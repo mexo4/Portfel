@@ -13,7 +13,6 @@ import {
 } from "@/lib/constants";
 import {
   fetchFxRates,
-  fetchQuotePreview,
   logoutUser,
   refreshPortfolioQuotes,
   requestEmailVerification,
@@ -58,19 +57,9 @@ const createDraftFromMode = (mode: AssetSearchMode): AssetDraft => {
 const toErrorMessage = (error: unknown, fallback: string) =>
   error instanceof Error ? error.message : fallback;
 
-const mergeRefreshedAssets = (
-  currentAssets: PortfolioAsset[],
-  refreshedAssets: PortfolioAsset[]
-) => {
-  const refreshedById = new Map(refreshedAssets.map((asset) => [asset.id, asset]));
-
-  return currentAssets.map((asset) => refreshedById.get(asset.id) ?? asset);
-};
-
 export default function PortfolioApp({ account, initialAssets }: PortfolioAppProps) {
   const assetsRef = useRef<PortfolioAsset[]>(initialAssets);
   const hasSavedAssetsRef = useRef(false);
-  const quoteRefreshRequestIdRef = useRef(0);
   const [activeSection, setActiveSection] = useState<AppSection>("portfolio");
   const [assets, setAssets] = useState<PortfolioAsset[]>(initialAssets);
   const [searchMode, setSearchMode] = useState<AssetSearchMode>("stock-global");
@@ -94,53 +83,8 @@ export default function PortfolioApp({ account, initialAssets }: PortfolioAppPro
     assetsRef.current = assets;
   }, [assets]);
 
-  useEffect(() => {
-    const symbol = draft.symbol.trim();
-
-    if (!symbol) {
-      return;
-    }
-
-    const draftKey = `${symbol}|${draft.kind}|${draft.provider}|${draft.providerId ?? ""}|${draft.marketCurrency}`;
-    let isCancelled = false;
-    const timeoutId = window.setTimeout(async () => {
-      const quote = await fetchQuotePreview({
-        symbol,
-        kind: draft.kind,
-        marketCurrency: draft.marketCurrency,
-        provider: draft.provider,
-        providerId: draft.providerId,
-      });
-
-      if (!quote || isCancelled) {
-        return;
-      }
-
-      setDraft((currentDraft) => {
-        const currentDraftKey = `${currentDraft.symbol.trim()}|${currentDraft.kind}|${currentDraft.provider}|${currentDraft.providerId ?? ""}|${currentDraft.marketCurrency}`;
-
-        if (currentDraftKey !== draftKey) {
-          return currentDraft;
-        }
-
-        return {
-          ...currentDraft,
-          latestPrice: quote.price,
-          marketCurrency: quote.marketCurrency,
-          provider: quote.provider,
-          providerId: quote.providerId ?? currentDraft.providerId,
-        };
-      });
-    }, 220);
-
-    return () => {
-      isCancelled = true;
-      window.clearTimeout(timeoutId);
-    };
-  }, [draft.symbol, draft.kind, draft.marketCurrency, draft.provider, draft.providerId]);
-
   const applySearchResultToDraft = useCallback(
-    async (
+    (
       result: AssetSearchResult,
       options?: {
         query?: string;
@@ -148,7 +92,6 @@ export default function PortfolioApp({ account, initialAssets }: PortfolioAppPro
       }
     ) => {
       const nextQuery = options?.query ?? result.name;
-      const resultKey = `${result.symbol}|${result.provider}|${result.providerId ?? ""}|${result.kind}`;
 
       setDraft((currentDraft) => ({
         ...currentDraft,
@@ -158,42 +101,12 @@ export default function PortfolioApp({ account, initialAssets }: PortfolioAppPro
         marketCurrency: result.marketCurrency,
         provider: result.provider,
         providerId: result.providerId,
-        latestPrice:
-          `${currentDraft.symbol}|${currentDraft.provider}|${currentDraft.providerId ?? ""}|${currentDraft.kind}` ===
-          resultKey
-            ? currentDraft.latestPrice
-            : undefined,
+        latestPrice: undefined,
       }));
 
       if (options?.clearResults) {
         setResults([]);
       }
-
-      const quote = await fetchQuotePreview({
-        symbol: result.symbol,
-        kind: result.kind,
-        marketCurrency: result.marketCurrency,
-        provider: result.provider,
-        providerId: result.providerId,
-      });
-
-      if (!quote) return;
-
-      setDraft((currentDraft) => {
-        const currentDraftKey = `${currentDraft.symbol}|${currentDraft.provider}|${currentDraft.providerId ?? ""}|${currentDraft.kind}`;
-
-        if (currentDraftKey !== resultKey) {
-          return currentDraft;
-        }
-
-        return {
-          ...currentDraft,
-          latestPrice: quote.price,
-          marketCurrency: quote.marketCurrency,
-          provider: quote.provider,
-          providerId: quote.providerId ?? currentDraft.providerId,
-        };
-      });
     },
     []
   );
@@ -280,22 +193,13 @@ export default function PortfolioApp({ account, initialAssets }: PortfolioAppPro
   };
 
   const syncQuotes = async () => {
-    const snapshot = assetsRef.current;
-
-    if (snapshot.length === 0) return;
-
-    const requestId = ++quoteRefreshRequestIdRef.current;
+    if (assetsRef.current.length === 0) return;
 
     setIsRefreshing(true);
 
     try {
-      const refreshedAssets = await refreshPortfolioQuotes(snapshot);
-
-      if (requestId !== quoteRefreshRequestIdRef.current) {
-        return;
-      }
-
-      setAssets((currentAssets) => mergeRefreshedAssets(currentAssets, refreshedAssets));
+      const refreshedAssets = await refreshPortfolioQuotes(assetsRef.current);
+      setAssets(refreshedAssets);
       setLastSyncAt(new Date().toISOString());
       setSyncError(null);
     } catch (error) {
@@ -328,8 +232,8 @@ export default function PortfolioApp({ account, initialAssets }: PortfolioAppPro
     setSearchError(null);
   };
 
-  const handlePickResult = async (result: AssetSearchResult) => {
-    await applySearchResultToDraft(result, {
+  const handlePickResult = (result: AssetSearchResult) => {
+    applySearchResultToDraft(result, {
       query: result.name,
       clearResults: true,
     });
@@ -356,8 +260,6 @@ export default function PortfolioApp({ account, initialAssets }: PortfolioAppPro
       marketCurrency: draft.marketCurrency,
       provider: draft.provider,
       providerId: draft.providerId,
-      latestPrice: draft.latestPrice,
-      lastUpdatedAt: draft.latestPrice ? new Date().toISOString() : undefined,
       createdAt: new Date().toISOString(),
     };
 
@@ -365,41 +267,6 @@ export default function PortfolioApp({ account, initialAssets }: PortfolioAppPro
     setDraft(createDraftFromMode(searchMode));
     setResults([]);
     setSearchError(null);
-
-    if (nextAsset.latestPrice !== undefined) {
-      return;
-    }
-
-    void (async () => {
-      const quote = await fetchQuotePreview({
-        symbol: nextAsset.symbol,
-        kind: nextAsset.kind,
-        marketCurrency: nextAsset.marketCurrency,
-        provider: nextAsset.provider,
-        providerId: nextAsset.providerId,
-      });
-
-      if (!quote) {
-        return;
-      }
-
-      setAssets((currentAssets) =>
-        currentAssets.map((asset) =>
-          asset.id === nextAsset.id
-            ? {
-                ...asset,
-                symbol: quote.symbol,
-                latestPrice: quote.price,
-                marketCurrency: quote.marketCurrency,
-                provider: quote.provider,
-                providerId: quote.providerId ?? asset.providerId,
-                lastUpdatedAt: quote.fetchedAt,
-                name: quote.name ?? asset.name,
-              }
-            : asset
-        )
-      );
-    })();
   };
 
   const handleLogout = async () => {
@@ -500,7 +367,7 @@ export default function PortfolioApp({ account, initialAssets }: PortfolioAppPro
                 }));
               }}
               onPickResult={(result) => {
-                void handlePickResult(result);
+                handlePickResult(result);
               }}
               onSubmit={handleAddAsset}
             />

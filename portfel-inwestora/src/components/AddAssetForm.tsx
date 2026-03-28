@@ -184,14 +184,6 @@ export default function AddAssetForm({
         </button>
       </div>
 
-      <div className="pill-row mt-4">
-        {draft.latestPrice ? (
-          <span className="tag">ostatnia cena: {draft.latestPrice}</span>
-        ) : (
-          <span className="tag">wybierz wynik lub wpisz ticker recznie</span>
-        )}
-      </div>
-
       {results.length > 0 ? (
         <div className="mt-6 grid gap-3 md:grid-cols-2">
           {results.map((result) => (

@@ -1,11 +1,6 @@
-import {
-  LOCAL_ETF_CATALOG,
-  LOCAL_STOCK_CATALOG,
-} from "@/lib/constants";
 import { inferCurrencyFromSymbol, normalizeSymbol } from "@/lib/ticker";
 import { normalizeText, round, toCurrencyCode, uniqueBy } from "@/lib/utils";
 import type {
-  AssetCatalogItem,
   AssetKind,
   AssetQuote,
   AssetSearchMode,
@@ -97,19 +92,6 @@ const COMMODITY_API_KEY =
 
 const isGpwSymbol = (symbol: string) => /\.WA$/i.test(symbol);
 const isEuropeanEtfSymbol = (symbol: string) => /\.(AS|DE|DU|F|HM|MI|MU)$/i.test(symbol);
-const shouldUseStooqForGpwStock = ({
-  symbol,
-  kind,
-  marketCurrency,
-  provider,
-}: {
-  symbol: string;
-  kind: AssetKind;
-  marketCurrency: CurrencyCode;
-  provider: QuoteProvider;
-}) =>
-  kind === "stock" &&
-  (provider === "stooq" || marketCurrency === "PLN" || isGpwSymbol(symbol));
 
 const getEtfProvider = (symbol: string): QuoteProvider =>
   isEuropeanEtfSymbol(symbol) ? "stooq" : "finnhub";
@@ -164,25 +146,6 @@ const getStooqSymbolCandidates = (symbol: string) => {
 };
 
 const STOOQ_DOMAINS = ["https://stooq.pl", "https://stooq.com"] as const;
-const STOOQ_TEXT_PROXY_URL = "https://r.jina.ai/http://stooq.pl/q/?s=";
-
-const parseStooqPageNumber = (value: string) => {
-  const normalized = value.replace(/\s+/g, "").replace(",", ".");
-  const parsed = Number(normalized);
-
-  return Number.isFinite(parsed) && parsed > 0 ? round(parsed) : null;
-};
-
-const getStooqPageSymbolCandidates = (symbol: string) => {
-  const normalized = symbol.trim().toLowerCase();
-
-  if (isGpwSymbol(normalized)) {
-    const withoutSuffix = normalized.replace(/\.wa$/i, "");
-    return uniqueBy([withoutSuffix, normalized], (item) => item);
-  }
-
-  return uniqueBy([normalized], (item) => item);
-};
 
 const parseStooqJsonQuote = async (response: Response) => {
   try {
@@ -219,46 +182,6 @@ const parseStooqCsvQuote = (csv: string) => {
   return Number.isFinite(close) && close > 0 ? round(close) : null;
 };
 
-const fetchStooqPageQuote = async (
-  symbol: string,
-  fallbackCurrency: CurrencyCode
-): Promise<AssetQuote | null> => {
-  const pageSymbols = getStooqPageSymbolCandidates(symbol);
-
-  for (const pageSymbol of pageSymbols) {
-    const response = await fetch(`${STOOQ_TEXT_PROXY_URL}${encodeURIComponent(pageSymbol)}`, {
-      headers: {
-        Accept: "text/plain",
-      },
-      cache: "no-store",
-    });
-
-    if (!response.ok) {
-      continue;
-    }
-
-    const markdown = await response.text();
-    const priceMatch = markdown.match(/Kurs\s+\*\*([\d.,\s]+)\*\*/i);
-    const price = priceMatch?.[1] ? parseStooqPageNumber(priceMatch[1]) : null;
-
-    if (price === null) {
-      continue;
-    }
-
-    const nameMatch = markdown.match(/Title:\s+.+?\s+-\s+(.+?)\s*$/m);
-
-    return {
-      symbol,
-      price,
-      marketCurrency: inferCurrencyFromSymbol(symbol, fallbackCurrency),
-      provider: "stooq",
-      fetchedAt: new Date().toISOString(),
-      name: nameMatch?.[1]?.trim(),
-    };
-  }
-
-  return null;
-};
 
 const fetchFinnhubProfile = async (symbol: string) => {
   if (!FINNHUB_API_KEY) return null;
@@ -468,80 +391,6 @@ const searchCommodityApi = async (query: string): Promise<AssetSearchResult[]> =
     }));
 };
 
-const scoreCatalogMatch = (item: AssetCatalogItem, normalizedQuery: string) => {
-  const symbol = normalizeText(item.symbol);
-  const name = normalizeText(item.name);
-  const subtitle = normalizeText(item.subtitle ?? "");
-  const terms = item.searchTerms.map((term) => normalizeText(term));
-
-  if (symbol === normalizedQuery) return 100;
-  if (terms.some((term) => term === normalizedQuery)) return 95;
-  if (name === normalizedQuery) return 90;
-  if (symbol.startsWith(normalizedQuery)) return 80;
-  if (terms.some((term) => term.startsWith(normalizedQuery))) return 75;
-  if (name.startsWith(normalizedQuery)) return 70;
-  if (symbol.includes(normalizedQuery)) return 60;
-  if (terms.some((term) => term.includes(normalizedQuery))) return 55;
-  if (name.includes(normalizedQuery)) return 50;
-  if (subtitle.includes(normalizedQuery)) return 40;
-  return 0;
-};
-
-const searchCatalogAssets = (
-  query: string,
-  kind: AssetKind,
-  mode?: AssetSearchMode
-): AssetSearchResult[] => {
-  const normalizedQuery = normalizeText(query);
-
-  if (!normalizedQuery) {
-    return [];
-  }
-
-  const catalogItems =
-    kind === "stock"
-      ? LOCAL_STOCK_CATALOG
-      : kind === "etf"
-        ? LOCAL_ETF_CATALOG
-        : [];
-
-  return catalogItems
-    .filter((item) => {
-      if (item.kind !== kind) {
-        return false;
-      }
-
-      if (mode === "stock-gpw" && !isGpwSymbol(item.symbol)) {
-        return false;
-      }
-
-      if (mode === "stock-global" && isGpwSymbol(item.symbol)) {
-        return false;
-      }
-
-      if (mode === "etf" && item.kind !== "etf") {
-        return false;
-      }
-
-      return scoreCatalogMatch(item, normalizedQuery) > 0;
-    })
-    .sort(
-      (left, right) =>
-        scoreCatalogMatch(right, normalizedQuery) - scoreCatalogMatch(left, normalizedQuery)
-    )
-    .slice(0, 8)
-    .map((item) => ({
-      symbol: item.symbol,
-      name: item.name,
-      kind: item.kind,
-      marketCurrency: item.marketCurrency,
-      provider: item.provider,
-      providerId: item.providerId,
-      subtitle: item.subtitle ?? "Katalog",
-      source: "catalog" as const,
-    }));
-};
-
 const fetchFinnhubQuote = async (
   symbol: string,
   fallbackCurrency: CurrencyCode
@@ -679,7 +528,7 @@ const fetchStooqQuote = async (
     }
   }
 
-  return fetchStooqPageQuote(symbol, fallbackCurrency);
+  return null;
 };
 
 const fetchCoinGeckoQuote = async (
@@ -785,14 +634,7 @@ export const searchMarketAssets = async (
   }
 
   if (kind === "stock" || kind === "etf") {
-    const catalogResults = searchCatalogAssets(query, kind, mode);
-    const remoteResults =
-      mode === "stock-gpw" ? [] : await searchFinnhub(query, kind, mode);
-
-    return uniqueBy(
-      [...catalogResults, ...remoteResults],
-      (item) => `${item.symbol}|${item.kind}|${item.provider}|${item.providerId ?? ""}`
-    ).slice(0, 8);
+    return searchFinnhub(query, kind, mode);
   }
 
   return [];
@@ -819,17 +661,6 @@ export const fetchAssetQuoteServer = async ({
 
   if (kind === "commodity") {
     return fetchCommodityQuote(normalizedSymbol);
-  }
-
-  if (
-    shouldUseStooqForGpwStock({
-      symbol: normalizedSymbol,
-      kind,
-      marketCurrency,
-      provider,
-    })
-  ) {
-    return fetchStooqQuote(normalizedSymbol, "PLN");
   }
 
   if (provider === "finnhub") {

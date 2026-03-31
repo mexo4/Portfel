@@ -57,6 +57,7 @@ export type PortfolioAsset = {
   name: string;
   symbol: string;
   kind: AssetKind;
+  purchaseDate: string;
   quantity: number;
   purchasePrice: number;
   purchaseCurrency: CurrencyCode;
@@ -74,6 +75,7 @@ export type AssetDraft = {
   query: string;
   name: string;
   symbol: string;
+  purchaseDate: string;
   quantity: number;
   purchasePrice: number;
   purchaseCurrency: CurrencyCode;

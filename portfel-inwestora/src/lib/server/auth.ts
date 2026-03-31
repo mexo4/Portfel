@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import type { NextResponse } from "next/server";
 import { createFreshUserProfile, normalizeUserProfile } from "@/lib/profile";
 import db from "@/lib/server/db";
+import { toDateInputValue } from "@/lib/utils";
 import type {
   AuthenticatedUser,
   PortfolioAsset,
@@ -73,9 +74,13 @@ const parsePortfolioAssets = (portfolioJson: string): PortfolioAsset[] => {
           typeof asset.createdAt === "string" && asset.createdAt
             ? asset.createdAt
             : new Date().toISOString();
+        const purchaseDate = toDateInputValue(
+          typeof asset.purchaseDate === "string" ? asset.purchaseDate : createdAt
+        );
 
         return {
           ...asset,
+          purchaseDate,
           createdAt,
         } as PortfolioAsset;
       });

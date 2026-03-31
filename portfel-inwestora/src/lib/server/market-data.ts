@@ -22,13 +22,6 @@ type FinnhubQuoteResponse = {
   c?: number;
 };
 
-type FinnhubProfileResponse = {
-  country?: string;
-  currency?: string;
-  exchange?: string;
-  name?: string;
-};
-
 type StooqQuoteResponse = {
   symbols?: Array<{
     symbol?: string;
@@ -153,7 +146,12 @@ const STOOQ_DOMAINS = [
 ] as const;
 const STOOQ_TEXT_PROXY_URL = "https://r.jina.ai/http://stooq.pl/q/?s=";
 
-const safeFetch = async (url: string, init?: RequestInit) => {
+const safeFetch = async (
+  url: string,
+  init?: RequestInit,
+  _timeoutMs?: number
+) => {
+  void _timeoutMs;
   try {
     return await fetch(url, init);
   } catch {
@@ -221,12 +219,16 @@ const fetchStooqPageQuote = async (
   const pageSymbols = getStooqPageSymbolCandidates(symbol);
 
   for (const pageSymbol of pageSymbols) {
-    const response = await safeFetch(`${STOOQ_TEXT_PROXY_URL}${encodeURIComponent(pageSymbol)}`, {
-      headers: {
-        Accept: "text/plain",
+    const response = await safeFetch(
+      `${STOOQ_TEXT_PROXY_URL}${encodeURIComponent(pageSymbol)}`,
+      {
+        headers: {
+          Accept: "text/plain",
+        },
+        cache: "no-store",
       },
-      cache: "no-store",
-    });
+      7_500
+    );
 
     if (!response || !response.ok) {
       continue;
@@ -253,28 +255,6 @@ const fetchStooqPageQuote = async (
   }
 
   return null;
-};
-
-
-const fetchFinnhubProfile = async (symbol: string) => {
-  if (!FINNHUB_API_KEY) return null;
-
-  const response = await fetch(
-    `https://finnhub.io/api/v1/stock/profile2?symbol=${encodeURIComponent(symbol)}&token=${FINNHUB_API_KEY}`,
-    {
-      cache: "no-store",
-    }
-  );
-
-  if (!response.ok) return null;
-
-  const payload = (await response.json()) as FinnhubProfileResponse;
-
-  if (!payload?.name && !payload?.country && !payload?.currency && !payload?.exchange) {
-    return null;
-  }
-
-  return payload;
 };
 
 const searchFinnhub = async (
@@ -315,34 +295,15 @@ const searchFinnhub = async (
     }
   );
 
-  const profiledResults =
-    mode === "stock-global" && kind === "stock"
-      ? await Promise.all(
-          filteredResults.slice(0, 12).map(async (item) => ({
-            item,
-            profile: await fetchFinnhubProfile(item.symbol),
-          }))
-        )
-      : filteredResults.map((item) => ({
-          item,
-          profile: null,
-        }));
-
   return uniqueBy(
-    profiledResults
-      .filter(({ profile }) => {
-        if (mode !== "stock-global" || kind !== "stock") return true;
-        if (!profile) return false;
-        return profile.country?.toUpperCase() === "US";
-      })
-      .map(({ item, profile }) => ({
+    filteredResults.map((item) => ({
         symbol: normalizeSymbol(item.symbol),
-        name: profile?.name || item.description || item.displaySymbol || item.symbol,
+        name: item.description || item.displaySymbol || item.symbol,
         kind,
         marketCurrency:
           mode === "stock-gpw"
             ? "PLN"
-            : toCurrencyCode(profile?.currency ?? inferCurrencyFromSymbol(item.symbol, "USD")),
+            : inferCurrencyFromSymbol(item.symbol, "USD"),
         provider:
           mode === "stock-gpw"
             ? ("stooq" as const)
@@ -390,11 +351,15 @@ const searchCoinGecko = async (query: string): Promise<AssetSearchResult[]> => {
 const fetchCommoditySymbols = async () => {
   if (!COMMODITY_API_KEY) return [];
 
+  const upstream = new URL("https://api.commoditypriceapi.com/v2/symbols");
+  upstream.searchParams.set("apiKey", COMMODITY_API_KEY);
+
   const response = await fetch(
-    `https://api.commoditypriceapi.com/v2/symbols?apiKey=${COMMODITY_API_KEY}`,
+    upstream.toString(),
     {
       headers: {
         Accept: "application/json",
+        "x-api-key": COMMODITY_API_KEY,
       },
       next: {
         revalidate: 3600,
@@ -459,6 +424,7 @@ const searchCommodityApi = async (query: string): Promise<AssetSearchResult[]> =
       kind: "commodity" as const,
       marketCurrency: toCurrencyCode(item.currency?.code),
       provider: "commoditypriceapi" as const,
+      providerId: item.symbol,
       subtitle: item.category,
       source: "api" as const,
     }));
@@ -470,23 +436,14 @@ const fetchFinnhubQuote = async (
 ): Promise<AssetQuote | null> => {
   if (!FINNHUB_API_KEY) return null;
 
-  const [quoteResponse, profileResponse] = await Promise.all([
-    fetch(
-      `https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(symbol)}&token=${FINNHUB_API_KEY}`,
-      { cache: "no-store" }
-    ),
-    fetch(
-      `https://finnhub.io/api/v1/stock/profile2?symbol=${encodeURIComponent(symbol)}&token=${FINNHUB_API_KEY}`,
-      { cache: "no-store" }
-    ),
-  ]);
+  const quoteResponse = await fetch(
+    `https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(symbol)}&token=${FINNHUB_API_KEY}`,
+    { cache: "no-store" }
+  );
 
   if (!quoteResponse.ok) return null;
 
   const quotePayload: FinnhubQuoteResponse = await quoteResponse.json();
-  const profilePayload: FinnhubProfileResponse | null = profileResponse.ok
-    ? await profileResponse.json()
-    : null;
 
   if (typeof quotePayload.c !== "number" || quotePayload.c <= 0) {
     return null;
@@ -495,10 +452,9 @@ const fetchFinnhubQuote = async (
   return {
     symbol,
     price: round(quotePayload.c),
-    marketCurrency: toCurrencyCode(profilePayload?.currency ?? fallbackCurrency),
+    marketCurrency: toCurrencyCode(fallbackCurrency),
     provider: "finnhub",
     fetchedAt: new Date().toISOString(),
-    name: profilePayload?.name,
   };
 };
 
@@ -560,21 +516,22 @@ const fetchStooqQuote = async (
       }
 
       const today = new Date().toISOString().slice(0, 10).replaceAll("-", "");
-      const response = await safeFetch(
+      const historyResponse = await safeFetch(
         `${domain}/q/d/l/?s=${encodeURIComponent(requestSymbol)}&d1=20000101&d2=${today}&i=d`,
         {
           headers: {
             "User-Agent": "Mozilla/5.0",
           },
           cache: "no-store",
-        }
+        },
+        6_000
       );
 
-      if (!response?.ok) {
+      if (!historyResponse?.ok) {
         continue;
       }
 
-      const csv = await response.text();
+      const csv = await historyResponse.text();
       const lines = csv
         .trim()
         .split("\n")
@@ -659,34 +616,92 @@ const COMMODITY_SYMBOL_MAP: Record<string, string> = {
   NG: "NG-FUT",
 };
 
-const fetchCommodityQuote = async (symbol: string): Promise<AssetQuote | null> => {
+const parseCommodityRate = (value: unknown): number | null => {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return round(value);
+  }
+
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const typedValue = value as Record<string, unknown>;
+  const nestedCandidates = [
+    typedValue.rate,
+    typedValue.price,
+    typedValue.value,
+    typedValue.close,
+    typedValue.latest,
+  ];
+
+  for (const candidate of nestedCandidates) {
+    if (typeof candidate === "number" && Number.isFinite(candidate) && candidate > 0) {
+      return round(candidate);
+    }
+  }
+
+  return null;
+};
+
+const fetchCommodityQuote = async (
+  symbol: string,
+  providerId?: string
+): Promise<AssetQuote | null> => {
   if (!COMMODITY_API_KEY) return null;
 
-  const mappedSymbol = COMMODITY_SYMBOL_MAP[symbol] ?? symbol;
+  const providerSymbol = normalizeSymbol(providerId ?? symbol);
+  const mappedSymbol = COMMODITY_SYMBOL_MAP[providerSymbol] ?? providerSymbol;
   const upstream = new URL("https://api.commoditypriceapi.com/v2/rates/latest");
   upstream.searchParams.set("apiKey", COMMODITY_API_KEY);
   upstream.searchParams.set("symbols", mappedSymbol);
-  upstream.searchParams.set("quote", "USD");
 
   const response = await fetch(upstream.toString(), {
     headers: {
       Accept: "application/json",
+      "x-api-key": COMMODITY_API_KEY,
     },
     cache: "no-store",
   });
 
   if (!response.ok) return null;
 
-  const payload = await response.json();
-  const price = payload?.rates?.[mappedSymbol];
+  const payload = (await response.json()) as {
+    rates?: Record<string, unknown>;
+    metaData?: Record<
+      string,
+      {
+        quote?: string | { code?: string };
+      }
+    >;
+  };
+  const rateKeys = uniqueBy(
+    [
+      mappedSymbol,
+      mappedSymbol.toUpperCase(),
+      mappedSymbol.toLowerCase(),
+      providerSymbol,
+      symbol,
+      symbol.toUpperCase(),
+    ],
+    (item) => item
+  );
+  const rateEntryKey = rateKeys.find((key) => key in (payload.rates ?? {}));
+  const price = rateEntryKey ? parseCommodityRate(payload.rates?.[rateEntryKey]) : null;
 
-  if (typeof price !== "number" || price <= 0) return null;
+  if (!price) return null;
+
+  const rawQuoteValue =
+    (rateEntryKey && payload.metaData?.[rateEntryKey]?.quote) ??
+    payload.metaData?.[mappedSymbol]?.quote;
+  const quoteCode =
+    typeof rawQuoteValue === "string" ? rawQuoteValue : rawQuoteValue?.code;
 
   return {
     symbol,
-    price: round(price),
-    marketCurrency: "USD",
+    price,
+    marketCurrency: toCurrencyCode(quoteCode ?? "USD"),
     provider: "commoditypriceapi",
+    providerId: providerSymbol,
     fetchedAt: new Date().toISOString(),
   };
 };
@@ -734,7 +749,7 @@ export const fetchAssetQuoteServer = async ({
   }
 
   if (kind === "commodity") {
-    return fetchCommodityQuote(normalizedSymbol);
+    return fetchCommodityQuote(normalizedSymbol, providerId);
   }
 
   if (isGpwStock) {
@@ -742,11 +757,18 @@ export const fetchAssetQuoteServer = async ({
   }
 
   if (provider === "finnhub") {
-    return fetchFinnhubQuote(normalizedSymbol, marketCurrency);
+    return (
+      (await fetchFinnhubQuote(normalizedSymbol, marketCurrency)) ??
+      (await fetchStooqQuote(normalizedSymbol, marketCurrency)) ??
+      (await fetchStooqQuote(`${normalizedSymbol}.US`, marketCurrency))
+    );
   }
 
   if (provider === "stooq") {
-    return fetchStooqQuote(normalizedSymbol, marketCurrency);
+    return (
+      (await fetchStooqQuote(normalizedSymbol, marketCurrency)) ??
+      (await fetchFinnhubQuote(normalizedSymbol, marketCurrency))
+    );
   }
 
   const autoQuote =

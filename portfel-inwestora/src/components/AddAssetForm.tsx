@@ -17,7 +17,9 @@ type AddAssetFormProps = {
   draft: AssetDraft;
   results: AssetSearchResult[];
   isSearching: boolean;
+  isQuoteLoading: boolean;
   searchError: string | null;
+  quoteError?: string | null;
   onDraftChange: (draft: AssetDraft) => void;
   onSearchModeChange: (mode: AssetSearchMode) => void;
   onQueryChange: (query: string) => void;
@@ -31,7 +33,9 @@ export default function AddAssetForm({
   draft,
   results,
   isSearching,
+  isQuoteLoading,
   searchError,
+  quoteError,
   onDraftChange,
   onSearchModeChange,
   onQueryChange,
@@ -65,7 +69,7 @@ export default function AddAssetForm({
         ))}
       </div>
 
-      <div className="mt-6 grid gap-4 xl:grid-cols-[1.45fr_0.8fr_0.7fr_0.7fr_0.7fr]">
+      <div className="mt-6 grid gap-4 xl:grid-cols-6">
         <label className="field xl:col-span-2">
           <span>Wyszukiwarka</span>
           <input
@@ -74,11 +78,15 @@ export default function AddAssetForm({
             placeholder={getSearchPlaceholder(searchMode)}
           />
           {isSearching ? <small className="field-note">Szukam wynikow...</small> : null}
+          {isQuoteLoading ? <small className="field-note">Pobieram kurs...</small> : null}
           {!isSearching && draft.symbol ? (
             <small className="field-note">Wybrany ticker: {draft.symbol}</small>
           ) : null}
           {searchError ? (
             <small className="field-note field-note-error">{searchError}</small>
+          ) : null}
+          {quoteError ? (
+            <small className="field-note field-note-error">{quoteError}</small>
           ) : null}
         </label>
 
@@ -97,11 +105,11 @@ export default function AddAssetForm({
             type="number"
             min="0"
             step="0.0001"
-            value={draft.quantity}
+            value={draft.quantity > 0 ? String(draft.quantity) : ""}
             onChange={(event) =>
               onDraftChange({
                 ...draft,
-                quantity: Number(event.target.value),
+                quantity: event.target.value === "" ? 0 : Number(event.target.value),
               })
             }
           />
@@ -113,11 +121,25 @@ export default function AddAssetForm({
             type="number"
             min="0"
             step="0.0001"
-            value={draft.purchasePrice}
+            value={draft.purchasePrice > 0 ? String(draft.purchasePrice) : ""}
             onChange={(event) =>
               onDraftChange({
                 ...draft,
-                purchasePrice: Number(event.target.value),
+                purchasePrice: event.target.value === "" ? 0 : Number(event.target.value),
+              })
+            }
+          />
+        </label>
+
+        <label className="field">
+          <span>Data zakupu</span>
+          <input
+            type="date"
+            value={draft.purchaseDate}
+            onChange={(event) =>
+              onDraftChange({
+                ...draft,
+                purchaseDate: event.target.value,
               })
             }
           />
@@ -179,8 +201,13 @@ export default function AddAssetForm({
           />
         </label>
 
-        <button className="primary-button self-end" type="button" onClick={onSubmit}>
-          Dodaj do portfela
+        <button
+          className="primary-button self-end"
+          type="button"
+          onClick={onSubmit}
+          disabled={isQuoteLoading}
+        >
+          {isQuoteLoading ? "Pobieram kurs..." : "Dodaj do portfela"}
         </button>
       </div>
 

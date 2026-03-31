@@ -28,7 +28,10 @@ export type PortfolioAssetGroup = {
   lots: PortfolioAsset[];
 };
 
-const getAssetSortTime = (asset: PortfolioAsset) => new Date(asset.createdAt).getTime();
+const getAssetSortTime = (asset: PortfolioAsset) => {
+  const sourceDate = asset.purchaseDate || asset.createdAt;
+  return new Date(sourceDate).getTime();
+};
 
 export const convertToPln = (
   amount: number,

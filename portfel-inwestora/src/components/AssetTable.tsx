@@ -8,7 +8,7 @@ import {
   getAssetProfitLossPln,
   getGroupedPortfolioAssets,
 } from "@/lib/pricing";
-import { formatCurrency, formatDateTime, formatNumber } from "@/lib/utils";
+import { formatCurrency, formatDate, formatDateTime, formatNumber } from "@/lib/utils";
 import type { FxRates, PortfolioAsset } from "@/types/portfolio";
 
 type AssetTableProps = {
@@ -202,6 +202,10 @@ export default function AssetTable({
                                       <strong>
                                         {formatCurrency(lot.purchasePrice, lot.purchaseCurrency)}
                                       </strong>
+                                    </div>
+                                    <div>
+                                      <p className="table-note">Data zakupu</p>
+                                      <strong>{formatDate(lot.purchaseDate)}</strong>
                                     </div>
                                     <div>
                                       <p className="table-note">Aktualna cena</p>

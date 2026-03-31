@@ -113,7 +113,7 @@ export default function PortfolioCharts({
     () =>
       assets
         .map((asset) => ({
-          date: new Date(asset.createdAt).toISOString().slice(0, 10),
+          date: asset.purchaseDate || new Date(asset.createdAt).toISOString().slice(0, 10),
           amountPln: getAssetInvestedPln(asset, fxRates),
         }))
         .filter((investment) => investment.amountPln > 0),

@@ -1,10 +1,11 @@
-import {
-  KIND_LABELS,
-  SEARCH_MODE_OPTIONS,
-} from "@/lib/constants";
+import { KIND_LABELS, SEARCH_MODE_OPTIONS } from "@/lib/constants";
 import { inferCurrencyFromSymbol } from "@/lib/ticker";
 import { uniqueBy } from "@/lib/utils";
-import type { AssetKind, AssetSearchMode, AssetSearchResult } from "@/types/portfolio";
+import type {
+  AssetKind,
+  AssetSearchMode,
+  AssetSearchResult,
+} from "@/types/portfolio";
 
 export const getMinimumSearchLength = (mode: AssetSearchMode) => {
   if (mode === "stock-global" || mode === "stock-gpw" || mode === "etf") {
@@ -109,7 +110,4 @@ export const buildTickerFallbackResults = (
 };
 
 export const mergeSearchResults = (items: AssetSearchResult[]) =>
-  uniqueBy(
-    items,
-    (item) => `${item.symbol}|${item.providerId ?? ""}|${item.kind}`
-  ).slice(0, 8);
+  uniqueBy(items, (item) => `${item.symbol}|${item.providerId ?? ""}|${item.kind}`).slice(0, 8);

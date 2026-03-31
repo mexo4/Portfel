@@ -145,7 +145,39 @@ const getStooqSymbolCandidates = (symbol: string) => {
   );
 };
 
-const STOOQ_DOMAINS = ["https://stooq.pl", "https://stooq.com"] as const;
+const STOOQ_DOMAINS = [
+  "https://stooq.pl",
+  "https://stooq.com",
+  "http://stooq.pl",
+  "http://stooq.com",
+] as const;
+const STOOQ_TEXT_PROXY_URL = "https://r.jina.ai/http://stooq.pl/q/?s=";
+
+const safeFetch = async (url: string, init?: RequestInit) => {
+  try {
+    return await fetch(url, init);
+  } catch {
+    return null;
+  }
+};
+
+const parseStooqPageNumber = (value: string) => {
+  const normalized = value.replace(/\s+/g, "").replace(",", ".");
+  const parsed = Number(normalized);
+
+  return Number.isFinite(parsed) && parsed > 0 ? round(parsed) : null;
+};
+
+const getStooqPageSymbolCandidates = (symbol: string) => {
+  const normalized = symbol.trim().toLowerCase();
+
+  if (isGpwSymbol(normalized)) {
+    const withoutSuffix = normalized.replace(/\.wa$/i, "");
+    return uniqueBy([withoutSuffix, normalized], (item) => item);
+  }
+
+  return uniqueBy([normalized], (item) => item);
+};
 
 const parseStooqJsonQuote = async (response: Response) => {
   try {
@@ -180,6 +212,47 @@ const parseStooqCsvQuote = (csv: string) => {
   const close = Number(parts[6] ?? parts[4] ?? parts[parts.length - 1]);
 
   return Number.isFinite(close) && close > 0 ? round(close) : null;
+};
+
+const fetchStooqPageQuote = async (
+  symbol: string,
+  fallbackCurrency: CurrencyCode
+): Promise<AssetQuote | null> => {
+  const pageSymbols = getStooqPageSymbolCandidates(symbol);
+
+  for (const pageSymbol of pageSymbols) {
+    const response = await safeFetch(`${STOOQ_TEXT_PROXY_URL}${encodeURIComponent(pageSymbol)}`, {
+      headers: {
+        Accept: "text/plain",
+      },
+      cache: "no-store",
+    });
+
+    if (!response || !response.ok) {
+      continue;
+    }
+
+    const markdown = await response.text();
+    const priceMatch = markdown.match(/Kurs\s+\*\*([\d.,\s]+)\*\*/i);
+    const price = priceMatch?.[1] ? parseStooqPageNumber(priceMatch[1]) : null;
+
+    if (price === null) {
+      continue;
+    }
+
+    const nameMatch = markdown.match(/Title:\s+.+?\s+-\s+(.+?)\s*$/m);
+
+    return {
+      symbol,
+      price,
+      marketCurrency: inferCurrencyFromSymbol(symbol, fallbackCurrency),
+      provider: "stooq",
+      fetchedAt: new Date().toISOString(),
+      name: nameMatch?.[1]?.trim(),
+    };
+  }
+
+  return null;
 };
 
 
@@ -437,7 +510,7 @@ const fetchStooqQuote = async (
 
   for (const requestSymbol of requestSymbols) {
     for (const domain of STOOQ_DOMAINS) {
-      const liveResponse = await fetch(
+      const liveResponse = await safeFetch(
         `${domain}/q/l/?s=${encodeURIComponent(requestSymbol)}&f=sd2t2ohlcv&h&e=json`,
         {
           headers: {
@@ -448,7 +521,7 @@ const fetchStooqQuote = async (
         }
       );
 
-      if (liveResponse.ok) {
+      if (liveResponse?.ok) {
         const close = await parseStooqJsonQuote(liveResponse);
 
         if (close !== null) {
@@ -462,7 +535,7 @@ const fetchStooqQuote = async (
         }
       }
 
-      const csvLiveResponse = await fetch(
+      const csvLiveResponse = await safeFetch(
         `${domain}/q/l/?s=${encodeURIComponent(requestSymbol)}&f=sd2t2ohlcv&e=csv`,
         {
           headers: {
@@ -472,7 +545,7 @@ const fetchStooqQuote = async (
         }
       );
 
-      if (csvLiveResponse.ok) {
+      if (csvLiveResponse?.ok) {
         const close = parseStooqCsvQuote(await csvLiveResponse.text());
 
         if (close !== null) {
@@ -487,7 +560,7 @@ const fetchStooqQuote = async (
       }
 
       const today = new Date().toISOString().slice(0, 10).replaceAll("-", "");
-      const response = await fetch(
+      const response = await safeFetch(
         `${domain}/q/d/l/?s=${encodeURIComponent(requestSymbol)}&d1=20000101&d2=${today}&i=d`,
         {
           headers: {
@@ -497,7 +570,7 @@ const fetchStooqQuote = async (
         }
       );
 
-      if (!response.ok) {
+      if (!response?.ok) {
         continue;
       }
 
@@ -528,7 +601,7 @@ const fetchStooqQuote = async (
     }
   }
 
-  return null;
+  return fetchStooqPageQuote(symbol, fallbackCurrency);
 };
 
 const fetchCoinGeckoQuote = async (
@@ -654,6 +727,7 @@ export const fetchAssetQuoteServer = async ({
   providerId?: string;
 }) => {
   const normalizedSymbol = normalizeSymbol(symbol);
+  const isGpwStock = kind === "stock" && isGpwSymbol(normalizedSymbol);
 
   if (kind === "crypto") {
     return fetchCoinGeckoQuote(normalizedSymbol, providerId);
@@ -661,6 +735,10 @@ export const fetchAssetQuoteServer = async ({
 
   if (kind === "commodity") {
     return fetchCommodityQuote(normalizedSymbol);
+  }
+
+  if (isGpwStock) {
+    return fetchStooqQuote(normalizedSymbol, marketCurrency);
   }
 
   if (provider === "finnhub") {

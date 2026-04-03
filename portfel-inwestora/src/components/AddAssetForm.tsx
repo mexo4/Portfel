@@ -16,6 +16,7 @@ type AddAssetFormProps = {
   searchMode: AssetSearchMode;
   draft: AssetDraft;
   results: AssetSearchResult[];
+  lastAddedResult: AssetSearchResult | null;
   isSearching: boolean;
   isQuoteLoading: boolean;
   searchError: string | null;
@@ -25,13 +26,24 @@ type AddAssetFormProps = {
   onQueryChange: (query: string) => void;
   onSymbolChange: (symbol: string) => void;
   onPickResult: (result: AssetSearchResult) => void;
+  onReuseLastAddedResult: (result: AssetSearchResult) => void;
   onSubmit: () => void;
+};
+
+const parseNumericInput = (value: string) => {
+  if (!value.trim()) {
+    return 0;
+  }
+
+  const parsed = Number(value.replace(",", "."));
+  return Number.isFinite(parsed) ? parsed : 0;
 };
 
 export default function AddAssetForm({
   searchMode,
   draft,
   results,
+  lastAddedResult,
   isSearching,
   isQuoteLoading,
   searchError,
@@ -41,6 +53,7 @@ export default function AddAssetForm({
   onQueryChange,
   onSymbolChange,
   onPickResult,
+  onReuseLastAddedResult,
   onSubmit,
 }: AddAssetFormProps) {
   return (
@@ -105,11 +118,12 @@ export default function AddAssetForm({
             type="number"
             min="0"
             step="0.0001"
-            value={draft.quantity > 0 ? String(draft.quantity) : ""}
+            value={draft.quantityInput}
             onChange={(event) =>
               onDraftChange({
                 ...draft,
-                quantity: event.target.value === "" ? 0 : Number(event.target.value),
+                quantityInput: event.target.value,
+                quantity: parseNumericInput(event.target.value),
               })
             }
           />
@@ -121,11 +135,12 @@ export default function AddAssetForm({
             type="number"
             min="0"
             step="0.0001"
-            value={draft.purchasePrice > 0 ? String(draft.purchasePrice) : ""}
+            value={draft.purchasePriceInput}
             onChange={(event) =>
               onDraftChange({
                 ...draft,
-                purchasePrice: event.target.value === "" ? 0 : Number(event.target.value),
+                purchasePriceInput: event.target.value,
+                purchasePrice: parseNumericInput(event.target.value),
               })
             }
           />
@@ -145,6 +160,22 @@ export default function AddAssetForm({
           />
         </label>
       </div>
+
+      {lastAddedResult ? (
+        <div className="mt-4 max-w-xl">
+          <p className="eyebrow">Ostatnio dodane</p>
+          <button
+            type="button"
+            className="result-card mt-3 w-full text-left"
+            onClick={() => onReuseLastAddedResult(lastAddedResult)}
+          >
+            <p className="result-title">{lastAddedResult.name}</p>
+            <p className="result-meta">
+              {lastAddedResult.symbol} - {KIND_LABELS[lastAddedResult.kind]}
+            </p>
+          </button>
+        </div>
+      ) : null}
 
       <div className="mt-4 grid gap-4 xl:grid-cols-[1fr_1fr_1fr_auto]">
         <label className="field">

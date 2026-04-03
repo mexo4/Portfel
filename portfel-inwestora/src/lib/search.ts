@@ -36,6 +36,7 @@ export const getModeConfig = (mode: AssetSearchMode) =>
   SEARCH_MODE_OPTIONS.find((option) => option.value === mode) ?? SEARCH_MODE_OPTIONS[0];
 
 const isGpwCatalogSymbol = (symbol: string) => /\.WA$/i.test(symbol);
+const getGpwSymbolCore = (symbol: string) => symbol.replace(/\.WA$/i, "");
 
 const getCatalogEntries = (
   kind: AssetKind,
@@ -204,3 +205,79 @@ export const buildTickerFallbackResults = (
 
 export const mergeSearchResults = (items: AssetSearchResult[]) =>
   uniqueBy(items, (item) => `${item.symbol}|${item.providerId ?? ""}|${item.kind}`).slice(0, 8);
+
+const getSourcePriority = (item: AssetSearchResult) => {
+  if (item.source === "catalog") return 0;
+  if (item.source === "api") return 1;
+  return 2;
+};
+
+const getSearchResultMatchScore = (
+  query: string,
+  item: AssetSearchResult,
+  options?: {
+    mode?: AssetSearchMode;
+    preferSymbol?: boolean;
+  }
+) => {
+  const normalizedQueryText = normalizeText(query);
+  const normalizedQuerySymbol = query.trim().toUpperCase();
+  const normalizedItemName = normalizeText(item.name);
+  const normalizedItemSymbol = item.symbol.trim().toUpperCase();
+  const queryGpwCore = getGpwSymbolCore(normalizedQuerySymbol);
+  const itemGpwCore = getGpwSymbolCore(normalizedItemSymbol);
+  const isGpwLookup = options?.mode === "stock-gpw";
+
+  if (options?.preferSymbol) {
+    if (isGpwLookup && itemGpwCore === queryGpwCore) return 0;
+    if (normalizedItemSymbol === normalizedQuerySymbol) return 0;
+    if (normalizedItemName === normalizedQueryText) return 2;
+    if (normalizedItemName.startsWith(normalizedQueryText)) return 3;
+    if (normalizedItemSymbol.startsWith(normalizedQuerySymbol)) return 4;
+    if (isGpwLookup && itemGpwCore.startsWith(queryGpwCore)) return 5;
+    return Number.POSITIVE_INFINITY;
+  }
+
+  if (normalizedItemName === normalizedQueryText) return 0;
+  if (normalizedItemSymbol === normalizedQuerySymbol) return 1;
+  if (isGpwLookup && itemGpwCore === queryGpwCore) return 2;
+  if (normalizedItemName.startsWith(normalizedQueryText)) return 3;
+  if (normalizedItemSymbol.startsWith(normalizedQuerySymbol)) return 4;
+  if (isGpwLookup && itemGpwCore.startsWith(queryGpwCore)) return 5;
+  return Number.POSITIVE_INFINITY;
+};
+
+export const pickBestSearchResult = (
+  query: string,
+  items: AssetSearchResult[],
+  options?: {
+    allowFirstItemFallback?: boolean;
+    mode?: AssetSearchMode;
+    preferSymbol?: boolean;
+  }
+) => {
+  const trimmedQuery = query.trim();
+
+  if (!trimmedQuery) {
+    return null;
+  }
+
+  const rankedItems = items
+    .map((item) => ({
+      item,
+      score: getSearchResultMatchScore(trimmedQuery, item, options),
+    }))
+    .filter((entry) => Number.isFinite(entry.score))
+    .sort(
+      (left, right) =>
+        left.score - right.score ||
+        getSourcePriority(left.item) - getSourcePriority(right.item) ||
+        left.item.name.localeCompare(right.item.name, "pl")
+    );
+
+  if (rankedItems.length > 0) {
+    return rankedItems[0].item;
+  }
+
+  return options?.allowFirstItemFallback ? (items[0] ?? null) : null;
+};

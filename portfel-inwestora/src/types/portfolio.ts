@@ -77,7 +77,9 @@ export type AssetDraft = {
   symbol: string;
   purchaseDate: string;
   quantity: number;
+  quantityInput: string;
   purchasePrice: number;
+  purchasePriceInput: string;
   purchaseCurrency: CurrencyCode;
   feePln: number;
   marketCurrency: CurrencyCode;

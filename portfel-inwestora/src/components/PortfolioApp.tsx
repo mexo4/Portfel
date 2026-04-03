@@ -21,7 +21,11 @@ import {
   searchAssets,
 } from "@/lib/api";
 import { getPortfolioSummary } from "@/lib/pricing";
-import { getMinimumSearchLength, getModeConfig } from "@/lib/search";
+import {
+  getMinimumSearchLength,
+  getModeConfig,
+  pickBestSearchResult,
+} from "@/lib/search";
 import { createAssetId, createEmptyDraft, normalizeSymbol } from "@/lib/ticker";
 import { getTodayDateInputValue, normalizeText, toDateInputValue } from "@/lib/utils";
 import type {
@@ -66,28 +70,6 @@ const normalizeSymbolForMode = (symbol: string, mode: AssetSearchMode) => {
 };
 const shouldRetryQuoteRequest = (mode: AssetSearchMode) => !isGpwMode(mode);
 
-const pickAutoTickerResult = (query: string, items: AssetSearchResult[]) => {
-  const normalizedQuery = normalizeText(query);
-  if (!normalizedQuery || normalizedQuery.length < 2) {
-    return null;
-  }
-
-  const normalizedQuerySymbol = normalizeSymbol(query);
-  const exactSymbolMatch = items.find(
-    (item) => normalizeSymbol(item.symbol) === normalizedQuerySymbol
-  );
-  if (exactSymbolMatch) return exactSymbolMatch;
-
-  const exactNameMatch = items.find((item) => normalizeText(item.name) === normalizedQuery);
-  if (exactNameMatch) return exactNameMatch;
-
-  const startsWithNameMatch = items.find((item) =>
-    normalizeText(item.name).startsWith(normalizedQuery)
-  );
-
-  return startsWithNameMatch ?? items[0] ?? null;
-};
-
 export default function PortfolioApp({ account, initialAssets }: PortfolioAppProps) {
   const assetsRef = useRef<PortfolioAsset[]>(initialAssets);
   const hasSavedAssetsRef = useRef(false);
@@ -99,6 +81,7 @@ export default function PortfolioApp({ account, initialAssets }: PortfolioAppPro
   const [searchMode, setSearchMode] = useState<AssetSearchMode>("stock-global");
   const [draft, setDraft] = useState<AssetDraft>(() => createDraftFromMode("stock-global"));
   const [results, setResults] = useState<AssetSearchResult[]>([]);
+  const [lastAddedResult, setLastAddedResult] = useState<AssetSearchResult | null>(null);
   const [filter, setFilter] = useState("");
   const [fxRates, setFxRates] = useState<FxRates>(FALLBACK_FX_RATES);
   const [isSearching, setIsSearching] = useState(false);
@@ -145,7 +128,10 @@ export default function PortfolioApp({ account, initialAssets }: PortfolioAppPro
           setResults(nextResults);
 
           if (!isManualSymbolRef.current) {
-            const autoResult = pickAutoTickerResult(trimmedQuery, nextResults);
+            const autoResult = pickBestSearchResult(trimmedQuery, nextResults, {
+              allowFirstItemFallback: true,
+              mode: searchMode,
+            });
 
             if (autoResult) {
               setDraft((currentDraft) => {
@@ -195,6 +181,91 @@ export default function PortfolioApp({ account, initialAssets }: PortfolioAppPro
       window.clearTimeout(timeoutId);
     };
   }, [draft.kind, draft.query, searchMode]);
+
+  useEffect(() => {
+    const trimmedSymbol = draft.symbol.trim();
+    const minimumSearchLength = getMinimumSearchLength(searchMode);
+
+    if (!isManualSymbolRef.current || trimmedSymbol.length < minimumSearchLength) {
+      return;
+    }
+
+    let isCancelled = false;
+    const timeoutId = window.setTimeout(async () => {
+      setIsSearching(true);
+      setSearchError(null);
+
+      try {
+        const nextResults = await searchAssets({
+          query: trimmedSymbol,
+          kind: draft.kind,
+          mode: searchMode,
+        });
+
+        if (isCancelled) {
+          return;
+        }
+
+        const autoResult = pickBestSearchResult(trimmedSymbol, nextResults, {
+          mode: searchMode,
+          preferSymbol: true,
+        });
+
+        setDraft((currentDraft) => {
+          if (
+            !isManualSymbolRef.current ||
+            normalizeSymbol(currentDraft.symbol) !== normalizeSymbol(trimmedSymbol)
+          ) {
+            return currentDraft;
+          }
+
+          if (!autoResult) {
+            return {
+              ...currentDraft,
+              query: "",
+              name: "",
+              providerId: undefined,
+              latestPrice: undefined,
+            };
+          }
+
+          const hasSameResolvedValues =
+            normalizeText(currentDraft.query) === normalizeText(autoResult.name) &&
+            normalizeText(currentDraft.name) === normalizeText(autoResult.name) &&
+            currentDraft.provider === autoResult.provider &&
+            currentDraft.providerId === autoResult.providerId &&
+            currentDraft.marketCurrency === autoResult.marketCurrency;
+
+          if (hasSameResolvedValues) {
+            return currentDraft;
+          }
+
+          return {
+            ...currentDraft,
+            query: autoResult.name,
+            name: autoResult.name,
+            marketCurrency: autoResult.marketCurrency,
+            provider: autoResult.provider,
+            providerId: autoResult.providerId,
+            latestPrice: undefined,
+          };
+        });
+      } catch (error) {
+        if (!isCancelled) {
+          setSearchError(toErrorMessage(error, "Nie udalo sie pobrac wynikow."));
+        }
+      } finally {
+        if (!isCancelled) {
+          setIsSearching(false);
+        }
+      }
+    }, SEARCH_DEBOUNCE_MS);
+
+    return () => {
+      isCancelled = true;
+      window.clearTimeout(timeoutId);
+    };
+  }, [draft.kind, draft.symbol, searchMode]);
 
   useEffect(() => {
     if (!hasSavedAssetsRef.current) {
@@ -327,6 +398,7 @@ export default function PortfolioApp({ account, initialAssets }: PortfolioAppPro
     setQuoteError(null);
     setSearchMode(mode);
     setDraft(createDraftFromMode(mode));
+    setLastAddedResult(null);
     setResults([]);
     setSearchError(null);
   };
@@ -355,6 +427,7 @@ export default function PortfolioApp({ account, initialAssets }: PortfolioAppPro
     const normalizedResultSymbol = normalizeSymbolForMode(result.symbol, searchMode);
 
     isManualSymbolRef.current = false;
+    setSearchError(null);
     setQuoteError(null);
     setDraft((currentDraft) => ({
       ...currentDraft,
@@ -497,7 +570,17 @@ export default function PortfolioApp({ account, initialAssets }: PortfolioAppPro
       createdAt: new Date().toISOString(),
     };
 
+    isManualSymbolRef.current = false;
     setAssets((currentAssets) => [nextAsset, ...currentAssets]);
+    setLastAddedResult({
+      symbol,
+      name,
+      kind: draft.kind,
+      marketCurrency: quote.marketCurrency,
+      provider: quote.provider,
+      providerId: quote.providerId ?? draft.providerId,
+      source: "catalog",
+    });
     setDraft(createDraftFromMode(searchMode));
     setResults([]);
     setSearchError(null);
@@ -578,6 +661,7 @@ export default function PortfolioApp({ account, initialAssets }: PortfolioAppPro
               searchMode={searchMode}
               draft={draft}
               results={results}
+              lastAddedResult={lastAddedResult}
               isSearching={isSearching}
               isQuoteLoading={isQuoteLoading}
               searchError={searchError}
@@ -588,6 +672,7 @@ export default function PortfolioApp({ account, initialAssets }: PortfolioAppPro
                 quoteRequestSeqRef.current += 1;
                 isManualSymbolRef.current = false;
                 setIsQuoteLoading(false);
+                setSearchError(null);
                 setQuoteError(null);
                 setDraft((currentDraft) => ({
                   ...currentDraft,
@@ -602,15 +687,22 @@ export default function PortfolioApp({ account, initialAssets }: PortfolioAppPro
                 quoteRequestSeqRef.current += 1;
                 isManualSymbolRef.current = true;
                 setIsQuoteLoading(false);
+                setResults([]);
+                setSearchError(null);
                 setQuoteError(null);
                 setDraft((currentDraft) => ({
                   ...currentDraft,
                   symbol: symbol.toUpperCase(),
+                  query: "",
+                  name: "",
                   providerId: undefined,
                   latestPrice: undefined,
                 }));
               }}
               onPickResult={(result) => {
+                void handlePickResult(result);
+              }}
+              onReuseLastAddedResult={(result) => {
                 void handlePickResult(result);
               }}
               onSubmit={() => {

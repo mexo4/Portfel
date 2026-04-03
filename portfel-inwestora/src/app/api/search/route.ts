@@ -3,9 +3,10 @@ import {
   buildTickerFallbackResults,
   getMinimumSearchLength,
   mergeSearchResults,
+  searchCatalogAssets,
 } from "@/lib/search";
 import { searchMarketAssets } from "@/lib/server/market-data";
-import type { AssetKind, AssetSearchMode } from "@/types/portfolio";
+import type { AssetKind, AssetSearchMode, AssetSearchResult } from "@/types/portfolio";
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -18,12 +19,19 @@ export async function GET(request: Request) {
     return NextResponse.json({ results: [] });
   }
 
-  try {
-    const remoteResults = await searchMarketAssets(query, kind, mode);
-    const fallbackResults = buildTickerFallbackResults(query, kind, mode);
+  const catalogResults = searchCatalogAssets(query, kind, mode);
+  const fallbackResults = buildTickerFallbackResults(query, kind, mode);
+  let remoteResults: AssetSearchResult[] = [];
 
+  try {
+    remoteResults = await searchMarketAssets(query, kind, mode);
+  } catch (error) {
+    console.error("GET /api/search remote lookup failed", error);
+  }
+
+  try {
     return NextResponse.json({
-      results: mergeSearchResults([...remoteResults, ...fallbackResults]),
+      results: mergeSearchResults([...catalogResults, ...remoteResults, ...fallbackResults]),
     });
   } catch (error) {
     console.error("GET /api/search failed", error);

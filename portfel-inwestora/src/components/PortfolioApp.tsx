@@ -58,6 +58,13 @@ const createDraftFromMode = (mode: AssetSearchMode): AssetDraft => {
 const toErrorMessage = (error: unknown, fallback: string) =>
   error instanceof Error ? error.message : fallback;
 const wait = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms));
+const isGpwMode = (mode: AssetSearchMode) => mode === "stock-gpw";
+const normalizeSymbolForMode = (symbol: string, mode: AssetSearchMode) => {
+  const normalized = normalizeSymbol(symbol);
+  if (!normalized || !isGpwMode(mode)) return normalized;
+  return normalized.endsWith(".WA") ? normalized : `${normalized}.WA`;
+};
+const shouldRetryQuoteRequest = (mode: AssetSearchMode) => !isGpwMode(mode);
 
 const pickAutoTickerResult = (query: string, items: AssetSearchResult[]) => {
   const normalizedQuery = normalizeText(query);
@@ -298,7 +305,7 @@ export default function PortfolioApp({ account, initialAssets }: PortfolioAppPro
     }
 
     setDraft((currentDraft) => {
-      if (normalizeSymbol(currentDraft.symbol) !== targetSymbol) {
+      if (normalizeSymbolForMode(currentDraft.symbol, searchMode) !== targetSymbol) {
         return currentDraft;
       }
 
@@ -324,15 +331,20 @@ export default function PortfolioApp({ account, initialAssets }: PortfolioAppPro
     setSearchError(null);
   };
 
-  const fetchDraftQuoteWithRetry = async (request: {
-    symbol: string;
-    kind: AssetDraft["kind"];
-    marketCurrency: AssetDraft["marketCurrency"];
-    provider: AssetDraft["provider"];
-    providerId?: string;
-  }) => {
+  const fetchDraftQuoteWithRetry = async (
+    request: {
+      symbol: string;
+      kind: AssetDraft["kind"];
+      marketCurrency: AssetDraft["marketCurrency"];
+      provider: AssetDraft["provider"];
+      providerId?: string;
+    },
+    options?: {
+      allowRetry?: boolean;
+    }
+  ) => {
     const firstTry = await fetchQuotePreview(request);
-    if (firstTry) return firstTry;
+    if (firstTry || options?.allowRetry === false) return firstTry;
 
     await wait(220);
     return fetchQuotePreview(request);
@@ -340,7 +352,7 @@ export default function PortfolioApp({ account, initialAssets }: PortfolioAppPro
 
   const handlePickResult = async (result: AssetSearchResult) => {
     const requestSeq = ++quoteRequestSeqRef.current;
-    const normalizedResultSymbol = normalizeSymbol(result.symbol);
+    const normalizedResultSymbol = normalizeSymbolForMode(result.symbol, searchMode);
 
     isManualSymbolRef.current = false;
     setQuoteError(null);
@@ -348,7 +360,7 @@ export default function PortfolioApp({ account, initialAssets }: PortfolioAppPro
       ...currentDraft,
       query: result.name,
       name: result.name,
-      symbol: result.symbol,
+      symbol: normalizedResultSymbol,
       marketCurrency: result.marketCurrency,
       provider: result.provider,
       providerId: result.providerId,
@@ -359,12 +371,12 @@ export default function PortfolioApp({ account, initialAssets }: PortfolioAppPro
 
     try {
       const quote = await fetchDraftQuoteWithRetry({
-        symbol: result.symbol,
+        symbol: normalizedResultSymbol,
         kind: result.kind,
         marketCurrency: result.marketCurrency,
         provider: result.provider,
         providerId: result.providerId,
-      });
+      }, { allowRetry: shouldRetryQuoteRequest(searchMode) });
 
       if (requestSeq !== quoteRequestSeqRef.current) return;
 
@@ -381,7 +393,10 @@ export default function PortfolioApp({ account, initialAssets }: PortfolioAppPro
   };
 
   const resolveDraftQuote = async (
-    normalizedSymbol: string
+    normalizedSymbol: string,
+    options?: {
+      allowRetry?: boolean;
+    }
   ): Promise<AssetQuote | null> => {
     if (draft.latestPrice && draft.latestPrice > 0) {
       return {
@@ -405,7 +420,7 @@ export default function PortfolioApp({ account, initialAssets }: PortfolioAppPro
         marketCurrency: draft.marketCurrency,
         provider: draft.provider,
         providerId: draft.providerId,
-      });
+      }, options);
 
       if (requestSeq !== quoteRequestSeqRef.current) {
         return null;
@@ -427,7 +442,7 @@ export default function PortfolioApp({ account, initialAssets }: PortfolioAppPro
 
   const handleAddAsset = async () => {
     const name = draft.name.trim() || draft.query.trim();
-    const symbol = normalizeSymbol(draft.symbol);
+    const symbol = normalizeSymbolForMode(draft.symbol, searchMode);
     const purchaseDate = toDateInputValue(draft.purchaseDate);
 
     setSearchError(null);
@@ -449,7 +464,16 @@ export default function PortfolioApp({ account, initialAssets }: PortfolioAppPro
       return;
     }
 
-    const quote = await resolveDraftQuote(symbol);
+    if (symbol !== normalizeSymbol(draft.symbol)) {
+      setDraft((currentDraft) => ({
+        ...currentDraft,
+        symbol,
+      }));
+    }
+
+    const quote = await resolveDraftQuote(symbol, {
+      allowRetry: shouldRetryQuoteRequest(searchMode),
+    });
 
     if (!quote) {
       return;

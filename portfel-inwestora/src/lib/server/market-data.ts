@@ -1,3 +1,9 @@
+import {
+  findGpwCatalogEntry,
+  findGpwCatalogEntryWithPrice,
+  searchGpwCatalog,
+  warmGpwCatalog,
+} from "@/lib/server/gpw-catalog";
 import { inferCurrencyFromSymbol, normalizeSymbol } from "@/lib/ticker";
 import { normalizeText, round, toCurrencyCode, uniqueBy } from "@/lib/utils";
 import type {
@@ -85,6 +91,21 @@ const COMMODITY_API_KEY =
 
 const isGpwSymbol = (symbol: string) => /\.WA$/i.test(symbol);
 const isEuropeanEtfSymbol = (symbol: string) => /\.(AS|DE|DU|F|HM|MI|MU)$/i.test(symbol);
+const normalizeGpwSymbol = (symbol: string) => {
+  const normalized = normalizeSymbol(symbol);
+  if (!normalized) return normalized;
+  return isGpwSymbol(normalized) ? normalized : `${normalized}.WA`;
+};
+const getGpwTickerCore = (symbol: string) => normalizeGpwSymbol(symbol).replace(/\.WA$/i, "");
+const shouldUseGpwStooqQuote = ({
+  symbol,
+  kind,
+  marketCurrency,
+}: {
+  symbol: string;
+  kind: AssetKind;
+  marketCurrency: CurrencyCode;
+}) => kind === "stock" && (isGpwSymbol(symbol) || marketCurrency === "PLN");
 
 const getEtfProvider = (symbol: string): QuoteProvider =>
   isEuropeanEtfSymbol(symbol) ? "stooq" : "finnhub";
@@ -138,24 +159,31 @@ const getStooqSymbolCandidates = (symbol: string) => {
   );
 };
 
-const STOOQ_DOMAINS = [
-  "https://stooq.pl",
-  "https://stooq.com",
-  "http://stooq.pl",
-  "http://stooq.com",
-] as const;
+const STOOQ_DOMAINS = ["https://stooq.pl", "https://stooq.com"] as const;
 const STOOQ_TEXT_PROXY_URL = "https://r.jina.ai/http://stooq.pl/q/?s=";
+const STOOQ_RATE_LIMIT_PATTERN = /przekroczony\s+dzienny\s+limit\s+wywolan/i;
+const GPW_QUOTE_CACHE_TTL_MS = 30_000;
+
+const gpwQuoteCache = new Map<string, { quote: AssetQuote; expiresAt: number }>();
+const gpwQuoteInFlight = new Map<string, Promise<AssetQuote | null>>();
 
 const safeFetch = async (
   url: string,
   init?: RequestInit,
-  _timeoutMs?: number
+  timeoutMs = 5_000
 ) => {
-  void _timeoutMs;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
   try {
-    return await fetch(url, init);
+    return await fetch(url, {
+      ...init,
+      signal: controller.signal,
+    });
   } catch {
     return null;
+  } finally {
+    clearTimeout(timeoutId);
   }
 };
 
@@ -177,6 +205,57 @@ const getStooqPageSymbolCandidates = (symbol: string) => {
   return uniqueBy([normalized], (item) => item);
 };
 
+const normalizeGpwTickerQuery = (query: string) => {
+  const normalized = normalizeSymbol(query);
+
+  if (!normalized) {
+    return null;
+  }
+
+  if (isGpwSymbol(normalized)) {
+    const tickerCore = normalized.replace(/\.WA$/i, "");
+    return /^[A-Z0-9]{1,6}$/.test(tickerCore) ? tickerCore : null;
+  }
+
+  return /^[A-Z0-9]{1,6}$/.test(normalized) ? normalized : null;
+};
+
+const containsStooqRateLimitMessage = (value: string) =>
+  STOOQ_RATE_LIMIT_PATTERN.test(value);
+
+const getGpwQuoteCacheKey = (symbol: string) => `stooq:${normalizeGpwSymbol(symbol)}`;
+
+const getCachedGpwQuote = (symbol: string) => {
+  const cacheKey = getGpwQuoteCacheKey(symbol);
+  const cachedEntry = gpwQuoteCache.get(cacheKey);
+
+  if (!cachedEntry) {
+    return null;
+  }
+
+  if (cachedEntry.expiresAt <= Date.now()) {
+    gpwQuoteCache.delete(cacheKey);
+    return null;
+  }
+
+  return {
+    ...cachedEntry.quote,
+    symbol: normalizeGpwSymbol(symbol),
+  };
+};
+
+const setCachedGpwQuote = (quote: AssetQuote) => {
+  const normalizedSymbol = normalizeGpwSymbol(quote.symbol);
+
+  gpwQuoteCache.set(getGpwQuoteCacheKey(normalizedSymbol), {
+    quote: {
+      ...quote,
+      symbol: normalizedSymbol,
+    },
+    expiresAt: Date.now() + GPW_QUOTE_CACHE_TTL_MS,
+  });
+};
+
 const parseStooqJsonQuote = async (response: Response) => {
   try {
     const payload = (await response.json()) as StooqQuoteResponse;
@@ -194,6 +273,10 @@ const parseStooqJsonQuote = async (response: Response) => {
 };
 
 const parseStooqCsvQuote = (csv: string) => {
+  if (containsStooqRateLimitMessage(csv)) {
+    return null;
+  }
+
   const lines = csv
     .trim()
     .split(/\r?\n/)
@@ -214,7 +297,8 @@ const parseStooqCsvQuote = (csv: string) => {
 
 const fetchStooqPageQuote = async (
   symbol: string,
-  fallbackCurrency: CurrencyCode
+  fallbackCurrency: CurrencyCode,
+  timeoutMs = 7_500
 ): Promise<AssetQuote | null> => {
   const pageSymbols = getStooqPageSymbolCandidates(symbol);
 
@@ -224,10 +308,11 @@ const fetchStooqPageQuote = async (
       {
         headers: {
           Accept: "text/plain",
+          "User-Agent": "Mozilla/5.0",
         },
         cache: "no-store",
       },
-      7_500
+      timeoutMs
     );
 
     if (!response || !response.ok) {
@@ -255,6 +340,162 @@ const fetchStooqPageQuote = async (
   }
 
   return null;
+};
+
+const buildGpwQuote = (symbol: string, price: number, name?: string): AssetQuote => {
+  const normalizedSymbol = normalizeGpwSymbol(symbol);
+  const catalogEntry = findGpwCatalogEntry(normalizedSymbol);
+
+  return {
+    symbol: normalizedSymbol,
+    price: round(price),
+    marketCurrency: "PLN",
+    provider: "stooq",
+    fetchedAt: new Date().toISOString(),
+    name: name?.trim() || catalogEntry?.name,
+  };
+};
+
+const getCachedGpwCatalogQuote = async (symbol: string) => {
+  const catalogEntry = await findGpwCatalogEntryWithPrice(symbol);
+
+  if (!catalogEntry?.price) {
+    return null;
+  }
+
+  return buildGpwQuote(symbol, catalogEntry.price, catalogEntry.name);
+};
+
+const fetchStooqLiveCsvQuote = async (
+  symbol: string,
+  fallbackCurrency: CurrencyCode,
+  timeoutMs = 1_000
+): Promise<AssetQuote | null> => {
+  const requestSymbols = [getGpwTickerCore(symbol).toLowerCase()];
+
+  for (const requestSymbol of requestSymbols) {
+    const response = await safeFetch(
+      `https://stooq.pl/q/l/?s=${encodeURIComponent(requestSymbol)}&f=sd2t2ohlcv&e=csv`,
+      {
+        headers: {
+          "User-Agent": "Mozilla/5.0",
+        },
+        cache: "no-store",
+      },
+      timeoutMs
+    );
+
+    if (!response?.ok) {
+      continue;
+    }
+
+    const csv = await response.text();
+
+    if (containsStooqRateLimitMessage(csv)) {
+      continue;
+    }
+
+    const close = parseStooqCsvQuote(csv);
+
+    if (close !== null) {
+      return {
+        symbol,
+        price: close,
+        marketCurrency: inferCurrencyFromSymbol(symbol, fallbackCurrency),
+        provider: "stooq",
+        fetchedAt: new Date().toISOString(),
+      };
+    }
+  }
+
+  return null;
+};
+
+const fetchStooqHistoryQuote = async (
+  symbol: string,
+  fallbackCurrency: CurrencyCode,
+  timeoutMs = 800
+): Promise<AssetQuote | null> => {
+  const requestSymbols = [getGpwTickerCore(symbol).toLowerCase()];
+  const today = new Date().toISOString().slice(0, 10).replaceAll("-", "");
+
+  for (const requestSymbol of requestSymbols) {
+    const response = await safeFetch(
+      `https://stooq.pl/q/d/l/?s=${encodeURIComponent(requestSymbol)}&d1=20000101&d2=${today}&i=d`,
+      {
+        headers: {
+          "User-Agent": "Mozilla/5.0",
+        },
+        cache: "no-store",
+      },
+      timeoutMs
+    );
+
+    if (!response?.ok) {
+      continue;
+    }
+
+    const csv = await response.text();
+
+    if (containsStooqRateLimitMessage(csv)) {
+      continue;
+    }
+
+    const lines = csv
+      .trim()
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const lastDataLine = [...lines].reverse().find((line) => /^\d{4}-\d{2}-\d{2},/i.test(line));
+
+    if (!lastDataLine) {
+      continue;
+    }
+
+    const close = Number(lastDataLine.split(",")[4]);
+
+    if (Number.isFinite(close) && close > 0) {
+      return {
+        symbol,
+        price: round(close),
+        marketCurrency: inferCurrencyFromSymbol(symbol, fallbackCurrency),
+        provider: "stooq",
+        fetchedAt: new Date().toISOString(),
+      };
+    }
+  }
+
+  return null;
+};
+
+const searchGpwStooqTickerFallback = async (
+  query: string
+): Promise<AssetSearchResult[]> => {
+  const tickerCore = normalizeGpwTickerQuery(query);
+
+  if (!tickerCore) {
+    return [];
+  }
+
+  const quote = await fetchStooqPageQuote(tickerCore, "PLN", 5_000);
+
+  if (!quote) {
+    return [];
+  }
+
+  const canonicalSymbol = normalizeGpwSymbol(tickerCore);
+
+  return [
+    {
+      symbol: canonicalSymbol,
+      name: quote.name?.trim() || canonicalSymbol,
+      kind: "stock",
+      marketCurrency: "PLN",
+      provider: "stooq",
+      subtitle: "Stooq",
+      source: "api",
+    },
+  ];
 };
 
 const searchFinnhub = async (
@@ -502,7 +743,13 @@ const fetchStooqQuote = async (
       );
 
       if (csvLiveResponse?.ok) {
-        const close = parseStooqCsvQuote(await csvLiveResponse.text());
+        const csv = await csvLiveResponse.text();
+
+        if (containsStooqRateLimitMessage(csv)) {
+          continue;
+        }
+
+        const close = parseStooqCsvQuote(csv);
 
         if (close !== null) {
           return {
@@ -532,6 +779,11 @@ const fetchStooqQuote = async (
       }
 
       const csv = await historyResponse.text();
+
+      if (containsStooqRateLimitMessage(csv)) {
+        continue;
+      }
+
       const lines = csv
         .trim()
         .split("\n")
@@ -559,6 +811,85 @@ const fetchStooqQuote = async (
   }
 
   return fetchStooqPageQuote(symbol, fallbackCurrency);
+};
+
+const fetchGpwStooqQuote = async (symbol: string): Promise<AssetQuote | null> => {
+  warmGpwCatalog();
+  const normalizedGpwSymbol = normalizeGpwSymbol(symbol);
+
+  if (!normalizedGpwSymbol) {
+    return null;
+  }
+
+  const cachedQuote = getCachedGpwQuote(normalizedGpwSymbol);
+
+  if (cachedQuote) {
+    return cachedQuote;
+  }
+
+  const cacheKey = getGpwQuoteCacheKey(normalizedGpwSymbol);
+  const inFlightQuote = gpwQuoteInFlight.get(cacheKey);
+
+  if (inFlightQuote) {
+    return inFlightQuote;
+  }
+
+  const quotePromise = (async () => {
+    const liveQuote = await fetchStooqLiveCsvQuote(normalizedGpwSymbol, "PLN");
+
+    if (liveQuote) {
+      const normalizedQuote = buildGpwQuote(
+        normalizedGpwSymbol,
+        liveQuote.price,
+        liveQuote.name
+      );
+      setCachedGpwQuote(normalizedQuote);
+      return normalizedQuote;
+    }
+
+    const historyQuote = await fetchStooqHistoryQuote(normalizedGpwSymbol, "PLN");
+
+    if (historyQuote) {
+      const normalizedQuote = buildGpwQuote(
+        normalizedGpwSymbol,
+        historyQuote.price,
+        historyQuote.name
+      );
+      setCachedGpwQuote(normalizedQuote);
+      return normalizedQuote;
+    }
+
+    const catalogQuote = await getCachedGpwCatalogQuote(normalizedGpwSymbol);
+
+    if (catalogQuote) {
+      setCachedGpwQuote(catalogQuote);
+      return catalogQuote;
+    }
+
+    const pageQuote = await fetchStooqPageQuote(
+      getGpwTickerCore(normalizedGpwSymbol),
+      "PLN",
+      5_000
+    );
+
+    if (!pageQuote) {
+      return null;
+    }
+
+    const normalizedQuote = buildGpwQuote(
+      normalizedGpwSymbol,
+      pageQuote.price,
+      pageQuote.name
+    );
+    setCachedGpwQuote(normalizedQuote);
+    return normalizedQuote;
+  })().finally(() => {
+    gpwQuoteInFlight.delete(cacheKey);
+  });
+
+  gpwQuoteInFlight.set(cacheKey, quotePromise);
+
+  return quotePromise;
 };
 
 const fetchCoinGeckoQuote = async (
@@ -721,6 +1052,17 @@ export const searchMarketAssets = async (
     return searchCommodityApi(query);
   }
 
+  if (kind === "stock" && mode === "stock-gpw") {
+    warmGpwCatalog();
+    const catalogResults = await searchGpwCatalog(query);
+
+    if (catalogResults.length > 0) {
+      return catalogResults;
+    }
+
+    return searchGpwStooqTickerFallback(query);
+  }
+
   if (kind === "stock" || kind === "etf") {
     return searchFinnhub(query, kind, mode);
   }
@@ -742,7 +1084,11 @@ export const fetchAssetQuoteServer = async ({
   providerId?: string;
 }) => {
   const normalizedSymbol = normalizeSymbol(symbol);
-  const isGpwStock = kind === "stock" && isGpwSymbol(normalizedSymbol);
+  const isGpwStockRequest = shouldUseGpwStooqQuote({
+    symbol: normalizedSymbol,
+    kind,
+    marketCurrency,
+  });
 
   if (kind === "crypto") {
     return fetchCoinGeckoQuote(normalizedSymbol, providerId);
@@ -752,8 +1098,8 @@ export const fetchAssetQuoteServer = async ({
     return fetchCommodityQuote(normalizedSymbol, providerId);
   }
 
-  if (isGpwStock) {
-    return fetchStooqQuote(normalizedSymbol, marketCurrency);
+  if (isGpwStockRequest) {
+    return fetchGpwStooqQuote(normalizedSymbol);
   }
 
   if (provider === "finnhub") {

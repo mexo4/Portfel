@@ -1,7 +1,14 @@
-import { KIND_LABELS, SEARCH_MODE_OPTIONS } from "@/lib/constants";
+import {
+  COMMODITY_CATALOG,
+  KIND_LABELS,
+  LOCAL_ETF_CATALOG,
+  LOCAL_STOCK_CATALOG,
+  SEARCH_MODE_OPTIONS,
+} from "@/lib/constants";
 import { inferCurrencyFromSymbol } from "@/lib/ticker";
-import { uniqueBy } from "@/lib/utils";
+import { normalizeText, uniqueBy } from "@/lib/utils";
 import type {
+  AssetCatalogItem,
   AssetKind,
   AssetSearchMode,
   AssetSearchResult,
@@ -27,6 +34,92 @@ export const getKindLabel = (kind: AssetKind) => KIND_LABELS[kind];
 
 export const getModeConfig = (mode: AssetSearchMode) =>
   SEARCH_MODE_OPTIONS.find((option) => option.value === mode) ?? SEARCH_MODE_OPTIONS[0];
+
+const isGpwCatalogSymbol = (symbol: string) => /\.WA$/i.test(symbol);
+
+const getCatalogEntries = (
+  kind: AssetKind,
+  mode?: AssetSearchMode
+): AssetCatalogItem[] => {
+  if (kind === "commodity" || mode === "commodity") {
+    return COMMODITY_CATALOG;
+  }
+
+  if (kind === "etf" || mode === "etf") {
+    return LOCAL_ETF_CATALOG;
+  }
+
+  if (kind !== "stock") {
+    return [];
+  }
+
+  if (mode === "stock-gpw") {
+    return LOCAL_STOCK_CATALOG.filter((item) => isGpwCatalogSymbol(item.symbol));
+  }
+
+  if (mode === "stock-global") {
+    return LOCAL_STOCK_CATALOG.filter((item) => !isGpwCatalogSymbol(item.symbol));
+  }
+
+  return LOCAL_STOCK_CATALOG;
+};
+
+const getCatalogMatchScore = (
+  item: AssetCatalogItem,
+  query: string,
+  normalizedQuery: string
+) => {
+  const upperQuery = query.trim().toUpperCase();
+  const normalizedSymbol = normalizeText(item.symbol);
+  const normalizedName = normalizeText(item.name);
+  const normalizedTerms = item.searchTerms.map((term) => normalizeText(term));
+
+  if (item.symbol === upperQuery) return 0;
+  if (normalizedSymbol === normalizedQuery) return 1;
+  if (normalizedName === normalizedQuery) return 2;
+  if (normalizedTerms.some((term) => term === normalizedQuery)) return 3;
+  if (item.symbol.startsWith(upperQuery)) return 4;
+  if (normalizedName.startsWith(normalizedQuery)) return 5;
+  return 6;
+};
+
+export const searchCatalogAssets = (
+  query: string,
+  kind: AssetKind,
+  mode?: AssetSearchMode
+): AssetSearchResult[] => {
+  const normalizedQuery = normalizeText(query);
+
+  if (!normalizedQuery) {
+    return [];
+  }
+
+  return getCatalogEntries(kind, mode)
+    .filter((item) => {
+      const haystack = normalizeText(
+        [item.name, item.symbol, item.subtitle, ...item.searchTerms].join(" ")
+      );
+
+      return haystack.includes(normalizedQuery);
+    })
+    .sort(
+      (left, right) =>
+        getCatalogMatchScore(left, query, normalizedQuery) -
+          getCatalogMatchScore(right, query, normalizedQuery) ||
+        left.name.localeCompare(right.name, "pl")
+    )
+    .slice(0, 8)
+    .map((item) => ({
+      symbol: item.symbol,
+      name: item.name,
+      kind: item.kind,
+      marketCurrency: item.marketCurrency,
+      provider: item.provider,
+      providerId: item.providerId,
+      subtitle: item.subtitle,
+      source: "catalog" as const,
+    }));
+};
 
 export const isLikelyTickerInput = (query: string) => {
   const trimmed = query.trim();

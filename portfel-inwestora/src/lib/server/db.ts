@@ -57,6 +57,12 @@ db.exec(`
     ON email_verification_tokens(user_id);
   CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_user_id
     ON password_reset_tokens(user_id);
+
+  CREATE TABLE IF NOT EXISTS market_cache (
+    key TEXT PRIMARY KEY,
+    payload_json TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
 `);
 
 const ensureColumn = (tableName: string, columnName: string, definition: string) => {

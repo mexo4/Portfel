@@ -1,6 +1,10 @@
 import { LOCAL_STOCK_CATALOG } from "@/lib/constants";
 import db from "@/lib/server/db";
-import { normalizeSymbol } from "@/lib/ticker";
+import {
+  getGpwTickerCore,
+  isGpwSymbol,
+  normalizeGpwSymbol,
+} from "@/lib/ticker";
 import { normalizeText, uniqueBy } from "@/lib/utils";
 import type { AssetSearchResult } from "@/types/portfolio";
 
@@ -55,15 +59,16 @@ const writeCacheStatement = db.prepare(`
     updated_at = excluded.updated_at
 `);
 
-const isGpwCatalogSymbol = (symbol: string) => /\.WA$/i.test(symbol);
+const isGpwCatalogSymbol = (symbol: string) => isGpwSymbol(symbol);
 
-const normalizeGpwSymbol = (symbol: string) => {
-  const normalized = normalizeSymbol(symbol);
-  if (!normalized) return normalized;
-  return isGpwCatalogSymbol(normalized) ? normalized : `${normalized}.WA`;
-};
+const getSymbolCore = (symbol: string) => getGpwTickerCore(symbol);
 
-const getSymbolCore = (symbol: string) => normalizeGpwSymbol(symbol).replace(/\.WA$/i, "");
+const LOCAL_GPW_ITEM_BY_CORE = new Map(
+  LOCAL_STOCK_CATALOG.filter((item) => isGpwCatalogSymbol(item.symbol)).map((item) => [
+    getSymbolCore(item.symbol),
+    item,
+  ])
+);
 
 const parsePrice = (value?: string | number | null) => {
   if (typeof value === "number") {
@@ -80,20 +85,24 @@ const parsePrice = (value?: string | number | null) => {
 };
 
 const createCatalogItem = (symbol: string, name: string, price?: number | null): GpwCatalogItem => {
-  const canonicalSymbol = normalizeGpwSymbol(symbol);
-  const symbolCore = getSymbolCore(canonicalSymbol);
-  const normalizedSymbol = normalizeText(canonicalSymbol);
-  const normalizedName = normalizeText(name);
+  const symbolCore = getSymbolCore(symbol);
+  const localCatalogItem = LOCAL_GPW_ITEM_BY_CORE.get(symbolCore);
+  const displaySymbol = localCatalogItem
+    ? normalizeGpwSymbol(localCatalogItem.symbol)
+    : normalizeGpwSymbol(symbol);
+  const displayName = localCatalogItem?.name?.trim() || name.trim();
+  const normalizedSymbol = normalizeText(displaySymbol);
+  const normalizedName = normalizeText(displayName);
 
   return {
-    symbol: canonicalSymbol,
+    symbol: displaySymbol,
     symbolCore,
-    name: name.trim(),
+    name: displayName,
     price: parsePrice(price),
     normalizedSymbol,
     normalizedName,
     normalizedHaystack: normalizeText(
-      [canonicalSymbol, symbolCore, name]
+      [displaySymbol, symbolCore, `${symbolCore}.WA`, `${symbolCore}.PL`, displayName, name]
         .map((value) => value.trim())
         .filter(Boolean)
         .join(" ")
@@ -110,7 +119,7 @@ const createSnapshot = (
     items
       .filter((item) => item.symbol.trim() && item.name.trim())
       .map((item) => createCatalogItem(item.symbol, item.name, item.price)),
-    (item) => item.symbol
+    (item) => item.symbolCore
   ),
   updatedAt,
   source,
@@ -333,13 +342,14 @@ const getAvailableSnapshot = () => {
 
 const getMatchScore = (item: GpwCatalogItem, query: string, normalizedQuery: string) => {
   const upperQuery = query.trim().toUpperCase();
-  const canonicalQuery = normalizeGpwSymbol(query);
+  const queryCore = getSymbolCore(query);
 
-  if (item.symbol === canonicalQuery) return 0;
+  if (item.symbol === normalizeGpwSymbol(query)) return 0;
+  if (item.symbolCore === queryCore) return 1;
   if (item.symbolCore === upperQuery) return 1;
   if (item.normalizedSymbol === normalizedQuery) return 2;
   if (item.normalizedName === normalizedQuery) return 3;
-  if (item.symbolCore.startsWith(upperQuery)) return 4;
+  if (queryCore && item.symbolCore.startsWith(queryCore)) return 4;
   if (item.name.toUpperCase().startsWith(upperQuery)) return 5;
   if (item.normalizedName.startsWith(normalizedQuery)) return 6;
   return 7;
@@ -374,27 +384,24 @@ export const searchGpwCatalog = async (query: string): Promise<AssetSearchResult
 };
 
 export const findGpwCatalogEntry = (symbol: string) => {
-  const normalizedSymbol = normalizeGpwSymbol(symbol);
+  const symbolCore = getSymbolCore(symbol);
 
-  if (!normalizedSymbol) {
+  if (!symbolCore) {
     return null;
   }
 
-  return (
-    getAvailableSnapshot().items.find((item) => item.symbol === normalizedSymbol) ?? null
-  );
+  return getAvailableSnapshot().items.find((item) => item.symbolCore === symbolCore) ?? null;
 };
 
 export const findGpwCatalogEntryWithPrice = async (symbol: string) => {
-  const normalizedSymbol = normalizeGpwSymbol(symbol);
+  const symbolCore = getSymbolCore(symbol);
 
-  if (!normalizedSymbol) {
+  if (!symbolCore) {
     return null;
   }
 
   const snapshot = getAvailableSnapshot();
-  const currentEntry =
-    snapshot.items.find((item) => item.symbol === normalizedSymbol) ?? null;
+  const currentEntry = snapshot.items.find((item) => item.symbolCore === symbolCore) ?? null;
 
   if (currentEntry?.price) {
     return currentEntry;
@@ -406,9 +413,7 @@ export const findGpwCatalogEntryWithPrice = async (symbol: string) => {
     return currentEntry;
   }
 
-  return (
-    refreshedSnapshot.items.find((item) => item.symbol === normalizedSymbol) ?? currentEntry
-  );
+  return refreshedSnapshot.items.find((item) => item.symbolCore === symbolCore) ?? currentEntry;
 };
 
 export const warmGpwCatalog = () => {

@@ -1,10 +1,12 @@
 import { BASE_CURRENCY } from "@/lib/constants";
+import { getPortfolioAssetGroupKey } from "@/lib/ticker";
 import { round } from "@/lib/utils";
 import type {
   AssetKind,
   CurrencyCode,
   FxRates,
   PortfolioAsset,
+  PortfolioSale,
   PortfolioSummary,
 } from "@/types/portfolio";
 
@@ -19,11 +21,15 @@ export type PortfolioAssetGroup = {
   averagePurchasePriceCurrency: CurrencyCode;
   marketCurrency: CurrencyCode;
   latestUnitPrice?: number;
+  previousClose?: number;
   hasLivePrice: boolean;
+  hasDailyChange: boolean;
+  dailyChangePercent?: number;
   totalInvestedPln: number;
   totalValuePln: number;
   totalProfitLossPln: number;
   lastUpdatedAt?: string;
+  groupOrder: number;
   lotsCount: number;
   lots: PortfolioAsset[];
 };
@@ -44,6 +50,22 @@ export const hasAssetLivePrice = (asset: PortfolioAsset) =>
 
 export const getAssetLatestUnitPrice = (asset: PortfolioAsset) =>
   hasAssetLivePrice(asset) ? asset.latestPrice : undefined;
+
+export const getAssetPreviousClose = (asset: PortfolioAsset) =>
+  typeof asset.previousClose === "number" && Number.isFinite(asset.previousClose) && asset.previousClose > 0
+    ? asset.previousClose
+    : undefined;
+
+export const getAssetDailyChangePercent = (asset: PortfolioAsset) => {
+  const latestUnitPrice = getAssetLatestUnitPrice(asset);
+  const previousClose = getAssetPreviousClose(asset);
+
+  if (latestUnitPrice === undefined || previousClose === undefined) {
+    return undefined;
+  }
+
+  return round(((latestUnitPrice - previousClose) / previousClose) * 100, 2);
+};
 
 export const getAssetInvestedPln = (asset: PortfolioAsset, fxRates: FxRates) =>
   round(
@@ -68,7 +90,7 @@ export const getGroupedPortfolioAssets = (
   const groups = new Map<string, PortfolioAsset[]>();
 
   assets.forEach((asset) => {
-    const key = `${asset.kind}:${asset.symbol}`;
+    const key = getPortfolioAssetGroupKey(asset);
     const currentGroup = groups.get(key) ?? [];
     currentGroup.push(asset);
     groups.set(key, currentGroup);
@@ -82,6 +104,8 @@ export const getGroupedPortfolioAssets = (
       const representativeLot =
         sortedLots.find((lot) => hasAssetLivePrice(lot)) ?? sortedLots[0];
       const hasLivePrice = sortedLots.some(hasAssetLivePrice);
+      const previousClose = getAssetPreviousClose(representativeLot);
+      const dailyChangePercent = getAssetDailyChangePercent(representativeLot);
       const quantity = round(
         sortedLots.reduce((total, lot) => total + lot.quantity, 0),
         6
@@ -104,6 +128,10 @@ export const getGroupedPortfolioAssets = (
       const totalValuePln = round(
         sortedLots.reduce((total, lot) => total + getAssetMarketValuePln(lot, fxRates), 0)
       );
+      const groupOrderCandidates = sortedLots
+        .map((lot) => lot.groupOrder)
+        .filter((value): value is number => Number.isFinite(value))
+        .sort((left, right) => left - right);
       const lastUpdatedAt = sortedLots
         .map((lot) => lot.lastUpdatedAt)
         .filter((value): value is string => Boolean(value))
@@ -126,13 +154,17 @@ export const getGroupedPortfolioAssets = (
         averagePurchasePriceCurrency,
         marketCurrency: representativeLot.marketCurrency,
         latestUnitPrice: getAssetLatestUnitPrice(representativeLot),
+        previousClose,
         hasLivePrice,
+        hasDailyChange: dailyChangePercent !== undefined,
+        dailyChangePercent,
         totalInvestedPln,
         totalValuePln,
         totalProfitLossPln: round(
           sortedLots.reduce((total, lot) => total + getAssetProfitLossPln(lot, fxRates), 0)
         ),
         lastUpdatedAt,
+        groupOrder: groupOrderCandidates[0] ?? Number.MAX_SAFE_INTEGER,
         lotsCount: sortedLots.length,
         lots: sortedLots,
       } satisfies PortfolioAssetGroup;
@@ -141,9 +173,10 @@ export const getGroupedPortfolioAssets = (
 
 export const getPortfolioSummary = (
   assets: PortfolioAsset[],
+  sales: PortfolioSale[],
   fxRates: FxRates
 ): PortfolioSummary => {
-  const totals = assets.reduce(
+  const openTotals = assets.reduce(
     (acc, asset) => {
       acc.totalValuePln += getAssetMarketValuePln(asset, fxRates);
       acc.totalInvestedPln += getAssetInvestedPln(asset, fxRates);
@@ -156,13 +189,22 @@ export const getPortfolioSummary = (
       totalProfitLossPln: 0,
     }
   );
+  const realizedProfitLossPln = round(
+    sales.reduce((total, sale) => total + sale.realizedProfitLossPln, 0)
+  );
+  const openProfitLossPln = round(openTotals.totalProfitLossPln);
+  const combinedProfitLossPln = round(openProfitLossPln + realizedProfitLossPln);
 
   return {
-    totalValuePln: round(totals.totalValuePln),
-    totalInvestedPln: round(totals.totalInvestedPln),
-    totalProfitLossPln: round(totals.totalProfitLossPln),
+    totalValuePln: round(openTotals.totalValuePln),
+    totalInvestedPln: round(openTotals.totalInvestedPln),
+    totalProfitLossPln: openProfitLossPln,
+    openProfitLossPln,
+    realizedProfitLossPln,
+    combinedProfitLossPln,
     positionsCount: assets.length,
-    assetsCount: new Set(assets.map((asset) => asset.symbol)).size,
+    assetsCount: new Set(assets.map((asset) => getPortfolioAssetGroupKey(asset))).size,
+    salesCount: sales.length,
   };
 };
 

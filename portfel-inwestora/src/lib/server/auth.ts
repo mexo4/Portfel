@@ -2,13 +2,13 @@ import bcrypt from "bcryptjs";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
+import { normalizePortfolioState } from "@/lib/portfolio-state";
 import type { NextResponse } from "next/server";
 import { createFreshUserProfile, normalizeUserProfile } from "@/lib/profile";
 import db from "@/lib/server/db";
-import { toDateInputValue } from "@/lib/utils";
 import type {
   AuthenticatedUser,
-  PortfolioAsset,
+  PortfolioState,
   UserProfile,
 } from "@/types/portfolio";
 
@@ -56,36 +56,11 @@ const toAuthenticatedUser = (
   emailVerifiedAt: user.email_verified_at,
 });
 
-const parsePortfolioAssets = (portfolioJson: string): PortfolioAsset[] => {
+const parsePortfolio = (portfolioJson: string): PortfolioState => {
   try {
-    const parsed = JSON.parse(portfolioJson) as Array<Partial<PortfolioAsset>>;
-
-    if (!Array.isArray(parsed)) {
-      return [];
-    }
-
-    return parsed
-      .filter(
-        (asset): asset is Partial<PortfolioAsset> =>
-          Boolean(asset) && typeof asset === "object"
-      )
-      .map((asset) => {
-        const createdAt =
-          typeof asset.createdAt === "string" && asset.createdAt
-            ? asset.createdAt
-            : new Date().toISOString();
-        const purchaseDate = toDateInputValue(
-          typeof asset.purchaseDate === "string" ? asset.purchaseDate : createdAt
-        );
-
-        return {
-          ...asset,
-          purchaseDate,
-          createdAt,
-        } as PortfolioAsset;
-      });
+    return normalizePortfolioState(JSON.parse(portfolioJson));
   } catch {
-    return [];
+    return normalizePortfolioState([]);
   }
 };
 
@@ -333,7 +308,7 @@ export const getCurrentAccountData = async () => {
   return {
     user: toAuthenticatedUser(sessionUser),
     profile: parseUserProfile(sessionUser),
-    assets: parsePortfolioAssets(sessionUser.portfolio_json),
+    ...parsePortfolio(sessionUser.portfolio_json),
   };
 };
 
@@ -413,7 +388,7 @@ export const updateCurrentUserProfile = async (
 
 export const updateCurrentUserPortfolio = async (
   userId: string,
-  assets: PortfolioAsset[]
+  portfolio: PortfolioState
 ) => {
   const existingUser = getUserById(userId);
 
@@ -427,9 +402,9 @@ export const updateCurrentUserPortfolio = async (
       SET portfolio_json = ?, updated_at = ?
       WHERE id = ?
     `
-  ).run(JSON.stringify(assets), new Date().toISOString(), userId);
+  ).run(JSON.stringify(normalizePortfolioState(portfolio)), new Date().toISOString(), userId);
 
-  return assets;
+  return normalizePortfolioState(portfolio);
 };
 
 export const requestEmailVerificationForUser = async (userId: string, baseUrl: string) => {

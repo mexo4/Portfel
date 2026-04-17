@@ -207,7 +207,7 @@ export const buildBenchmarkComparisons = async (
   const validInvestments = investments.filter(
     (investment) =>
       Number.isFinite(investment.amountPln) &&
-      investment.amountPln > 0 &&
+      investment.amountPln !== 0 &&
       Boolean(investment.date)
   );
 

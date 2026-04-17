@@ -2,20 +2,24 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { fetchBenchmarkComparisons } from "@/lib/api";
-import { getAssetInvestedPln, getGroupedPortfolioAssets } from "@/lib/pricing";
+import { buildPortfolioBenchmarkInvestments } from "@/lib/portfolio-state";
+import { getGroupedPortfolioAssets } from "@/lib/pricing";
+import { isGpwSymbol } from "@/lib/ticker";
 import { formatCurrency } from "@/lib/utils";
 import type {
   BenchmarkComparison,
   FxRates,
   PortfolioAsset,
+  PortfolioSale,
 } from "@/types/portfolio";
 
 type PortfolioChartsProps = {
   assets: PortfolioAsset[];
+  sales: PortfolioSale[];
   fxRates: FxRates;
 };
 
-type AssetClassBreakdownTarget = Pick<PortfolioAsset, "kind">;
+type AssetClassBreakdownTarget = Pick<PortfolioAsset, "kind" | "symbol">;
 
 const CHART_COLORS = [
   "#0f766e",
@@ -28,28 +32,30 @@ const CHART_COLORS = [
 
 const ASSET_CLASS_BREAKDOWN = [
   {
-    id: "stock",
-    label: "Akcje",
+    id: "stock-gpw",
+    label: "Akcje GPW",
     color: CHART_COLORS[0],
-    matches: (asset: AssetClassBreakdownTarget) => asset.kind === "stock",
+    matches: (asset: AssetClassBreakdownTarget) =>
+      asset.kind === "stock" && isGpwSymbol(asset.symbol),
+  },
+  {
+    id: "stock-global",
+    label: "Akcje amerykanskie",
+    color: CHART_COLORS[1],
+    matches: (asset: AssetClassBreakdownTarget) =>
+      asset.kind === "stock" && !isGpwSymbol(asset.symbol),
   },
   {
     id: "etf",
     label: "ETF",
-    color: CHART_COLORS[1],
+    color: CHART_COLORS[2],
     matches: (asset: AssetClassBreakdownTarget) => asset.kind === "etf",
   },
   {
     id: "crypto",
     label: "Krypto",
-    color: CHART_COLORS[2],
-    matches: (asset: AssetClassBreakdownTarget) => asset.kind === "crypto",
-  },
-  {
-    id: "commodity",
-    label: "Surowce",
     color: CHART_COLORS[3],
-    matches: (asset: AssetClassBreakdownTarget) => asset.kind === "commodity",
+    matches: (asset: AssetClassBreakdownTarget) => asset.kind === "crypto",
   },
 ] as const;
 
@@ -90,6 +96,7 @@ const createDonutBackground = (
 
 export default function PortfolioCharts({
   assets,
+  sales,
   fxRates,
 }: PortfolioChartsProps) {
   const [benchmarkComparisons, setBenchmarkComparisons] = useState<BenchmarkComparison[]>([]);
@@ -104,20 +111,13 @@ export default function PortfolioCharts({
     (total, asset) => total + asset.totalValuePln,
     0
   );
-  const totalInvestedPln = groupedAssets.reduce(
-    (total, asset) => total + asset.totalInvestedPln,
-    0
-  );
-
   const benchmarkInvestments = useMemo(
-    () =>
-      assets
-        .map((asset) => ({
-          date: asset.purchaseDate || new Date(asset.createdAt).toISOString().slice(0, 10),
-          amountPln: getAssetInvestedPln(asset, fxRates),
-        }))
-        .filter((investment) => investment.amountPln > 0),
-    [assets, fxRates]
+    () => buildPortfolioBenchmarkInvestments(assets, sales, fxRates),
+    [assets, sales, fxRates]
+  );
+  const comparisonInvestedPln = useMemo(
+    () => benchmarkInvestments.reduce((total, investment) => total + investment.amountPln, 0),
+    [benchmarkInvestments]
   );
 
   useEffect(() => {
@@ -158,7 +158,7 @@ export default function PortfolioCharts({
     };
   }, [benchmarkInvestments]);
 
-  if (groupedAssets.length === 0) {
+  if (groupedAssets.length === 0 && benchmarkInvestments.length === 0) {
     return (
       <section className="panel chart-card">
         <p className="eyebrow">Wykresy</p>
@@ -210,12 +210,12 @@ export default function PortfolioCharts({
   const portfolioComparison: BenchmarkComparison = {
     id: "portfolio",
     label: "Twoj portfel",
-    investedPln: totalInvestedPln,
+    investedPln: comparisonInvestedPln,
     currentValuePln: totalValuePln,
-    profitLossPln: totalValuePln - totalInvestedPln,
+    profitLossPln: totalValuePln - comparisonInvestedPln,
     returnPercent:
-      totalInvestedPln > 0
-        ? ((totalValuePln - totalInvestedPln) / totalInvestedPln) * 100
+      comparisonInvestedPln > 0
+        ? ((totalValuePln - comparisonInvestedPln) / comparisonInvestedPln) * 100
         : 0,
   };
 
@@ -337,7 +337,8 @@ export default function PortfolioCharts({
         <p className="eyebrow">Dywersyfikacja</p>
         <h2 className="section-title">Udzial klas aktywow</h2>
         <p className="section-copy">
-          Podzial portfela na akcje, ETF-y, krypto i surowce.
+          Podzial portfela na akcje GPW, akcje amerykanskie, ETF-y, krypto i
+          surowce.
         </p>
 
         <div className="donut-layout mt-6">

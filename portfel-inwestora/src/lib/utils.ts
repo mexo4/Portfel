@@ -53,12 +53,20 @@ export const toDateInputValue = (
   return localDate.toISOString().slice(0, 10);
 };
 
-export const formatCurrency = (value: number, currency: CurrencyCode = "PLN") =>
-  new Intl.NumberFormat("pl-PL", {
-    style: "currency",
-    currency,
-    maximumFractionDigits: currency === "PLN" ? 2 : 4,
-  }).format(value);
+export const formatCurrency = (value: number, currency: CurrencyCode = "PLN") => {
+  try {
+    return new Intl.NumberFormat("pl-PL", {
+      style: "currency",
+      currency,
+      maximumFractionDigits: currency === "PLN" ? 2 : 4,
+    }).format(value);
+  } catch {
+    return `${new Intl.NumberFormat("pl-PL", {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: currency === "PLN" ? 2 : 4,
+    }).format(value)} ${currency}`;
+  }
+};
 
 export const formatNumber = (value: number, fractionDigits = 4) =>
   new Intl.NumberFormat("pl-PL", {
@@ -107,9 +115,10 @@ export const uniqueBy = <T,>(items: T[], getKey: (item: T) => string) => {
   });
 };
 
-export const toCurrencyCode = (value?: string): CurrencyCode => {
-  const upper = value?.toUpperCase();
-  if (upper === "EUR") return "EUR";
-  if (upper === "USD") return "USD";
-  return "PLN";
+export const toCurrencyCode = (
+  value?: string,
+  fallback: CurrencyCode = "PLN"
+): CurrencyCode => {
+  const upper = value?.trim().toUpperCase();
+  return upper ? upper : fallback;
 };

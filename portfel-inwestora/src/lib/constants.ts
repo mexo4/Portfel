@@ -10,13 +10,21 @@ import type {
 
 export const APP_NAME = "Portfel inwestora";
 export const APP_DESCRIPTION =
-  "MVP do sledzenia akcji, ETF-ow, krypto i surowcow z wycena w PLN.";
+  "MVP do sledzenia akcji, ETF-ow i krypto z wycena w PLN.";
 
 export const BASE_CURRENCY: CurrencyCode = "PLN";
 export const AUTO_REFRESH_INTERVAL_MS = 30_000;
 export const SEARCH_DEBOUNCE_MS = 300;
 
-export const SUPPORTED_CURRENCIES: CurrencyCode[] = ["PLN", "USD", "EUR"];
+export const SUPPORTED_CURRENCIES: CurrencyCode[] = [
+  "PLN",
+  "USD",
+  "EUR",
+  "GBP",
+  "CHF",
+  "CAD",
+  "JPY",
+];
 
 export const INVESTOR_EXPERIENCE_OPTIONS: Array<{
   value: InvestorExperience;
@@ -31,7 +39,6 @@ export const KIND_LABELS: Record<AssetKind, string> = {
   stock: "Akcje",
   etf: "ETF",
   crypto: "Krypto",
-  commodity: "Surowce",
 };
 
 export const SEARCH_MODE_OPTIONS: Array<{
@@ -62,7 +69,7 @@ export const SEARCH_MODE_OPTIONS: Array<{
     value: "etf",
     label: "ETF",
     kind: "etf",
-    provider: "catalog",
+    provider: "eodhd",
     purchaseCurrency: "USD",
     marketCurrency: "USD",
   },
@@ -71,14 +78,6 @@ export const SEARCH_MODE_OPTIONS: Array<{
     label: "Krypto",
     kind: "crypto",
     provider: "coingecko",
-    purchaseCurrency: "USD",
-    marketCurrency: "USD",
-  },
-  {
-    value: "commodity",
-    label: "Surowce",
-    kind: "commodity",
-    provider: "commoditypriceapi",
     purchaseCurrency: "USD",
     marketCurrency: "USD",
   },
@@ -279,54 +278,6 @@ export const LOCAL_ETF_CATALOG: AssetCatalogItem[] = [
   },
 ];
 
-export const COMMODITY_CATALOG: AssetCatalogItem[] = [
-  {
-    symbol: "XAU",
-    name: "Gold",
-    kind: "commodity",
-    marketCurrency: "USD",
-    provider: "commoditypriceapi",
-    searchTerms: ["gold", "xau", "zloto", "kruszec"],
-    subtitle: "Spot",
-  },
-  {
-    symbol: "XAG",
-    name: "Silver",
-    kind: "commodity",
-    marketCurrency: "USD",
-    provider: "commoditypriceapi",
-    searchTerms: ["silver", "xag", "srebro"],
-    subtitle: "Spot",
-  },
-  {
-    symbol: "WTI",
-    name: "Crude Oil WTI",
-    kind: "commodity",
-    marketCurrency: "USD",
-    provider: "commoditypriceapi",
-    searchTerms: ["wti", "oil", "ropa", "crude"],
-    subtitle: "Energy",
-  },
-  {
-    symbol: "BRENT",
-    name: "Crude Oil Brent",
-    kind: "commodity",
-    marketCurrency: "USD",
-    provider: "commoditypriceapi",
-    searchTerms: ["brent", "oil", "ropa"],
-    subtitle: "Energy",
-  },
-  {
-    symbol: "NG",
-    name: "Natural Gas",
-    kind: "commodity",
-    marketCurrency: "USD",
-    provider: "commoditypriceapi",
-    searchTerms: ["gas", "natural gas", "gaz", "ng"],
-    subtitle: "Energy",
-  },
-];
-
 export const FALLBACK_FX_RATES = {
   PLN: 1,
   USD: 4.0,
@@ -362,7 +313,7 @@ export const DEFAULT_DRAFT_BY_KIND: Record<AssetKind, AssetDraft> = {
     purchaseCurrency: "USD",
     feePln: 0,
     marketCurrency: "USD",
-    provider: "catalog",
+    provider: "eodhd",
   },
   crypto: {
     kind: "crypto",
@@ -378,20 +329,5 @@ export const DEFAULT_DRAFT_BY_KIND: Record<AssetKind, AssetDraft> = {
     feePln: 0,
     marketCurrency: "USD",
     provider: "coingecko",
-  },
-  commodity: {
-    kind: "commodity",
-    query: "",
-    name: "",
-    symbol: "",
-    purchaseDate: "",
-    quantity: 0,
-    quantityInput: "",
-    purchasePrice: 0,
-    purchasePriceInput: "",
-    purchaseCurrency: "USD",
-    feePln: 0,
-    marketCurrency: "USD",
-    provider: "commoditypriceapi",
   },
 };

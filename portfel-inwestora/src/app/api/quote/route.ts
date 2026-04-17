@@ -10,6 +10,8 @@ export async function GET(request: Request) {
   const marketCurrency = toCurrencyCode(searchParams.get("marketCurrency") ?? "USD");
   const provider = (searchParams.get("provider") as QuoteProvider | null) ?? "catalog";
   const providerId = searchParams.get("providerId")?.trim() ?? undefined;
+  const priceScaleValue = searchParams.get("priceScale")?.trim();
+  const priceScale = priceScaleValue ? Number(priceScaleValue) : undefined;
 
   if (!symbol) {
     return NextResponse.json({ error: "Brak symbolu." }, { status: 400 });
@@ -22,6 +24,10 @@ export async function GET(request: Request) {
       marketCurrency,
       provider,
       providerId,
+      priceScale:
+        typeof priceScale === "number" && Number.isFinite(priceScale) && priceScale > 0
+          ? priceScale
+          : undefined,
     });
 
     if (!quote) {

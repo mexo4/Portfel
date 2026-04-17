@@ -6,6 +6,8 @@ import AppSectionTabs, { type AppSection } from "@/components/AppSectionTabs";
 import AssetTable from "@/components/AssetTable";
 import PortfolioCharts from "@/components/PortfolioCharts";
 import PortfolioSummary from "@/components/PortfolioSummary";
+import SalesHistoryPanel from "@/components/SalesHistoryPanel";
+import SellAssetPanel from "@/components/SellAssetPanel";
 import {
   AUTO_REFRESH_INTERVAL_MS,
   FALLBACK_FX_RATES,
@@ -17,33 +19,62 @@ import {
   logoutUser,
   refreshPortfolioQuotes,
   requestEmailVerification,
-  savePortfolioAssets,
+  savePortfolioState,
   searchAssets,
 } from "@/lib/api";
-import { getPortfolioSummary } from "@/lib/pricing";
+import {
+  applySaleToPortfolio,
+  createSellAssetDraft,
+  getManualOrderKeys,
+  getNextGroupOrder,
+  getSortedPortfolioSales,
+  normalizeStoredPortfolioAssets,
+} from "@/lib/portfolio-state";
+import {
+  getGroupedPortfolioAssets,
+  getPortfolioSummary,
+  type PortfolioAssetGroup,
+} from "@/lib/pricing";
 import {
   getMinimumSearchLength,
   getModeConfig,
   pickBestSearchResult,
 } from "@/lib/search";
-import { createAssetId, createEmptyDraft, normalizeSymbol } from "@/lib/ticker";
-import { getTodayDateInputValue, normalizeText, toDateInputValue } from "@/lib/utils";
+import {
+  createAssetId,
+  createEmptyDraft,
+  getGpwSymbolKey,
+  getPortfolioAssetGroupKey,
+  normalizeGpwSymbol,
+  normalizeSymbol,
+} from "@/lib/ticker";
+import {
+  getTodayDateInputValue,
+  normalizeText,
+  toCurrencyCode,
+  toDateInputValue,
+} from "@/lib/utils";
 import type {
   AssetDraft,
   AssetQuote,
   AssetSearchMode,
   AssetSearchResult,
+  AssetTableSortMode,
   AuthenticatedUser,
   FxRates,
   PortfolioAsset,
+  PortfolioSale,
+  SellAssetDraft,
 } from "@/types/portfolio";
 
 type PortfolioAppProps = {
   account: AuthenticatedUser;
   initialAssets: PortfolioAsset[];
+  initialSales: PortfolioSale[];
 };
 
 const SAVE_DEBOUNCE_MS = 700;
+const ASSET_SORT_MODE_STORAGE_KEY = "portfolio.assetTableSortMode";
 
 const createDraftFromMode = (mode: AssetSearchMode): AssetDraft => {
   const config = getModeConfig(mode);
@@ -64,25 +95,123 @@ const toErrorMessage = (error: unknown, fallback: string) =>
 const wait = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms));
 const isGpwMode = (mode: AssetSearchMode) => mode === "stock-gpw";
 const normalizeSymbolForMode = (symbol: string, mode: AssetSearchMode) => {
-  const normalized = normalizeSymbol(symbol);
-  if (!normalized || !isGpwMode(mode)) return normalized;
-  return normalized.endsWith(".WA") ? normalized : `${normalized}.WA`;
+  if (!isGpwMode(mode)) {
+    return normalizeSymbol(symbol);
+  }
+
+  return normalizeGpwSymbol(symbol);
+};
+const getComparableSymbolForMode = (symbol: string, mode: AssetSearchMode) => {
+  if (!isGpwMode(mode)) {
+    return normalizeSymbol(symbol);
+  }
+
+  return getGpwSymbolKey(symbol);
+};
+const getResolvedResultSymbolForMode = (
+  currentSymbol: string,
+  resultSymbol: string,
+  mode: AssetSearchMode
+) => {
+  const normalizedResultSymbol = normalizeSymbolForMode(resultSymbol, mode);
+
+  if (!isGpwMode(mode)) {
+    return normalizedResultSymbol;
+  }
+
+  const normalizedCurrentSymbol = normalizeSymbolForMode(currentSymbol, mode);
+
+  if (
+    normalizedCurrentSymbol &&
+    getComparableSymbolForMode(normalizedCurrentSymbol, mode) ===
+      getComparableSymbolForMode(normalizedResultSymbol, mode)
+  ) {
+    return normalizedCurrentSymbol;
+  }
+
+  return normalizedResultSymbol;
 };
 const shouldRetryQuoteRequest = (mode: AssetSearchMode) => !isGpwMode(mode);
+const shouldSyncPurchaseCurrencyWithResult = (mode: AssetSearchMode) => mode === "etf";
+const doesQuoteProviderRequireProviderId = (kind: AssetDraft["kind"]) =>
+  kind === "etf" || kind === "crypto";
+const getDraftQuotePreviewRequest = (draft: AssetDraft, mode: AssetSearchMode) => {
+  const normalizedSymbol = normalizeSymbolForMode(draft.symbol, mode);
+  const trimmedName = draft.name.trim();
 
-export default function PortfolioApp({ account, initialAssets }: PortfolioAppProps) {
-  const assetsRef = useRef<PortfolioAsset[]>(initialAssets);
+  if (!normalizedSymbol || !trimmedName || !draft.provider) {
+    return null;
+  }
+
+  if (doesQuoteProviderRequireProviderId(draft.kind) && !draft.providerId) {
+    return null;
+  }
+
+  return {
+    symbol: normalizedSymbol,
+    kind: draft.kind,
+    marketCurrency: draft.marketCurrency,
+    provider: draft.provider,
+    providerId: draft.providerId,
+    priceScale: draft.priceScale,
+    requestKey: [
+      normalizedSymbol,
+      draft.kind,
+      draft.marketCurrency,
+      draft.provider,
+      draft.providerId ?? "",
+      draft.priceScale ?? "",
+    ].join("|"),
+  };
+};
+const isAssetTableSortMode = (value: string | null): value is AssetTableSortMode =>
+  value === "manual" ||
+  value === "value-desc" ||
+  value === "value-asc" ||
+  value === "profit-desc" ||
+  value === "loss-asc" ||
+  value === "daily-gain-desc" ||
+  value === "daily-loss-asc";
+
+const getTrackedCurrencies = (assets: PortfolioAsset[], draft: AssetDraft) =>
+  Array.from(
+    new Set(
+      [
+        "PLN",
+        draft.purchaseCurrency,
+        draft.marketCurrency,
+        ...assets.flatMap((asset) => [asset.purchaseCurrency, asset.marketCurrency]),
+      ]
+        .map((code) => toCurrencyCode(code))
+        .filter(Boolean)
+    )
+  ).sort();
+
+export default function PortfolioApp({
+  account,
+  initialAssets,
+  initialSales,
+}: PortfolioAppProps) {
+  const assetsRef = useRef<PortfolioAsset[]>(normalizeStoredPortfolioAssets(initialAssets));
   const hasSavedAssetsRef = useRef(false);
   const quoteRefreshSeqRef = useRef(0);
   const quoteRequestSeqRef = useRef(0);
+  const lastPreviewRequestKeyRef = useRef("");
   const isManualSymbolRef = useRef(false);
   const [activeSection, setActiveSection] = useState<AppSection>("portfolio");
-  const [assets, setAssets] = useState<PortfolioAsset[]>(initialAssets);
+  const [assets, setAssets] = useState<PortfolioAsset[]>(() =>
+    normalizeStoredPortfolioAssets(initialAssets)
+  );
+  const [sales, setSales] = useState<PortfolioSale[]>(() =>
+    getSortedPortfolioSales(initialSales)
+  );
   const [searchMode, setSearchMode] = useState<AssetSearchMode>("stock-global");
   const [draft, setDraft] = useState<AssetDraft>(() => createDraftFromMode("stock-global"));
   const [results, setResults] = useState<AssetSearchResult[]>([]);
   const [lastAddedResult, setLastAddedResult] = useState<AssetSearchResult | null>(null);
   const [filter, setFilter] = useState("");
+  const [assetSortMode, setAssetSortMode] = useState<AssetTableSortMode>("manual");
+  const [hasLoadedSortMode, setHasLoadedSortMode] = useState(false);
   const [fxRates, setFxRates] = useState<FxRates>(FALLBACK_FX_RATES);
   const [isSearching, setIsSearching] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -97,10 +226,81 @@ export default function PortfolioApp({ account, initialAssets }: PortfolioAppPro
   const [verificationPreviewUrl, setVerificationPreviewUrl] = useState<string | null>(null);
   const [lastSyncAt, setLastSyncAt] = useState<string>();
   const [fxUpdatedAt, setFxUpdatedAt] = useState<string>();
+  const [sellDraft, setSellDraft] = useState<SellAssetDraft | null>(null);
+  const [sellError, setSellError] = useState<string | null>(null);
+  const trackedCurrencies = useMemo(
+    () => getTrackedCurrencies(assets, draft),
+    [assets, draft]
+  );
+  const trackedCurrenciesKey = trackedCurrencies.join("|");
+  const draftQuotePreviewRequest = useMemo(
+    () => getDraftQuotePreviewRequest(draft, searchMode),
+    [draft, searchMode]
+  );
+  const groupedAssets = useMemo(
+    () => getGroupedPortfolioAssets(assets, fxRates),
+    [assets, fxRates]
+  );
+  const activeSellGroup = useMemo(() => {
+    if (!sellDraft) {
+      return null;
+    }
+
+    return groupedAssets.find((group) => group.key === sellDraft.groupKey) ?? null;
+  }, [groupedAssets, sellDraft]);
 
   useEffect(() => {
     assetsRef.current = assets;
   }, [assets]);
+
+  useEffect(() => {
+    if (!sellDraft) {
+      return;
+    }
+
+    if (!activeSellGroup) {
+      setSellDraft(null);
+      setSellError(null);
+      return;
+    }
+
+    setSellDraft((currentDraft) => {
+      if (!currentDraft || currentDraft.groupKey !== activeSellGroup.key) {
+        return currentDraft;
+      }
+
+      if (currentDraft.maxQuantity === activeSellGroup.quantity) {
+        return currentDraft;
+      }
+
+      return {
+        ...currentDraft,
+        maxQuantity: activeSellGroup.quantity,
+      };
+    });
+  }, [activeSellGroup, sellDraft]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const storedSortMode = window.localStorage.getItem(ASSET_SORT_MODE_STORAGE_KEY);
+
+    if (isAssetTableSortMode(storedSortMode)) {
+      setAssetSortMode(storedSortMode);
+    }
+
+    setHasLoadedSortMode(true);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !hasLoadedSortMode) {
+      return;
+    }
+
+    window.localStorage.setItem(ASSET_SORT_MODE_STORAGE_KEY, assetSortMode);
+  }, [assetSortMode, hasLoadedSortMode]);
 
   useEffect(() => {
     const trimmedQuery = draft.query.trim();
@@ -109,6 +309,7 @@ export default function PortfolioApp({ account, initialAssets }: PortfolioAppPro
     if (trimmedQuery.length < minimumSearchLength) {
       setResults([]);
       setSearchError(null);
+      setIsSearching(false);
       return;
     }
 
@@ -139,13 +340,21 @@ export default function PortfolioApp({ account, initialAssets }: PortfolioAppPro
                   return currentDraft;
                 }
 
-                const normalizedCurrentSymbol = normalizeSymbol(currentDraft.symbol);
-                const normalizedAutoSymbol = normalizeSymbol(autoResult.symbol);
+                const normalizedCurrentSymbol = normalizeSymbolForMode(
+                  currentDraft.symbol,
+                  searchMode
+                );
+                const normalizedAutoSymbol = normalizeSymbolForMode(
+                  autoResult.symbol,
+                  searchMode
+                );
                 const hasSameAutoValues =
-                  normalizedCurrentSymbol === normalizedAutoSymbol &&
+                  getComparableSymbolForMode(normalizedCurrentSymbol, searchMode) ===
+                    getComparableSymbolForMode(normalizedAutoSymbol, searchMode) &&
                   currentDraft.provider === autoResult.provider &&
                   currentDraft.providerId === autoResult.providerId &&
-                  currentDraft.marketCurrency === autoResult.marketCurrency;
+                  currentDraft.marketCurrency === autoResult.marketCurrency &&
+                  currentDraft.priceScale === autoResult.priceScale;
 
                 if (hasSameAutoValues) {
                   return currentDraft;
@@ -154,11 +363,20 @@ export default function PortfolioApp({ account, initialAssets }: PortfolioAppPro
                 return {
                   ...currentDraft,
                   name: autoResult.name,
-                  symbol: autoResult.symbol,
+                  symbol: getResolvedResultSymbolForMode(
+                    currentDraft.symbol,
+                    autoResult.symbol,
+                    searchMode
+                  ),
+                  purchaseCurrency: shouldSyncPurchaseCurrencyWithResult(searchMode)
+                    ? autoResult.marketCurrency
+                    : currentDraft.purchaseCurrency,
                   marketCurrency: autoResult.marketCurrency,
                   provider: autoResult.provider,
                   providerId: autoResult.providerId,
+                  priceScale: autoResult.priceScale,
                   latestPrice: undefined,
+                  previousClose: undefined,
                 };
               });
             }
@@ -187,6 +405,7 @@ export default function PortfolioApp({ account, initialAssets }: PortfolioAppPro
     const minimumSearchLength = getMinimumSearchLength(searchMode);
 
     if (!isManualSymbolRef.current || trimmedSymbol.length < minimumSearchLength) {
+      setIsSearching(false);
       return;
     }
 
@@ -214,7 +433,8 @@ export default function PortfolioApp({ account, initialAssets }: PortfolioAppPro
         setDraft((currentDraft) => {
           if (
             !isManualSymbolRef.current ||
-            normalizeSymbol(currentDraft.symbol) !== normalizeSymbol(trimmedSymbol)
+            getComparableSymbolForMode(currentDraft.symbol, searchMode) !==
+              getComparableSymbolForMode(trimmedSymbol, searchMode)
           ) {
             return currentDraft;
           }
@@ -225,16 +445,21 @@ export default function PortfolioApp({ account, initialAssets }: PortfolioAppPro
               query: "",
               name: "",
               providerId: undefined,
+              priceScale: undefined,
               latestPrice: undefined,
+              previousClose: undefined,
             };
           }
 
           const hasSameResolvedValues =
+            getComparableSymbolForMode(currentDraft.symbol, searchMode) ===
+              getComparableSymbolForMode(autoResult.symbol, searchMode) &&
             normalizeText(currentDraft.query) === normalizeText(autoResult.name) &&
             normalizeText(currentDraft.name) === normalizeText(autoResult.name) &&
             currentDraft.provider === autoResult.provider &&
             currentDraft.providerId === autoResult.providerId &&
-            currentDraft.marketCurrency === autoResult.marketCurrency;
+            currentDraft.marketCurrency === autoResult.marketCurrency &&
+            currentDraft.priceScale === autoResult.priceScale;
 
           if (hasSameResolvedValues) {
             return currentDraft;
@@ -242,12 +467,22 @@ export default function PortfolioApp({ account, initialAssets }: PortfolioAppPro
 
           return {
             ...currentDraft,
+            symbol: getResolvedResultSymbolForMode(
+              currentDraft.symbol,
+              autoResult.symbol,
+              searchMode
+            ),
             query: autoResult.name,
             name: autoResult.name,
+            purchaseCurrency: shouldSyncPurchaseCurrencyWithResult(searchMode)
+              ? autoResult.marketCurrency
+              : currentDraft.purchaseCurrency,
             marketCurrency: autoResult.marketCurrency,
             provider: autoResult.provider,
             providerId: autoResult.providerId,
+            priceScale: autoResult.priceScale,
             latestPrice: undefined,
+            previousClose: undefined,
           };
         });
       } catch (error) {
@@ -277,7 +512,7 @@ export default function PortfolioApp({ account, initialAssets }: PortfolioAppPro
 
     const timeoutId = window.setTimeout(async () => {
       try {
-        await savePortfolioAssets(assets);
+        await savePortfolioState({ assets, sales });
 
         if (!isCancelled) {
           setSyncError(null);
@@ -293,15 +528,21 @@ export default function PortfolioApp({ account, initialAssets }: PortfolioAppPro
       isCancelled = true;
       window.clearTimeout(timeoutId);
     };
-  }, [assets]);
+  }, [assets, sales]);
 
-  const syncFxRates = async () => {
+  const syncFxRates = async (codes: string[]) => {
     try {
-      const response = await fetchFxRates();
-      setFxRates(response.rates);
+      const response = await fetchFxRates(codes);
+      setFxRates({
+        ...FALLBACK_FX_RATES,
+        ...response.rates,
+      });
       setFxUpdatedAt(response.fetchedAt);
     } catch {
-      setFxRates(FALLBACK_FX_RATES);
+      setFxRates((currentRates) => ({
+        ...FALLBACK_FX_RATES,
+        ...currentRates,
+      }));
     }
   };
 
@@ -317,21 +558,25 @@ export default function PortfolioApp({ account, initialAssets }: PortfolioAppPro
       setAssets((currentAssets) => {
         const refreshedById = new Map(refreshedAssets.map((asset) => [asset.id, asset]));
 
-        return currentAssets.map((asset) => {
-          const refreshed = refreshedById.get(asset.id);
-          if (!refreshed) return asset;
+        return normalizeStoredPortfolioAssets(
+          currentAssets.map((asset) => {
+            const refreshed = refreshedById.get(asset.id);
+            if (!refreshed) return asset;
 
-          return {
-            ...asset,
-            symbol: refreshed.symbol ?? asset.symbol,
-            name: refreshed.name ?? asset.name,
-            latestPrice: refreshed.latestPrice,
-            marketCurrency: refreshed.marketCurrency,
-            provider: refreshed.provider,
-            providerId: refreshed.providerId ?? asset.providerId,
-            lastUpdatedAt: refreshed.lastUpdatedAt,
-          };
-        });
+            return {
+              ...asset,
+              symbol: refreshed.symbol ?? asset.symbol,
+              name: refreshed.name ?? asset.name,
+              latestPrice: refreshed.latestPrice,
+              previousClose: refreshed.previousClose ?? asset.previousClose,
+              marketCurrency: refreshed.marketCurrency,
+              provider: refreshed.provider,
+              providerId: refreshed.providerId ?? asset.providerId,
+              priceScale: refreshed.priceScale ?? asset.priceScale,
+              lastUpdatedAt: refreshed.lastUpdatedAt,
+            };
+          })
+        );
       });
 
       if (refreshSeq === quoteRefreshSeqRef.current) {
@@ -350,8 +595,8 @@ export default function PortfolioApp({ account, initialAssets }: PortfolioAppPro
   };
 
   useEffect(() => {
-    void syncFxRates();
-  }, []);
+    void syncFxRates(trackedCurrencies);
+  }, [trackedCurrencies, trackedCurrenciesKey]);
 
   useEffect(() => {
     if (assets.length === 0) return;
@@ -376,16 +621,21 @@ export default function PortfolioApp({ account, initialAssets }: PortfolioAppPro
     }
 
     setDraft((currentDraft) => {
-      if (normalizeSymbolForMode(currentDraft.symbol, searchMode) !== targetSymbol) {
+      if (
+        getComparableSymbolForMode(currentDraft.symbol, searchMode) !==
+        getComparableSymbolForMode(targetSymbol, searchMode)
+      ) {
         return currentDraft;
       }
 
       return {
         ...currentDraft,
         latestPrice: quote.price,
+        previousClose: quote.previousClose ?? currentDraft.previousClose,
         marketCurrency: quote.marketCurrency,
         provider: quote.provider,
         providerId: quote.providerId ?? currentDraft.providerId,
+        priceScale: quote.priceScale ?? currentDraft.priceScale,
       };
     });
     setQuoteError(null);
@@ -393,7 +643,9 @@ export default function PortfolioApp({ account, initialAssets }: PortfolioAppPro
 
   const handleSearchModeChange = (mode: AssetSearchMode) => {
     quoteRequestSeqRef.current += 1;
+    lastPreviewRequestKeyRef.current = "";
     isManualSymbolRef.current = false;
+    setIsSearching(false);
     setIsQuoteLoading(false);
     setQuoteError(null);
     setSearchMode(mode);
@@ -410,6 +662,7 @@ export default function PortfolioApp({ account, initialAssets }: PortfolioAppPro
       marketCurrency: AssetDraft["marketCurrency"];
       provider: AssetDraft["provider"];
       providerId?: string;
+      priceScale?: number;
     },
     options?: {
       allowRetry?: boolean;
@@ -422,47 +675,107 @@ export default function PortfolioApp({ account, initialAssets }: PortfolioAppPro
     return fetchQuotePreview(request);
   };
 
-  const handlePickResult = async (result: AssetSearchResult) => {
+  useEffect(() => {
+    if (!draftQuotePreviewRequest) {
+      lastPreviewRequestKeyRef.current = "";
+      return;
+    }
+
+    if (lastPreviewRequestKeyRef.current === draftQuotePreviewRequest.requestKey) {
+      return;
+    }
+
+    let isCancelled = false;
     const requestSeq = ++quoteRequestSeqRef.current;
+
+    lastPreviewRequestKeyRef.current = draftQuotePreviewRequest.requestKey;
+    setIsQuoteLoading(true);
+    setQuoteError(null);
+
+    void (async () => {
+      try {
+        const quote = await fetchDraftQuoteWithRetry(
+          {
+            symbol: draftQuotePreviewRequest.symbol,
+            kind: draftQuotePreviewRequest.kind,
+            marketCurrency: draftQuotePreviewRequest.marketCurrency,
+            provider: draftQuotePreviewRequest.provider,
+            providerId: draftQuotePreviewRequest.providerId,
+            priceScale: draftQuotePreviewRequest.priceScale,
+          },
+          { allowRetry: shouldRetryQuoteRequest(searchMode) }
+        );
+
+        if (isCancelled || requestSeq !== quoteRequestSeqRef.current) {
+          return;
+        }
+
+        if (!quote) {
+          setQuoteError("Brak kursu dla wybranego aktywa. Wybierz inny wynik.");
+          return;
+        }
+
+        setDraft((currentDraft) => {
+          if (
+            getComparableSymbolForMode(currentDraft.symbol, searchMode) !==
+            getComparableSymbolForMode(draftQuotePreviewRequest.symbol, searchMode)
+          ) {
+            return currentDraft;
+          }
+
+          return {
+            ...currentDraft,
+            latestPrice: quote.price,
+            previousClose: quote.previousClose ?? currentDraft.previousClose,
+            marketCurrency: quote.marketCurrency,
+            provider: quote.provider,
+            providerId: quote.providerId ?? currentDraft.providerId,
+            priceScale: quote.priceScale ?? currentDraft.priceScale,
+          };
+        });
+        setQuoteError(null);
+      } finally {
+        if (!isCancelled && requestSeq === quoteRequestSeqRef.current) {
+          setIsQuoteLoading(false);
+        }
+      }
+    })();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [
+    draft.latestPrice,
+    draftQuotePreviewRequest,
+    searchMode,
+  ]);
+
+  const handlePickResult = async (result: AssetSearchResult) => {
     const normalizedResultSymbol = normalizeSymbolForMode(result.symbol, searchMode);
 
+    quoteRequestSeqRef.current += 1;
+    lastPreviewRequestKeyRef.current = "";
     isManualSymbolRef.current = false;
+    setIsSearching(false);
     setSearchError(null);
     setQuoteError(null);
+    setIsQuoteLoading(false);
     setDraft((currentDraft) => ({
       ...currentDraft,
       query: result.name,
       name: result.name,
       symbol: normalizedResultSymbol,
+      purchaseCurrency: shouldSyncPurchaseCurrencyWithResult(searchMode)
+        ? result.marketCurrency
+        : currentDraft.purchaseCurrency,
       marketCurrency: result.marketCurrency,
       provider: result.provider,
       providerId: result.providerId,
+      priceScale: result.priceScale,
       latestPrice: undefined,
+      previousClose: undefined,
     }));
     setResults([]);
-    setIsQuoteLoading(true);
-
-    try {
-      const quote = await fetchDraftQuoteWithRetry({
-        symbol: normalizedResultSymbol,
-        kind: result.kind,
-        marketCurrency: result.marketCurrency,
-        provider: result.provider,
-        providerId: result.providerId,
-      }, { allowRetry: shouldRetryQuoteRequest(searchMode) });
-
-      if (requestSeq !== quoteRequestSeqRef.current) return;
-
-      applyQuoteToDraftIfCurrent(
-        normalizedResultSymbol,
-        quote,
-        "Brak kursu dla wybranego aktywa. Wybierz inny wynik."
-      );
-    } finally {
-      if (requestSeq === quoteRequestSeqRef.current) {
-        setIsQuoteLoading(false);
-      }
-    }
   };
 
   const resolveDraftQuote = async (
@@ -475,9 +788,11 @@ export default function PortfolioApp({ account, initialAssets }: PortfolioAppPro
       return {
         symbol: normalizedSymbol,
         price: draft.latestPrice,
+        previousClose: draft.previousClose,
         marketCurrency: draft.marketCurrency,
         provider: draft.provider,
         providerId: draft.providerId,
+        priceScale: draft.priceScale,
         fetchedAt: new Date().toISOString(),
       };
     }
@@ -493,6 +808,7 @@ export default function PortfolioApp({ account, initialAssets }: PortfolioAppPro
         marketCurrency: draft.marketCurrency,
         provider: draft.provider,
         providerId: draft.providerId,
+        priceScale: draft.priceScale,
       }, options);
 
       if (requestSeq !== quoteRequestSeqRef.current) {
@@ -537,7 +853,7 @@ export default function PortfolioApp({ account, initialAssets }: PortfolioAppPro
       return;
     }
 
-    if (symbol !== normalizeSymbol(draft.symbol)) {
+    if (symbol !== normalizeSymbolForMode(draft.symbol, searchMode)) {
       setDraft((currentDraft) => ({
         ...currentDraft,
         symbol,
@@ -552,10 +868,20 @@ export default function PortfolioApp({ account, initialAssets }: PortfolioAppPro
       return;
     }
 
+    const storedSymbol = symbol;
+    const storedName = quote.name?.trim() || name;
+    const nextAssetGroupKey = getPortfolioAssetGroupKey({
+      kind: draft.kind,
+      symbol: storedSymbol,
+    });
+    const existingGroupOrder = assets.find(
+      (asset) => getPortfolioAssetGroupKey(asset) === nextAssetGroupKey
+    )?.groupOrder;
+
     const nextAsset: PortfolioAsset = {
       id: createAssetId(),
-      name,
-      symbol,
+      name: storedName,
+      symbol: storedSymbol,
       kind: draft.kind,
       purchaseDate,
       quantity: draft.quantity,
@@ -565,26 +891,88 @@ export default function PortfolioApp({ account, initialAssets }: PortfolioAppPro
       marketCurrency: quote.marketCurrency,
       provider: quote.provider,
       providerId: quote.providerId ?? draft.providerId,
+      priceScale: quote.priceScale ?? draft.priceScale,
       latestPrice: quote.price,
+      previousClose: quote.previousClose ?? draft.previousClose,
       lastUpdatedAt: quote.fetchedAt,
+      groupOrder: existingGroupOrder ?? getNextGroupOrder(assets),
       createdAt: new Date().toISOString(),
     };
 
     isManualSymbolRef.current = false;
-    setAssets((currentAssets) => [nextAsset, ...currentAssets]);
+    setAssets((currentAssets) =>
+      normalizeStoredPortfolioAssets([nextAsset, ...currentAssets])
+    );
     setLastAddedResult({
-      symbol,
-      name,
+      symbol: storedSymbol,
+      name: storedName,
       kind: draft.kind,
       marketCurrency: quote.marketCurrency,
       provider: quote.provider,
       providerId: quote.providerId ?? draft.providerId,
+      priceScale: quote.priceScale ?? draft.priceScale,
       source: "catalog",
     });
     setDraft(createDraftFromMode(searchMode));
     setResults([]);
     setSearchError(null);
     setQuoteError(null);
+  };
+
+  const handleReorderAssetGroups = (nextGroupKeys: string[]) => {
+    setSyncError(null);
+    setAssets((currentAssets) => {
+      const orderedGroupKeys = getManualOrderKeys(currentAssets);
+
+      if (
+        nextGroupKeys.length !== orderedGroupKeys.length ||
+        orderedGroupKeys.every((key, index) => key === nextGroupKeys[index])
+      ) {
+        return currentAssets;
+      }
+
+      const nextGroupOrderByKey = new Map(
+        nextGroupKeys.map((key, index) => [key, index] as const)
+      );
+
+      return normalizeStoredPortfolioAssets(
+        currentAssets.map((asset) => ({
+          ...asset,
+          groupOrder:
+            nextGroupOrderByKey.get(getPortfolioAssetGroupKey(asset)) ?? asset.groupOrder,
+        }))
+      );
+    });
+  };
+
+  const handleStartSale = (group: PortfolioAssetGroup) => {
+    setSellDraft(createSellAssetDraft(group));
+    setSellError(null);
+    setSyncError(null);
+  };
+
+  const handleSubmitSale = () => {
+    if (!sellDraft || !activeSellGroup) {
+      setSellError("Nie znaleziono aktywa do sprzedazy.");
+      return;
+    }
+
+    try {
+      const result = applySaleToPortfolio({
+        assets,
+        group: activeSellGroup,
+        draft: sellDraft,
+        fxRates,
+      });
+
+      setAssets(result.assets);
+      setSales((currentSales) => getSortedPortfolioSales([result.sale, ...currentSales]));
+      setSellDraft(null);
+      setSellError(null);
+      setSyncError(null);
+    } catch (error) {
+      setSellError(toErrorMessage(error, "Nie udalo sie zapisac sprzedazy."));
+    }
   };
 
   const handleLogout = async () => {
@@ -624,7 +1012,10 @@ export default function PortfolioApp({ account, initialAssets }: PortfolioAppPro
     }
   };
 
-  const summary = useMemo(() => getPortfolioSummary(assets, fxRates), [assets, fxRates]);
+  const summary = useMemo(
+    () => getPortfolioSummary(assets, sales, fxRates),
+    [assets, sales, fxRates]
+  );
 
   return (
     <main className="page-shell">
@@ -644,7 +1035,7 @@ export default function PortfolioApp({ account, initialAssets }: PortfolioAppPro
           verificationError={verificationError}
           verificationPreviewUrl={verificationPreviewUrl}
           onRefresh={() => {
-            void syncFxRates();
+            void syncFxRates(trackedCurrencies);
             void syncQuotes();
           }}
           onLogout={() => {
@@ -669,9 +1060,15 @@ export default function PortfolioApp({ account, initialAssets }: PortfolioAppPro
               onDraftChange={setDraft}
               onSearchModeChange={handleSearchModeChange}
               onQueryChange={(query) => {
+                const trimmedQuery = query.trim();
+                const minimumSearchLength = getMinimumSearchLength(searchMode);
+
                 quoteRequestSeqRef.current += 1;
+                lastPreviewRequestKeyRef.current = "";
                 isManualSymbolRef.current = false;
+                setIsSearching(trimmedQuery.length >= minimumSearchLength);
                 setIsQuoteLoading(false);
+                setResults([]);
                 setSearchError(null);
                 setQuoteError(null);
                 setDraft((currentDraft) => ({
@@ -680,12 +1077,16 @@ export default function PortfolioApp({ account, initialAssets }: PortfolioAppPro
                   name: query,
                   symbol: "",
                   providerId: undefined,
+                  priceScale: undefined,
                   latestPrice: undefined,
+                  previousClose: undefined,
                 }));
               }}
               onSymbolChange={(symbol) => {
                 quoteRequestSeqRef.current += 1;
+                lastPreviewRequestKeyRef.current = "";
                 isManualSymbolRef.current = true;
+                setIsSearching(false);
                 setIsQuoteLoading(false);
                 setResults([]);
                 setSearchError(null);
@@ -696,7 +1097,9 @@ export default function PortfolioApp({ account, initialAssets }: PortfolioAppPro
                   query: "",
                   name: "",
                   providerId: undefined,
+                  priceScale: undefined,
                   latestPrice: undefined,
+                  previousClose: undefined,
                 }));
               }}
               onPickResult={(result) => {
@@ -714,17 +1117,41 @@ export default function PortfolioApp({ account, initialAssets }: PortfolioAppPro
               assets={assets}
               fxRates={fxRates}
               filter={filter}
+              sortMode={assetSortMode}
               onFilterChange={setFilter}
+              onSortModeChange={setAssetSortMode}
+              onReorderGroups={handleReorderAssetGroups}
+              onStartSale={handleStartSale}
               onRemove={(assetId) => {
                 setSyncError(null);
                 setAssets((currentAssets) =>
-                  currentAssets.filter((asset) => asset.id !== assetId)
+                  normalizeStoredPortfolioAssets(
+                    currentAssets.filter((asset) => asset.id !== assetId)
+                  )
                 );
               }}
             />
+
+            {sellDraft ? (
+              <SellAssetPanel
+                draft={sellDraft}
+                error={sellError}
+                onChange={(nextDraft) => {
+                  setSellDraft(nextDraft);
+                  setSellError(null);
+                }}
+                onCancel={() => {
+                  setSellDraft(null);
+                  setSellError(null);
+                }}
+                onSubmit={handleSubmitSale}
+              />
+            ) : null}
+
+            <SalesHistoryPanel sales={sales} />
           </>
         ) : (
-          <PortfolioCharts assets={assets} fxRates={fxRates} />
+          <PortfolioCharts assets={assets} sales={sales} fxRates={fxRates} />
         )}
       </div>
     </main>

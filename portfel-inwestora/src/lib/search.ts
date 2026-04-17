@@ -1,11 +1,13 @@
 import {
-  COMMODITY_CATALOG,
   KIND_LABELS,
-  LOCAL_ETF_CATALOG,
   LOCAL_STOCK_CATALOG,
   SEARCH_MODE_OPTIONS,
 } from "@/lib/constants";
-import { inferCurrencyFromSymbol } from "@/lib/ticker";
+import {
+  getGpwTickerCore,
+  isGpwSymbol,
+  normalizeGpwSymbol,
+} from "@/lib/ticker";
 import { normalizeText, uniqueBy } from "@/lib/utils";
 import type {
   AssetCatalogItem,
@@ -13,6 +15,8 @@ import type {
   AssetSearchMode,
   AssetSearchResult,
 } from "@/types/portfolio";
+
+const SEARCH_RESULT_LIMIT = 16;
 
 export const getMinimumSearchLength = (mode: AssetSearchMode) => {
   if (mode === "stock-global" || mode === "stock-gpw" || mode === "etf") {
@@ -26,8 +30,7 @@ export const getSearchPlaceholder = (mode: AssetSearchMode) => {
   if (mode === "stock-global") return "Np. Apple, NVIDIA, Microsoft";
   if (mode === "stock-gpw") return "Np. XTB, Orlen, PZU";
   if (mode === "etf") return "Np. VWCE, SXR8, SPY";
-  if (mode === "crypto") return "Np. bitcoin, solana, BTC";
-  return "Np. gold, silver, oil";
+  return "Np. bitcoin, solana, BTC";
 };
 
 export const getKindLabel = (kind: AssetKind) => KIND_LABELS[kind];
@@ -35,19 +38,29 @@ export const getKindLabel = (kind: AssetKind) => KIND_LABELS[kind];
 export const getModeConfig = (mode: AssetSearchMode) =>
   SEARCH_MODE_OPTIONS.find((option) => option.value === mode) ?? SEARCH_MODE_OPTIONS[0];
 
-const isGpwCatalogSymbol = (symbol: string) => /\.WA$/i.test(symbol);
-const getGpwSymbolCore = (symbol: string) => symbol.replace(/\.WA$/i, "");
+const isGpwCatalogSymbol = (symbol: string) => isGpwSymbol(symbol);
+const getGpwSymbolCore = (symbol: string) => getGpwTickerCore(symbol);
+
+const getGpwAliasTerms = (symbol: string) => {
+  if (!isGpwCatalogSymbol(symbol)) {
+    return [];
+  }
+
+  const tickerCore = getGpwSymbolCore(symbol);
+
+  if (!tickerCore) {
+    return [];
+  }
+
+  return [tickerCore, `${tickerCore}.WA`, `${tickerCore}.PL`];
+};
 
 const getCatalogEntries = (
   kind: AssetKind,
   mode?: AssetSearchMode
 ): AssetCatalogItem[] => {
-  if (kind === "commodity" || mode === "commodity") {
-    return COMMODITY_CATALOG;
-  }
-
   if (kind === "etf" || mode === "etf") {
-    return LOCAL_ETF_CATALOG;
+    return [];
   }
 
   if (kind !== "stock") {
@@ -74,14 +87,18 @@ const getCatalogMatchScore = (
   const normalizedSymbol = normalizeText(item.symbol);
   const normalizedName = normalizeText(item.name);
   const normalizedTerms = item.searchTerms.map((term) => normalizeText(term));
+  const itemGpwCore = isGpwCatalogSymbol(item.symbol) ? getGpwSymbolCore(item.symbol) : "";
+  const queryGpwCore = itemGpwCore ? getGpwSymbolCore(upperQuery) : "";
 
   if (item.symbol === upperQuery) return 0;
+  if (itemGpwCore && itemGpwCore === queryGpwCore) return 1;
   if (normalizedSymbol === normalizedQuery) return 1;
   if (normalizedName === normalizedQuery) return 2;
   if (normalizedTerms.some((term) => term === normalizedQuery)) return 3;
-  if (item.symbol.startsWith(upperQuery)) return 4;
-  if (normalizedName.startsWith(normalizedQuery)) return 5;
-  return 6;
+  if (itemGpwCore && itemGpwCore.startsWith(queryGpwCore) && queryGpwCore) return 4;
+  if (item.symbol.startsWith(upperQuery)) return 5;
+  if (normalizedName.startsWith(normalizedQuery)) return 6;
+  return 7;
 };
 
 export const searchCatalogAssets = (
@@ -98,7 +115,8 @@ export const searchCatalogAssets = (
   return getCatalogEntries(kind, mode)
     .filter((item) => {
       const haystack = normalizeText(
-        [item.name, item.symbol, item.subtitle, ...item.searchTerms].join(" ")
+        [item.name, item.symbol, item.subtitle, ...item.searchTerms, ...getGpwAliasTerms(item.symbol)]
+          .join(" ")
       );
 
       return haystack.includes(normalizedQuery);
@@ -109,7 +127,7 @@ export const searchCatalogAssets = (
           getCatalogMatchScore(right, query, normalizedQuery) ||
         left.name.localeCompare(right.name, "pl")
     )
-    .slice(0, 8)
+    .slice(0, SEARCH_RESULT_LIMIT)
     .map((item) => ({
       symbol: item.symbol,
       name: item.name,
@@ -159,27 +177,17 @@ export const buildTickerFallbackResults = (
   const candidates: AssetSearchResult[] = [];
 
   if (mode === "stock-gpw") {
+    const canonicalSymbol = normalizeGpwSymbol(normalized);
+
     candidates.push({
-      symbol: normalized,
-      name: normalized,
+      symbol: canonicalSymbol,
+      name: getGpwTickerCore(canonicalSymbol),
       kind: "stock",
       marketCurrency: "PLN",
       provider: "stooq",
       subtitle: "Ticker GPW / Stooq",
       source: "fallback",
     });
-
-    if (!normalized.endsWith(".WA")) {
-      candidates.push({
-        symbol: `${normalized}.WA`,
-        name: normalized,
-        kind: "stock",
-        marketCurrency: "PLN",
-        provider: "stooq",
-        subtitle: "Ticker GPW / Stooq",
-        source: "fallback",
-      });
-    }
   }
 
   if (mode === "stock-global") {
@@ -187,24 +195,22 @@ export const buildTickerFallbackResults = (
   }
 
   if (kind === "etf" || mode === "etf") {
-    const isEuropeanEtf = /\.(AS|DE|DU|F|HM|MI|MU)$/i.test(normalized);
-
-    candidates.push({
-      symbol: normalized,
-      name: normalized,
-      kind: "etf",
-      marketCurrency: inferCurrencyFromSymbol(normalized, "USD"),
-      provider: isEuropeanEtf ? "stooq" : "finnhub",
-      subtitle: "Ticker wpisany recznie",
-      source: "fallback",
-    });
+    return candidates;
   }
 
   return candidates;
 };
 
+const getSearchResultDeduplicationKey = (item: AssetSearchResult) => {
+  if (item.kind === "stock" && isGpwSymbol(item.symbol)) {
+    return `stock:gpw:${getGpwTickerCore(item.symbol)}`;
+  }
+
+  return `${item.symbol}|${item.providerId ?? ""}|${item.kind}|${item.provider}`;
+};
+
 export const mergeSearchResults = (items: AssetSearchResult[]) =>
-  uniqueBy(items, (item) => `${item.symbol}|${item.providerId ?? ""}|${item.kind}`).slice(0, 8);
+  uniqueBy(items, getSearchResultDeduplicationKey).slice(0, SEARCH_RESULT_LIMIT);
 
 const getSourcePriority = (item: AssetSearchResult) => {
   if (item.source === "catalog") return 0;
@@ -224,6 +230,7 @@ const getSearchResultMatchScore = (
   const normalizedQuerySymbol = query.trim().toUpperCase();
   const normalizedItemName = normalizeText(item.name);
   const normalizedItemSymbol = item.symbol.trim().toUpperCase();
+  const normalizedItemIsin = item.isin?.trim().toUpperCase() ?? "";
   const queryGpwCore = getGpwSymbolCore(normalizedQuerySymbol);
   const itemGpwCore = getGpwSymbolCore(normalizedItemSymbol);
   const isGpwLookup = options?.mode === "stock-gpw";
@@ -231,6 +238,7 @@ const getSearchResultMatchScore = (
   if (options?.preferSymbol) {
     if (isGpwLookup && itemGpwCore === queryGpwCore) return 0;
     if (normalizedItemSymbol === normalizedQuerySymbol) return 0;
+    if (normalizedItemIsin === normalizedQuerySymbol) return 1;
     if (normalizedItemName === normalizedQueryText) return 2;
     if (normalizedItemName.startsWith(normalizedQueryText)) return 3;
     if (normalizedItemSymbol.startsWith(normalizedQuerySymbol)) return 4;
@@ -240,10 +248,11 @@ const getSearchResultMatchScore = (
 
   if (normalizedItemName === normalizedQueryText) return 0;
   if (normalizedItemSymbol === normalizedQuerySymbol) return 1;
-  if (isGpwLookup && itemGpwCore === queryGpwCore) return 2;
-  if (normalizedItemName.startsWith(normalizedQueryText)) return 3;
-  if (normalizedItemSymbol.startsWith(normalizedQuerySymbol)) return 4;
-  if (isGpwLookup && itemGpwCore.startsWith(queryGpwCore)) return 5;
+  if (normalizedItemIsin === normalizedQuerySymbol) return 2;
+  if (isGpwLookup && itemGpwCore === queryGpwCore) return 3;
+  if (normalizedItemName.startsWith(normalizedQueryText)) return 4;
+  if (normalizedItemSymbol.startsWith(normalizedQuerySymbol)) return 5;
+  if (isGpwLookup && itemGpwCore.startsWith(queryGpwCore)) return 6;
   return Number.POSITIVE_INFINITY;
 };
 

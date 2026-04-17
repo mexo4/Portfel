@@ -89,13 +89,37 @@ export default function PortfolioSummary({
           <strong>{formatCurrency(summary.totalValuePln)}</strong>
         </article>
         <article className="metric-card">
-          <span>Zainwestowano</span>
+          <span>Zainwestowano otwarte</span>
           <strong>{formatCurrency(summary.totalInvestedPln)}</strong>
         </article>
         <article className="metric-card">
-          <span>Wynik</span>
-          <strong className={summary.totalProfitLossPln >= 0 ? "tone-positive" : "tone-negative"}>
-            {formatCurrency(summary.totalProfitLossPln)}
+          <span>Wynik otwarty</span>
+          <strong
+            className={
+              summary.openProfitLossPln >= 0 ? "tone-positive" : "tone-negative"
+            }
+          >
+            {formatCurrency(summary.openProfitLossPln)}
+          </strong>
+        </article>
+        <article className="metric-card">
+          <span>Wynik zrealizowany</span>
+          <strong
+            className={
+              summary.realizedProfitLossPln >= 0 ? "tone-positive" : "tone-negative"
+            }
+          >
+            {formatCurrency(summary.realizedProfitLossPln)}
+          </strong>
+        </article>
+        <article className="metric-card">
+          <span>Wynik laczny</span>
+          <strong
+            className={
+              summary.combinedProfitLossPln >= 0 ? "tone-positive" : "tone-negative"
+            }
+          >
+            {formatCurrency(summary.combinedProfitLossPln)}
           </strong>
         </article>
         <article className="metric-card metric-card-muted">
@@ -108,6 +132,7 @@ export default function PortfolioSummary({
       <div className="hero-meta mt-5">
         <span className="tag">pozycje: {summary.positionsCount}</span>
         <span className="tag">unikalne aktywa: {summary.assetsCount}</span>
+        <span className="tag">sprzedaze: {summary.salesCount}</span>
         <span className="tag">auto refresh: co {AUTO_REFRESH_INTERVAL_MS / 1000}s</span>
         <span className="tag">baza: {getBaseCurrency()}</span>
       </div>

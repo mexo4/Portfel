@@ -8,6 +8,7 @@ import type {
   BenchmarkInvestment,
   FxRates,
   PortfolioAsset,
+  PortfolioSale,
   UserProfile,
 } from "@/types/portfolio";
 
@@ -19,7 +20,7 @@ type SearchParams = {
 
 type QuoteRequest = Pick<
   PortfolioAsset,
-  "symbol" | "kind" | "marketCurrency" | "provider" | "providerId"
+  "symbol" | "kind" | "marketCurrency" | "provider" | "providerId" | "priceScale"
 >;
 
 const requestJson = async <T,>(url: string, init?: RequestInit): Promise<T> => {
@@ -72,6 +73,10 @@ export const fetchQuotePreview = async (request: QuoteRequest) => {
     params.set("providerId", request.providerId);
   }
 
+  if (typeof request.priceScale === "number" && Number.isFinite(request.priceScale)) {
+    params.set("priceScale", String(request.priceScale));
+  }
+
   try {
     const data = await requestJson<{ quote: AssetQuote }>(
       `/api/quote?${params.toString()}`
@@ -94,9 +99,11 @@ export const refreshPortfolioQuotes = async (assets: PortfolioAsset[]) => {
         ...asset,
         symbol: quote.symbol,
         latestPrice: quote.price,
+        previousClose: quote.previousClose ?? asset.previousClose,
         marketCurrency: quote.marketCurrency,
         provider: quote.provider,
         providerId: quote.providerId ?? asset.providerId,
+        priceScale: quote.priceScale ?? asset.priceScale,
         lastUpdatedAt: quote.fetchedAt,
         name: quote.name ?? asset.name,
       };
@@ -106,8 +113,16 @@ export const refreshPortfolioQuotes = async (assets: PortfolioAsset[]) => {
   return refreshed;
 };
 
-export const fetchFxRates = async () => {
-  const data = await requestJson<{ rates: FxRates; fetchedAt: string }>("/api/fx");
+export const fetchFxRates = async (codes?: string[]) => {
+  const params = new URLSearchParams();
+
+  if (codes && codes.length > 0) {
+    params.set("codes", codes.join(","));
+  }
+
+  const data = await requestJson<{ rates: FxRates; fetchedAt: string }>(
+    `/api/fx${params.size > 0 ? `?${params.toString()}` : ""}`
+  );
   return data;
 };
 
@@ -123,13 +138,22 @@ export const saveUserProfile = async (profile: UserProfile) => {
   return data;
 };
 
-export const savePortfolioAssets = async (assets: PortfolioAsset[]) => {
-  const data = await requestJson<{ assets: PortfolioAsset[] }>("/api/portfolio", {
+export const savePortfolioState = async ({
+  assets,
+  sales,
+}: {
+  assets: PortfolioAsset[];
+  sales: PortfolioSale[];
+}) => {
+  const data = await requestJson<{
+    assets: PortfolioAsset[];
+    sales: PortfolioSale[];
+  }>("/api/portfolio", {
     method: "PUT",
-    body: JSON.stringify({ assets }),
+    body: JSON.stringify({ assets, sales }),
   });
 
-  return data.assets;
+  return data;
 };
 
 export const loginUser = async (payload: { email: string; password: string }) => {

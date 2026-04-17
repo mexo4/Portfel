@@ -2,9 +2,14 @@ import { NextResponse } from "next/server";
 import { FALLBACK_FX_RATES } from "@/lib/constants";
 import { fetchFxRatesServer } from "@/lib/server/market-data";
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
-    const rates = await fetchFxRatesServer();
+    const requestUrl = new URL(request.url);
+    const codes = (requestUrl.searchParams.get("codes") ?? "")
+      .split(",")
+      .map((code) => code.trim().toUpperCase())
+      .filter(Boolean);
+    const rates = await fetchFxRatesServer(codes);
     return NextResponse.json({
       rates,
       fetchedAt: new Date().toISOString(),

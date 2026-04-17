@@ -1,24 +1,32 @@
-export type AssetKind = "stock" | "etf" | "crypto" | "commodity";
+export type AssetKind = "stock" | "etf" | "crypto";
 
 export type AssetSearchMode =
   | "stock-global"
   | "stock-gpw"
   | "etf"
-  | "crypto"
-  | "commodity";
+  | "crypto";
 
-export type CurrencyCode = "PLN" | "USD" | "EUR";
+export type CurrencyCode = string;
 
 export type InvestorExperience = "beginner" | "intermediate" | "advanced";
 
 export type QuoteProvider =
   | "finnhub"
   | "stooq"
+  | "eodhd"
   | "coingecko"
-  | "commoditypriceapi"
   | "catalog";
 
 export type SearchSource = "api" | "catalog" | "fallback";
+
+export type AssetTableSortMode =
+  | "manual"
+  | "value-desc"
+  | "value-asc"
+  | "profit-desc"
+  | "loss-asc"
+  | "daily-gain-desc"
+  | "daily-loss-asc";
 
 export type AssetCatalogItem = {
   symbol: string;
@@ -29,6 +37,8 @@ export type AssetCatalogItem = {
   searchTerms: string[];
   subtitle?: string;
   providerId?: string;
+  isin?: string;
+  priceScale?: number;
 };
 
 export type AssetSearchResult = {
@@ -40,6 +50,8 @@ export type AssetSearchResult = {
   source: SearchSource;
   providerId?: string;
   subtitle?: string;
+  isin?: string;
+  priceScale?: number;
 };
 
 export type AssetQuote = {
@@ -50,6 +62,8 @@ export type AssetQuote = {
   fetchedAt: string;
   providerId?: string;
   name?: string;
+  priceScale?: number;
+  previousClose?: number;
 };
 
 export type PortfolioAsset = {
@@ -65,8 +79,11 @@ export type PortfolioAsset = {
   marketCurrency: CurrencyCode;
   provider: QuoteProvider;
   providerId?: string;
+  priceScale?: number;
   latestPrice?: number;
+  previousClose?: number;
   lastUpdatedAt?: string;
+  groupOrder?: number;
   createdAt: string;
 };
 
@@ -85,7 +102,63 @@ export type AssetDraft = {
   marketCurrency: CurrencyCode;
   provider: QuoteProvider;
   providerId?: string;
+  priceScale?: number;
   latestPrice?: number;
+  previousClose?: number;
+};
+
+export type PortfolioSaleAllocation = {
+  lotId: string;
+  quantity: number;
+  purchaseDate: string;
+  purchasePrice: number;
+  purchaseCurrency: CurrencyCode;
+  allocatedBuyFeePln: number;
+  investedPln: number;
+};
+
+export type PortfolioSale = {
+  id: string;
+  assetKey: string;
+  name: string;
+  symbol: string;
+  kind: AssetKind;
+  quantity: number;
+  salePrice: number;
+  saleDate: string;
+  feePln: number;
+  marketCurrency: CurrencyCode;
+  provider: QuoteProvider;
+  providerId?: string;
+  priceScale?: number;
+  realizedInvestedPln: number;
+  realizedProceedsPln: number;
+  realizedProfitLossPln: number;
+  allocations: PortfolioSaleAllocation[];
+  createdAt: string;
+};
+
+export type SellAssetDraft = {
+  groupKey: string;
+  name: string;
+  symbol: string;
+  kind: AssetKind;
+  marketCurrency: CurrencyCode;
+  provider: QuoteProvider;
+  providerId?: string;
+  priceScale?: number;
+  maxQuantity: number;
+  quantity: number;
+  quantityInput: string;
+  salePrice: number;
+  salePriceInput: string;
+  saleDate: string;
+  feePln: number;
+};
+
+export type PortfolioState = {
+  assets: PortfolioAsset[];
+  sales: PortfolioSale[];
 };
 
 export type FxRates = Record<CurrencyCode, number>;
@@ -94,8 +167,12 @@ export type PortfolioSummary = {
   totalValuePln: number;
   totalInvestedPln: number;
   totalProfitLossPln: number;
+  openProfitLossPln: number;
+  realizedProfitLossPln: number;
+  combinedProfitLossPln: number;
   positionsCount: number;
   assetsCount: number;
+  salesCount: number;
 };
 
 export type BenchmarkInvestment = {

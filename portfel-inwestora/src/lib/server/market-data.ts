@@ -1,10 +1,22 @@
 import {
+  fetchEodhdEtfQuote,
+  fetchEodhdFxRates,
+  searchEodhdEtfs,
+} from "@/lib/server/eodhd";
+import {
   findGpwCatalogEntry,
   findGpwCatalogEntryWithPrice,
   searchGpwCatalog,
   warmGpwCatalog,
 } from "@/lib/server/gpw-catalog";
-import { inferCurrencyFromSymbol, normalizeSymbol } from "@/lib/ticker";
+import {
+  getGpwTickerCore,
+  inferCurrencyFromSymbol,
+  isGpwSymbol,
+  normalizeGpwSymbol,
+  normalizeSymbol,
+  toStooqGpwSymbol,
+} from "@/lib/ticker";
 import { normalizeText, round, toCurrencyCode, uniqueBy } from "@/lib/utils";
 import type {
   AssetKind,
@@ -12,6 +24,7 @@ import type {
   AssetSearchMode,
   AssetSearchResult,
   CurrencyCode,
+  FxRates,
   QuoteProvider,
 } from "@/types/portfolio";
 
@@ -26,6 +39,7 @@ type FinnhubSearchResponse = {
 
 type FinnhubQuoteResponse = {
   c?: number;
+  pc?: number;
 };
 
 type StooqQuoteResponse = {
@@ -49,54 +63,14 @@ type CoinGeckoSearchResponse = {
   }>;
 };
 
-type CommoditySymbolPayload = {
-  symbols?:
-    | Array<{
-        symbol?: string;
-        category?: string;
-        name?: string;
-        status?: string;
-        currency?: {
-          code?: string;
-        };
-        unit?: {
-          symbol?: string;
-          name?: string;
-        };
-      }>
-    | Record<
-        string,
-        {
-          symbol?: string;
-          category?: string;
-          name?: string;
-          status?: string;
-          currency?: {
-            code?: string;
-          };
-          unit?: {
-            symbol?: string;
-            name?: string;
-          };
-        }
-      >;
+type StooqHistorySnapshot = {
+  price: number;
+  previousClose?: number;
 };
 
 const FINNHUB_API_KEY =
   process.env.FINNHUB_API_KEY ?? process.env.NEXT_PUBLIC_FINNHUB_API_KEY ?? "";
-const COMMODITY_API_KEY =
-  process.env.COMMODITY_PRICE_API_KEY ??
-  process.env.NEXT_PUBLIC_COMMODITY_API_KEY ??
-  "";
 
-const isGpwSymbol = (symbol: string) => /\.WA$/i.test(symbol);
-const isEuropeanEtfSymbol = (symbol: string) => /\.(AS|DE|DU|F|HM|MI|MU)$/i.test(symbol);
-const normalizeGpwSymbol = (symbol: string) => {
-  const normalized = normalizeSymbol(symbol);
-  if (!normalized) return normalized;
-  return isGpwSymbol(normalized) ? normalized : `${normalized}.WA`;
-};
-const getGpwTickerCore = (symbol: string) => normalizeGpwSymbol(symbol).replace(/\.WA$/i, "");
 const shouldUseGpwStooqQuote = ({
   symbol,
   kind,
@@ -106,9 +80,6 @@ const shouldUseGpwStooqQuote = ({
   kind: AssetKind;
   marketCurrency: CurrencyCode;
 }) => kind === "stock" && (isGpwSymbol(symbol) || marketCurrency === "PLN");
-
-const getEtfProvider = (symbol: string): QuoteProvider =>
-  isEuropeanEtfSymbol(symbol) ? "stooq" : "finnhub";
 
 const isUsFinnhubSymbol = (symbol: string) => /^[A-Z]{1,5}(\.[A-Z])?$/.test(symbol);
 
@@ -123,37 +94,26 @@ const isStockLikeFinnhubType = (type?: string) => {
   );
 };
 
-const isEtfLikeFinnhubType = (type?: string) => {
-  const normalizedType = normalizeText(type ?? "");
-  if (!normalizedType) return true;
-
-  return (
-    normalizedType.includes("etf") ||
-    normalizedType.includes("exchange traded fund") ||
-    normalizedType.includes("fund") ||
-    normalizedType.includes("etn") ||
-    normalizedType.includes("etp")
-  );
-};
-
 const getStooqSymbolCandidates = (symbol: string) => {
-  const normalized = symbol.trim().toLowerCase();
+  const normalized = normalizeSymbol(symbol);
 
   if (isGpwSymbol(normalized)) {
-    const withoutSuffix = normalized.replace(/\.wa$/i, "");
+    const tickerCore = getGpwTickerCore(normalized);
 
     return uniqueBy(
-      [normalized, withoutSuffix, normalized.toUpperCase(), withoutSuffix.toUpperCase()],
+      [`${tickerCore}.wa`, tickerCore.toLowerCase(), `${tickerCore}.WA`, tickerCore],
       (item) => item
     );
   }
 
+  const normalizedLower = normalized.toLowerCase();
+
   return uniqueBy(
     [
-      `${normalized}.wa`,
+      `${normalizedLower}.wa`,
+      normalizedLower,
+      `${normalizedLower}.wa`.toUpperCase(),
       normalized,
-      `${normalized}.wa`.toUpperCase(),
-      normalized.toUpperCase(),
     ],
     (item) => item
   );
@@ -195,14 +155,14 @@ const parseStooqPageNumber = (value: string) => {
 };
 
 const getStooqPageSymbolCandidates = (symbol: string) => {
-  const normalized = symbol.trim().toLowerCase();
+  const normalized = normalizeSymbol(symbol);
 
   if (isGpwSymbol(normalized)) {
-    const withoutSuffix = normalized.replace(/\.wa$/i, "");
-    return uniqueBy([withoutSuffix, normalized], (item) => item);
+    const tickerCore = getGpwTickerCore(normalized);
+    return uniqueBy([tickerCore.toLowerCase(), `${tickerCore.toLowerCase()}.wa`, tickerCore], (item) => item);
   }
 
-  return uniqueBy([normalized], (item) => item);
+  return uniqueBy([normalized.toLowerCase()], (item) => item);
 };
 
 const normalizeGpwTickerQuery = (query: string) => {
@@ -212,18 +172,14 @@ const normalizeGpwTickerQuery = (query: string) => {
     return null;
   }
 
-  if (isGpwSymbol(normalized)) {
-    const tickerCore = normalized.replace(/\.WA$/i, "");
-    return /^[A-Z0-9]{1,6}$/.test(tickerCore) ? tickerCore : null;
-  }
-
-  return /^[A-Z0-9]{1,6}$/.test(normalized) ? normalized : null;
+  const tickerCore = getGpwTickerCore(normalized);
+  return /^[A-Z0-9]{1,6}$/.test(tickerCore) ? tickerCore : null;
 };
 
 const containsStooqRateLimitMessage = (value: string) =>
   STOOQ_RATE_LIMIT_PATTERN.test(value);
 
-const getGpwQuoteCacheKey = (symbol: string) => `stooq:${normalizeGpwSymbol(symbol)}`;
+const getGpwQuoteCacheKey = (symbol: string) => `stooq:${toStooqGpwSymbol(symbol)}`;
 
 const getCachedGpwQuote = (symbol: string) => {
   const cacheKey = getGpwQuoteCacheKey(symbol);
@@ -246,14 +202,26 @@ const getCachedGpwQuote = (symbol: string) => {
 
 const setCachedGpwQuote = (quote: AssetQuote) => {
   const normalizedSymbol = normalizeGpwSymbol(quote.symbol);
+  const cacheKey = getGpwQuoteCacheKey(normalizedSymbol);
 
-  gpwQuoteCache.set(getGpwQuoteCacheKey(normalizedSymbol), {
+  gpwQuoteCache.set(cacheKey, {
     quote: {
       ...quote,
       symbol: normalizedSymbol,
     },
     expiresAt: Date.now() + GPW_QUOTE_CACHE_TTL_MS,
   });
+};
+
+const toGpwCatalogQuote = (
+  symbol: string,
+  catalogEntry: { price: number | null; name: string } | null
+) => {
+  if (!catalogEntry?.price) {
+    return null;
+  }
+
+  return buildGpwQuote(symbol, catalogEntry.price, catalogEntry.name);
 };
 
 const parseStooqJsonQuote = async (response: Response) => {
@@ -293,6 +261,45 @@ const parseStooqCsvQuote = (csv: string) => {
   const close = Number(parts[6] ?? parts[4] ?? parts[parts.length - 1]);
 
   return Number.isFinite(close) && close > 0 ? round(close) : null;
+};
+
+const parseStooqHistorySnapshot = (csv: string): StooqHistorySnapshot | null => {
+  if (containsStooqRateLimitMessage(csv)) {
+    return null;
+  }
+
+  const dataLines = csv
+    .trim()
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => /^\d{4}-\d{2}-\d{2},/i.test(line));
+
+  if (dataLines.length === 0) {
+    return null;
+  }
+
+  const lastLine = dataLines.at(-1);
+
+  if (!lastLine) {
+    return null;
+  }
+
+  const lastClose = Number(lastLine.split(",")[4]);
+
+  if (!Number.isFinite(lastClose) || lastClose <= 0) {
+    return null;
+  }
+
+  const previousLine = dataLines.length > 1 ? dataLines.at(-2) : null;
+  const previousClose = previousLine ? Number(previousLine.split(",")[4]) : Number.NaN;
+
+  return {
+    price: round(lastClose),
+    previousClose:
+      Number.isFinite(previousClose) && previousClose > 0
+        ? round(previousClose)
+        : undefined,
+  };
 };
 
 const fetchStooqPageQuote = async (
@@ -342,7 +349,12 @@ const fetchStooqPageQuote = async (
   return null;
 };
 
-const buildGpwQuote = (symbol: string, price: number, name?: string): AssetQuote => {
+const buildGpwQuote = (
+  symbol: string,
+  price: number,
+  name?: string,
+  previousClose?: number
+): AssetQuote => {
   const normalizedSymbol = normalizeGpwSymbol(symbol);
   const catalogEntry = findGpwCatalogEntry(normalizedSymbol);
 
@@ -353,17 +365,53 @@ const buildGpwQuote = (symbol: string, price: number, name?: string): AssetQuote
     provider: "stooq",
     fetchedAt: new Date().toISOString(),
     name: name?.trim() || catalogEntry?.name,
+    previousClose,
   };
 };
 
-const getCachedGpwCatalogQuote = async (symbol: string) => {
-  const catalogEntry = await findGpwCatalogEntryWithPrice(symbol);
+const getCachedGpwCatalogQuote = (symbol: string) =>
+  toGpwCatalogQuote(symbol, findGpwCatalogEntry(symbol));
 
-  if (!catalogEntry?.price) {
+const getRefreshedGpwCatalogQuote = async (symbol: string) =>
+  toGpwCatalogQuote(symbol, await findGpwCatalogEntryWithPrice(symbol));
+
+const fetchStooqHistoryQuoteForRequestSymbol = async (
+  symbol: string,
+  requestSymbol: string,
+  fallbackCurrency: CurrencyCode,
+  timeoutMs = 800
+): Promise<AssetQuote | null> => {
+  const today = new Date().toISOString().slice(0, 10).replaceAll("-", "");
+  const response = await safeFetch(
+    `https://stooq.pl/q/d/l/?s=${encodeURIComponent(requestSymbol)}&d1=20000101&d2=${today}&i=d`,
+    {
+      headers: {
+        "User-Agent": "Mozilla/5.0",
+      },
+      cache: "no-store",
+    },
+    timeoutMs
+  );
+
+  if (!response?.ok) {
     return null;
   }
 
-  return buildGpwQuote(symbol, catalogEntry.price, catalogEntry.name);
+  const csv = await response.text();
+  const snapshot = parseStooqHistorySnapshot(csv);
+
+  if (!snapshot) {
+    return null;
+  }
+
+  return {
+    symbol,
+    price: snapshot.price,
+    previousClose: snapshot.previousClose,
+    marketCurrency: inferCurrencyFromSymbol(symbol, fallbackCurrency),
+    provider: "stooq",
+    fetchedAt: new Date().toISOString(),
+  };
 };
 
 const fetchStooqLiveCsvQuote = async (
@@ -398,9 +446,17 @@ const fetchStooqLiveCsvQuote = async (
     const close = parseStooqCsvQuote(csv);
 
     if (close !== null) {
+      const historyQuote = await fetchStooqHistoryQuoteForRequestSymbol(
+        symbol,
+        requestSymbol,
+        fallbackCurrency,
+        3_500
+      );
+
       return {
         symbol,
         price: close,
+        previousClose: historyQuote?.previousClose,
         marketCurrency: inferCurrencyFromSymbol(symbol, fallbackCurrency),
         provider: "stooq",
         fetchedAt: new Date().toISOString(),
@@ -417,51 +473,17 @@ const fetchStooqHistoryQuote = async (
   timeoutMs = 800
 ): Promise<AssetQuote | null> => {
   const requestSymbols = [getGpwTickerCore(symbol).toLowerCase()];
-  const today = new Date().toISOString().slice(0, 10).replaceAll("-", "");
 
   for (const requestSymbol of requestSymbols) {
-    const response = await safeFetch(
-      `https://stooq.pl/q/d/l/?s=${encodeURIComponent(requestSymbol)}&d1=20000101&d2=${today}&i=d`,
-      {
-        headers: {
-          "User-Agent": "Mozilla/5.0",
-        },
-        cache: "no-store",
-      },
+    const historyQuote = await fetchStooqHistoryQuoteForRequestSymbol(
+      symbol,
+      requestSymbol,
+      fallbackCurrency,
       timeoutMs
     );
 
-    if (!response?.ok) {
-      continue;
-    }
-
-    const csv = await response.text();
-
-    if (containsStooqRateLimitMessage(csv)) {
-      continue;
-    }
-
-    const lines = csv
-      .trim()
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean);
-    const lastDataLine = [...lines].reverse().find((line) => /^\d{4}-\d{2}-\d{2},/i.test(line));
-
-    if (!lastDataLine) {
-      continue;
-    }
-
-    const close = Number(lastDataLine.split(",")[4]);
-
-    if (Number.isFinite(close) && close > 0) {
-      return {
-        symbol,
-        price: round(close),
-        marketCurrency: inferCurrencyFromSymbol(symbol, fallbackCurrency),
-        provider: "stooq",
-        fetchedAt: new Date().toISOString(),
-      };
+    if (historyQuote) {
+      return historyQuote;
     }
   }
 
@@ -477,13 +499,13 @@ const searchGpwStooqTickerFallback = async (
     return [];
   }
 
-  const quote = await fetchStooqPageQuote(tickerCore, "PLN", 5_000);
+  const quote = await fetchStooqPageQuote(tickerCore, "PLN", 20_000);
 
   if (!quote) {
     return [];
   }
 
-  const canonicalSymbol = normalizeGpwSymbol(tickerCore);
+  const canonicalSymbol = normalizeGpwSymbol(query);
 
   return [
     {
@@ -529,7 +551,6 @@ const searchFinnhub = async (
     } => {
       if (!item.symbol) return false;
       if (kind === "stock" && !isStockLikeFinnhubType(item.type)) return false;
-      if (kind === "etf" && !isEtfLikeFinnhubType(item.type)) return false;
       if (mode === "stock-gpw") return isGpwSymbol(item.symbol);
       if (mode === "stock-global") return isUsFinnhubSymbol(item.symbol);
       return true;
@@ -545,12 +566,7 @@ const searchFinnhub = async (
           mode === "stock-gpw"
             ? "PLN"
             : inferCurrencyFromSymbol(item.symbol, "USD"),
-        provider:
-          mode === "stock-gpw"
-            ? ("stooq" as const)
-            : kind === "etf"
-              ? getEtfProvider(item.symbol)
-              : ("finnhub" as const),
+        provider: mode === "stock-gpw" ? ("stooq" as const) : ("finnhub" as const),
       subtitle: "API",
       source: "api" as const,
     })),
@@ -589,88 +605,6 @@ const searchCoinGecko = async (query: string): Promise<AssetSearchResult[]> => {
     }));
 };
 
-const fetchCommoditySymbols = async () => {
-  if (!COMMODITY_API_KEY) return [];
-
-  const upstream = new URL("https://api.commoditypriceapi.com/v2/symbols");
-  upstream.searchParams.set("apiKey", COMMODITY_API_KEY);
-
-  const response = await fetch(
-    upstream.toString(),
-    {
-      headers: {
-        Accept: "application/json",
-        "x-api-key": COMMODITY_API_KEY,
-      },
-      next: {
-        revalidate: 3600,
-      },
-    }
-  );
-
-  if (!response.ok) return [];
-
-  const payload = (await response.json()) as CommoditySymbolPayload;
-  const rawSymbols = payload.symbols;
-
-  const items = Array.isArray(rawSymbols)
-    ? rawSymbols
-    : Object.values(rawSymbols ?? {});
-
-  return items.filter(
-    (
-      item
-    ): item is {
-      symbol: string;
-      category?: string;
-      name?: string;
-      status?: string;
-      currency?: {
-        code?: string;
-      };
-      unit?: {
-        symbol?: string;
-        name?: string;
-      };
-    } => Boolean(item.symbol) && item.status !== "deprecated"
-  );
-};
-
-const searchCommodityApi = async (query: string): Promise<AssetSearchResult[]> => {
-  const normalizedQuery = normalizeText(query);
-  if (!normalizedQuery) return [];
-
-  const symbols = await fetchCommoditySymbols();
-
-  return symbols
-    .filter((item) => {
-      const haystack = normalizeText(
-        [
-          item.symbol,
-          item.name,
-          item.category,
-          item.unit?.symbol,
-          item.unit?.name,
-        ]
-          .filter(Boolean)
-          .join(" ")
-      );
-
-      return haystack.includes(normalizedQuery);
-    })
-    .slice(0, 8)
-    .map((item) => ({
-      symbol: item.symbol,
-      name: item.name ?? item.symbol,
-      kind: "commodity" as const,
-      marketCurrency: toCurrencyCode(item.currency?.code),
-      provider: "commoditypriceapi" as const,
-      providerId: item.symbol,
-      subtitle: item.category,
-      source: "api" as const,
-    }));
-};
-
 const fetchFinnhubQuote = async (
   symbol: string,
   fallbackCurrency: CurrencyCode
@@ -685,17 +619,27 @@ const fetchFinnhubQuote = async (
   if (!quoteResponse.ok) return null;
 
   const quotePayload: FinnhubQuoteResponse = await quoteResponse.json();
+  const latestPrice =
+    typeof quotePayload.c === "number" && quotePayload.c > 0
+      ? quotePayload.c
+      : typeof quotePayload.pc === "number" && quotePayload.pc > 0
+        ? quotePayload.pc
+        : null;
 
-  if (typeof quotePayload.c !== "number" || quotePayload.c <= 0) {
+  if (latestPrice === null) {
     return null;
   }
 
   return {
     symbol,
-    price: round(quotePayload.c),
+    price: round(latestPrice),
     marketCurrency: toCurrencyCode(fallbackCurrency),
     provider: "finnhub",
     fetchedAt: new Date().toISOString(),
+    previousClose:
+      typeof quotePayload.pc === "number" && quotePayload.pc > 0
+        ? round(quotePayload.pc)
+        : undefined,
   };
 };
 
@@ -722,9 +666,17 @@ const fetchStooqQuote = async (
         const close = await parseStooqJsonQuote(liveResponse);
 
         if (close !== null) {
+          const historyQuote = await fetchStooqHistoryQuoteForRequestSymbol(
+            symbol,
+            requestSymbol,
+            fallbackCurrency,
+            4_500
+          );
+
           return {
             symbol,
             price: close,
+            previousClose: historyQuote?.previousClose,
             marketCurrency: inferCurrencyFromSymbol(symbol, fallbackCurrency),
             provider: "stooq",
             fetchedAt: new Date().toISOString(),
@@ -752,9 +704,17 @@ const fetchStooqQuote = async (
         const close = parseStooqCsvQuote(csv);
 
         if (close !== null) {
+          const historyQuote = await fetchStooqHistoryQuoteForRequestSymbol(
+            symbol,
+            requestSymbol,
+            fallbackCurrency,
+            4_500
+          );
+
           return {
             symbol,
             price: close,
+            previousClose: historyQuote?.previousClose,
             marketCurrency: inferCurrencyFromSymbol(symbol, fallbackCurrency),
             provider: "stooq",
             fetchedAt: new Date().toISOString(),
@@ -784,24 +744,13 @@ const fetchStooqQuote = async (
         continue;
       }
 
-      const lines = csv
-        .trim()
-        .split("\n")
-        .map((line) => line.trim())
-        .filter(Boolean);
+      const snapshot = parseStooqHistorySnapshot(csv);
 
-      if (lines.length < 2) {
-        continue;
-      }
-
-      const lastLine = lines[lines.length - 1];
-      const parts = lastLine.split(",");
-      const close = Number(parts[4]);
-
-      if (Number.isFinite(close) && close > 0) {
+      if (snapshot) {
         return {
           symbol,
-          price: round(close),
+          price: snapshot.price,
+          previousClose: snapshot.previousClose,
           marketCurrency: inferCurrencyFromSymbol(symbol, fallbackCurrency),
           provider: "stooq",
           fetchedAt: new Date().toISOString(),
@@ -816,8 +765,9 @@ const fetchStooqQuote = async (
 const fetchGpwStooqQuote = async (symbol: string): Promise<AssetQuote | null> => {
   warmGpwCatalog();
   const normalizedGpwSymbol = normalizeGpwSymbol(symbol);
+  const requestGpwSymbol = toStooqGpwSymbol(normalizedGpwSymbol);
 
-  if (!normalizedGpwSymbol) {
+  if (!normalizedGpwSymbol || !requestGpwSymbol) {
     return null;
   }
 
@@ -827,7 +777,7 @@ const fetchGpwStooqQuote = async (symbol: string): Promise<AssetQuote | null> =>
     return cachedQuote;
   }
 
-  const cacheKey = getGpwQuoteCacheKey(normalizedGpwSymbol);
+  const cacheKey = getGpwQuoteCacheKey(requestGpwSymbol);
   const inFlightQuote = gpwQuoteInFlight.get(cacheKey);
 
   if (inFlightQuote) {
@@ -835,31 +785,33 @@ const fetchGpwStooqQuote = async (symbol: string): Promise<AssetQuote | null> =>
   }
 
   const quotePromise = (async () => {
-    const liveQuote = await fetchStooqLiveCsvQuote(normalizedGpwSymbol, "PLN");
+    const liveQuote = await fetchStooqLiveCsvQuote(requestGpwSymbol, "PLN");
 
     if (liveQuote) {
       const normalizedQuote = buildGpwQuote(
         normalizedGpwSymbol,
         liveQuote.price,
-        liveQuote.name
+        liveQuote.name,
+        liveQuote.previousClose
       );
       setCachedGpwQuote(normalizedQuote);
       return normalizedQuote;
     }
 
-    const historyQuote = await fetchStooqHistoryQuote(normalizedGpwSymbol, "PLN");
+    const historyQuote = await fetchStooqHistoryQuote(requestGpwSymbol, "PLN");
 
     if (historyQuote) {
       const normalizedQuote = buildGpwQuote(
         normalizedGpwSymbol,
         historyQuote.price,
-        historyQuote.name
+        historyQuote.name,
+        historyQuote.previousClose
       );
       setCachedGpwQuote(normalizedQuote);
       return normalizedQuote;
     }
 
-    const catalogQuote = await getCachedGpwCatalogQuote(normalizedGpwSymbol);
+    const catalogQuote = getCachedGpwCatalogQuote(normalizedGpwSymbol);
 
     if (catalogQuote) {
       setCachedGpwQuote(catalogQuote);
@@ -867,22 +819,29 @@ const fetchGpwStooqQuote = async (symbol: string): Promise<AssetQuote | null> =>
     }
 
     const pageQuote = await fetchStooqPageQuote(
-      getGpwTickerCore(normalizedGpwSymbol),
+      getGpwTickerCore(requestGpwSymbol),
       "PLN",
-      5_000
+      20_000
     );
 
-    if (!pageQuote) {
-      return null;
+    if (pageQuote) {
+      const normalizedQuote = buildGpwQuote(
+        normalizedGpwSymbol,
+        pageQuote.price,
+        pageQuote.name
+      );
+      setCachedGpwQuote(normalizedQuote);
+      return normalizedQuote;
     }
 
-    const normalizedQuote = buildGpwQuote(
-      normalizedGpwSymbol,
-      pageQuote.price,
-      pageQuote.name
-    );
-    setCachedGpwQuote(normalizedQuote);
-    return normalizedQuote;
+    const refreshedCatalogQuote = await getRefreshedGpwCatalogQuote(normalizedGpwSymbol);
+
+    if (refreshedCatalogQuote) {
+      setCachedGpwQuote(refreshedCatalogQuote);
+      return refreshedCatalogQuote;
+    }
+
+    return null;
   })().finally(() => {
     gpwQuoteInFlight.delete(cacheKey);
   });
@@ -908,7 +867,7 @@ const fetchCoinGeckoQuote = async (
   const response = await fetch(
     `https://api.coingecko.com/api/v3/simple/price?ids=${encodeURIComponent(
       coinId
-    )}&vs_currencies=usd`,
+    )}&vs_currencies=usd&include_24hr_change=true`,
     {
       headers: {
         Accept: "application/json",
@@ -923,11 +882,20 @@ const fetchCoinGeckoQuote = async (
     string,
     {
       usd?: number;
+      usd_24h_change?: number;
     }
   >;
   const price = payload[coinId]?.usd;
+  const dailyChangePercent = payload[coinId]?.usd_24h_change;
 
   if (typeof price !== "number" || price <= 0) return null;
+
+  const previousClose =
+    typeof dailyChangePercent === "number" &&
+    Number.isFinite(dailyChangePercent) &&
+    dailyChangePercent > -100
+      ? round(price / (1 + dailyChangePercent / 100), 8)
+      : undefined;
 
   return {
     symbol: normalizeSymbol(symbol),
@@ -936,104 +904,7 @@ const fetchCoinGeckoQuote = async (
     provider: "coingecko",
     providerId: coinId,
     fetchedAt: new Date().toISOString(),
-  };
-};
-
-const COMMODITY_SYMBOL_MAP: Record<string, string> = {
-  XAU: "XAU",
-  XAG: "XAG",
-  WTI: "WTIOIL-FUT",
-  BRENT: "BRENTOIL-SPOT",
-  NG: "NG-FUT",
-};
-
-const parseCommodityRate = (value: unknown): number | null => {
-  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
-    return round(value);
-  }
-
-  if (!value || typeof value !== "object") {
-    return null;
-  }
-
-  const typedValue = value as Record<string, unknown>;
-  const nestedCandidates = [
-    typedValue.rate,
-    typedValue.price,
-    typedValue.value,
-    typedValue.close,
-    typedValue.latest,
-  ];
-
-  for (const candidate of nestedCandidates) {
-    if (typeof candidate === "number" && Number.isFinite(candidate) && candidate > 0) {
-      return round(candidate);
-    }
-  }
-
-  return null;
-};
-
-const fetchCommodityQuote = async (
-  symbol: string,
-  providerId?: string
-): Promise<AssetQuote | null> => {
-  if (!COMMODITY_API_KEY) return null;
-
-  const providerSymbol = normalizeSymbol(providerId ?? symbol);
-  const mappedSymbol = COMMODITY_SYMBOL_MAP[providerSymbol] ?? providerSymbol;
-  const upstream = new URL("https://api.commoditypriceapi.com/v2/rates/latest");
-  upstream.searchParams.set("apiKey", COMMODITY_API_KEY);
-  upstream.searchParams.set("symbols", mappedSymbol);
-
-  const response = await fetch(upstream.toString(), {
-    headers: {
-      Accept: "application/json",
-      "x-api-key": COMMODITY_API_KEY,
-    },
-    cache: "no-store",
-  });
-
-  if (!response.ok) return null;
-
-  const payload = (await response.json()) as {
-    rates?: Record<string, unknown>;
-    metaData?: Record<
-      string,
-      {
-        quote?: string | { code?: string };
-      }
-    >;
-  };
-  const rateKeys = uniqueBy(
-    [
-      mappedSymbol,
-      mappedSymbol.toUpperCase(),
-      mappedSymbol.toLowerCase(),
-      providerSymbol,
-      symbol,
-      symbol.toUpperCase(),
-    ],
-    (item) => item
-  );
-  const rateEntryKey = rateKeys.find((key) => key in (payload.rates ?? {}));
-  const price = rateEntryKey ? parseCommodityRate(payload.rates?.[rateEntryKey]) : null;
-
-  if (!price) return null;
-
-  const rawQuoteValue =
-    (rateEntryKey && payload.metaData?.[rateEntryKey]?.quote) ??
-    payload.metaData?.[mappedSymbol]?.quote;
-  const quoteCode =
-    typeof rawQuoteValue === "string" ? rawQuoteValue : rawQuoteValue?.code;
-
-  return {
-    symbol,
-    price,
-    marketCurrency: toCurrencyCode(quoteCode ?? "USD"),
-    provider: "commoditypriceapi",
-    providerId: providerSymbol,
-    fetchedAt: new Date().toISOString(),
+    previousClose,
   };
 };
 
@@ -1048,10 +919,6 @@ export const searchMarketAssets = async (
     return searchCoinGecko(query);
   }
 
-  if (kind === "commodity") {
-    return searchCommodityApi(query);
-  }
-
   if (kind === "stock" && mode === "stock-gpw") {
     warmGpwCatalog();
     const catalogResults = await searchGpwCatalog(query);
@@ -1063,7 +930,11 @@ export const searchMarketAssets = async (
     return searchGpwStooqTickerFallback(query);
   }
 
-  if (kind === "stock" || kind === "etf") {
+  if (kind === "etf" || mode === "etf") {
+    return searchEodhdEtfs(query);
+  }
+
+  if (kind === "stock") {
     return searchFinnhub(query, kind, mode);
   }
 
@@ -1076,12 +947,14 @@ export const fetchAssetQuoteServer = async ({
   marketCurrency,
   provider,
   providerId,
+  priceScale,
 }: {
   symbol: string;
   kind: AssetKind;
   marketCurrency: CurrencyCode;
   provider: QuoteProvider;
   providerId?: string;
+  priceScale?: number;
 }) => {
   const normalizedSymbol = normalizeSymbol(symbol);
   const isGpwStockRequest = shouldUseGpwStooqQuote({
@@ -1094,8 +967,13 @@ export const fetchAssetQuoteServer = async ({
     return fetchCoinGeckoQuote(normalizedSymbol, providerId);
   }
 
-  if (kind === "commodity") {
-    return fetchCommodityQuote(normalizedSymbol, providerId);
+  if (kind === "etf" && provider === "eodhd") {
+    return fetchEodhdEtfQuote({
+      symbol: normalizedSymbol,
+      providerId,
+      marketCurrency,
+      priceScale,
+    });
   }
 
   if (isGpwStockRequest) {
@@ -1124,8 +1002,8 @@ export const fetchAssetQuoteServer = async ({
   return autoQuote;
 };
 
-export const fetchFxRatesServer = async () => {
-  const response = await fetch("https://api.nbp.pl/api/exchangerates/tables/A?format=json", {
+const fetchNbpFxTable = async (table: "A" | "B") => {
+  const response = await fetch(`https://api.nbp.pl/api/exchangerates/tables/${table}?format=json`, {
     headers: {
       Accept: "application/json",
     },
@@ -1145,11 +1023,49 @@ export const fetchFxRatesServer = async () => {
     }>;
   }>;
 
-  const rates = payload[0]?.rates ?? [];
+  return payload[0]?.rates ?? [];
+};
 
-  return {
-    PLN: 1,
-    USD: rates.find((item) => item.code === "USD")?.mid ?? 1,
-    EUR: rates.find((item) => item.code === "EUR")?.mid ?? 1,
-  } as const;
+export const fetchFxRatesServer = async (codes: CurrencyCode[] = []): Promise<FxRates> => {
+  const normalizedCodes = uniqueBy(
+    codes.map((code) => toCurrencyCode(code)).concat("PLN"),
+    (code) => code
+  );
+
+  const eodhdRates = await fetchEodhdFxRates(normalizedCodes);
+  const missingCodes = normalizedCodes.filter((code) => eodhdRates[code] === undefined);
+
+  if (missingCodes.length === 0) {
+    return eodhdRates;
+  }
+
+  const [tableA, tableB] = await Promise.allSettled([fetchNbpFxTable("A"), fetchNbpFxTable("B")]);
+  const nbpRates = [
+    ...(tableA.status === "fulfilled" ? tableA.value : []),
+    ...(tableB.status === "fulfilled" ? tableB.value : []),
+  ];
+
+  return normalizedCodes.reduce<FxRates>((rates, code) => {
+    if (rates[code] !== undefined) {
+      return rates;
+    }
+
+    if (eodhdRates[code] !== undefined) {
+      rates[code] = eodhdRates[code];
+      return rates;
+    }
+
+    if (code === "PLN") {
+      rates[code] = 1;
+      return rates;
+    }
+
+    const nbpRate = nbpRates.find((item) => item.code === code)?.mid;
+
+    if (typeof nbpRate === "number" && nbpRate > 0) {
+      rates[code] = round(nbpRate, 6);
+    }
+
+    return rates;
+  }, { PLN: 1 });
 };

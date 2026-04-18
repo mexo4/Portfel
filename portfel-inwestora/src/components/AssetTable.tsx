@@ -44,7 +44,6 @@ type AssetTableProps = {
   onSortModeChange: (mode: AssetTableSortMode) => void;
   onReorderGroups: (nextGroupKeys: string[]) => void;
   onRemove: (assetId: string) => void;
-  onStartSale: (group: PortfolioAssetGroup) => void;
 };
 
 type SortableGroupSectionProps = {
@@ -55,7 +54,6 @@ type SortableGroupSectionProps = {
   isManualReorderLocked: boolean;
   onToggleGroup: (groupKey: string) => void;
   onRemove: (assetId: string) => void;
-  onStartSale: (group: PortfolioAssetGroup) => void;
 };
 
 const SORT_OPTIONS: Array<{
@@ -201,7 +199,6 @@ const SortableGroupSection = ({
   isManualReorderLocked,
   onToggleGroup,
   onRemove,
-  onStartSale,
 }: SortableGroupSectionProps) => {
   const canDrag = isManualSortMode && !isManualReorderLocked;
   const {
@@ -352,17 +349,6 @@ const SortableGroupSection = ({
                 className="ghost-button"
                 onClick={(event) => {
                   event.stopPropagation();
-                  onStartSale(group);
-                }}
-              >
-                Sprzedaj
-              </button>
-
-              <button
-                type="button"
-                className="ghost-button"
-                onClick={(event) => {
-                  event.stopPropagation();
                   onToggleGroup(group.key);
                 }}
               >
@@ -456,7 +442,6 @@ export default function AssetTable({
   onSortModeChange,
   onReorderGroups,
   onRemove,
-  onStartSale,
 }: AssetTableProps) {
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
   const [activeGroupKey, setActiveGroupKey] = useState<string | null>(null);
@@ -614,7 +599,6 @@ export default function AssetTable({
                     isManualReorderLocked={isManualReorderLocked}
                     onToggleGroup={toggleGroup}
                     onRemove={onRemove}
-                    onStartSale={onStartSale}
                   />
                 ))}
               </SortableContext>

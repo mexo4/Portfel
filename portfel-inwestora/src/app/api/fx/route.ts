@@ -9,7 +9,8 @@ export async function GET(request: Request) {
       .split(",")
       .map((code) => code.trim().toUpperCase())
       .filter(Boolean);
-    const rates = await fetchFxRatesServer(codes);
+    const date = requestUrl.searchParams.get("date")?.trim() || undefined;
+    const rates = await fetchFxRatesServer(codes, date);
     return NextResponse.json({
       rates,
       fetchedAt: new Date().toISOString(),

@@ -115,6 +115,18 @@ export type PortfolioSaleAllocation = {
   purchaseCurrency: CurrencyCode;
   allocatedBuyFeePln: number;
   investedPln: number;
+  name?: string;
+  symbol?: string;
+  kind?: AssetKind;
+  marketCurrency?: CurrencyCode;
+  provider?: QuoteProvider;
+  providerId?: string;
+  priceScale?: number;
+  latestPrice?: number;
+  previousClose?: number;
+  lastUpdatedAt?: string;
+  groupOrder?: number;
+  createdAt?: string;
 };
 
 export type PortfolioSale = {
@@ -134,8 +146,30 @@ export type PortfolioSale = {
   realizedInvestedPln: number;
   realizedProceedsPln: number;
   realizedProfitLossPln: number;
+  realizedInvestedValue?: number;
+  realizedProceedsValue?: number;
+  realizedProfitLossValue?: number;
+  realizedValueCurrency?: CurrencyCode;
   allocations: PortfolioSaleAllocation[];
   createdAt: string;
+};
+
+export type PortfolioRealizedAdjustment = {
+  id: string;
+  amount: number;
+  currency: CurrencyCode;
+  amountPlnSnapshot: number;
+  date: string;
+  note?: string;
+  createdAt: string;
+};
+
+export type RealizedAdjustmentDraft = {
+  amount: number;
+  amountInput: string;
+  currency: CurrencyCode;
+  date: string;
+  note: string;
 };
 
 export type SellAssetDraft = {
@@ -143,6 +177,7 @@ export type SellAssetDraft = {
   name: string;
   symbol: string;
   kind: AssetKind;
+  purchaseCurrency: CurrencyCode;
   marketCurrency: CurrencyCode;
   provider: QuoteProvider;
   providerId?: string;
@@ -159,6 +194,7 @@ export type SellAssetDraft = {
 export type PortfolioState = {
   assets: PortfolioAsset[];
   sales: PortfolioSale[];
+  realizedAdjustments: PortfolioRealizedAdjustment[];
 };
 
 export type FxRates = Record<CurrencyCode, number>;
@@ -169,6 +205,7 @@ export type PortfolioSummary = {
   totalProfitLossPln: number;
   openProfitLossPln: number;
   realizedProfitLossPln: number;
+  realizedProfitLossByCurrency: Record<CurrencyCode, number>;
   combinedProfitLossPln: number;
   positionsCount: number;
   assetsCount: number;

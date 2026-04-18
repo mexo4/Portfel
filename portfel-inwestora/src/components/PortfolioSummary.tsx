@@ -38,6 +38,10 @@ export default function PortfolioSummary({
   onLogout,
   onRequestVerification,
 }: PortfolioSummaryProps) {
+  const foreignRealizedEntries = Object.entries(summary.realizedProfitLossByCurrency)
+    .filter(([currency]) => currency !== "PLN")
+    .sort(([leftCurrency], [rightCurrency]) => leftCurrency.localeCompare(rightCurrency, "pl"));
+
   return (
     <section className="panel panel-compact">
       <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
@@ -45,7 +49,8 @@ export default function PortfolioSummary({
           <p className="eyebrow">Portfel inwestycyjny</p>
           <h2 className="section-title">Szybki podglad portfela</h2>
           <p className="section-copy">
-            Wszystko liczone w {getBaseCurrency()}, z automatycznym odswiezaniem cen i FX.
+            Glowny wynik liczony jest w {getBaseCurrency()}, a zysk zrealizowany pokazujemy
+            dodatkowo w walutach transakcji.
           </p>
         </div>
 
@@ -112,6 +117,14 @@ export default function PortfolioSummary({
             {formatCurrency(summary.realizedProfitLossPln)}
           </strong>
         </article>
+        {foreignRealizedEntries.map(([currency, value]) => (
+          <article key={currency} className="metric-card">
+            <span>Wynik zrealizowany {currency}</span>
+            <strong className={value >= 0 ? "tone-positive" : "tone-negative"}>
+              {formatCurrency(value, currency)}
+            </strong>
+          </article>
+        ))}
         <article className="metric-card">
           <span>Wynik laczny</span>
           <strong

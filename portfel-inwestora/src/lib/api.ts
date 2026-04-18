@@ -8,6 +8,7 @@ import type {
   BenchmarkInvestment,
   FxRates,
   PortfolioAsset,
+  PortfolioRealizedAdjustment,
   PortfolioSale,
   UserProfile,
 } from "@/types/portfolio";
@@ -113,11 +114,15 @@ export const refreshPortfolioQuotes = async (assets: PortfolioAsset[]) => {
   return refreshed;
 };
 
-export const fetchFxRates = async (codes?: string[]) => {
+export const fetchFxRates = async (codes?: string[], date?: string) => {
   const params = new URLSearchParams();
 
   if (codes && codes.length > 0) {
     params.set("codes", codes.join(","));
+  }
+
+  if (date) {
+    params.set("date", date);
   }
 
   const data = await requestJson<{ rates: FxRates; fetchedAt: string }>(
@@ -141,16 +146,19 @@ export const saveUserProfile = async (profile: UserProfile) => {
 export const savePortfolioState = async ({
   assets,
   sales,
+  realizedAdjustments,
 }: {
   assets: PortfolioAsset[];
   sales: PortfolioSale[];
+  realizedAdjustments: PortfolioRealizedAdjustment[];
 }) => {
   const data = await requestJson<{
     assets: PortfolioAsset[];
     sales: PortfolioSale[];
+    realizedAdjustments: PortfolioRealizedAdjustment[];
   }>("/api/portfolio", {
     method: "PUT",
-    body: JSON.stringify({ assets, sales }),
+    body: JSON.stringify({ assets, sales, realizedAdjustments }),
   });
 
   return data;

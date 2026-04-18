@@ -63,6 +63,12 @@ type CoinGeckoSearchResponse = {
   }>;
 };
 
+type CoinGeckoCoin = {
+  id: string;
+  name: string;
+  symbol: string;
+};
+
 type StooqHistorySnapshot = {
   price: number;
   previousClose?: number;
@@ -123,9 +129,14 @@ const STOOQ_DOMAINS = ["https://stooq.pl", "https://stooq.com"] as const;
 const STOOQ_TEXT_PROXY_URL = "https://r.jina.ai/http://stooq.pl/q/?s=";
 const STOOQ_RATE_LIMIT_PATTERN = /przekroczony\s+dzienny\s+limit\s+wywolan/i;
 const GPW_QUOTE_CACHE_TTL_MS = 30_000;
+const COINGECKO_SEARCH_CACHE_TTL_MS = 60_000;
+const COINGECKO_QUOTE_CACHE_TTL_MS = 30_000;
 
 const gpwQuoteCache = new Map<string, { quote: AssetQuote; expiresAt: number }>();
 const gpwQuoteInFlight = new Map<string, Promise<AssetQuote | null>>();
+const coinGeckoSearchCache = new Map<string, { coins: CoinGeckoCoin[]; expiresAt: number }>();
+const coinGeckoResolveCache = new Map<string, { providerId: string; expiresAt: number }>();
+const coinGeckoQuoteCache = new Map<string, { quote: AssetQuote; expiresAt: number }>();
 
 const safeFetch = async (
   url: string,
@@ -575,34 +586,109 @@ const searchFinnhub = async (
     .slice(0, 8);
 };
 
-const searchCoinGecko = async (query: string): Promise<AssetSearchResult[]> => {
-  const response = await fetch(
+const getCoinGeckoMatchScore = (query: string, coin: CoinGeckoCoin) => {
+  const normalizedQuerySymbol = normalizeSymbol(query);
+  const normalizedQueryText = normalizeText(query);
+  const normalizedCoinSymbol = normalizeSymbol(coin.symbol);
+  const normalizedCoinName = normalizeText(coin.name);
+
+  if (normalizedCoinSymbol === normalizedQuerySymbol) return 0;
+  if (normalizedCoinName === normalizedQueryText) return 1;
+  if (normalizedCoinSymbol.startsWith(normalizedQuerySymbol)) return 2;
+  if (normalizedCoinName.startsWith(normalizedQueryText)) return 3;
+  if (normalizedCoinSymbol.includes(normalizedQuerySymbol)) return 4;
+  if (normalizedCoinName.includes(normalizedQueryText)) return 5;
+  return 6;
+};
+
+const fetchCoinGeckoCoins = async (query: string): Promise<CoinGeckoCoin[]> => {
+  const cacheKey = normalizeText(query);
+  const cachedSearch = coinGeckoSearchCache.get(cacheKey);
+
+  if (cachedSearch && cachedSearch.expiresAt > Date.now()) {
+    return cachedSearch.coins;
+  }
+
+  const response = await safeFetch(
     `https://api.coingecko.com/api/v3/search?query=${encodeURIComponent(query)}`,
     {
       headers: {
         Accept: "application/json",
       },
       cache: "no-store",
-    }
+    },
+    7_500
   );
 
-  if (!response.ok) return [];
+  if (!response?.ok) {
+    return cachedSearch?.coins ?? [];
+  }
 
   const payload: CoinGeckoSearchResponse = await response.json();
-
-  return (payload.coins ?? [])
-    .filter((coin): coin is { id: string; name?: string; symbol?: string } => Boolean(coin.id))
-    .slice(0, 8)
+  const coins = (payload.coins ?? [])
+    .filter(
+      (coin): coin is { id: string; name?: string; symbol?: string } => Boolean(coin.id)
+    )
     .map((coin) => ({
-      symbol: normalizeSymbol(coin.symbol || coin.id),
+      id: coin.id,
       name: coin.name || coin.id,
-      kind: "crypto" as const,
-      marketCurrency: "USD" as const,
-      provider: "coingecko" as const,
-      providerId: coin.id,
-      subtitle: "CoinGecko",
-      source: "api" as const,
+      symbol: normalizeSymbol(coin.symbol || coin.id),
     }));
+
+  const rankedCoins = [...coins].sort(
+    (left, right) =>
+      getCoinGeckoMatchScore(query, left) - getCoinGeckoMatchScore(query, right) ||
+      left.name.localeCompare(right.name, "pl")
+  );
+
+  coinGeckoSearchCache.set(cacheKey, {
+    coins: rankedCoins,
+    expiresAt: Date.now() + COINGECKO_SEARCH_CACHE_TTL_MS,
+  });
+
+  return rankedCoins;
+};
+
+const resolveCoinGeckoProviderId = async (symbol: string, providerId?: string) => {
+  if (providerId) {
+    return providerId;
+  }
+
+  const normalizedSymbol = normalizeSymbol(symbol);
+  const cachedProvider = coinGeckoResolveCache.get(normalizedSymbol);
+
+  if (cachedProvider && cachedProvider.expiresAt > Date.now()) {
+    return cachedProvider.providerId;
+  }
+
+  const coins = await fetchCoinGeckoCoins(normalizedSymbol);
+  const resolvedProviderId = coins[0]?.id;
+
+  if (!resolvedProviderId) {
+    return null;
+  }
+
+  coinGeckoResolveCache.set(normalizedSymbol, {
+    providerId: resolvedProviderId,
+    expiresAt: Date.now() + COINGECKO_SEARCH_CACHE_TTL_MS,
+  });
+
+  return resolvedProviderId;
+};
+
+const searchCoinGecko = async (query: string): Promise<AssetSearchResult[]> => {
+  const coins = await fetchCoinGeckoCoins(query);
+
+  return coins.slice(0, 8).map((coin) => ({
+    symbol: coin.symbol,
+    name: coin.name,
+    kind: "crypto" as const,
+    marketCurrency: "USD" as const,
+    provider: "coingecko" as const,
+    providerId: coin.id,
+    subtitle: "CoinGecko",
+    source: "api" as const,
+  }));
 };
 
 const fetchFinnhubQuote = async (
@@ -855,16 +941,21 @@ const fetchCoinGeckoQuote = async (
   symbol: string,
   providerId?: string
 ): Promise<AssetQuote | null> => {
-  let coinId = providerId ?? "";
-
-  if (!coinId) {
-    const matches = await searchCoinGecko(symbol);
-    coinId = matches[0]?.providerId ?? "";
-  }
+  const normalizedSymbol = normalizeSymbol(symbol);
+  const coinId = await resolveCoinGeckoProviderId(normalizedSymbol, providerId);
 
   if (!coinId) return null;
 
-  const response = await fetch(
+  const cachedQuote = coinGeckoQuoteCache.get(coinId);
+
+  if (cachedQuote && cachedQuote.expiresAt > Date.now()) {
+    return {
+      ...cachedQuote.quote,
+      symbol: normalizedSymbol,
+    };
+  }
+
+  const response = await safeFetch(
     `https://api.coingecko.com/api/v3/simple/price?ids=${encodeURIComponent(
       coinId
     )}&vs_currencies=usd&include_24hr_change=true`,
@@ -873,10 +964,18 @@ const fetchCoinGeckoQuote = async (
         Accept: "application/json",
       },
       cache: "no-store",
-    }
+    },
+    7_500
   );
 
-  if (!response.ok) return null;
+  if (!response?.ok) {
+    return cachedQuote?.quote
+      ? {
+          ...cachedQuote.quote,
+          symbol: normalizedSymbol,
+        }
+      : null;
+  }
 
   const payload = (await response.json()) as Record<
     string,
@@ -897,8 +996,8 @@ const fetchCoinGeckoQuote = async (
       ? round(price / (1 + dailyChangePercent / 100), 8)
       : undefined;
 
-  return {
-    symbol: normalizeSymbol(symbol),
+  const quote: AssetQuote = {
+    symbol: normalizedSymbol,
     price: round(price),
     marketCurrency: "USD",
     provider: "coingecko",
@@ -906,6 +1005,13 @@ const fetchCoinGeckoQuote = async (
     fetchedAt: new Date().toISOString(),
     previousClose,
   };
+
+  coinGeckoQuoteCache.set(coinId, {
+    quote,
+    expiresAt: Date.now() + COINGECKO_QUOTE_CACHE_TTL_MS,
+  });
+
+  return quote;
 };
 
 export const searchMarketAssets = async (
@@ -1002,13 +1108,21 @@ export const fetchAssetQuoteServer = async ({
   return autoQuote;
 };
 
-const fetchNbpFxTable = async (table: "A" | "B") => {
-  const response = await fetch(`https://api.nbp.pl/api/exchangerates/tables/${table}?format=json`, {
+const shiftDateInputValue = (date: string, days: number) => {
+  const sourceDate = new Date(`${date}T00:00:00.000Z`);
+  sourceDate.setUTCDate(sourceDate.getUTCDate() + days);
+  return sourceDate.toISOString().slice(0, 10);
+};
+
+const fetchNbpFxTable = async (table: "A" | "B", date?: string) => {
+  const response = await fetch(
+    `https://api.nbp.pl/api/exchangerates/tables/${table}${date ? `/${date}` : ""}?format=json`,
+    {
     headers: {
       Accept: "application/json",
     },
     next: {
-      revalidate: 300,
+      revalidate: date ? 86_400 : 300,
     },
   });
 
@@ -1026,11 +1140,80 @@ const fetchNbpFxTable = async (table: "A" | "B") => {
   return payload[0]?.rates ?? [];
 };
 
-export const fetchFxRatesServer = async (codes: CurrencyCode[] = []): Promise<FxRates> => {
+const fetchNbpHistoricalFxRates = async (codes: CurrencyCode[], date: string) => {
+  for (let offset = 0; offset <= 7; offset += 1) {
+    const effectiveDate = shiftDateInputValue(date, -offset);
+    const [tableA, tableB] = await Promise.allSettled([
+      fetchNbpFxTable("A", effectiveDate),
+      fetchNbpFxTable("B", effectiveDate),
+    ]);
+    const nbpRates = [
+      ...(tableA.status === "fulfilled" ? tableA.value : []),
+      ...(tableB.status === "fulfilled" ? tableB.value : []),
+    ];
+
+    if (nbpRates.length === 0) {
+      continue;
+    }
+
+    return codes.reduce<FxRates>((rates, code) => {
+      if (code === "PLN") {
+        rates[code] = 1;
+        return rates;
+      }
+
+      const nbpRate = nbpRates.find((item) => item.code === code)?.mid;
+
+      if (typeof nbpRate === "number" && nbpRate > 0) {
+        rates[code] = round(nbpRate, 6);
+      }
+
+      return rates;
+    }, { PLN: 1 });
+  }
+
+  return { PLN: 1 };
+};
+
+export const fetchFxRatesServer = async (
+  codes: CurrencyCode[] = [],
+  date?: string
+): Promise<FxRates> => {
   const normalizedCodes = uniqueBy(
     codes.map((code) => toCurrencyCode(code)).concat("PLN"),
     (code) => code
   );
+
+  if (date) {
+    const historicalNbpRates = await fetchNbpHistoricalFxRates(normalizedCodes, date);
+    const missingHistoricalCodes = normalizedCodes.filter(
+      (code) => historicalNbpRates[code] === undefined
+    );
+
+    if (missingHistoricalCodes.length === 0) {
+      return historicalNbpRates;
+    }
+
+    const fallbackCurrentRates = await fetchEodhdFxRates(missingHistoricalCodes);
+
+    return normalizedCodes.reduce<FxRates>((rates, code) => {
+      if (historicalNbpRates[code] !== undefined) {
+        rates[code] = historicalNbpRates[code];
+        return rates;
+      }
+
+      if (fallbackCurrentRates[code] !== undefined) {
+        rates[code] = fallbackCurrentRates[code];
+        return rates;
+      }
+
+      if (code === "PLN") {
+        rates[code] = 1;
+      }
+
+      return rates;
+    }, { PLN: 1 });
+  }
 
   const eodhdRates = await fetchEodhdFxRates(normalizedCodes);
   const missingCodes = normalizedCodes.filter((code) => eodhdRates[code] === undefined);

@@ -14,7 +14,11 @@ export async function GET() {
     return NextResponse.json({ error: "Brak autoryzacji." }, { status: 401 });
   }
 
-  return NextResponse.json({ assets: accountData.assets, sales: accountData.sales });
+  return NextResponse.json({
+    assets: accountData.assets,
+    sales: accountData.sales,
+    realizedAdjustments: accountData.realizedAdjustments,
+  });
 }
 
 export async function PUT(request: Request) {
@@ -28,11 +32,15 @@ export async function PUT(request: Request) {
     const payload = (await request.json()) as {
       assets?: PortfolioState["assets"];
       sales?: PortfolioState["sales"];
+      realizedAdjustments?: PortfolioState["realizedAdjustments"];
     };
 
     const updatedPortfolio = await updateCurrentUserPortfolio(accountData.user.id, {
       assets: Array.isArray(payload.assets) ? payload.assets : [],
       sales: Array.isArray(payload.sales) ? payload.sales : [],
+      realizedAdjustments: Array.isArray(payload.realizedAdjustments)
+        ? payload.realizedAdjustments
+        : [],
     });
 
     return NextResponse.json(updatedPortfolio);

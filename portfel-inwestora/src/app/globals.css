@@ -597,6 +597,7 @@ select {
 }
 
 .primary-button,
+.transaction-button,
 .ghost-button,
 .result-card,
 .search-result-card {
@@ -619,7 +620,41 @@ select {
   cursor: pointer;
 }
 
+.transaction-button {
+  min-height: 52px;
+  border: 0;
+  border-radius: 999px;
+  padding: 0 22px;
+  color: #ffffff;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 16px 32px rgba(20, 35, 48, 0.12);
+}
+
+.transaction-button-compact {
+  min-height: 44px;
+  padding: 0 16px;
+  font-size: 0.94rem;
+  box-shadow: 0 12px 24px rgba(20, 35, 48, 0.1);
+}
+
+.transaction-button:disabled {
+  opacity: 0.78;
+  cursor: progress;
+}
+
+.transaction-button-buy {
+  background: linear-gradient(135deg, #087657, #16a34a);
+  box-shadow: 0 16px 32px rgba(8, 118, 87, 0.2);
+}
+
+.transaction-button-sell {
+  background: linear-gradient(135deg, #b42318, #dc2626);
+  box-shadow: 0 16px 32px rgba(180, 35, 24, 0.18);
+}
+
 .primary-button:hover:not(:disabled),
+.transaction-button:hover:not(:disabled),
 .ghost-button:hover,
 .result-card:hover,
 .search-result-card:hover {

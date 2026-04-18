@@ -253,7 +253,11 @@ export const registerAccount = async ({
     normalizedName,
     null,
     JSON.stringify(profile),
-    JSON.stringify([]),
+    JSON.stringify({
+      assets: [],
+      sales: [],
+      realizedAdjustments: [],
+    }),
     now,
     now
   );

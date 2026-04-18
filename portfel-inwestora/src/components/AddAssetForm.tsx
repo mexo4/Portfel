@@ -26,7 +26,8 @@ type AddAssetFormProps = {
   onSymbolChange: (symbol: string) => void;
   onPickResult: (result: AssetSearchResult) => void;
   onReuseLastAddedResult: (result: AssetSearchResult) => void;
-  onSubmit: () => void;
+  onBuySubmit: () => void;
+  onSellSubmit: () => void;
 };
 
 const parseNumericInput = (value: string) => {
@@ -58,7 +59,8 @@ export default function AddAssetForm({
   onSymbolChange,
   onPickResult,
   onReuseLastAddedResult,
-  onSubmit,
+  onBuySubmit,
+  onSellSubmit,
 }: AddAssetFormProps) {
   const trimmedQuery = draft.query.trim();
   const minimumSearchLength = getMinimumSearchLength(searchMode);
@@ -69,6 +71,7 @@ export default function AddAssetForm({
   const shouldShowLastAdded =
     !hasActiveSearchQuery && !isSearching && !searchError && Boolean(lastAddedResult);
   const currencyOptions = getCurrencyOptions(draft.purchaseCurrency, draft.marketCurrency);
+  const priceCurrency = draft.marketCurrency || "PLN";
 
   return (
     <section className="panel">
@@ -148,7 +151,7 @@ export default function AddAssetForm({
         </label>
 
         <label className="field">
-          <span>Cena zakupu (1szt) </span>
+          <span>Cena transakcji (1 szt, {priceCurrency})</span>
           <input
             type="number"
             min="0"
@@ -165,7 +168,7 @@ export default function AddAssetForm({
         </label>
 
         <label className="field">
-          <span>Data zakupu</span>
+          <span>Data transakcji</span>
           <input
             type="date"
             value={draft.purchaseDate}
@@ -245,7 +248,7 @@ export default function AddAssetForm({
         </div>
       ) : null}
 
-      <div className="mt-4 grid gap-4 xl:grid-cols-[1fr_1fr_1fr_auto]">
+      <div className="mt-4 grid gap-4 xl:grid-cols-[1fr_1fr_1fr_auto_auto]">
         <label className="field">
           <span>Waluta zakupu</span>
           <select
@@ -266,7 +269,7 @@ export default function AddAssetForm({
         </label>
 
         <label className="field">
-          <span>Waluta rynku</span>
+          <span>Waluta rynku / kursu</span>
           <select
             value={draft.marketCurrency}
             onChange={(event) =>
@@ -301,12 +304,20 @@ export default function AddAssetForm({
         </label>
 
         <button
-          className="primary-button self-end"
+          className="transaction-button transaction-button-compact transaction-button-buy self-end"
           type="button"
-          onClick={onSubmit}
+          onClick={onBuySubmit}
           disabled={isQuoteLoading}
         >
-          {isQuoteLoading ? "Pobieram kurs..." : "Dodaj do portfela"}
+          {isQuoteLoading ? "Pobieram kurs..." : "Kup"}
+        </button>
+
+        <button
+          className="transaction-button transaction-button-compact transaction-button-sell self-end"
+          type="button"
+          onClick={onSellSubmit}
+        >
+          Sprzedaj
         </button>
       </div>
     </section>

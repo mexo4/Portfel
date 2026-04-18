@@ -10,10 +10,12 @@ import type {
   BenchmarkInvestment,
   FxRates,
   PortfolioAsset,
+  PortfolioRealizedAdjustment,
   PortfolioSale,
   PortfolioSaleAllocation,
   PortfolioState,
   QuoteProvider,
+  RealizedAdjustmentDraft,
   SellAssetDraft,
 } from "@/types/portfolio";
 
@@ -29,6 +31,26 @@ const SUPPORTED_QUOTE_PROVIDERS = new Set<QuoteProvider>([
 const hasFiniteNumber = (value: unknown): value is number =>
   typeof value === "number" && Number.isFinite(value);
 
+const convertFromPln = (
+  amountPln: number,
+  currency: string,
+  fxRates: FxRates
+) => {
+  const normalizedCurrency = toCurrencyCode(currency, "PLN");
+
+  if (normalizedCurrency === "PLN") {
+    return round(amountPln, 6);
+  }
+
+  const rate = fxRates[normalizedCurrency];
+
+  if (!hasFiniteNumber(rate) || rate <= 0) {
+    return null;
+  }
+
+  return round(amountPln / rate, 6);
+};
+
 const getSafeQuoteProvider = (value: unknown, kind: AssetKind): QuoteProvider =>
   typeof value === "string" && SUPPORTED_QUOTE_PROVIDERS.has(value as QuoteProvider)
     ? (value as QuoteProvider)
@@ -39,9 +61,13 @@ const isSupportedAssetKind = (value: unknown): value is AssetKind =>
 
 const getAssetSortTime = (asset: Pick<PortfolioAsset, "purchaseDate" | "createdAt">) =>
   new Date(asset.purchaseDate || asset.createdAt).getTime();
+const getPortfolioSaleSortTime = (sale: Pick<PortfolioSale, "saleDate" | "createdAt">) =>
+  new Date(sale.saleDate || sale.createdAt).getTime();
 
 const createSaleId = () =>
   `sale-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+const createRealizedAdjustmentId = () =>
+  `realized-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
 export const getManualOrderKeys = (assets: PortfolioAsset[]) => {
   const groupedAssets = new Map<
@@ -139,6 +165,46 @@ const normalizePortfolioSaleAllocation = (
     investedPln: hasFiniteNumber(allocation.investedPln)
       ? round(allocation.investedPln)
       : 0,
+    name: typeof allocation.name === "string" && allocation.name ? allocation.name : undefined,
+    symbol:
+      typeof allocation.symbol === "string" && allocation.symbol
+        ? normalizeSymbol(allocation.symbol)
+        : undefined,
+    kind: isSupportedAssetKind(allocation.kind) ? allocation.kind : undefined,
+    marketCurrency:
+      typeof allocation.marketCurrency === "string" && allocation.marketCurrency
+        ? toCurrencyCode(allocation.marketCurrency)
+        : undefined,
+    provider:
+      isSupportedAssetKind(allocation.kind) && allocation.provider
+        ? getSafeQuoteProvider(allocation.provider, allocation.kind)
+        : undefined,
+    providerId:
+      typeof allocation.providerId === "string" && allocation.providerId
+        ? allocation.providerId
+        : undefined,
+    priceScale:
+      hasFiniteNumber(allocation.priceScale) && allocation.priceScale > 0
+        ? allocation.priceScale
+        : undefined,
+    latestPrice:
+      hasFiniteNumber(allocation.latestPrice) && allocation.latestPrice > 0
+        ? round(allocation.latestPrice, 8)
+        : undefined,
+    previousClose:
+      hasFiniteNumber(allocation.previousClose) && allocation.previousClose > 0
+        ? round(allocation.previousClose, 8)
+        : undefined,
+    lastUpdatedAt:
+      typeof allocation.lastUpdatedAt === "string" && allocation.lastUpdatedAt
+        ? allocation.lastUpdatedAt
+        : undefined,
+    groupOrder:
+      hasFiniteNumber(allocation.groupOrder) ? allocation.groupOrder : undefined,
+    createdAt:
+      typeof allocation.createdAt === "string" && allocation.createdAt
+        ? allocation.createdAt
+        : undefined,
   };
 };
 
@@ -192,6 +258,19 @@ const normalizePortfolioSale = (
     realizedProfitLossPln: hasFiniteNumber(sale.realizedProfitLossPln)
       ? round(sale.realizedProfitLossPln)
       : 0,
+    realizedInvestedValue: hasFiniteNumber(sale.realizedInvestedValue)
+      ? round(sale.realizedInvestedValue, 6)
+      : undefined,
+    realizedProceedsValue: hasFiniteNumber(sale.realizedProceedsValue)
+      ? round(sale.realizedProceedsValue, 6)
+      : undefined,
+    realizedProfitLossValue: hasFiniteNumber(sale.realizedProfitLossValue)
+      ? round(sale.realizedProfitLossValue, 6)
+      : undefined,
+    realizedValueCurrency:
+      typeof sale.realizedValueCurrency === "string" && sale.realizedValueCurrency
+        ? toCurrencyCode(sale.realizedValueCurrency)
+        : undefined,
     allocations: Array.isArray(sale.allocations)
       ? sale.allocations
           .map((allocation) => normalizePortfolioSaleAllocation(allocation))
@@ -260,14 +339,50 @@ const normalizePortfolioAsset = (
   };
 };
 
+const normalizePortfolioRealizedAdjustment = (
+  adjustment: Partial<PortfolioRealizedAdjustment>
+): PortfolioRealizedAdjustment | null => {
+  if (
+    typeof adjustment.id !== "string" ||
+    !adjustment.id ||
+    !hasFiniteNumber(adjustment.amount) ||
+    adjustment.amount === 0 ||
+    !hasFiniteNumber(adjustment.amountPlnSnapshot) ||
+    adjustment.amountPlnSnapshot === 0
+  ) {
+    return null;
+  }
+
+  return {
+    id: adjustment.id,
+    amount: round(adjustment.amount, 6),
+    currency: toCurrencyCode(adjustment.currency, "PLN"),
+    amountPlnSnapshot: round(adjustment.amountPlnSnapshot),
+    date: toDateInputValue(adjustment.date, getTodayDateInputValue()),
+    note:
+      typeof adjustment.note === "string" && adjustment.note.trim()
+        ? adjustment.note.trim()
+        : undefined,
+    createdAt:
+      typeof adjustment.createdAt === "string" && adjustment.createdAt
+        ? adjustment.createdAt
+        : new Date().toISOString(),
+  };
+};
+
 export const normalizePortfolioState = (value: unknown): PortfolioState => {
   const rawState: {
     assets?: unknown[];
     sales?: unknown[];
+    realizedAdjustments?: unknown[];
   } =
     Array.isArray(value) || !value || typeof value !== "object"
-      ? { assets: Array.isArray(value) ? value : [], sales: [] }
-      : (value as { assets?: unknown[]; sales?: unknown[] });
+      ? { assets: Array.isArray(value) ? value : [], sales: [], realizedAdjustments: [] }
+      : (value as {
+          assets?: unknown[];
+          sales?: unknown[];
+          realizedAdjustments?: unknown[];
+        });
 
   const assets = Array.isArray(rawState.assets)
     ? rawState.assets
@@ -279,6 +394,17 @@ export const normalizePortfolioState = (value: unknown): PortfolioState => {
         .map((sale) => normalizePortfolioSale(sale as Partial<PortfolioSale>))
         .filter((sale): sale is PortfolioSale => Boolean(sale))
     : [];
+  const realizedAdjustments = Array.isArray(rawState.realizedAdjustments)
+    ? rawState.realizedAdjustments
+        .map((adjustment) =>
+          normalizePortfolioRealizedAdjustment(
+            adjustment as Partial<PortfolioRealizedAdjustment>
+          )
+        )
+        .filter(
+          (adjustment): adjustment is PortfolioRealizedAdjustment => Boolean(adjustment)
+        )
+    : [];
 
   return {
     assets: normalizeStoredPortfolioAssets(assets),
@@ -286,6 +412,12 @@ export const normalizePortfolioState = (value: unknown): PortfolioState => {
       (left, right) =>
         new Date(right.saleDate || right.createdAt).getTime() -
           new Date(left.saleDate || left.createdAt).getTime() ||
+        new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
+    ),
+    realizedAdjustments: realizedAdjustments.sort(
+      (left, right) =>
+        new Date(right.date || right.createdAt).getTime() -
+          new Date(left.date || left.createdAt).getTime() ||
         new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
     ),
   };
@@ -296,6 +428,7 @@ export const createSellAssetDraft = (group: PortfolioAssetGroup): SellAssetDraft
   name: group.name,
   symbol: group.symbol,
   kind: group.kind,
+  purchaseCurrency: group.purchaseCurrency,
   marketCurrency: group.marketCurrency,
   provider: group.lots[0]?.provider ?? getDefaultProviderForKind(group.kind),
   providerId: group.lots[0]?.providerId,
@@ -321,10 +454,49 @@ export const getNextGroupOrder = (assets: PortfolioAsset[]) =>
 export const getSortedPortfolioSales = (sales: PortfolioSale[]) =>
   [...sales].sort(
     (left, right) =>
-      new Date(right.saleDate || right.createdAt).getTime() -
-        new Date(left.saleDate || left.createdAt).getTime() ||
+      getPortfolioSaleSortTime(right) - getPortfolioSaleSortTime(left) ||
       new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
   );
+
+export const getSortedPortfolioRealizedAdjustments = (
+  adjustments: PortfolioRealizedAdjustment[]
+) =>
+  [...adjustments].sort(
+    (left, right) =>
+      new Date(right.date || right.createdAt).getTime() -
+        new Date(left.date || left.createdAt).getTime() ||
+      new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
+  );
+
+export const createEmptyRealizedAdjustmentDraft = (): RealizedAdjustmentDraft => ({
+  amount: 0,
+  amountInput: "",
+  currency: "PLN",
+  date: getTodayDateInputValue(),
+  note: "",
+});
+
+export const createPortfolioRealizedAdjustment = ({
+  amount,
+  currency,
+  amountPlnSnapshot,
+  date,
+  note,
+}: {
+  amount: number;
+  currency: string;
+  amountPlnSnapshot: number;
+  date: string;
+  note?: string;
+}): PortfolioRealizedAdjustment => ({
+  id: createRealizedAdjustmentId(),
+  amount: round(amount, 6),
+  currency: toCurrencyCode(currency, "PLN"),
+  amountPlnSnapshot: round(amountPlnSnapshot),
+  date: toDateInputValue(date, getTodayDateInputValue()),
+  note: note?.trim() ? note.trim() : undefined,
+  createdAt: new Date().toISOString(),
+});
 
 export const buildPortfolioBenchmarkInvestments = (
   assets: PortfolioAsset[],
@@ -370,6 +542,7 @@ export const applySaleToPortfolio = ({
   const salePrice = round(draft.salePrice, 6);
   const saleDate = toDateInputValue(draft.saleDate, getTodayDateInputValue());
   const saleFeePln = hasFiniteNumber(draft.feePln) ? round(draft.feePln, 6) : 0;
+  const saleCurrency = toCurrencyCode(draft.marketCurrency, group.marketCurrency);
 
   if (saleQuantity <= 0) {
     throw new Error("Podaj ilosc do sprzedazy.");
@@ -423,6 +596,18 @@ export const applySaleToPortfolio = ({
       purchaseCurrency: lot.purchaseCurrency,
       allocatedBuyFeePln,
       investedPln,
+      name: lot.name,
+      symbol: lot.symbol,
+      kind: lot.kind,
+      marketCurrency: lot.marketCurrency,
+      provider: lot.provider,
+      providerId: lot.providerId,
+      priceScale: lot.priceScale,
+      latestPrice: lot.latestPrice,
+      previousClose: lot.previousClose,
+      lastUpdatedAt: lot.lastUpdatedAt,
+      groupOrder: lot.groupOrder,
+      createdAt: lot.createdAt,
     });
 
     if (nextQuantity <= 0) {
@@ -446,11 +631,43 @@ export const applySaleToPortfolio = ({
     allocations.reduce((total, allocation) => total + allocation.investedPln, 0)
   );
   const realizedProceedsPln = round(
-    convertToPln(saleQuantity * salePrice, group.marketCurrency, fxRates) - saleFeePln
+    convertToPln(saleQuantity * salePrice, saleCurrency, fxRates) - saleFeePln
   );
 
   if (realizedProceedsPln < 0) {
     throw new Error("Prowizja nie moze byc wyzsza niz wartosc sprzedazy.");
+  }
+
+  const nativeResultCurrency = toCurrencyCode(
+    draft.purchaseCurrency,
+    allocations[0]?.purchaseCurrency ?? saleCurrency
+  );
+  let realizedInvestedValue: number | undefined;
+  let realizedProceedsValue: number | undefined;
+  let realizedProfitLossValue: number | undefined;
+  let realizedValueCurrency: string | undefined;
+
+  if (nativeResultCurrency) {
+    const convertedInvestedValue = convertFromPln(
+      realizedInvestedPln,
+      nativeResultCurrency,
+      fxRates
+    );
+    const convertedProceedsValue = convertFromPln(
+      realizedProceedsPln,
+      nativeResultCurrency,
+      fxRates
+    );
+
+    if (convertedInvestedValue !== null && convertedProceedsValue !== null) {
+      realizedInvestedValue = round(convertedInvestedValue, 6);
+      realizedProceedsValue = round(convertedProceedsValue, 6);
+      realizedProfitLossValue = round(
+        convertedProceedsValue - convertedInvestedValue,
+        6
+      );
+      realizedValueCurrency = nativeResultCurrency;
+    }
   }
 
   const sale: PortfolioSale = {
@@ -463,13 +680,17 @@ export const applySaleToPortfolio = ({
     salePrice,
     saleDate,
     feePln: saleFeePln,
-    marketCurrency: draft.marketCurrency,
+    marketCurrency: saleCurrency,
     provider: draft.provider,
     providerId: draft.providerId,
     priceScale: draft.priceScale,
     realizedInvestedPln,
     realizedProceedsPln,
     realizedProfitLossPln: round(realizedProceedsPln - realizedInvestedPln),
+    realizedInvestedValue,
+    realizedProceedsValue,
+    realizedProfitLossValue,
+    realizedValueCurrency,
     allocations,
     createdAt: new Date().toISOString(),
   };
@@ -483,4 +704,126 @@ export const applySaleToPortfolio = ({
 export const createEmptyPortfolioState = (): PortfolioState => ({
   assets: [],
   sales: [],
+  realizedAdjustments: [],
 });
+
+const comparePortfolioSalesAscending = (left: PortfolioSale, right: PortfolioSale) =>
+  getPortfolioSaleSortTime(left) - getPortfolioSaleSortTime(right) ||
+  left.createdAt.localeCompare(right.createdAt) ||
+  left.id.localeCompare(right.id);
+
+export const canUndoPortfolioSale = (sales: PortfolioSale[], saleId: string) => {
+  const targetSale = sales.find((sale) => sale.id === saleId);
+
+  if (!targetSale) {
+    return false;
+  }
+
+  const targetLotIds = new Set(targetSale.allocations.map((allocation) => allocation.lotId));
+
+  if (targetLotIds.size === 0) {
+    return true;
+  }
+
+  return !sales.some(
+    (sale) =>
+      sale.id !== saleId &&
+      comparePortfolioSalesAscending(sale, targetSale) > 0 &&
+      sale.allocations.some((allocation) => targetLotIds.has(allocation.lotId))
+  );
+};
+
+const createRestoredAssetFromAllocation = ({
+  allocation,
+  sale,
+  fallbackGroupOrder,
+}: {
+  allocation: PortfolioSaleAllocation;
+  sale: PortfolioSale;
+  fallbackGroupOrder?: number;
+}): PortfolioAsset => ({
+  id: allocation.lotId,
+  name: allocation.name ?? sale.name,
+  symbol: allocation.symbol ?? sale.symbol,
+  kind: allocation.kind ?? sale.kind,
+  purchaseDate: allocation.purchaseDate,
+  quantity: round(allocation.quantity, 6),
+  purchasePrice: round(allocation.purchasePrice, 6),
+  purchaseCurrency: allocation.purchaseCurrency,
+  feePln: round(allocation.allocatedBuyFeePln, 6),
+  marketCurrency: toCurrencyCode(allocation.marketCurrency, sale.marketCurrency),
+  provider:
+    allocation.kind && allocation.provider
+      ? getSafeQuoteProvider(allocation.provider, allocation.kind)
+      : sale.provider,
+  providerId: allocation.providerId ?? sale.providerId,
+  priceScale: allocation.priceScale ?? sale.priceScale,
+  latestPrice: allocation.latestPrice,
+  previousClose: allocation.previousClose,
+  lastUpdatedAt: allocation.lastUpdatedAt,
+  groupOrder: allocation.groupOrder ?? fallbackGroupOrder,
+  createdAt:
+    allocation.createdAt ??
+    new Date(`${allocation.purchaseDate}T00:00:00.000Z`).toISOString(),
+});
+
+export const undoPortfolioSale = ({
+  assets,
+  sales,
+  saleId,
+}: {
+  assets: PortfolioAsset[];
+  sales: PortfolioSale[];
+  saleId: string;
+}) => {
+  const sale = sales.find((item) => item.id === saleId);
+
+  if (!sale) {
+    throw new Error("Nie znaleziono wskazanej sprzedazy.");
+  }
+
+  if (!canUndoPortfolioSale(sales, saleId)) {
+    throw new Error(
+      "Nie mozna cofnac tej sprzedazy, bo nowsza sprzedaz rozliczyla juz te same zakupy."
+    );
+  }
+
+  const existingGroupOrder = assets.find(
+    (asset) => getPortfolioAssetGroupKey(asset) === sale.assetKey
+  )?.groupOrder;
+  const restoredGroupOrder =
+    sale.allocations.find(
+      (allocation) =>
+        typeof allocation.groupOrder === "number" && Number.isFinite(allocation.groupOrder)
+    )?.groupOrder ??
+    existingGroupOrder ??
+    getNextGroupOrder(assets);
+  const nextAssetsById = new Map(assets.map((asset) => [asset.id, asset]));
+
+  for (const allocation of sale.allocations) {
+    const existingAsset = nextAssetsById.get(allocation.lotId);
+
+    if (existingAsset) {
+      nextAssetsById.set(allocation.lotId, {
+        ...existingAsset,
+        quantity: round(existingAsset.quantity + allocation.quantity, 6),
+        feePln: round(existingAsset.feePln + allocation.allocatedBuyFeePln, 6),
+      });
+      continue;
+    }
+
+    nextAssetsById.set(
+      allocation.lotId,
+      createRestoredAssetFromAllocation({
+        allocation,
+        sale,
+        fallbackGroupOrder: restoredGroupOrder,
+      })
+    );
+  }
+
+  return {
+    assets: normalizeStoredPortfolioAssets(Array.from(nextAssetsById.values())),
+    sales: getSortedPortfolioSales(sales.filter((item) => item.id !== saleId)),
+  };
+};

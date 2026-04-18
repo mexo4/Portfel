@@ -8,6 +8,7 @@ export default async function HomePage() {
     <PortfolioApp
       initialAssets={accountData.assets}
       initialSales={accountData.sales}
+      initialRealizedAdjustments={accountData.realizedAdjustments}
       account={accountData.user}
     />
   );

@@ -6,6 +6,7 @@ import type {
   CurrencyCode,
   FxRates,
   PortfolioAsset,
+  PortfolioRealizedAdjustment,
   PortfolioSale,
   PortfolioSummary,
 } from "@/types/portfolio";
@@ -174,6 +175,7 @@ export const getGroupedPortfolioAssets = (
 export const getPortfolioSummary = (
   assets: PortfolioAsset[],
   sales: PortfolioSale[],
+  realizedAdjustments: PortfolioRealizedAdjustment[],
   fxRates: FxRates
 ): PortfolioSummary => {
   const openTotals = assets.reduce(
@@ -189,11 +191,32 @@ export const getPortfolioSummary = (
       totalProfitLossPln: 0,
     }
   );
-  const realizedProfitLossPln = round(
-    sales.reduce((total, sale) => total + sale.realizedProfitLossPln, 0)
+  const realizedProfitLossByCurrency = sales.reduce<Record<CurrencyCode, number>>(
+    (totals, sale) => {
+      const currency = sale.realizedValueCurrency ?? "PLN";
+      const value = sale.realizedProfitLossValue ?? sale.realizedProfitLossPln;
+
+      totals[currency] = round((totals[currency] ?? 0) + value, currency === "PLN" ? 2 : 6);
+      return totals;
+    },
+    {}
+  );
+  const realizedProfitLossByCurrencyWithAdjustments = realizedAdjustments.reduce<
+    Record<CurrencyCode, number>
+  >((totals, adjustment) => {
+    totals[adjustment.currency] = round(
+      (totals[adjustment.currency] ?? 0) + adjustment.amount,
+      adjustment.currency === "PLN" ? 2 : 6
+    );
+    return totals;
+  }, realizedProfitLossByCurrency);
+  const realizedProfitLossPln = round(realizedProfitLossByCurrencyWithAdjustments.PLN ?? 0);
+  const realizedProfitLossBasePln = round(
+    sales.reduce((total, sale) => total + sale.realizedProfitLossPln, 0) +
+      realizedAdjustments.reduce((total, adjustment) => total + adjustment.amountPlnSnapshot, 0)
   );
   const openProfitLossPln = round(openTotals.totalProfitLossPln);
-  const combinedProfitLossPln = round(openProfitLossPln + realizedProfitLossPln);
+  const combinedProfitLossPln = round(openProfitLossPln + realizedProfitLossBasePln);
 
   return {
     totalValuePln: round(openTotals.totalValuePln),
@@ -201,6 +224,7 @@ export const getPortfolioSummary = (
     totalProfitLossPln: openProfitLossPln,
     openProfitLossPln,
     realizedProfitLossPln,
+    realizedProfitLossByCurrency: realizedProfitLossByCurrencyWithAdjustments,
     combinedProfitLossPln,
     positionsCount: assets.length,
     assetsCount: new Set(assets.map((asset) => getPortfolioAssetGroupKey(asset))).size,

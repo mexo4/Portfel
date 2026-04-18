@@ -337,8 +337,7 @@ export default function PortfolioCharts({
         <p className="eyebrow">Dywersyfikacja</p>
         <h2 className="section-title">Udzial klas aktywow</h2>
         <p className="section-copy">
-          Podzial portfela na akcje GPW, akcje amerykanskie, ETF-y, krypto i
-          surowce.
+          Podzial portfela na akcje GPW, akcje amerykanskie, ETF-y i krypto.
         </p>
 
         <div className="donut-layout mt-6">

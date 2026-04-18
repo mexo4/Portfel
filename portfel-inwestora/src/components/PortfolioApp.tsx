@@ -5,9 +5,9 @@ import AddAssetForm from "@/components/AddAssetForm";
 import AppSectionTabs, { type AppSection } from "@/components/AppSectionTabs";
 import AssetTable from "@/components/AssetTable";
 import PortfolioCharts from "@/components/PortfolioCharts";
+import RealizedAdjustmentsPanel from "@/components/RealizedAdjustmentsPanel";
 import PortfolioSummary from "@/components/PortfolioSummary";
 import SalesHistoryPanel from "@/components/SalesHistoryPanel";
-import SellAssetPanel from "@/components/SellAssetPanel";
 import {
   AUTO_REFRESH_INTERVAL_MS,
   FALLBACK_FX_RATES,
@@ -24,16 +24,19 @@ import {
 } from "@/lib/api";
 import {
   applySaleToPortfolio,
-  createSellAssetDraft,
+  canUndoPortfolioSale,
+  createEmptyRealizedAdjustmentDraft,
+  createPortfolioRealizedAdjustment,
   getManualOrderKeys,
   getNextGroupOrder,
+  getSortedPortfolioRealizedAdjustments,
   getSortedPortfolioSales,
   normalizeStoredPortfolioAssets,
+  undoPortfolioSale,
 } from "@/lib/portfolio-state";
 import {
   getGroupedPortfolioAssets,
   getPortfolioSummary,
-  type PortfolioAssetGroup,
 } from "@/lib/pricing";
 import {
   getMinimumSearchLength,
@@ -63,14 +66,16 @@ import type {
   AuthenticatedUser,
   FxRates,
   PortfolioAsset,
+  PortfolioRealizedAdjustment,
   PortfolioSale,
-  SellAssetDraft,
+  RealizedAdjustmentDraft,
 } from "@/types/portfolio";
 
 type PortfolioAppProps = {
   account: AuthenticatedUser;
   initialAssets: PortfolioAsset[];
   initialSales: PortfolioSale[];
+  initialRealizedAdjustments: PortfolioRealizedAdjustment[];
 };
 
 const SAVE_DEBOUNCE_MS = 700;
@@ -133,8 +138,7 @@ const getResolvedResultSymbolForMode = (
 };
 const shouldRetryQuoteRequest = (mode: AssetSearchMode) => !isGpwMode(mode);
 const shouldSyncPurchaseCurrencyWithResult = (mode: AssetSearchMode) => mode === "etf";
-const doesQuoteProviderRequireProviderId = (kind: AssetDraft["kind"]) =>
-  kind === "etf" || kind === "crypto";
+const doesQuoteProviderRequireProviderId = (kind: AssetDraft["kind"]) => kind === "etf";
 const getDraftQuotePreviewRequest = (draft: AssetDraft, mode: AssetSearchMode) => {
   const normalizedSymbol = normalizeSymbolForMode(draft.symbol, mode);
   const trimmedName = draft.name.trim();
@@ -173,13 +177,18 @@ const isAssetTableSortMode = (value: string | null): value is AssetTableSortMode
   value === "daily-gain-desc" ||
   value === "daily-loss-asc";
 
-const getTrackedCurrencies = (assets: PortfolioAsset[], draft: AssetDraft) =>
+const getTrackedCurrencies = (
+  assets: PortfolioAsset[],
+  draft: AssetDraft,
+  realizedAdjustmentDraft: RealizedAdjustmentDraft
+) =>
   Array.from(
     new Set(
       [
         "PLN",
         draft.purchaseCurrency,
         draft.marketCurrency,
+        realizedAdjustmentDraft.currency,
         ...assets.flatMap((asset) => [asset.purchaseCurrency, asset.marketCurrency]),
       ]
         .map((code) => toCurrencyCode(code))
@@ -191,6 +200,7 @@ export default function PortfolioApp({
   account,
   initialAssets,
   initialSales,
+  initialRealizedAdjustments,
 }: PortfolioAppProps) {
   const assetsRef = useRef<PortfolioAsset[]>(normalizeStoredPortfolioAssets(initialAssets));
   const hasSavedAssetsRef = useRef(false);
@@ -226,11 +236,15 @@ export default function PortfolioApp({
   const [verificationPreviewUrl, setVerificationPreviewUrl] = useState<string | null>(null);
   const [lastSyncAt, setLastSyncAt] = useState<string>();
   const [fxUpdatedAt, setFxUpdatedAt] = useState<string>();
-  const [sellDraft, setSellDraft] = useState<SellAssetDraft | null>(null);
-  const [sellError, setSellError] = useState<string | null>(null);
+  const [realizedAdjustments, setRealizedAdjustments] = useState<PortfolioRealizedAdjustment[]>(
+    () => getSortedPortfolioRealizedAdjustments(initialRealizedAdjustments)
+  );
+  const [realizedAdjustmentDraft, setRealizedAdjustmentDraft] =
+    useState<RealizedAdjustmentDraft>(() => createEmptyRealizedAdjustmentDraft());
+  const [realizedAdjustmentError, setRealizedAdjustmentError] = useState<string | null>(null);
   const trackedCurrencies = useMemo(
-    () => getTrackedCurrencies(assets, draft),
-    [assets, draft]
+    () => getTrackedCurrencies(assets, draft, realizedAdjustmentDraft),
+    [assets, draft, realizedAdjustmentDraft]
   );
   const trackedCurrenciesKey = trackedCurrencies.join("|");
   const draftQuotePreviewRequest = useMemo(
@@ -241,44 +255,10 @@ export default function PortfolioApp({
     () => getGroupedPortfolioAssets(assets, fxRates),
     [assets, fxRates]
   );
-  const activeSellGroup = useMemo(() => {
-    if (!sellDraft) {
-      return null;
-    }
-
-    return groupedAssets.find((group) => group.key === sellDraft.groupKey) ?? null;
-  }, [groupedAssets, sellDraft]);
 
   useEffect(() => {
     assetsRef.current = assets;
   }, [assets]);
-
-  useEffect(() => {
-    if (!sellDraft) {
-      return;
-    }
-
-    if (!activeSellGroup) {
-      setSellDraft(null);
-      setSellError(null);
-      return;
-    }
-
-    setSellDraft((currentDraft) => {
-      if (!currentDraft || currentDraft.groupKey !== activeSellGroup.key) {
-        return currentDraft;
-      }
-
-      if (currentDraft.maxQuantity === activeSellGroup.quantity) {
-        return currentDraft;
-      }
-
-      return {
-        ...currentDraft,
-        maxQuantity: activeSellGroup.quantity,
-      };
-    });
-  }, [activeSellGroup, sellDraft]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -512,7 +492,7 @@ export default function PortfolioApp({
 
     const timeoutId = window.setTimeout(async () => {
       try {
-        await savePortfolioState({ assets, sales });
+        await savePortfolioState({ assets, sales, realizedAdjustments });
 
         if (!isCancelled) {
           setSyncError(null);
@@ -528,7 +508,7 @@ export default function PortfolioApp({
       isCancelled = true;
       window.clearTimeout(timeoutId);
     };
-  }, [assets, sales]);
+  }, [assets, sales, realizedAdjustments]);
 
   const syncFxRates = async (codes: string[]) => {
     try {
@@ -844,7 +824,7 @@ export default function PortfolioApp({
       draft.quantity <= 0 ||
       draft.purchasePrice <= 0
     ) {
-      setSearchError("Uzupelnij nazwe, ticker, date zakupu, ilosc i cene zakupu.");
+      setSearchError("Uzupelnij nazwe, ticker, date transakcji, ilosc i cene.");
       return;
     }
 
@@ -919,6 +899,172 @@ export default function PortfolioApp({
     setQuoteError(null);
   };
 
+  const handleSellAsset = async () => {
+    const name = draft.name.trim() || draft.query.trim();
+    const symbol = normalizeSymbolForMode(draft.symbol, searchMode);
+    const saleDate = toDateInputValue(draft.purchaseDate);
+
+    setSearchError(null);
+    setQuoteError(null);
+
+    if (!symbol || !saleDate || draft.quantity <= 0 || draft.purchasePrice <= 0) {
+      setSearchError("Uzupelnij ticker, date transakcji, ilosc i cene sprzedazy.");
+      return;
+    }
+
+    const groupKey = getPortfolioAssetGroupKey({
+      kind: draft.kind,
+      symbol,
+    });
+    const targetGroup = groupedAssets.find((group) => group.key === groupKey);
+
+    if (!targetGroup) {
+      setSearchError("Nie masz otwartej pozycji dla tego aktywa.");
+      return;
+    }
+
+    try {
+      const representativeLot = targetGroup.lots[0];
+      const historicalFxCodes = Array.from(
+        new Set(
+          [
+            draft.purchaseCurrency,
+            draft.marketCurrency,
+            ...targetGroup.lots.map((lot) => lot.purchaseCurrency),
+          ]
+            .map((code) => toCurrencyCode(code))
+            .filter(Boolean)
+        )
+      );
+      let saleFxRates = fxRates;
+
+      try {
+        const response = await fetchFxRates(historicalFxCodes, saleDate);
+        saleFxRates = {
+          ...FALLBACK_FX_RATES,
+          ...saleFxRates,
+          ...response.rates,
+        };
+      } catch {
+        saleFxRates = {
+          ...FALLBACK_FX_RATES,
+          ...saleFxRates,
+        };
+      }
+
+      const result = applySaleToPortfolio({
+        assets,
+        group: targetGroup,
+        draft: {
+          groupKey,
+          name: name || targetGroup.name,
+          symbol,
+          kind: draft.kind,
+          purchaseCurrency: draft.purchaseCurrency,
+          marketCurrency: draft.marketCurrency,
+          provider: representativeLot?.provider ?? draft.provider,
+          providerId: representativeLot?.providerId ?? draft.providerId,
+          priceScale: representativeLot?.priceScale ?? draft.priceScale,
+          maxQuantity: targetGroup.quantity,
+          quantity: draft.quantity,
+          quantityInput: draft.quantityInput,
+          salePrice: draft.purchasePrice,
+          salePriceInput: draft.purchasePriceInput,
+          saleDate,
+          feePln: draft.feePln,
+        },
+        fxRates: saleFxRates,
+      });
+
+      isManualSymbolRef.current = false;
+      setAssets(result.assets);
+      setSales((currentSales) => getSortedPortfolioSales([result.sale, ...currentSales]));
+      setDraft(createDraftFromMode(searchMode));
+      setResults([]);
+      setSearchError(null);
+      setQuoteError(null);
+      setSyncError(null);
+    } catch (error) {
+      setSearchError(toErrorMessage(error, "Nie udalo sie zapisac sprzedazy."));
+    }
+  };
+
+  const handleAddRealizedAdjustment = async () => {
+    const amount = realizedAdjustmentDraft.amount;
+    const currency = toCurrencyCode(realizedAdjustmentDraft.currency, "PLN");
+    const date = toDateInputValue(realizedAdjustmentDraft.date);
+    const note = realizedAdjustmentDraft.note.trim();
+
+    setRealizedAdjustmentError(null);
+    setSyncError(null);
+
+    if (!date || amount === 0) {
+      setRealizedAdjustmentError("Podaj kwote rozna od zera oraz date.");
+      return;
+    }
+
+    let nextRates = fxRates;
+    let amountPlnSnapshot: number;
+
+    if (currency === "PLN") {
+      amountPlnSnapshot = amount;
+    } else {
+      let rate: number | undefined = nextRates[currency];
+
+      if (typeof rate !== "number" || !Number.isFinite(rate) || rate <= 0) {
+        try {
+          const response = await fetchFxRates([currency]);
+          nextRates = {
+            ...FALLBACK_FX_RATES,
+            ...nextRates,
+            ...response.rates,
+          };
+          setFxRates(nextRates);
+          setFxUpdatedAt(response.fetchedAt);
+          rate = nextRates[currency];
+        } catch {
+          rate = undefined;
+        }
+      }
+
+      if (typeof rate !== "number" || !Number.isFinite(rate) || rate <= 0) {
+        setRealizedAdjustmentError("Brakuje kursu FX dla wybranej waluty.");
+        return;
+      }
+
+      amountPlnSnapshot = amount * rate;
+    }
+
+    const nextAdjustment = createPortfolioRealizedAdjustment({
+      amount,
+      currency,
+      amountPlnSnapshot,
+      date,
+      note,
+    });
+
+    setRealizedAdjustments((currentAdjustments) =>
+      getSortedPortfolioRealizedAdjustments([nextAdjustment, ...currentAdjustments])
+    );
+    setRealizedAdjustmentDraft(createEmptyRealizedAdjustmentDraft());
+  };
+
+  const handleUndoSale = (saleId: string) => {
+    try {
+      const result = undoPortfolioSale({
+        assets,
+        sales,
+        saleId,
+      });
+
+      setAssets(result.assets);
+      setSales(result.sales);
+      setSyncError(null);
+    } catch (error) {
+      setSyncError(toErrorMessage(error, "Nie udalo sie cofnac sprzedazy."));
+    }
+  };
+
   const handleReorderAssetGroups = (nextGroupKeys: string[]) => {
     setSyncError(null);
     setAssets((currentAssets) => {
@@ -943,36 +1089,6 @@ export default function PortfolioApp({
         }))
       );
     });
-  };
-
-  const handleStartSale = (group: PortfolioAssetGroup) => {
-    setSellDraft(createSellAssetDraft(group));
-    setSellError(null);
-    setSyncError(null);
-  };
-
-  const handleSubmitSale = () => {
-    if (!sellDraft || !activeSellGroup) {
-      setSellError("Nie znaleziono aktywa do sprzedazy.");
-      return;
-    }
-
-    try {
-      const result = applySaleToPortfolio({
-        assets,
-        group: activeSellGroup,
-        draft: sellDraft,
-        fxRates,
-      });
-
-      setAssets(result.assets);
-      setSales((currentSales) => getSortedPortfolioSales([result.sale, ...currentSales]));
-      setSellDraft(null);
-      setSellError(null);
-      setSyncError(null);
-    } catch (error) {
-      setSellError(toErrorMessage(error, "Nie udalo sie zapisac sprzedazy."));
-    }
   };
 
   const handleLogout = async () => {
@@ -1013,8 +1129,8 @@ export default function PortfolioApp({
   };
 
   const summary = useMemo(
-    () => getPortfolioSummary(assets, sales, fxRates),
-    [assets, sales, fxRates]
+    () => getPortfolioSummary(assets, sales, realizedAdjustments, fxRates),
+    [assets, sales, realizedAdjustments, fxRates]
   );
 
   return (
@@ -1022,32 +1138,10 @@ export default function PortfolioApp({
       <div className="page-grid">
         <AppSectionTabs activeSection={activeSection} onChange={setActiveSection} />
 
-        <PortfolioSummary
-          summary={summary}
-          lastSyncAt={lastSyncAt}
-          fxUpdatedAt={fxUpdatedAt}
-          isRefreshing={isRefreshing}
-          isLoggingOut={isLoggingOut}
-          isSendingVerification={isSendingVerification}
-          canVerifyEmail={!account.emailVerifiedAt}
-          syncError={syncError}
-          verificationMessage={verificationMessage}
-          verificationError={verificationError}
-          verificationPreviewUrl={verificationPreviewUrl}
-          onRefresh={() => {
-            void syncFxRates(trackedCurrencies);
-            void syncQuotes();
-          }}
-          onLogout={() => {
-            void handleLogout();
-          }}
-          onRequestVerification={() => {
-            void handleVerificationRequest();
-          }}
-        />
-
         {activeSection === "portfolio" ? (
           <>
+            {syncError ? <p className="field-note field-note-error">{syncError}</p> : null}
+
             <AddAssetForm
               searchMode={searchMode}
               draft={draft}
@@ -1108,8 +1202,11 @@ export default function PortfolioApp({
               onReuseLastAddedResult={(result) => {
                 void handlePickResult(result);
               }}
-              onSubmit={() => {
+              onBuySubmit={() => {
                 void handleAddAsset();
+              }}
+              onSellSubmit={() => {
+                void handleSellAsset();
               }}
             />
 
@@ -1121,7 +1218,6 @@ export default function PortfolioApp({
               onFilterChange={setFilter}
               onSortModeChange={setAssetSortMode}
               onReorderGroups={handleReorderAssetGroups}
-              onStartSale={handleStartSale}
               onRemove={(assetId) => {
                 setSyncError(null);
                 setAssets((currentAssets) =>
@@ -1132,26 +1228,53 @@ export default function PortfolioApp({
               }}
             />
 
-            {sellDraft ? (
-              <SellAssetPanel
-                draft={sellDraft}
-                error={sellError}
-                onChange={(nextDraft) => {
-                  setSellDraft(nextDraft);
-                  setSellError(null);
-                }}
-                onCancel={() => {
-                  setSellDraft(null);
-                  setSellError(null);
-                }}
-                onSubmit={handleSubmitSale}
-              />
-            ) : null}
+            <RealizedAdjustmentsPanel
+              draft={realizedAdjustmentDraft}
+              adjustments={realizedAdjustments}
+              error={realizedAdjustmentError}
+              onChange={(nextDraft) => {
+                setRealizedAdjustmentDraft(nextDraft);
+                setRealizedAdjustmentError(null);
+              }}
+              onSubmit={() => {
+                void handleAddRealizedAdjustment();
+              }}
+            />
 
-            <SalesHistoryPanel sales={sales} />
+            <SalesHistoryPanel
+              sales={sales}
+              canUndoSale={(saleId) => canUndoPortfolioSale(sales, saleId)}
+              onUndoSale={handleUndoSale}
+            />
           </>
         ) : (
-          <PortfolioCharts assets={assets} sales={sales} fxRates={fxRates} />
+          <>
+            <PortfolioSummary
+              summary={summary}
+              lastSyncAt={lastSyncAt}
+              fxUpdatedAt={fxUpdatedAt}
+              isRefreshing={isRefreshing}
+              isLoggingOut={isLoggingOut}
+              isSendingVerification={isSendingVerification}
+              canVerifyEmail={!account.emailVerifiedAt}
+              syncError={syncError}
+              verificationMessage={verificationMessage}
+              verificationError={verificationError}
+              verificationPreviewUrl={verificationPreviewUrl}
+              onRefresh={() => {
+                void syncFxRates(trackedCurrencies);
+                void syncQuotes();
+              }}
+              onLogout={() => {
+                void handleLogout();
+              }}
+              onRequestVerification={() => {
+                void handleVerificationRequest();
+              }}
+            />
+
+            <PortfolioCharts assets={assets} sales={sales} fxRates={fxRates} />
+          </>
         )}
       </div>
     </main>

@@ -1,5 +1,10 @@
 import { getAssetInvestedPln, type PortfolioAssetGroup, convertToPln } from "@/lib/pricing";
 import {
+  createFallbackTreasuryBondSeries,
+  getTreasuryBondCouponPaymentDates,
+  normalizeTreasuryBondCode,
+} from "@/lib/treasury-bonds";
+import {
   getDefaultProviderForKind,
   getPortfolioAssetGroupKey,
   normalizeSymbol,
@@ -8,6 +13,7 @@ import { getTodayDateInputValue, round, toCurrencyCode, toDateInputValue } from 
 import type {
   AssetKind,
   BenchmarkInvestment,
+  BondTransactionKind,
   FxRates,
   PortfolioAsset,
   PortfolioRealizedAdjustment,
@@ -17,14 +23,17 @@ import type {
   QuoteProvider,
   RealizedAdjustmentDraft,
   SellAssetDraft,
+  TreasuryBondRateEntry,
+  TreasuryBondSeries,
 } from "@/types/portfolio";
 
-const SUPPORTED_ASSET_KINDS = new Set<AssetKind>(["stock", "etf", "crypto"]);
+const SUPPORTED_ASSET_KINDS = new Set<AssetKind>(["stock", "etf", "crypto", "bond"]);
 const SUPPORTED_QUOTE_PROVIDERS = new Set<QuoteProvider>([
   "catalog",
   "coingecko",
   "eodhd",
   "finnhub",
+  "obligacjeskarbowe",
   "stooq",
 ]);
 
@@ -58,6 +67,115 @@ const getSafeQuoteProvider = (value: unknown, kind: AssetKind): QuoteProvider =>
 
 const isSupportedAssetKind = (value: unknown): value is AssetKind =>
   typeof value === "string" && SUPPORTED_ASSET_KINDS.has(value as AssetKind);
+
+const isBondTransactionKind = (value: unknown): value is BondTransactionKind =>
+  value === "sale" || value === "bond-redemption" || value === "bond-swap";
+
+const normalizeTreasuryBondRateEntry = (
+  entry: Partial<TreasuryBondRateEntry>
+): TreasuryBondRateEntry | null => {
+  if (
+    !hasFiniteNumber(entry.yearIndex) ||
+    entry.yearIndex < 1 ||
+    !hasFiniteNumber(entry.annualRate)
+  ) {
+    return null;
+  }
+
+  return {
+    yearIndex: entry.yearIndex,
+    annualRate: round(entry.annualRate, 6),
+    referenceMonth:
+      typeof entry.referenceMonth === "string" && entry.referenceMonth
+        ? entry.referenceMonth
+        : undefined,
+    inflationRate: hasFiniteNumber(entry.inflationRate)
+      ? round(entry.inflationRate, 6)
+      : undefined,
+    source:
+      entry.source === "official" || entry.source === "inflation"
+        ? entry.source
+        : "fallback",
+  };
+};
+
+const normalizeTreasuryBondSeries = (
+  series: Partial<TreasuryBondSeries> | undefined
+): TreasuryBondSeries | undefined => {
+  if (!series || typeof series.code !== "string" || !series.code) {
+    return undefined;
+  }
+
+  let fallback: TreasuryBondSeries;
+
+  try {
+    fallback = createFallbackTreasuryBondSeries(series.code);
+  } catch {
+    return undefined;
+  }
+
+  return {
+    ...fallback,
+    code: normalizeTreasuryBondCode(series.code),
+    nominalValue:
+      hasFiniteNumber(series.nominalValue) && series.nominalValue > 0
+        ? round(series.nominalValue, 6)
+        : fallback.nominalValue,
+    salePrice:
+      hasFiniteNumber(series.salePrice) && series.salePrice > 0
+        ? round(series.salePrice, 6)
+        : fallback.salePrice,
+    swapPrice:
+      hasFiniteNumber(series.swapPrice) && series.swapPrice > 0
+        ? round(series.swapPrice, 6)
+        : fallback.swapPrice,
+    firstYearRate:
+      hasFiniteNumber(series.firstYearRate) && series.firstYearRate >= 0
+        ? round(series.firstYearRate, 6)
+        : fallback.firstYearRate,
+    marginRate:
+      hasFiniteNumber(series.marginRate) && series.marginRate >= 0
+        ? round(series.marginRate, 6)
+        : fallback.marginRate,
+    earlyRedemptionFee:
+      hasFiniteNumber(series.earlyRedemptionFee) && series.earlyRedemptionFee >= 0
+        ? round(series.earlyRedemptionFee, 6)
+        : fallback.earlyRedemptionFee,
+    interestPaymentDescription:
+      typeof series.interestPaymentDescription === "string" &&
+      series.interestPaymentDescription.trim()
+        ? series.interestPaymentDescription.trim()
+        : fallback.interestPaymentDescription,
+    isFamilyOnly:
+      typeof series.isFamilyOnly === "boolean" ? series.isFamilyOnly : fallback.isFamilyOnly,
+    sourceLinks:
+      series.sourceLinks && typeof series.sourceLinks === "object"
+        ? {
+            offerPageUrl:
+              typeof series.sourceLinks.offerPageUrl === "string"
+                ? series.sourceLinks.offerPageUrl
+                : fallback.sourceLinks?.offerPageUrl,
+            interestTableUrl:
+              typeof series.sourceLinks.interestTableUrl === "string"
+                ? series.sourceLinks.interestTableUrl
+                : fallback.sourceLinks?.interestTableUrl,
+            letterUrl:
+              typeof series.sourceLinks.letterUrl === "string"
+                ? series.sourceLinks.letterUrl
+                : fallback.sourceLinks?.letterUrl,
+          }
+        : fallback.sourceLinks,
+    rateSchedule: Array.isArray(series.rateSchedule)
+      ? series.rateSchedule
+          .map((entry) => normalizeTreasuryBondRateEntry(entry))
+          .filter((entry): entry is TreasuryBondRateEntry => Boolean(entry))
+      : fallback.rateSchedule,
+    resolvedAt:
+      typeof series.resolvedAt === "string" && series.resolvedAt
+        ? series.resolvedAt
+        : fallback.resolvedAt,
+  };
+};
 
 const getAssetSortTime = (asset: Pick<PortfolioAsset, "purchaseDate" | "createdAt">) =>
   new Date(asset.purchaseDate || asset.createdAt).getTime();
@@ -201,6 +319,7 @@ const normalizePortfolioSaleAllocation = (
         : undefined,
     groupOrder:
       hasFiniteNumber(allocation.groupOrder) ? allocation.groupOrder : undefined,
+    bondMeta: normalizeTreasuryBondSeries(allocation.bondMeta),
     createdAt:
       typeof allocation.createdAt === "string" && allocation.createdAt
         ? allocation.createdAt
@@ -238,17 +357,28 @@ const normalizePortfolioSale = (
     name: typeof sale.name === "string" && sale.name ? sale.name : symbol,
     symbol,
     kind,
+    transactionKind: isBondTransactionKind(sale.transactionKind)
+      ? sale.transactionKind
+      : "sale",
     quantity: round(sale.quantity, 6),
     salePrice: round(sale.salePrice, 6),
     saleDate: toDateInputValue(sale.saleDate, getTodayDateInputValue()),
+    settlementDate:
+      typeof sale.settlementDate === "string" && sale.settlementDate
+        ? toDateInputValue(sale.settlementDate, sale.saleDate ?? getTodayDateInputValue())
+        : undefined,
     feePln: hasFiniteNumber(sale.feePln) ? round(sale.feePln, 6) : 0,
-    marketCurrency: toCurrencyCode(sale.marketCurrency, "USD"),
+    marketCurrency: toCurrencyCode(
+      sale.marketCurrency,
+      kind === "stock" || kind === "bond" ? "PLN" : "USD"
+    ),
     provider: getSafeQuoteProvider(sale.provider, kind),
     providerId: typeof sale.providerId === "string" ? sale.providerId : undefined,
     priceScale:
       hasFiniteNumber(sale.priceScale) && sale.priceScale > 0
         ? sale.priceScale
         : undefined,
+    bondMeta: normalizeTreasuryBondSeries(sale.bondMeta),
     realizedInvestedPln: hasFiniteNumber(sale.realizedInvestedPln)
       ? round(sale.realizedInvestedPln)
       : 0,
@@ -270,6 +400,39 @@ const normalizePortfolioSale = (
     realizedValueCurrency:
       typeof sale.realizedValueCurrency === "string" && sale.realizedValueCurrency
         ? toCurrencyCode(sale.realizedValueCurrency)
+        : undefined,
+    grossProceedsPln: hasFiniteNumber(sale.grossProceedsPln)
+      ? round(sale.grossProceedsPln)
+      : undefined,
+    grossProfitLossPln: hasFiniteNumber(sale.grossProfitLossPln)
+      ? round(sale.grossProfitLossPln)
+      : undefined,
+    grossProceedsValue: hasFiniteNumber(sale.grossProceedsValue)
+      ? round(sale.grossProceedsValue, 6)
+      : undefined,
+    grossProfitLossValue: hasFiniteNumber(sale.grossProfitLossValue)
+      ? round(sale.grossProfitLossValue, 6)
+      : undefined,
+    taxTotalPln: hasFiniteNumber(sale.taxTotalPln) ? round(sale.taxTotalPln) : undefined,
+    redemptionFeeTotalPln: hasFiniteNumber(sale.redemptionFeeTotalPln)
+      ? round(sale.redemptionFeeTotalPln)
+      : undefined,
+    swapTargetCode:
+      typeof sale.swapTargetCode === "string" && sale.swapTargetCode
+        ? normalizeTreasuryBondCode(sale.swapTargetCode)
+        : undefined,
+    swapTargetQuantity: hasFiniteNumber(sale.swapTargetQuantity)
+      ? round(sale.swapTargetQuantity, 6)
+      : undefined,
+    swapPricePerUnit: hasFiniteNumber(sale.swapPricePerUnit)
+      ? round(sale.swapPricePerUnit, 6)
+      : undefined,
+    swapResidualCashPln: hasFiniteNumber(sale.swapResidualCashPln)
+      ? round(sale.swapResidualCashPln)
+      : undefined,
+    swapTargetAssetId:
+      typeof sale.swapTargetAssetId === "string" && sale.swapTargetAssetId
+        ? sale.swapTargetAssetId
         : undefined,
     allocations: Array.isArray(sale.allocations)
       ? sale.allocations
@@ -311,9 +474,15 @@ const normalizePortfolioAsset = (
     purchaseDate: toDateInputValue(asset.purchaseDate, getTodayDateInputValue()),
     quantity: round(asset.quantity, 6),
     purchasePrice: round(asset.purchasePrice, 6),
-    purchaseCurrency: toCurrencyCode(asset.purchaseCurrency, kind === "stock" ? "PLN" : "USD"),
+    purchaseCurrency: toCurrencyCode(
+      asset.purchaseCurrency,
+      kind === "stock" || kind === "bond" ? "PLN" : "USD"
+    ),
     feePln: hasFiniteNumber(asset.feePln) ? round(asset.feePln, 6) : 0,
-    marketCurrency: toCurrencyCode(asset.marketCurrency, kind === "stock" ? "PLN" : "USD"),
+    marketCurrency: toCurrencyCode(
+      asset.marketCurrency,
+      kind === "stock" || kind === "bond" ? "PLN" : "USD"
+    ),
     provider: getSafeQuoteProvider(asset.provider, kind),
     providerId: typeof asset.providerId === "string" ? asset.providerId : undefined,
     priceScale:
@@ -332,6 +501,7 @@ const normalizePortfolioAsset = (
       typeof asset.lastUpdatedAt === "string" ? asset.lastUpdatedAt : undefined,
     groupOrder:
       hasFiniteNumber(asset.groupOrder) ? asset.groupOrder : undefined,
+    bondMeta: normalizeTreasuryBondSeries(asset.bondMeta),
     createdAt:
       typeof asset.createdAt === "string" && asset.createdAt
         ? asset.createdAt
@@ -359,6 +529,11 @@ const normalizePortfolioRealizedAdjustment = (
     currency: toCurrencyCode(adjustment.currency, "PLN"),
     amountPlnSnapshot: round(adjustment.amountPlnSnapshot),
     date: toDateInputValue(adjustment.date, getTodayDateInputValue()),
+    source: adjustment.source === "bond-coupon" ? "bond-coupon" : "manual",
+    bondCode:
+      typeof adjustment.bondCode === "string" && adjustment.bondCode
+        ? normalizeTreasuryBondCode(adjustment.bondCode)
+        : undefined,
     note:
       typeof adjustment.note === "string" && adjustment.note.trim()
         ? adjustment.note.trim()
@@ -494,6 +669,7 @@ export const createPortfolioRealizedAdjustment = ({
   currency: toCurrencyCode(currency, "PLN"),
   amountPlnSnapshot: round(amountPlnSnapshot),
   date: toDateInputValue(date, getTodayDateInputValue()),
+  source: "manual",
   note: note?.trim() ? note.trim() : undefined,
   createdAt: new Date().toISOString(),
 });
@@ -526,6 +702,75 @@ export const buildPortfolioBenchmarkInvestments = (
         Boolean(investment.date)
     )
     .sort((left, right) => left.date.localeCompare(right.date));
+
+const getBondAnnualRateForYear = (bondMeta: TreasuryBondSeries, yearIndex: number) =>
+  bondMeta.rateSchedule?.find((entry) => entry.yearIndex === yearIndex)?.annualRate ??
+  (yearIndex === 1 ? bondMeta.firstYearRate : bondMeta.marginRate);
+
+export const buildAutomaticBondCouponAdjustments = (
+  assets: PortfolioAsset[],
+  sales: PortfolioSale[]
+) => {
+  const bondCouponSegments = [
+    ...assets
+      .filter((asset) => asset.kind === "bond" && asset.bondMeta?.couponMode === "paid-out")
+      .map((asset) => ({
+        segmentId: asset.id,
+        quantity: asset.quantity,
+        purchaseDate: asset.purchaseDate,
+        endDate: undefined as string | undefined,
+        bondMeta: asset.bondMeta!,
+      })),
+    ...sales.flatMap((sale) =>
+      sale.allocations
+        .filter(
+          (allocation) =>
+            allocation.kind === "bond" &&
+            (allocation.bondMeta ?? sale.bondMeta)?.couponMode === "paid-out"
+        )
+        .map((allocation) => ({
+          segmentId: `${sale.id}:${allocation.lotId}`,
+          quantity: allocation.quantity,
+          purchaseDate: allocation.purchaseDate,
+          endDate: sale.settlementDate ?? sale.saleDate,
+          bondMeta: allocation.bondMeta ?? sale.bondMeta!,
+        }))
+    ),
+  ];
+
+  return getSortedPortfolioRealizedAdjustments(
+    bondCouponSegments.flatMap((segment) => {
+      const couponDates = getTreasuryBondCouponPaymentDates(
+        segment.purchaseDate,
+        segment.bondMeta
+      );
+
+      return couponDates
+        .filter((paymentDate) => !segment.endDate || paymentDate <= segment.endDate)
+        .map((paymentDate, index) => {
+          const grossCoupon = round(
+            segment.quantity *
+              segment.bondMeta.nominalValue *
+              (getBondAnnualRateForYear(segment.bondMeta, index + 1) / 100),
+            6
+          );
+          const netCoupon = round(grossCoupon * 0.81, 6);
+
+          return {
+            id: `bond-coupon-${segment.segmentId}-${paymentDate}`,
+            amount: netCoupon,
+            currency: "PLN",
+            amountPlnSnapshot: round(netCoupon),
+            date: paymentDate,
+            source: "bond-coupon" as const,
+            bondCode: segment.bondMeta.code,
+            note: `Kupon COI ${segment.bondMeta.code}`,
+            createdAt: new Date(`${paymentDate}T00:00:00.000Z`).toISOString(),
+          } satisfies PortfolioRealizedAdjustment;
+        });
+    })
+  );
+};
 
 export const applySaleToPortfolio = ({
   assets,
@@ -607,6 +852,7 @@ export const applySaleToPortfolio = ({
       previousClose: lot.previousClose,
       lastUpdatedAt: lot.lastUpdatedAt,
       groupOrder: lot.groupOrder,
+      bondMeta: lot.bondMeta,
       createdAt: lot.createdAt,
     });
 
@@ -676,6 +922,7 @@ export const applySaleToPortfolio = ({
     name: group.name,
     symbol: group.symbol,
     kind: group.kind,
+    transactionKind: "sale",
     quantity: saleQuantity,
     salePrice,
     saleDate,
@@ -684,6 +931,7 @@ export const applySaleToPortfolio = ({
     provider: draft.provider,
     providerId: draft.providerId,
     priceScale: draft.priceScale,
+    bondMeta: group.lots[0]?.bondMeta,
     realizedInvestedPln,
     realizedProceedsPln,
     realizedProfitLossPln: round(realizedProceedsPln - realizedInvestedPln),
@@ -721,7 +969,18 @@ export const canUndoPortfolioSale = (sales: PortfolioSale[], saleId: string) => 
 
   const targetLotIds = new Set(targetSale.allocations.map((allocation) => allocation.lotId));
 
-  if (targetLotIds.size === 0) {
+  const usesSourceLotsAgain = sales.some(
+    (sale) =>
+      sale.id !== saleId &&
+      comparePortfolioSalesAscending(sale, targetSale) > 0 &&
+      sale.allocations.some((allocation) => targetLotIds.has(allocation.lotId))
+  );
+
+  if (usesSourceLotsAgain) {
+    return false;
+  }
+
+  if (!targetSale.swapTargetAssetId) {
     return true;
   }
 
@@ -729,7 +988,7 @@ export const canUndoPortfolioSale = (sales: PortfolioSale[], saleId: string) => 
     (sale) =>
       sale.id !== saleId &&
       comparePortfolioSalesAscending(sale, targetSale) > 0 &&
-      sale.allocations.some((allocation) => targetLotIds.has(allocation.lotId))
+      sale.allocations.some((allocation) => allocation.lotId === targetSale.swapTargetAssetId)
   );
 };
 
@@ -762,6 +1021,7 @@ const createRestoredAssetFromAllocation = ({
   previousClose: allocation.previousClose,
   lastUpdatedAt: allocation.lastUpdatedAt,
   groupOrder: allocation.groupOrder ?? fallbackGroupOrder,
+  bondMeta: allocation.bondMeta ?? sale.bondMeta,
   createdAt:
     allocation.createdAt ??
     new Date(`${allocation.purchaseDate}T00:00:00.000Z`).toISOString(),
@@ -820,6 +1080,10 @@ export const undoPortfolioSale = ({
         fallbackGroupOrder: restoredGroupOrder,
       })
     );
+  }
+
+  if (sale.transactionKind === "bond-swap" && sale.swapTargetAssetId) {
+    nextAssetsById.delete(sale.swapTargetAssetId);
   }
 
   return {

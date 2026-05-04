@@ -12,6 +12,7 @@ import type {
 } from "@/types/portfolio";
 
 type AddAssetFormProps = {
+  showModeSelector?: boolean;
   searchMode: AssetSearchMode;
   draft: AssetDraft;
   results: AssetSearchResult[];
@@ -45,6 +46,7 @@ const getCurrencyOptions = (...currencies: string[]) =>
   );
 
 export default function AddAssetForm({
+  showModeSelector = true,
   searchMode,
   draft,
   results,
@@ -89,18 +91,20 @@ export default function AddAssetForm({
         </p>
       </div>
 
-      <div className="mode-grid mt-6">
-        {SEARCH_MODE_OPTIONS.map((option) => (
-          <button
-            key={option.value}
-            type="button"
-            className={searchMode === option.value ? "mode-card is-active" : "mode-card"}
-            onClick={() => onSearchModeChange(option.value)}
-          >
-            <span className="mode-title">{option.label}</span>
-          </button>
-        ))}
-      </div>
+      {showModeSelector ? (
+        <div className="mode-grid mt-6">
+          {SEARCH_MODE_OPTIONS.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              className={searchMode === option.value ? "mode-card is-active" : "mode-card"}
+              onClick={() => onSearchModeChange(option.value)}
+            >
+              <span className="mode-title">{option.label}</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
 
       <div className="mt-6 grid gap-4 xl:grid-cols-6">
         <div className="search-stack xl:col-span-2">

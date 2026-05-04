@@ -1,6 +1,6 @@
 "use client";
 
-export type AppSection = "portfolio" | "charts";
+export type AppSection = "portfolio" | "charts" | "line-charts";
 
 type AppSectionTabsProps = {
   activeSection: AppSection;
@@ -13,6 +13,7 @@ const SECTION_OPTIONS: Array<{
 }> = [
   { value: "portfolio", label: "Portfel" },
   { value: "charts", label: "Wykresy" },
+  { value: "line-charts", label: "Wykresy liniowe" },
 ];
 
 export default function AppSectionTabs({

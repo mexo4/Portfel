@@ -6,10 +6,16 @@ import type {
   AssetSearchResult,
   BenchmarkComparison,
   BenchmarkInvestment,
+  BondRedemptionQuote,
+  BondSwapQuote,
   FxRates,
   PortfolioAsset,
+  PortfolioBenchmarkDefinition,
+  PortfolioHistoryResponse,
   PortfolioRealizedAdjustment,
   PortfolioSale,
+  TreasuryBondQuote,
+  TreasuryBondSeries,
   UserProfile,
 } from "@/types/portfolio";
 
@@ -22,7 +28,9 @@ type SearchParams = {
 type QuoteRequest = Pick<
   PortfolioAsset,
   "symbol" | "kind" | "marketCurrency" | "provider" | "providerId" | "priceScale"
->;
+> & {
+  purchaseDate?: string;
+};
 
 const requestJson = async <T,>(url: string, init?: RequestInit): Promise<T> => {
   const headers = new Headers(init?.headers);
@@ -74,6 +82,10 @@ export const fetchQuotePreview = async (request: QuoteRequest) => {
     params.set("providerId", request.providerId);
   }
 
+  if (request.purchaseDate) {
+    params.set("purchaseDate", request.purchaseDate);
+  }
+
   if (typeof request.priceScale === "number" && Number.isFinite(request.priceScale)) {
     params.set("priceScale", String(request.priceScale));
   }
@@ -90,6 +102,68 @@ export const fetchQuotePreview = async (request: QuoteRequest) => {
 
 export const fetchAssetQuote = fetchQuotePreview;
 
+export const fetchTreasuryBondSeries = async ({
+  code,
+  purchaseDate,
+}: {
+  code: string;
+  purchaseDate: string;
+}) => {
+  const params = new URLSearchParams({
+    code,
+    purchaseDate,
+  });
+
+  return requestJson<{
+    series: TreasuryBondSeries;
+    quote: TreasuryBondQuote;
+  }>(`/api/bonds/series?${params.toString()}`);
+};
+
+export const fetchTreasuryBondRedemption = async ({
+  code,
+  purchaseDate,
+  requestDate,
+  quantity,
+}: {
+  code: string;
+  purchaseDate: string;
+  requestDate: string;
+  quantity: number;
+}) => {
+  const params = new URLSearchParams({
+    code,
+    purchaseDate,
+    requestDate,
+    quantity: String(quantity),
+  });
+
+  return requestJson<{
+    redemption: BondRedemptionQuote;
+  }>(`/api/bonds/redemption?${params.toString()}`);
+};
+
+export const fetchTreasuryBondSwap = async ({
+  sourceRedemption,
+  targetCode,
+  targetQuantity,
+}: {
+  sourceRedemption: BondRedemptionQuote;
+  targetCode: string;
+  targetQuantity: number;
+}) => {
+  return requestJson<{
+    swap: BondSwapQuote;
+  }>("/api/bonds/swap", {
+    method: "POST",
+    body: JSON.stringify({
+      sourceRedemption,
+      targetCode,
+      targetQuantity,
+    }),
+  });
+};
+
 export const refreshPortfolioQuotes = async (assets: PortfolioAsset[]) => {
   const refreshed = await Promise.all(
     assets.map(async (asset) => {
@@ -105,6 +179,7 @@ export const refreshPortfolioQuotes = async (assets: PortfolioAsset[]) => {
         provider: quote.provider,
         providerId: quote.providerId ?? asset.providerId,
         priceScale: quote.priceScale ?? asset.priceScale,
+        bondMeta: quote.bondMeta ?? asset.bondMeta,
         lastUpdatedAt: quote.fetchedAt,
         name: quote.name ?? asset.name,
       };
@@ -227,4 +302,29 @@ export const fetchBenchmarkComparisons = async (
   );
 
   return data.comparisons;
+};
+
+export const fetchPortfolioHistory = async ({
+  assets,
+  sales,
+  realizedAdjustments,
+  benchmarks,
+  signal,
+}: {
+  assets: PortfolioAsset[];
+  sales: PortfolioSale[];
+  realizedAdjustments: PortfolioRealizedAdjustment[];
+  benchmarks?: PortfolioBenchmarkDefinition[];
+  signal?: AbortSignal;
+}) => {
+  return requestJson<PortfolioHistoryResponse>("/api/portfolio-history", {
+    method: "POST",
+    signal,
+    body: JSON.stringify({
+      assets,
+      sales,
+      realizedAdjustments,
+      benchmarks,
+    }),
+  });
 };

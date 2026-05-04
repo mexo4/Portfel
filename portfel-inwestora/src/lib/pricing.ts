@@ -105,12 +105,40 @@ export const getGroupedPortfolioAssets = (
       const representativeLot =
         sortedLots.find((lot) => hasAssetLivePrice(lot)) ?? sortedLots[0];
       const hasLivePrice = sortedLots.some(hasAssetLivePrice);
-      const previousClose = getAssetPreviousClose(representativeLot);
-      const dailyChangePercent = getAssetDailyChangePercent(representativeLot);
       const quantity = round(
         sortedLots.reduce((total, lot) => total + lot.quantity, 0),
         6
       );
+      const weightedLatestUnitPrice = hasLivePrice
+        ? round(
+            sortedLots.reduce((total, lot) => {
+              const latestUnitPrice = getAssetLatestUnitPrice(lot);
+              return total + (latestUnitPrice ?? 0) * lot.quantity;
+            }, 0) / Math.max(quantity, 1),
+            8
+          )
+        : undefined;
+      const previousCloseLots = sortedLots.filter(
+        (lot) => getAssetPreviousClose(lot) !== undefined
+      );
+      const previousClose =
+        previousCloseLots.length > 0
+          ? round(
+              previousCloseLots.reduce((total, lot) => {
+                const lotPreviousClose = getAssetPreviousClose(lot) ?? 0;
+                return total + lotPreviousClose * lot.quantity;
+              }, 0) /
+                Math.max(
+                  previousCloseLots.reduce((total, lot) => total + lot.quantity, 0),
+                  1
+                ),
+              8
+            )
+          : undefined;
+      const dailyChangePercent =
+        weightedLatestUnitPrice !== undefined && previousClose !== undefined && previousClose > 0
+          ? round(((weightedLatestUnitPrice - previousClose) / previousClose) * 100, 2)
+          : undefined;
       const purchaseCurrencies = new Set(sortedLots.map((lot) => lot.purchaseCurrency));
       const averagePurchasePriceCurrency =
         purchaseCurrencies.size === 1 ? sortedLots[0].purchaseCurrency : BASE_CURRENCY;
@@ -154,7 +182,7 @@ export const getGroupedPortfolioAssets = (
         ),
         averagePurchasePriceCurrency,
         marketCurrency: representativeLot.marketCurrency,
-        latestUnitPrice: getAssetLatestUnitPrice(representativeLot),
+        latestUnitPrice: weightedLatestUnitPrice,
         previousClose,
         hasLivePrice,
         hasDailyChange: dailyChangePercent !== undefined,
@@ -193,8 +221,15 @@ export const getPortfolioSummary = (
   );
   const realizedProfitLossByCurrency = sales.reduce<Record<CurrencyCode, number>>(
     (totals, sale) => {
+      const isBondSettlement =
+        sale.transactionKind === "bond-redemption" || sale.transactionKind === "bond-swap";
       const currency = sale.realizedValueCurrency ?? "PLN";
-      const value = sale.realizedProfitLossValue ?? sale.realizedProfitLossPln;
+      const value = isBondSettlement
+        ? sale.grossProfitLossValue ??
+          sale.grossProfitLossPln ??
+          sale.realizedProfitLossValue ??
+          sale.realizedProfitLossPln
+        : sale.realizedProfitLossValue ?? sale.realizedProfitLossPln;
 
       totals[currency] = round((totals[currency] ?? 0) + value, currency === "PLN" ? 2 : 6);
       return totals;
@@ -212,7 +247,11 @@ export const getPortfolioSummary = (
   }, realizedProfitLossByCurrency);
   const realizedProfitLossPln = round(realizedProfitLossByCurrencyWithAdjustments.PLN ?? 0);
   const realizedProfitLossBasePln = round(
-    sales.reduce((total, sale) => total + sale.realizedProfitLossPln, 0) +
+    sales.reduce((total, sale) => {
+      const isBondSettlement =
+        sale.transactionKind === "bond-redemption" || sale.transactionKind === "bond-swap";
+      return total + (isBondSettlement ? sale.grossProfitLossPln ?? sale.realizedProfitLossPln : sale.realizedProfitLossPln);
+    }, 0) +
       realizedAdjustments.reduce((total, adjustment) => total + adjustment.amountPlnSnapshot, 0)
   );
   const openProfitLossPln = round(openTotals.totalProfitLossPln);

@@ -19,10 +19,10 @@ export default function SalesHistoryPanel({
       <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
         <div>
           <p className="eyebrow">Historia</p>
-          <h2 className="section-title">Historia sprzedazy</h2>
+          <h2 className="section-title">Historia sprzedazy, wykupu i zamian</h2>
         </div>
 
-        <p className="section-copy">Najnowsze transakcje sprzedazy sa na gorze.</p>
+        <p className="section-copy">Najnowsze transakcje sa na gorze.</p>
       </div>
 
       {sales.length === 0 ? (
@@ -31,13 +31,38 @@ export default function SalesHistoryPanel({
         <div className="mt-6 grid gap-4">
           {sales.map((sale) => {
             const isUndoAvailable = canUndoSale(sale.id);
+            const isBondSettlement =
+              sale.transactionKind === "bond-redemption" ||
+              sale.transactionKind === "bond-swap";
             const displayCurrency = sale.realizedValueCurrency ?? "PLN";
-            const displayProfit =
-              sale.realizedProfitLossValue ?? sale.realizedProfitLossPln;
+            const displayProfit = isBondSettlement
+              ? sale.grossProfitLossValue ??
+                sale.grossProfitLossPln ??
+                sale.realizedProfitLossValue ??
+                sale.realizedProfitLossPln
+              : sale.realizedProfitLossValue ?? sale.realizedProfitLossPln;
             const displayInvested =
               sale.realizedInvestedValue ?? sale.realizedInvestedPln;
-            const displayProceeds =
+            const displayProceeds = isBondSettlement
+              ? sale.grossProceedsValue ??
+                sale.grossProceedsPln ??
+                sale.realizedProceedsValue ??
+                sale.realizedProceedsPln
+              : sale.realizedProceedsValue ?? sale.realizedProceedsPln;
+            const netProceeds =
               sale.realizedProceedsValue ?? sale.realizedProceedsPln;
+            const transactionLabel =
+              sale.transactionKind === "bond-swap"
+                ? "Zamiana obligacji"
+                : sale.transactionKind === "bond-redemption"
+                  ? "Wykup obligacji"
+                  : "Sprzedaz aktywa";
+            const priceLabel =
+              sale.transactionKind === "bond-swap"
+                ? "Cena wykupu zrodlowej serii"
+                : sale.transactionKind === "bond-redemption"
+                  ? "Cena wykupu"
+                  : "Cena sprzedazy";
 
             return (
               <article key={sale.id} className="lot-card">
@@ -46,7 +71,14 @@ export default function SalesHistoryPanel({
                     <p className="table-title">
                       {sale.name} ({sale.symbol})
                     </p>
-                    <p className="table-note">{formatDate(sale.saleDate)}</p>
+                    <p className="table-note">
+                      {transactionLabel} · {formatDate(sale.saleDate)}
+                    </p>
+                    {sale.settlementDate ? (
+                      <p className="table-note">
+                        Rozliczenie: {formatDate(sale.settlementDate)}
+                      </p>
+                    ) : null}
                     {sale.realizedValueCurrency && sale.realizedValueCurrency !== "PLN" ? (
                       <p className="table-note">
                         Wynik bazowy: {formatCurrency(sale.realizedProfitLossPln)}
@@ -67,11 +99,13 @@ export default function SalesHistoryPanel({
                     <strong>{formatNumber(sale.quantity)}</strong>
                   </div>
                   <div>
-                    <p className="table-note">Cena sprzedazy</p>
+                    <p className="table-note">{priceLabel}</p>
                     <strong>{formatCurrency(sale.salePrice, sale.marketCurrency)}</strong>
                   </div>
                   <div>
-                    <p className="table-note">Wplyw netto</p>
+                    <p className="table-note">
+                      {isBondSettlement ? "Wplyw brutto" : "Wplyw netto"}
+                    </p>
                     <strong>{formatCurrency(displayProceeds, displayCurrency)}</strong>
                   </div>
                   <div>
@@ -79,14 +113,57 @@ export default function SalesHistoryPanel({
                     <strong>{formatCurrency(displayInvested, displayCurrency)}</strong>
                   </div>
                   <div>
-                    <p className="table-note">Prowizja</p>
-                    <strong>{formatCurrency(sale.feePln)}</strong>
+                    <p className="table-note">
+                      {isBondSettlement ? "Wplyw netto" : "Prowizja"}
+                    </p>
+                    <strong>
+                      {isBondSettlement
+                        ? formatCurrency(netProceeds, displayCurrency)
+                        : formatCurrency(sale.feePln)}
+                    </strong>
                   </div>
                   <div>
                     <p className="table-note">Rozliczone zakupy</p>
                     <strong>{sale.allocations.length}</strong>
                   </div>
                 </div>
+
+                {isBondSettlement ? (
+                  <div className="lot-grid mt-4">
+                    <div>
+                      <p className="table-note">Podatek</p>
+                      <strong>{formatCurrency(sale.taxTotalPln ?? 0)}</strong>
+                    </div>
+                    <div>
+                      <p className="table-note">Oplata</p>
+                      <strong>{formatCurrency(sale.redemptionFeeTotalPln ?? 0)}</strong>
+                    </div>
+                    {sale.transactionKind === "bond-swap" ? (
+                      <>
+                        <div>
+                          <p className="table-note">Nowa seria</p>
+                          <strong>{sale.swapTargetCode ?? "-"}</strong>
+                        </div>
+                        <div>
+                          <p className="table-note">Cena zamiany</p>
+                          <strong>
+                            {formatCurrency(sale.swapPricePerUnit ?? 0, "PLN")}
+                          </strong>
+                        </div>
+                        <div>
+                          <p className="table-note">Ilosc po zamianie</p>
+                          <strong>{formatNumber(sale.swapTargetQuantity ?? 0)}</strong>
+                        </div>
+                        <div>
+                          <p className="table-note">Pozostalo do wyplaty</p>
+                          <strong>
+                            {formatCurrency(sale.swapResidualCashPln ?? 0)}
+                          </strong>
+                        </div>
+                      </>
+                    ) : null}
+                  </div>
+                ) : null}
 
                 <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
                   {!isUndoAvailable ? (

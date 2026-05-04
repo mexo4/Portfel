@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { fetchAssetQuoteServer } from "@/lib/server/market-data";
+import { fetchTreasuryBondQuoteServer } from "@/lib/server/treasury-bonds";
 import { toCurrencyCode } from "@/lib/utils";
 import type { AssetKind, QuoteProvider } from "@/types/portfolio";
 
@@ -10,6 +11,7 @@ export async function GET(request: Request) {
   const marketCurrency = toCurrencyCode(searchParams.get("marketCurrency") ?? "USD");
   const provider = (searchParams.get("provider") as QuoteProvider | null) ?? "catalog";
   const providerId = searchParams.get("providerId")?.trim() ?? undefined;
+  const purchaseDate = searchParams.get("purchaseDate")?.trim() ?? undefined;
   const priceScaleValue = searchParams.get("priceScale")?.trim();
   const priceScale = priceScaleValue ? Number(priceScaleValue) : undefined;
 
@@ -17,18 +19,36 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "Brak symbolu." }, { status: 400 });
   }
 
+  const bondPurchaseDate = kind === "bond" ? purchaseDate : undefined;
+
+  if (kind === "bond" && !bondPurchaseDate) {
+    return NextResponse.json(
+      { error: "Brak daty zakupu dla obligacji." },
+      { status: 400 }
+    );
+  }
+
   try {
-    const quote = await fetchAssetQuoteServer({
-      symbol,
-      kind,
-      marketCurrency,
-      provider,
-      providerId,
-      priceScale:
-        typeof priceScale === "number" && Number.isFinite(priceScale) && priceScale > 0
-          ? priceScale
-          : undefined,
-    });
+    let quote;
+
+    if (kind === "bond") {
+      quote = await fetchTreasuryBondQuoteServer({
+        code: symbol,
+        purchaseDate: bondPurchaseDate!,
+      });
+    } else {
+      quote = await fetchAssetQuoteServer({
+        symbol,
+        kind,
+        marketCurrency,
+        provider,
+        providerId,
+        priceScale:
+          typeof priceScale === "number" && Number.isFinite(priceScale) && priceScale > 0
+            ? priceScale
+            : undefined,
+      });
+    }
 
     if (!quote) {
       return NextResponse.json(

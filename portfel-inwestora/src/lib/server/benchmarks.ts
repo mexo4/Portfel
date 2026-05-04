@@ -2,6 +2,7 @@ import { round } from "@/lib/utils";
 import type {
   BenchmarkComparison,
   BenchmarkInvestment,
+  PortfolioBenchmarkHistorySeries,
 } from "@/types/portfolio";
 
 type PricePoint = {
@@ -152,6 +153,53 @@ const findPointForDate = (series: PricePoint[], targetDate: string) => {
   return candidate;
 };
 
+const buildBenchmarkValueSeriesEntry = (
+  benchmark: BenchmarkDefinition,
+  series: PricePoint[],
+  dates: string[],
+  investmentsByDate: Map<string, number>
+): PortfolioBenchmarkHistorySeries | null => {
+  if (series.length === 0 || dates.length === 0) {
+    return null;
+  }
+
+  let pointIndex = 0;
+  let lastKnownClose: number | undefined;
+  let cumulativeUnits = 0;
+
+  const points = dates.map((date) => {
+    while (pointIndex < series.length && series[pointIndex]!.date <= date) {
+      lastKnownClose = series[pointIndex]!.close;
+      pointIndex += 1;
+    }
+
+    const flowAmountPln = investmentsByDate.get(date) ?? 0;
+
+    if (
+      flowAmountPln !== 0 &&
+      typeof lastKnownClose === "number" &&
+      Number.isFinite(lastKnownClose) &&
+      lastKnownClose > 0
+    ) {
+      cumulativeUnits += flowAmountPln / lastKnownClose;
+    }
+
+    return {
+      date,
+      valuePln:
+        typeof lastKnownClose === "number" && Number.isFinite(lastKnownClose) && lastKnownClose > 0
+          ? round(cumulativeUnits * lastKnownClose)
+          : 0,
+    };
+  });
+
+  return {
+    id: benchmark.id,
+    label: benchmark.label,
+    points,
+  };
+};
+
 const buildBenchmarkComparison = (
   benchmark: BenchmarkDefinition,
   series: PricePoint[],
@@ -227,4 +275,29 @@ export const buildBenchmarkComparisons = async (
       buildBenchmarkComparison(benchmark, series, validInvestments)
     )
     .filter((comparison): comparison is BenchmarkComparison => Boolean(comparison));
+};
+
+export const buildBenchmarkValueSeries = async ({
+  dates,
+  investmentsByDate,
+}: {
+  dates: string[];
+  investmentsByDate: Map<string, number>;
+}): Promise<PortfolioBenchmarkHistorySeries[]> => {
+  if (dates.length === 0 || investmentsByDate.size === 0) {
+    return [];
+  }
+
+  const seriesEntries = await Promise.all(
+    BENCHMARKS.map(async (benchmark) => ({
+      benchmark,
+      series: await fetchBenchmarkSeries(benchmark),
+    }))
+  );
+
+  return seriesEntries
+    .map(({ benchmark, series }) =>
+      buildBenchmarkValueSeriesEntry(benchmark, series, dates, investmentsByDate)
+    )
+    .filter((entry): entry is PortfolioBenchmarkHistorySeries => Boolean(entry));
 };

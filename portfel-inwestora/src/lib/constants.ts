@@ -1,4 +1,5 @@
 import type {
+  AssetEntryMode,
   AssetCatalogItem,
   AssetDraft,
   AssetKind,
@@ -39,6 +40,7 @@ export const KIND_LABELS: Record<AssetKind, string> = {
   stock: "Akcje",
   etf: "ETF",
   crypto: "Krypto",
+  bond: "Obligacje",
 };
 
 export const SEARCH_MODE_OPTIONS: Array<{
@@ -80,6 +82,20 @@ export const SEARCH_MODE_OPTIONS: Array<{
     provider: "coingecko",
     purchaseCurrency: "USD",
     marketCurrency: "USD",
+  },
+];
+
+export const ASSET_ENTRY_MODE_OPTIONS: Array<{
+  value: AssetEntryMode;
+  label: string;
+}> = [
+  ...SEARCH_MODE_OPTIONS.map((option) => ({
+    value: option.value,
+    label: option.label,
+  })),
+  {
+    value: "bond",
+    label: "Obligacje",
   },
 ];
 
@@ -329,5 +345,20 @@ export const DEFAULT_DRAFT_BY_KIND: Record<AssetKind, AssetDraft> = {
     feePln: 0,
     marketCurrency: "USD",
     provider: "coingecko",
+  },
+  bond: {
+    kind: "bond",
+    query: "",
+    name: "",
+    symbol: "",
+    purchaseDate: "",
+    quantity: 0,
+    quantityInput: "",
+    purchasePrice: 0,
+    purchasePriceInput: "",
+    purchaseCurrency: "PLN",
+    feePln: 0,
+    marketCurrency: "PLN",
+    provider: "obligacjeskarbowe",
   },
 };

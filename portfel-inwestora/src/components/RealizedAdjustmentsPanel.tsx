@@ -13,6 +13,7 @@ type RealizedAdjustmentsPanelProps = {
   error?: string | null;
   onChange: (draft: RealizedAdjustmentDraft) => void;
   onSubmit: () => void;
+  onRemove: (adjustmentId: string) => void;
 };
 
 const parseNumericInput = (value: string) => {
@@ -35,6 +36,7 @@ export default function RealizedAdjustmentsPanel({
   error,
   onChange,
   onSubmit,
+  onRemove,
 }: RealizedAdjustmentsPanelProps) {
   const currencyOptions = getCurrencyOptions(draft.currency);
 
@@ -133,6 +135,11 @@ export default function RealizedAdjustmentsPanel({
               <div className="lot-card-header">
                 <div>
                   <p className="table-title">{formatDate(adjustment.date)}</p>
+                  <p className="table-note">
+                    {adjustment.source === "bond-coupon"
+                      ? `Automatyczny kupon obligacji ${adjustment.bondCode ?? ""}`.trim()
+                      : "Wynik historyczny"}
+                  </p>
                   {adjustment.note ? <p className="table-note">{adjustment.note}</p> : null}
                 </div>
 
@@ -148,6 +155,28 @@ export default function RealizedAdjustmentsPanel({
                   Snapshot do wyniku lacznego: {formatCurrency(adjustment.amountPlnSnapshot)}
                 </p>
               ) : null}
+
+              <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+                {adjustment.source === "manual" ? (
+                  <>
+                    <span className="table-note">
+                      Usuniecie cofnie ten historyczny wynik z podsumowan i porownania z benchmarkami.
+                    </span>
+
+                    <button
+                      className="ghost-button"
+                      type="button"
+                      onClick={() => onRemove(adjustment.id)}
+                    >
+                      Usun
+                    </button>
+                  </>
+                ) : (
+                  <span className="table-note">
+                    Automatyczny wpis kuponowy z obligacji jest liczony systemowo i nie mozna go usunac recznie.
+                  </span>
+                )}
+              </div>
             </article>
           ))}
         </div>

@@ -2,12 +2,15 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import AddAssetForm from "@/components/AddAssetForm";
+import AssetModeSelector from "@/components/AssetModeSelector";
 import AppSectionTabs, { type AppSection } from "@/components/AppSectionTabs";
 import AssetTable from "@/components/AssetTable";
 import PortfolioCharts from "@/components/PortfolioCharts";
+import PortfolioLineCharts from "@/components/PortfolioLineCharts";
 import RealizedAdjustmentsPanel from "@/components/RealizedAdjustmentsPanel";
 import PortfolioSummary from "@/components/PortfolioSummary";
 import SalesHistoryPanel from "@/components/SalesHistoryPanel";
+import TreasuryBondForm from "@/components/TreasuryBondForm";
 import {
   AUTO_REFRESH_INTERVAL_MS,
   FALLBACK_FX_RATES,
@@ -16,6 +19,9 @@ import {
 import {
   fetchFxRates,
   fetchQuotePreview,
+  fetchTreasuryBondRedemption,
+  fetchTreasuryBondSeries,
+  fetchTreasuryBondSwap,
   logoutUser,
   refreshPortfolioQuotes,
   requestEmailVerification,
@@ -24,6 +30,7 @@ import {
 } from "@/lib/api";
 import {
   applySaleToPortfolio,
+  buildAutomaticBondCouponAdjustments,
   canUndoPortfolioSale,
   createEmptyRealizedAdjustmentDraft,
   createPortfolioRealizedAdjustment,
@@ -54,21 +61,35 @@ import {
 import {
   getTodayDateInputValue,
   normalizeText,
+  round,
   toCurrencyCode,
   toDateInputValue,
 } from "@/lib/utils";
+import {
+  createEmptyTreasuryBondDraft,
+  getTreasuryBondDisplayName,
+  getTreasuryBondMaturityDate,
+  isTreasuryBondPurchaseDateInIssueWindow,
+  normalizeTreasuryBondCode,
+} from "@/lib/treasury-bonds";
 import type {
+  AssetEntryMode,
   AssetDraft,
   AssetQuote,
   AssetSearchMode,
   AssetSearchResult,
   AssetTableSortMode,
   AuthenticatedUser,
+  BondRedemptionQuote,
+  BondSwapQuote,
   FxRates,
   PortfolioAsset,
   PortfolioRealizedAdjustment,
   PortfolioSale,
   RealizedAdjustmentDraft,
+  TreasuryBondDraft,
+  TreasuryBondQuote,
+  TreasuryBondSeries,
 } from "@/types/portfolio";
 
 type PortfolioAppProps = {
@@ -98,6 +119,7 @@ const createDraftFromMode = (mode: AssetSearchMode): AssetDraft => {
 const toErrorMessage = (error: unknown, fallback: string) =>
   error instanceof Error ? error.message : fallback;
 const wait = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms));
+const formatBondUnitPriceInput = (value: number) => String(round(value, 2));
 const isGpwMode = (mode: AssetSearchMode) => mode === "stock-gpw";
 const normalizeSymbolForMode = (symbol: string, mode: AssetSearchMode) => {
   if (!isGpwMode(mode)) {
@@ -215,8 +237,17 @@ export default function PortfolioApp({
   const [sales, setSales] = useState<PortfolioSale[]>(() =>
     getSortedPortfolioSales(initialSales)
   );
+  const [entryMode, setEntryMode] = useState<AssetEntryMode>("stock-global");
   const [searchMode, setSearchMode] = useState<AssetSearchMode>("stock-global");
   const [draft, setDraft] = useState<AssetDraft>(() => createDraftFromMode("stock-global"));
+  const [bondDraft, setBondDraft] = useState<TreasuryBondDraft>(() =>
+    createEmptyTreasuryBondDraft()
+  );
+  const [bondSeries, setBondSeries] = useState<TreasuryBondSeries | null>(null);
+  const [bondQuote, setBondQuote] = useState<TreasuryBondQuote | null>(null);
+  const [bondRedemptionPreview, setBondRedemptionPreview] =
+    useState<BondRedemptionQuote | null>(null);
+  const [bondSwapPreview, setBondSwapPreview] = useState<BondSwapQuote | null>(null);
   const [results, setResults] = useState<AssetSearchResult[]>([]);
   const [lastAddedResult, setLastAddedResult] = useState<AssetSearchResult | null>(null);
   const [filter, setFilter] = useState("");
@@ -228,8 +259,14 @@ export default function PortfolioApp({
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [isSendingVerification, setIsSendingVerification] = useState(false);
   const [isQuoteLoading, setIsQuoteLoading] = useState(false);
+  const [isBondLoading, setIsBondLoading] = useState(false);
+  const [isBondRedemptionLoading, setIsBondRedemptionLoading] = useState(false);
+  const [isBondSwapLoading, setIsBondSwapLoading] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [quoteError, setQuoteError] = useState<string | null>(null);
+  const [bondError, setBondError] = useState<string | null>(null);
+  const [bondRedemptionError, setBondRedemptionError] = useState<string | null>(null);
+  const [bondSwapError, setBondSwapError] = useState<string | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
   const [verificationMessage, setVerificationMessage] = useState<string | null>(null);
   const [verificationError, setVerificationError] = useState<string | null>(null);
@@ -254,6 +291,14 @@ export default function PortfolioApp({
   const groupedAssets = useMemo(
     () => getGroupedPortfolioAssets(assets, fxRates),
     [assets, fxRates]
+  );
+  const effectiveRealizedAdjustments = useMemo(
+    () =>
+      getSortedPortfolioRealizedAdjustments([
+        ...realizedAdjustments,
+        ...buildAutomaticBondCouponAdjustments(assets, sales),
+      ]),
+    [assets, realizedAdjustments, sales]
   );
 
   useEffect(() => {
@@ -281,6 +326,87 @@ export default function PortfolioApp({
 
     window.localStorage.setItem(ASSET_SORT_MODE_STORAGE_KEY, assetSortMode);
   }, [assetSortMode, hasLoadedSortMode]);
+
+  useEffect(() => {
+    const normalizedCode = normalizeTreasuryBondCode(bondDraft.code);
+
+    setBondRedemptionPreview(null);
+    setBondRedemptionError(null);
+
+    if (!normalizedCode) {
+      setBondSeries(null);
+      setBondQuote(null);
+      setBondError(null);
+      setIsBondLoading(false);
+      return;
+    }
+
+    if (normalizedCode.length < 7) {
+      setBondSeries(null);
+      setBondQuote(null);
+      setBondError(null);
+      setIsBondLoading(false);
+      return;
+    }
+
+    let isCancelled = false;
+    const timeoutId = window.setTimeout(async () => {
+      setIsBondLoading(true);
+      setBondError(null);
+
+      try {
+        const response = await fetchTreasuryBondSeries({
+          code: normalizedCode,
+          purchaseDate: bondDraft.purchaseDate,
+        });
+
+        if (isCancelled) {
+          return;
+        }
+
+        setBondSeries(response.series);
+        setBondQuote(response.quote);
+        setBondError(null);
+      } catch (error) {
+        if (isCancelled) {
+          return;
+        }
+
+        setBondSeries(null);
+        setBondQuote(null);
+        setBondError(toErrorMessage(error, "Nie udalo sie pobrac danych obligacji."));
+      } finally {
+        if (!isCancelled) {
+          setIsBondLoading(false);
+        }
+      }
+    }, SEARCH_DEBOUNCE_MS);
+
+    return () => {
+      isCancelled = true;
+      window.clearTimeout(timeoutId);
+    };
+  }, [bondDraft.code, bondDraft.purchaseDate]);
+
+  useEffect(() => {
+    const nextPurchasePrice = round(bondSeries?.salePrice ?? 100, 2);
+    const nextPurchasePriceInput = formatBondUnitPriceInput(nextPurchasePrice);
+
+    setBondDraft((currentDraft) => {
+      if (
+        currentDraft.purchasePrice === nextPurchasePrice &&
+        currentDraft.purchasePriceInput === nextPurchasePriceInput
+      ) {
+        return currentDraft;
+      }
+
+      return {
+        ...currentDraft,
+        purchasePrice: nextPurchasePrice,
+        purchasePriceInput: nextPurchasePriceInput,
+      };
+    });
+  }, [bondSeries?.code, bondSeries?.salePrice]);
 
   useEffect(() => {
     const trimmedQuery = draft.query.trim();
@@ -553,6 +679,7 @@ export default function PortfolioApp({
               provider: refreshed.provider,
               providerId: refreshed.providerId ?? asset.providerId,
               priceScale: refreshed.priceScale ?? asset.priceScale,
+              bondMeta: refreshed.bondMeta ?? asset.bondMeta,
               lastUpdatedAt: refreshed.lastUpdatedAt,
             };
           })
@@ -633,6 +760,183 @@ export default function PortfolioApp({
     setLastAddedResult(null);
     setResults([]);
     setSearchError(null);
+  };
+
+  const resetBondInteractionState = () => {
+    setBondRedemptionPreview(null);
+    setBondSwapPreview(null);
+    setBondRedemptionError(null);
+    setBondSwapError(null);
+  };
+
+  const handleEntryModeChange = (mode: AssetEntryMode) => {
+    resetBondInteractionState();
+    setEntryMode(mode);
+
+    if (mode === "bond") {
+      setBondError(null);
+      return;
+    }
+
+    handleSearchModeChange(mode);
+  };
+
+  const getBondGroup = (code: string) => {
+    const normalizedCode = normalizeTreasuryBondCode(code);
+    const groupKey = getPortfolioAssetGroupKey({
+      kind: "bond",
+      symbol: normalizedCode,
+    });
+
+    return groupedAssets.find((group) => group.key === groupKey);
+  };
+
+  const buildBondRedemptionPreview = async ({
+    code,
+    quantity,
+    requestDate,
+  }: {
+    code: string;
+    quantity: number;
+    requestDate: string;
+  }) => {
+    const targetGroup = getBondGroup(code);
+
+    if (!targetGroup) {
+      throw new Error("Nie masz otwartej pozycji dla tej obligacji.");
+    }
+
+    if (quantity <= 0) {
+      throw new Error("Podaj ilosc obligacji do wykupu.");
+    }
+
+    if (quantity > targetGroup.quantity) {
+      throw new Error("Nie mozna wykupic wiecej obligacji niz posiadasz.");
+    }
+
+    const sortedLots = [...targetGroup.lots].sort(
+      (left, right) =>
+        new Date(left.purchaseDate || left.createdAt).getTime() -
+          new Date(right.purchaseDate || right.createdAt).getTime() ||
+        left.createdAt.localeCompare(right.createdAt)
+    );
+    const lotRequests: Array<{
+      lot: PortfolioAsset;
+      quantity: number;
+    }> = [];
+    let remainingQuantity = quantity;
+
+    for (const lot of sortedLots) {
+      if (remainingQuantity <= 0) {
+        break;
+      }
+
+      const allocatedQuantity = Math.min(remainingQuantity, lot.quantity);
+
+      if (allocatedQuantity <= 0) {
+        continue;
+      }
+
+      lotRequests.push({
+        lot,
+        quantity: allocatedQuantity,
+      });
+      remainingQuantity = Math.max(0, round(remainingQuantity - allocatedQuantity, 6));
+    }
+
+    if (remainingQuantity > 0) {
+      throw new Error("Brakuje wystarczajacej ilosci do wykupu.");
+    }
+
+    const redemptions = await Promise.all(
+      lotRequests.map(async (request) => {
+        const response = await fetchTreasuryBondRedemption({
+          code: request.lot.symbol,
+          purchaseDate: request.lot.purchaseDate,
+          requestDate,
+          quantity: request.quantity,
+        });
+
+        return response.redemption;
+      })
+    );
+
+    const grossValueTotal = round(
+      redemptions.reduce((total, item) => total + item.grossValueTotal, 0)
+    );
+    const grossInterestTotal = round(
+      redemptions.reduce((total, item) => total + item.grossInterestTotal, 0)
+    );
+    const feeTotal = round(redemptions.reduce((total, item) => total + item.feeTotal, 0));
+    const taxableInterestTotal = round(
+      redemptions.reduce((total, item) => total + item.taxableInterestTotal, 0)
+    );
+    const taxTotal = round(redemptions.reduce((total, item) => total + item.taxTotal, 0));
+    const netValueTotal = round(
+      redemptions.reduce((total, item) => total + item.netValueTotal, 0)
+    );
+    const settlementDate = [...redemptions]
+      .map((item) => item.settlementDate)
+      .sort()
+      .at(-1) ?? requestDate;
+    const maturityDate = [...redemptions]
+      .map((item) => item.maturityDate)
+      .sort()
+      .at(-1) ?? requestDate;
+
+    return {
+      code: normalizeTreasuryBondCode(code),
+      quantity: round(quantity, 6),
+      requestDate,
+      settlementDate,
+      maturityDate,
+      grossValuePerUnit: round(grossValueTotal / quantity, 6),
+      grossValueTotal,
+      grossInterestPerUnit: round(grossInterestTotal / quantity, 6),
+      grossInterestTotal,
+      annualRate: round(
+        redemptions.reduce((total, item) => total + item.annualRate * item.quantity, 0) /
+          quantity,
+        4
+      ),
+      feePerUnit: round(feeTotal / quantity, 6),
+      feeTotal,
+      taxableInterestPerUnit: round(taxableInterestTotal / quantity, 6),
+      taxableInterestTotal,
+      taxPerUnit: round(taxTotal / quantity, 6),
+      taxTotal,
+      netValuePerUnit: round(netValueTotal / quantity, 6),
+      netValueTotal,
+      marketCurrency: "PLN",
+      transactionKind: "bond-redemption" as const,
+    } satisfies BondRedemptionQuote;
+  };
+
+  const buildBondSwapPreview = async ({
+    code,
+    quantity,
+    requestDate,
+    targetCode,
+    targetQuantity,
+  }: {
+    code: string;
+    quantity: number;
+    requestDate: string;
+    targetCode: string;
+    targetQuantity: number;
+  }) => {
+    const sourceRedemption = await buildBondRedemptionPreview({
+      code,
+      quantity,
+      requestDate,
+    });
+    const response = await fetchTreasuryBondSwap({
+      sourceRedemption,
+      targetCode,
+      targetQuantity,
+    });
+
+    return response.swap;
   };
 
   const fetchDraftQuoteWithRetry = async (
@@ -806,6 +1110,302 @@ export default function PortfolioApp({
       if (requestSeq === quoteRequestSeqRef.current) {
         setIsQuoteLoading(false);
       }
+    }
+  };
+
+  const buildBondSettlementSale = ({
+    baseSale,
+    representativeLot,
+    preview,
+    transactionKind,
+    extra,
+  }: {
+    baseSale: PortfolioSale;
+    representativeLot?: PortfolioAsset;
+    preview: BondRedemptionQuote;
+    transactionKind: "bond-redemption" | "bond-swap";
+    extra?: Partial<PortfolioSale>;
+  }): PortfolioSale => {
+    const grossProfitLossPln = round(
+      preview.grossValueTotal - baseSale.realizedInvestedPln
+    );
+
+    return {
+      ...baseSale,
+      transactionKind,
+      settlementDate: preview.settlementDate,
+      bondMeta: representativeLot?.bondMeta ?? baseSale.bondMeta,
+      grossProceedsPln: preview.grossValueTotal,
+      grossProfitLossPln,
+      grossProceedsValue: preview.grossValueTotal,
+      grossProfitLossValue: grossProfitLossPln,
+      taxTotalPln: preview.taxTotal,
+      redemptionFeeTotalPln: preview.feeTotal,
+      ...extra,
+    };
+  };
+
+  const handleAddBondAsset = async () => {
+    const normalizedCode = normalizeTreasuryBondCode(bondDraft.code);
+    const purchaseDate = toDateInputValue(bondDraft.purchaseDate);
+
+    resetBondInteractionState();
+    setBondError(null);
+    setSyncError(null);
+
+    if (!normalizedCode || bondDraft.quantity <= 0 || bondDraft.purchasePrice <= 0) {
+      setBondError("Podaj kod obligacji, ilosc, date operacji i cene zakupu.");
+      return;
+    }
+
+    if (!isTreasuryBondPurchaseDateInIssueWindow(normalizedCode, purchaseDate)) {
+      setBondError("Data zakupu musi miescic sie w miesiacu emisji zakodowanym w serii.");
+      return;
+    }
+
+    try {
+      const response =
+        bondSeries &&
+        bondQuote &&
+        bondSeries.code === normalizedCode &&
+        bondQuote.maturityDate ===
+          getTreasuryBondMaturityDate(purchaseDate, bondSeries.yearsToMaturity)
+          ? { series: bondSeries, quote: bondQuote }
+          : await fetchTreasuryBondSeries({
+              code: normalizedCode,
+              purchaseDate,
+            });
+      const nextAssetGroupKey = getPortfolioAssetGroupKey({
+        kind: "bond",
+        symbol: normalizedCode,
+      });
+      const existingGroupOrder = assets.find(
+        (asset) => getPortfolioAssetGroupKey(asset) === nextAssetGroupKey
+      )?.groupOrder;
+      const nextAsset: PortfolioAsset = {
+        id: createAssetId(),
+        name: getTreasuryBondDisplayName(response.series),
+        symbol: normalizedCode,
+        kind: "bond",
+        purchaseDate,
+        quantity: bondDraft.quantity,
+        purchasePrice: round(response.series.salePrice, 2),
+        purchaseCurrency: "PLN",
+        feePln: 0,
+        marketCurrency: "PLN",
+        provider: "obligacjeskarbowe",
+        latestPrice: response.quote.grossValue,
+        previousClose: response.quote.previousClose,
+        lastUpdatedAt: response.quote.fetchedAt,
+        bondMeta: response.series,
+        groupOrder: existingGroupOrder ?? getNextGroupOrder(assets),
+        createdAt: new Date().toISOString(),
+      };
+
+      setAssets((currentAssets) =>
+        normalizeStoredPortfolioAssets([nextAsset, ...currentAssets])
+      );
+      setBondDraft(createEmptyTreasuryBondDraft());
+      setBondSeries(null);
+      setBondQuote(null);
+      setBondError(null);
+    } catch (error) {
+      setBondError(toErrorMessage(error, "Nie udalo sie dodac obligacji."));
+    }
+  };
+
+  const handleRedeemBondAsset = async () => {
+    const normalizedCode = normalizeTreasuryBondCode(bondDraft.code);
+    const requestDate = toDateInputValue(bondDraft.purchaseDate);
+
+    setBondRedemptionError(null);
+    setBondSwapError(null);
+    setBondError(null);
+    setSyncError(null);
+
+    if (!normalizedCode || bondDraft.quantity <= 0) {
+      setBondRedemptionError("Podaj kod obligacji, ilosc i date dyspozycji wykupu.");
+      return;
+    }
+
+    setIsBondRedemptionLoading(true);
+
+    try {
+      const preview = await buildBondRedemptionPreview({
+        code: normalizedCode,
+        quantity: bondDraft.quantity,
+        requestDate,
+      });
+      const targetGroup = getBondGroup(normalizedCode);
+
+      if (!targetGroup) {
+        throw new Error("Nie znaleziono pozycji do wykupu.");
+      }
+
+      const representativeLot = targetGroup.lots[0];
+      const result = applySaleToPortfolio({
+        assets,
+        group: targetGroup,
+        draft: {
+          groupKey: targetGroup.key,
+          name: targetGroup.name,
+          symbol: normalizedCode,
+          kind: "bond",
+          purchaseCurrency: "PLN",
+          marketCurrency: "PLN",
+          provider: representativeLot?.provider ?? "obligacjeskarbowe",
+          providerId: representativeLot?.providerId,
+          priceScale: representativeLot?.priceScale,
+          maxQuantity: targetGroup.quantity,
+          quantity: bondDraft.quantity,
+          quantityInput: bondDraft.quantityInput,
+          salePrice: preview.grossValuePerUnit,
+          salePriceInput: String(preview.grossValuePerUnit),
+          saleDate: requestDate,
+          feePln: round(preview.feeTotal + preview.taxTotal, 2),
+        },
+        fxRates,
+      });
+
+      setAssets(result.assets);
+      setSales((currentSales) =>
+        getSortedPortfolioSales([
+          buildBondSettlementSale({
+            baseSale: result.sale,
+            representativeLot,
+            preview,
+            transactionKind: "bond-redemption",
+          }),
+          ...currentSales,
+        ])
+      );
+      setBondRedemptionPreview(preview);
+      setBondSwapPreview(null);
+    } catch (error) {
+      setBondRedemptionError(toErrorMessage(error, "Nie udalo sie zapisac wykupu."));
+    } finally {
+      setIsBondRedemptionLoading(false);
+    }
+  };
+
+  const handleSwapBondAsset = async () => {
+    const normalizedSourceCode = normalizeTreasuryBondCode(bondDraft.code);
+    const normalizedTargetCode = normalizeTreasuryBondCode(bondDraft.swapTargetCode);
+    const requestDate = toDateInputValue(bondDraft.purchaseDate);
+
+    setBondSwapError(null);
+    setBondRedemptionError(null);
+    setBondError(null);
+    setSyncError(null);
+
+    if (!normalizedSourceCode || bondDraft.quantity <= 0) {
+      setBondSwapError("Podaj kod zrodlowej obligacji, ilosc i date dyspozycji zamiany.");
+      return;
+    }
+
+    if (!normalizedTargetCode || bondDraft.swapTargetQuantity <= 0) {
+      setBondSwapError("Podaj kod docelowej serii oraz ilosc obligacji po zamianie.");
+      return;
+    }
+
+    setIsBondSwapLoading(true);
+
+    try {
+      const preview = await buildBondSwapPreview({
+        code: normalizedSourceCode,
+        quantity: bondDraft.quantity,
+        requestDate,
+        targetCode: normalizedTargetCode,
+        targetQuantity: bondDraft.swapTargetQuantity,
+      });
+      const targetGroup = getBondGroup(normalizedSourceCode);
+
+      if (!targetGroup) {
+        throw new Error("Nie znaleziono pozycji do zamiany.");
+      }
+
+      const representativeLot = targetGroup.lots[0];
+      const result = applySaleToPortfolio({
+        assets,
+        group: targetGroup,
+        draft: {
+          groupKey: targetGroup.key,
+          name: targetGroup.name,
+          symbol: normalizedSourceCode,
+          kind: "bond",
+          purchaseCurrency: "PLN",
+          marketCurrency: "PLN",
+          provider: representativeLot?.provider ?? "obligacjeskarbowe",
+          providerId: representativeLot?.providerId,
+          priceScale: representativeLot?.priceScale,
+          maxQuantity: targetGroup.quantity,
+          quantity: bondDraft.quantity,
+          quantityInput: bondDraft.quantityInput,
+          salePrice: preview.sourceRedemption.grossValuePerUnit,
+          salePriceInput: String(preview.sourceRedemption.grossValuePerUnit),
+          saleDate: requestDate,
+          feePln: round(
+            preview.sourceRedemption.feeTotal + preview.sourceRedemption.taxTotal,
+            2
+          ),
+        },
+        fxRates,
+      });
+      const nextTargetGroupKey = getPortfolioAssetGroupKey({
+        kind: "bond",
+        symbol: preview.targetSeries.code,
+      });
+      const existingTargetGroupOrder = result.assets.find(
+        (asset) => getPortfolioAssetGroupKey(asset) === nextTargetGroupKey
+      )?.groupOrder;
+      const swapTargetAssetId = createAssetId();
+      const targetAsset: PortfolioAsset = {
+        id: swapTargetAssetId,
+        name: getTreasuryBondDisplayName(preview.targetSeries),
+        symbol: preview.targetSeries.code,
+        kind: "bond",
+        purchaseDate: preview.settlementDate,
+        quantity: preview.targetQuantity,
+        purchasePrice: round(preview.swapPricePerUnit, 2),
+        purchaseCurrency: "PLN",
+        feePln: 0,
+        marketCurrency: "PLN",
+        provider: "obligacjeskarbowe",
+        latestPrice: preview.targetQuote.grossValue,
+        previousClose: preview.targetQuote.previousClose,
+        lastUpdatedAt: preview.targetQuote.fetchedAt,
+        bondMeta: preview.targetSeries,
+        groupOrder: existingTargetGroupOrder ?? getNextGroupOrder(result.assets),
+        createdAt: new Date().toISOString(),
+      };
+
+      setAssets(
+        normalizeStoredPortfolioAssets([targetAsset, ...result.assets])
+      );
+      setSales((currentSales) =>
+        getSortedPortfolioSales([
+          buildBondSettlementSale({
+            baseSale: result.sale,
+            representativeLot,
+            preview: preview.sourceRedemption,
+            transactionKind: "bond-swap",
+            extra: {
+              swapTargetCode: preview.targetCode,
+              swapTargetQuantity: preview.targetQuantity,
+              swapPricePerUnit: preview.swapPricePerUnit,
+              swapResidualCashPln: preview.residualCashPln,
+              swapTargetAssetId,
+            },
+          }),
+          ...currentSales,
+        ])
+      );
+      setBondSwapPreview(preview);
+      setBondRedemptionPreview(null);
+    } catch (error) {
+      setBondSwapError(toErrorMessage(error, "Nie udalo sie zapisac zamiany."));
+    } finally {
+      setIsBondSwapLoading(false);
     }
   };
 
@@ -1049,6 +1649,18 @@ export default function PortfolioApp({
     setRealizedAdjustmentDraft(createEmptyRealizedAdjustmentDraft());
   };
 
+  const handleRemoveRealizedAdjustment = (adjustmentId: string) => {
+    setSyncError(null);
+    setRealizedAdjustments((currentAdjustments) =>
+      getSortedPortfolioRealizedAdjustments(
+        currentAdjustments.filter(
+          (adjustment) =>
+            !(adjustment.id === adjustmentId && adjustment.source === "manual")
+        )
+      )
+    );
+  };
+
   const handleUndoSale = (saleId: string) => {
     try {
       const result = undoPortfolioSale({
@@ -1129,8 +1741,33 @@ export default function PortfolioApp({
   };
 
   const summary = useMemo(
-    () => getPortfolioSummary(assets, sales, realizedAdjustments, fxRates),
-    [assets, sales, realizedAdjustments, fxRates]
+    () => getPortfolioSummary(assets, sales, effectiveRealizedAdjustments, fxRates),
+    [assets, effectiveRealizedAdjustments, sales, fxRates]
+  );
+  const summaryPanel = (
+    <PortfolioSummary
+      summary={summary}
+      lastSyncAt={lastSyncAt}
+      fxUpdatedAt={fxUpdatedAt}
+      isRefreshing={isRefreshing}
+      isLoggingOut={isLoggingOut}
+      isSendingVerification={isSendingVerification}
+      canVerifyEmail={!account.emailVerifiedAt}
+      syncError={syncError}
+      verificationMessage={verificationMessage}
+      verificationError={verificationError}
+      verificationPreviewUrl={verificationPreviewUrl}
+      onRefresh={() => {
+        void syncFxRates(trackedCurrencies);
+        void syncQuotes();
+      }}
+      onLogout={() => {
+        void handleLogout();
+      }}
+      onRequestVerification={() => {
+        void handleVerificationRequest();
+      }}
+    />
   );
 
   return (
@@ -1142,73 +1779,129 @@ export default function PortfolioApp({
           <>
             {syncError ? <p className="field-note field-note-error">{syncError}</p> : null}
 
-            <AddAssetForm
-              searchMode={searchMode}
-              draft={draft}
-              results={results}
-              lastAddedResult={lastAddedResult}
-              isSearching={isSearching}
-              isQuoteLoading={isQuoteLoading}
-              searchError={searchError}
-              quoteError={quoteError}
-              onDraftChange={setDraft}
-              onSearchModeChange={handleSearchModeChange}
-              onQueryChange={(query) => {
-                const trimmedQuery = query.trim();
-                const minimumSearchLength = getMinimumSearchLength(searchMode);
+            <section className="panel panel-compact">
+              <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+                <div>
+                  <p className="eyebrow">Tryb dodawania</p>
+                  <h2 className="section-title">Wybierz klase aktywa</h2>
+                </div>
 
-                quoteRequestSeqRef.current += 1;
-                lastPreviewRequestKeyRef.current = "";
-                isManualSymbolRef.current = false;
-                setIsSearching(trimmedQuery.length >= minimumSearchLength);
-                setIsQuoteLoading(false);
-                setResults([]);
-                setSearchError(null);
-                setQuoteError(null);
-                setDraft((currentDraft) => ({
-                  ...currentDraft,
-                  query,
-                  name: query,
-                  symbol: "",
-                  providerId: undefined,
-                  priceScale: undefined,
-                  latestPrice: undefined,
-                  previousClose: undefined,
-                }));
-              }}
-              onSymbolChange={(symbol) => {
-                quoteRequestSeqRef.current += 1;
-                lastPreviewRequestKeyRef.current = "";
-                isManualSymbolRef.current = true;
-                setIsSearching(false);
-                setIsQuoteLoading(false);
-                setResults([]);
-                setSearchError(null);
-                setQuoteError(null);
-                setDraft((currentDraft) => ({
-                  ...currentDraft,
-                  symbol: symbol.toUpperCase(),
-                  query: "",
-                  name: "",
-                  providerId: undefined,
-                  priceScale: undefined,
-                  latestPrice: undefined,
-                  previousClose: undefined,
-                }));
-              }}
-              onPickResult={(result) => {
-                void handlePickResult(result);
-              }}
-              onReuseLastAddedResult={(result) => {
-                void handlePickResult(result);
-              }}
-              onBuySubmit={() => {
-                void handleAddAsset();
-              }}
-              onSellSubmit={() => {
-                void handleSellAsset();
-              }}
-            />
+                <p className="section-copy">
+                  Obligacje maja osobny formularz i nie ingeruja w dotychczasowy flow
+                  wyszukiwarki dla akcji, ETF-ow i krypto.
+                </p>
+              </div>
+
+              <div className="mt-6">
+                <AssetModeSelector value={entryMode} onChange={handleEntryModeChange} />
+              </div>
+            </section>
+
+            {entryMode === "bond" ? (
+              <TreasuryBondForm
+                draft={bondDraft}
+                series={bondSeries}
+                quote={bondQuote}
+                redemptionPreview={bondRedemptionPreview}
+                swapPreview={bondSwapPreview}
+                isLoadingSeries={isBondLoading}
+                isLoadingRedemption={isBondRedemptionLoading}
+                isLoadingSwap={isBondSwapLoading}
+                error={bondError}
+                redemptionError={bondRedemptionError}
+                swapError={bondSwapError}
+                onChange={(nextDraft) => {
+                  setBondDraft(nextDraft);
+                  resetBondInteractionState();
+                }}
+                onCodeChange={(code) => {
+                  setBondDraft((currentDraft) => ({
+                    ...currentDraft,
+                    code: normalizeTreasuryBondCode(code),
+                  }));
+                  setBondError(null);
+                  resetBondInteractionState();
+                }}
+                onBuySubmit={() => {
+                  void handleAddBondAsset();
+                }}
+                onRedeemSubmit={() => {
+                  void handleRedeemBondAsset();
+                }}
+                onSwapSubmit={() => {
+                  void handleSwapBondAsset();
+                }}
+              />
+            ) : (
+              <AddAssetForm
+                showModeSelector={false}
+                searchMode={searchMode}
+                draft={draft}
+                results={results}
+                lastAddedResult={lastAddedResult}
+                isSearching={isSearching}
+                isQuoteLoading={isQuoteLoading}
+                searchError={searchError}
+                quoteError={quoteError}
+                onDraftChange={setDraft}
+                onSearchModeChange={handleSearchModeChange}
+                onQueryChange={(query) => {
+                  const trimmedQuery = query.trim();
+                  const minimumSearchLength = getMinimumSearchLength(searchMode);
+
+                  quoteRequestSeqRef.current += 1;
+                  lastPreviewRequestKeyRef.current = "";
+                  isManualSymbolRef.current = false;
+                  setIsSearching(trimmedQuery.length >= minimumSearchLength);
+                  setIsQuoteLoading(false);
+                  setResults([]);
+                  setSearchError(null);
+                  setQuoteError(null);
+                  setDraft((currentDraft) => ({
+                    ...currentDraft,
+                    query,
+                    name: query,
+                    symbol: "",
+                    providerId: undefined,
+                    priceScale: undefined,
+                    latestPrice: undefined,
+                    previousClose: undefined,
+                  }));
+                }}
+                onSymbolChange={(symbol) => {
+                  quoteRequestSeqRef.current += 1;
+                  lastPreviewRequestKeyRef.current = "";
+                  isManualSymbolRef.current = true;
+                  setIsSearching(false);
+                  setIsQuoteLoading(false);
+                  setResults([]);
+                  setSearchError(null);
+                  setQuoteError(null);
+                  setDraft((currentDraft) => ({
+                    ...currentDraft,
+                    symbol: symbol.toUpperCase(),
+                    query: "",
+                    name: "",
+                    providerId: undefined,
+                    priceScale: undefined,
+                    latestPrice: undefined,
+                    previousClose: undefined,
+                  }));
+                }}
+                onPickResult={(result) => {
+                  void handlePickResult(result);
+                }}
+                onReuseLastAddedResult={(result) => {
+                  void handlePickResult(result);
+                }}
+                onBuySubmit={() => {
+                  void handleAddAsset();
+                }}
+                onSellSubmit={() => {
+                  void handleSellAsset();
+                }}
+              />
+            )}
 
             <AssetTable
               assets={assets}
@@ -1230,7 +1923,7 @@ export default function PortfolioApp({
 
             <RealizedAdjustmentsPanel
               draft={realizedAdjustmentDraft}
-              adjustments={realizedAdjustments}
+              adjustments={effectiveRealizedAdjustments}
               error={realizedAdjustmentError}
               onChange={(nextDraft) => {
                 setRealizedAdjustmentDraft(nextDraft);
@@ -1239,6 +1932,7 @@ export default function PortfolioApp({
               onSubmit={() => {
                 void handleAddRealizedAdjustment();
               }}
+              onRemove={handleRemoveRealizedAdjustment}
             />
 
             <SalesHistoryPanel
@@ -1247,33 +1941,25 @@ export default function PortfolioApp({
               onUndoSale={handleUndoSale}
             />
           </>
+        ) : activeSection === "charts" ? (
+          <>
+            {summaryPanel}
+
+            <PortfolioCharts
+              assets={assets}
+              sales={sales}
+              realizedAdjustments={realizedAdjustments}
+              fxRates={fxRates}
+            />
+          </>
         ) : (
           <>
-            <PortfolioSummary
-              summary={summary}
-              lastSyncAt={lastSyncAt}
-              fxUpdatedAt={fxUpdatedAt}
-              isRefreshing={isRefreshing}
-              isLoggingOut={isLoggingOut}
-              isSendingVerification={isSendingVerification}
-              canVerifyEmail={!account.emailVerifiedAt}
-              syncError={syncError}
-              verificationMessage={verificationMessage}
-              verificationError={verificationError}
-              verificationPreviewUrl={verificationPreviewUrl}
-              onRefresh={() => {
-                void syncFxRates(trackedCurrencies);
-                void syncQuotes();
-              }}
-              onLogout={() => {
-                void handleLogout();
-              }}
-              onRequestVerification={() => {
-                void handleVerificationRequest();
-              }}
+            <PortfolioLineCharts
+              assets={assets}
+              sales={sales}
+              realizedAdjustments={effectiveRealizedAdjustments}
+              fxRates={fxRates}
             />
-
-            <PortfolioCharts assets={assets} sales={sales} fxRates={fxRates} />
           </>
         )}
       </div>

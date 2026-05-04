@@ -10,12 +10,14 @@ import type {
   BenchmarkComparison,
   FxRates,
   PortfolioAsset,
+  PortfolioRealizedAdjustment,
   PortfolioSale,
 } from "@/types/portfolio";
 
 type PortfolioChartsProps = {
   assets: PortfolioAsset[];
   sales: PortfolioSale[];
+  realizedAdjustments: PortfolioRealizedAdjustment[];
   fxRates: FxRates;
 };
 
@@ -57,6 +59,12 @@ const ASSET_CLASS_BREAKDOWN = [
     color: CHART_COLORS[3],
     matches: (asset: AssetClassBreakdownTarget) => asset.kind === "crypto",
   },
+  {
+    id: "bond",
+    label: "Obligacje",
+    color: CHART_COLORS[4],
+    matches: (asset: AssetClassBreakdownTarget) => asset.kind === "bond",
+  },
 ] as const;
 
 const COMPARISON_COLORS: Record<string, string> = {
@@ -97,6 +105,7 @@ const createDonutBackground = (
 export default function PortfolioCharts({
   assets,
   sales,
+  realizedAdjustments,
   fxRates,
 }: PortfolioChartsProps) {
   const [benchmarkComparisons, setBenchmarkComparisons] = useState<BenchmarkComparison[]>([]);
@@ -118,6 +127,13 @@ export default function PortfolioCharts({
   const comparisonInvestedPln = useMemo(
     () => benchmarkInvestments.reduce((total, investment) => total + investment.amountPln, 0),
     [benchmarkInvestments]
+  );
+  const manualRealizedAdjustmentsPln = useMemo(
+    () =>
+      realizedAdjustments
+        .filter((adjustment) => adjustment.source === "manual")
+        .reduce((total, adjustment) => total + adjustment.amountPlnSnapshot, 0),
+    [realizedAdjustments]
   );
 
   useEffect(() => {
@@ -211,11 +227,13 @@ export default function PortfolioCharts({
     id: "portfolio",
     label: "Twoj portfel",
     investedPln: comparisonInvestedPln,
-    currentValuePln: totalValuePln,
-    profitLossPln: totalValuePln - comparisonInvestedPln,
+    currentValuePln: totalValuePln + manualRealizedAdjustmentsPln,
+    profitLossPln: totalValuePln + manualRealizedAdjustmentsPln - comparisonInvestedPln,
     returnPercent:
       comparisonInvestedPln > 0
-        ? ((totalValuePln - comparisonInvestedPln) / comparisonInvestedPln) * 100
+        ? ((totalValuePln + manualRealizedAdjustmentsPln - comparisonInvestedPln) /
+            comparisonInvestedPln) *
+          100
         : 0,
   };
 
@@ -337,7 +355,7 @@ export default function PortfolioCharts({
         <p className="eyebrow">Dywersyfikacja</p>
         <h2 className="section-title">Udzial klas aktywow</h2>
         <p className="section-copy">
-          Podzial portfela na akcje GPW, akcje amerykanskie, ETF-y i krypto.
+          Podzial portfela na akcje GPW, akcje amerykanskie, ETF-y, krypto i obligacje.
         </p>
 
         <div className="donut-layout mt-6">

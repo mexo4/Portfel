@@ -1,0 +1,1833 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+import {
+  Area,
+  CartesianGrid,
+  ComposedChart,
+  Line,
+  ReferenceLine,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+  type TooltipContentProps,
+  type TooltipPayloadEntry,
+} from "recharts";
+import { SEARCH_DEBOUNCE_MS, SEARCH_MODE_OPTIONS } from "@/lib/constants";
+import { fetchPortfolioHistory, searchAssets } from "@/lib/api";
+import { getMinimumSearchLength, getSearchPlaceholder } from "@/lib/search";
+import {
+  getPortfolioAssetGroupKey,
+  normalizeGpwSymbol,
+  normalizeSymbol,
+} from "@/lib/ticker";
+import {
+  formatCurrency,
+  formatDate,
+  formatNumber,
+  round,
+  toDateInputValue,
+} from "@/lib/utils";
+import type {
+  AssetSearchMode,
+  AssetSearchResult,
+  FxRates,
+  PortfolioAsset,
+  PortfolioAssetHistorySeries,
+  PortfolioBenchmarkDefinition,
+  PortfolioHistoryPoint,
+  PortfolioHistoryResponse,
+  PortfolioRealizedAdjustment,
+  PortfolioSale,
+} from "@/types/portfolio";
+
+type PortfolioLineChartsProps = {
+  assets: PortfolioAsset[];
+  sales: PortfolioSale[];
+  realizedAdjustments: PortfolioRealizedAdjustment[];
+  fxRates: FxRates;
+};
+
+type RangePreset = "1D" | "1W" | "1M" | "1Q" | "1Y" | "ALL";
+type ChartMode =
+  | "value"
+  | "return"
+  | "drawdown"
+  | "portfolio-vs-benchmark"
+  | "daily-change";
+type ToneClass = "tone-positive" | "tone-negative" | "tone-neutral";
+
+type ChartRow = {
+  date: string;
+} & Record<string, number | string | null>;
+
+type ReturnPoint = PortfolioHistoryPoint & {
+  returnPercent: number;
+};
+
+type DrawdownPoint = PortfolioHistoryPoint & {
+  drawdownPercent: number;
+  runningPeakPln: number;
+};
+
+type DailyChangePoint = PortfolioHistoryPoint & {
+  dailyChangePln: number;
+  dailyChangePercent: number;
+};
+
+type ChartLineDefinition = {
+  dataKey: string;
+  label: string;
+  color: string;
+  variant?: "line" | "area";
+  strokeWidth?: number;
+  connectNulls?: boolean;
+  valueFormatter: (value: number) => string;
+  detailFormatter?: (row: ChartRow) => string | null;
+};
+
+type ChartStat = {
+  label: string;
+  value: string;
+  tone?: ToneClass;
+};
+
+type ChartModel = {
+  title: string;
+  copy: string;
+  data: ChartRow[];
+  lines: ChartLineDefinition[];
+  summaryLabel: string;
+  summaryValue: string;
+  deltaLabel: string;
+  deltaValue: string;
+  deltaTone: ToneClass;
+  stats: ChartStat[];
+  referenceValue?: number;
+  yAxisTickFormatter: (value: number) => string;
+  emptyTitle: string;
+  emptyCopy: string;
+};
+
+type FallbackSegment = {
+  id: string;
+  groupKey: string;
+  label: string;
+  symbol: string;
+  kind: PortfolioAsset["kind"];
+  startDate: string;
+  endDate: string;
+  quantity: number;
+  startValuePlnPerUnit: number;
+  endValuePlnPerUnit: number;
+};
+
+type FallbackHistoryState = {
+  points: PortfolioHistoryPoint[];
+  assetSeries: PortfolioAssetHistorySeries[];
+};
+
+const DEFAULT_BENCHMARK_SEARCH_MODE: AssetSearchMode = "etf";
+
+const RANGE_PRESETS: RangePreset[] = ["1D", "1W", "1M", "1Q", "1Y", "ALL"];
+const MODE_OPTIONS: Array<{
+  value: ChartMode;
+  label: string;
+  copy: string;
+}> = [
+  {
+    value: "value",
+    label: "Wartosc portfela",
+    copy: "glowna linia wartosci i kapital netto",
+  },
+  {
+    value: "return",
+    label: "Zwrot procentowy",
+    copy: "wynik od poczatku w %",
+  },
+  {
+    value: "drawdown",
+    label: "Drawdown",
+    copy: "spadek od ostatniego maksimum",
+  },
+  {
+    value: "portfolio-vs-benchmark",
+    label: "Portfel vs benchmark",
+    copy: "wyszukiwane benchmarki, jedna baza startowa",
+  },
+  {
+    value: "daily-change",
+    label: "Zmiana dzienna",
+    copy: "sesja do sesji w PLN",
+  },
+];
+
+const SERIES_COLORS = [
+  "#13314a",
+  "#0f766e",
+  "#d38d38",
+  "#2f6f8f",
+  "#b45309",
+  "#3c7a57",
+];
+
+const EMPTY_HISTORY: PortfolioHistoryResponse = {
+  points: [],
+  warnings: [],
+  assetSeries: [],
+  benchmarkSeries: [],
+};
+
+const isGpwMode = (mode: AssetSearchMode) => mode === "stock-gpw";
+
+const normalizeBenchmarkSymbolForMode = (symbol: string, mode: AssetSearchMode) =>
+  isGpwMode(mode) ? normalizeGpwSymbol(symbol) : normalizeSymbol(symbol);
+
+const getBenchmarkKey = ({
+  kind,
+  provider,
+  providerId,
+  symbol,
+}: Pick<PortfolioBenchmarkDefinition, "kind" | "provider" | "providerId" | "symbol">) =>
+  [kind, provider, normalizeSymbol(providerId ?? symbol)].join(":");
+
+const toBenchmarkDefinition = (
+  result: AssetSearchResult,
+  mode: AssetSearchMode
+): PortfolioBenchmarkDefinition => {
+  const symbol = normalizeBenchmarkSymbolForMode(result.symbol, mode);
+
+  return {
+    id: getBenchmarkKey({
+      kind: result.kind,
+      provider: result.provider,
+      providerId: result.providerId,
+      symbol,
+    }),
+    name: result.name,
+    symbol,
+    kind: result.kind,
+    marketCurrency: result.marketCurrency,
+    provider: result.provider,
+    providerId: result.providerId,
+    priceScale: result.priceScale,
+  };
+};
+
+const getPointDate = (value: string) => new Date(`${value}T12:00:00.000Z`);
+
+const shiftDate = (date: string, days: number) => {
+  const nextDate = getPointDate(date);
+  nextDate.setUTCDate(nextDate.getUTCDate() + days);
+  return nextDate.toISOString().slice(0, 10);
+};
+
+const getDateRange = (startDate: string, endDate: string) => {
+  const dates: string[] = [];
+
+  for (let cursor = startDate; cursor <= endDate; cursor = shiftDate(cursor, 1)) {
+    dates.push(cursor);
+  }
+
+  return dates;
+};
+
+const getPresetStartDate = (preset: RangePreset, lastDate: string) => {
+  const nextDate = getPointDate(lastDate);
+
+  if (preset === "ALL") {
+    return null;
+  }
+
+  if (preset === "1D") {
+    return shiftDate(lastDate, -1);
+  }
+
+  if (preset === "1W") {
+    return shiftDate(lastDate, -7);
+  }
+
+  if (preset === "1M") {
+    nextDate.setUTCMonth(nextDate.getUTCMonth() - 1);
+    return nextDate.toISOString().slice(0, 10);
+  }
+
+  if (preset === "1Q") {
+    nextDate.setUTCMonth(nextDate.getUTCMonth() - 3);
+    return nextDate.toISOString().slice(0, 10);
+  }
+
+  nextDate.setUTCFullYear(nextDate.getUTCFullYear() - 1);
+  return nextDate.toISOString().slice(0, 10);
+};
+
+const filterByRange = <T extends { date: string }>(points: T[], preset: RangePreset) => {
+  const lastPoint = points.at(-1);
+
+  if (!lastPoint || preset === "ALL") {
+    return points;
+  }
+
+  const startDate = getPresetStartDate(preset, lastPoint.date);
+
+  if (!startDate) {
+    return points;
+  }
+
+  const filteredPoints = points.filter((point) => point.date >= startDate);
+
+  if (filteredPoints.length > 0) {
+    return filteredPoints;
+  }
+
+  if (preset === "1D" && points.length > 1) {
+    return points.slice(-2);
+  }
+
+  return points;
+};
+
+const formatPercent = (value: number, fractionDigits = 2) =>
+  `${new Intl.NumberFormat("pl-PL", {
+    minimumFractionDigits: fractionDigits,
+    maximumFractionDigits: fractionDigits,
+  }).format(value)}%`;
+
+const formatSignedPercent = (value: number, fractionDigits = 2) =>
+  `${value > 0 ? "+" : ""}${formatPercent(value, fractionDigits)}`;
+
+const formatSignedCurrency = (value: number) =>
+  `${value > 0 ? "+" : ""}${formatCurrency(value)}`;
+
+const formatCompactCurrency = (value: number) => {
+  const absValue = Math.abs(value);
+  const prefix = value < 0 ? "-" : "";
+
+  if (absValue >= 1_000_000) {
+    return `${prefix}${formatNumber(absValue / 1_000_000, absValue >= 10_000_000 ? 0 : 1)} mln`;
+  }
+
+  if (absValue >= 1_000) {
+    return `${prefix}${formatNumber(absValue / 1_000, absValue >= 100_000 ? 0 : 1)} tys.`;
+  }
+
+  return `${formatNumber(value, 0)} zl`;
+};
+
+const formatAxisPercent = (value: number) => formatPercent(value, 0);
+
+const formatAxisNormalized = (value: number) => {
+  const relativeValue = round(value - 100, 0);
+  return `${relativeValue > 0 ? "+" : ""}${formatPercent(relativeValue, 0)}`;
+};
+
+const formatShortDate = (value: string) =>
+  new Intl.DateTimeFormat("pl-PL", {
+    day: "2-digit",
+    month: "short",
+  }).format(getPointDate(value));
+
+const convertToPln = (amount: number, currency: string, fxRates: FxRates) =>
+  round(amount * (fxRates[currency] ?? 1));
+
+const getEarliestHistoryDate = ({
+  assets,
+  sales,
+  realizedAdjustments,
+}: {
+  assets: PortfolioAsset[];
+  sales: PortfolioSale[];
+  realizedAdjustments: PortfolioRealizedAdjustment[];
+}) => {
+  const dates = [
+    ...assets.map((asset) => asset.purchaseDate),
+    ...sales.flatMap((sale) => [
+      sale.saleDate,
+      ...sale.allocations.map((allocation) => allocation.purchaseDate),
+    ]),
+    ...realizedAdjustments.map((adjustment) => adjustment.date),
+  ]
+    .map((date) => toDateInputValue(date, ""))
+    .filter(Boolean)
+    .sort((left, right) => left.localeCompare(right));
+
+  return dates[0] ?? null;
+};
+
+const addAmountToDateMap = (map: Map<string, number>, date: string, amount: number) => {
+  if (!Number.isFinite(amount) || amount === 0) {
+    return;
+  }
+
+  map.set(date, round((map.get(date) ?? 0) + amount));
+};
+
+const getSegmentSpanDays = (startDate: string, endDate: string) =>
+  Math.max(
+    1,
+    Math.floor(
+      (getPointDate(endDate).getTime() - getPointDate(startDate).getTime()) / 86_400_000
+    )
+  );
+
+const getInterpolatedSegmentValue = (segment: FallbackSegment, date: string) => {
+  if (segment.startDate === segment.endDate) {
+    return round(segment.endValuePlnPerUnit * segment.quantity);
+  }
+
+  const elapsedDays = Math.max(
+    0,
+    Math.floor(
+      (getPointDate(date).getTime() - getPointDate(segment.startDate).getTime()) / 86_400_000
+    )
+  );
+  const ratio = Math.min(1, elapsedDays / getSegmentSpanDays(segment.startDate, segment.endDate));
+  const unitValue = round(
+    segment.startValuePlnPerUnit +
+      (segment.endValuePlnPerUnit - segment.startValuePlnPerUnit) * ratio,
+    6
+  );
+
+  return round(unitValue * segment.quantity);
+};
+
+const buildFallbackHistory = ({
+  assets,
+  sales,
+  realizedAdjustments,
+  fxRates,
+}: {
+  assets: PortfolioAsset[];
+  sales: PortfolioSale[];
+  realizedAdjustments: PortfolioRealizedAdjustment[];
+  fxRates: FxRates;
+}): FallbackHistoryState => {
+  const startDate = getEarliestHistoryDate({
+    assets,
+    sales,
+    realizedAdjustments,
+  });
+  const today = toDateInputValue(new Date().toISOString());
+
+  if (!startDate) {
+    return {
+      points: [],
+      assetSeries: [],
+    };
+  }
+
+  const dates = getDateRange(startDate, today);
+  const netInvestedEvents = new Map<string, number>();
+  const adjustmentEvents = new Map<string, number>();
+  const segments: FallbackSegment[] = [];
+  const assetMetaByGroupKey = new Map<
+    string,
+    {
+      groupKey: string;
+      label: string;
+      symbol: string;
+      kind: PortfolioAsset["kind"];
+    }
+  >();
+
+  for (const asset of assets) {
+    const groupKey = getPortfolioAssetGroupKey(asset);
+
+    if (!assetMetaByGroupKey.has(groupKey)) {
+      assetMetaByGroupKey.set(groupKey, {
+        groupKey,
+        label: asset.name,
+        symbol: asset.symbol,
+        kind: asset.kind,
+      });
+    }
+
+    addAmountToDateMap(
+      netInvestedEvents,
+      asset.purchaseDate,
+      convertToPln(asset.purchasePrice * asset.quantity, asset.purchaseCurrency, fxRates) +
+        asset.feePln
+    );
+
+    segments.push({
+      id: asset.id,
+      groupKey,
+      label: asset.name,
+      symbol: asset.symbol,
+      kind: asset.kind,
+      startDate: asset.purchaseDate,
+      endDate: today,
+      quantity: asset.quantity,
+      startValuePlnPerUnit: convertToPln(asset.purchasePrice, asset.purchaseCurrency, fxRates),
+      endValuePlnPerUnit: convertToPln(
+        asset.latestPrice ?? asset.purchasePrice,
+        asset.marketCurrency,
+        fxRates
+      ),
+    });
+  }
+
+  for (const sale of sales) {
+    addAmountToDateMap(netInvestedEvents, sale.saleDate, -round(sale.realizedProceedsPln));
+
+    for (const allocation of sale.allocations) {
+      const kind = allocation.kind ?? sale.kind;
+      const symbol = allocation.symbol ?? sale.symbol;
+      const groupKey = getPortfolioAssetGroupKey({
+        kind,
+        symbol,
+      });
+
+      if (!assetMetaByGroupKey.has(groupKey)) {
+        assetMetaByGroupKey.set(groupKey, {
+          groupKey,
+          label: allocation.name ?? sale.name,
+          symbol,
+          kind,
+        });
+      }
+
+      addAmountToDateMap(
+        netInvestedEvents,
+        allocation.purchaseDate,
+        convertToPln(
+          allocation.purchasePrice * allocation.quantity,
+          allocation.purchaseCurrency,
+          fxRates
+        ) + allocation.allocatedBuyFeePln
+      );
+
+      const segmentEndDate = shiftDate(sale.saleDate, -1);
+
+      if (segmentEndDate < allocation.purchaseDate) {
+        continue;
+      }
+
+      segments.push({
+        id: `${sale.id}:${allocation.lotId}`,
+        groupKey,
+        label: allocation.name ?? sale.name,
+        symbol,
+        kind,
+        startDate: allocation.purchaseDate,
+        endDate: segmentEndDate,
+        quantity: allocation.quantity,
+        startValuePlnPerUnit: convertToPln(
+          allocation.purchasePrice,
+          allocation.purchaseCurrency,
+          fxRates
+        ),
+        endValuePlnPerUnit: convertToPln(sale.salePrice, sale.marketCurrency, fxRates),
+      });
+    }
+  }
+
+  for (const adjustment of realizedAdjustments) {
+    addAmountToDateMap(adjustmentEvents, adjustment.date, adjustment.amountPlnSnapshot);
+  }
+
+  const assetValueByGroupKey = new Map(
+    Array.from(assetMetaByGroupKey.keys()).map((groupKey) => [
+      groupKey,
+      new Map<string, number>(dates.map((date) => [date, 0] as [string, number])),
+    ] as const)
+  );
+  const points: PortfolioHistoryPoint[] = [];
+  let cumulativeNetInvestedPln = 0;
+  let cumulativeAdjustmentsPln = 0;
+
+  for (const date of dates) {
+    cumulativeNetInvestedPln = round(
+      cumulativeNetInvestedPln + (netInvestedEvents.get(date) ?? 0)
+    );
+    cumulativeAdjustmentsPln = round(
+      cumulativeAdjustmentsPln + (adjustmentEvents.get(date) ?? 0)
+    );
+
+    const portfolioValuePln = round(
+      segments.reduce((total, segment) => {
+        if (date < segment.startDate || date > segment.endDate) {
+          return total;
+        }
+
+        const segmentValue = getInterpolatedSegmentValue(segment, date);
+
+        assetValueByGroupKey
+          .get(segment.groupKey)
+          ?.set(
+            date,
+            round((assetValueByGroupKey.get(segment.groupKey)?.get(date) ?? 0) + segmentValue)
+          );
+
+        return total + segmentValue;
+      }, 0)
+    );
+
+    points.push({
+      date,
+      portfolioValuePln,
+      netInvestedPln: round(cumulativeNetInvestedPln),
+      profitLossPln: round(
+        portfolioValuePln - cumulativeNetInvestedPln + cumulativeAdjustmentsPln
+      ),
+    });
+  }
+
+  const assetSeries = Array.from(assetMetaByGroupKey.values())
+    .map((meta) => ({
+      groupKey: meta.groupKey,
+      label: meta.label,
+      symbol: meta.symbol,
+      kind: meta.kind,
+      points: dates.map((date) => ({
+        date,
+        valuePln: round(assetValueByGroupKey.get(meta.groupKey)?.get(date) ?? 0),
+      })),
+    }))
+    .filter((series) => series.points.some((point) => point.valuePln !== 0));
+
+  return {
+    points,
+    assetSeries,
+  };
+};
+
+const buildReturnSeries = (points: PortfolioHistoryPoint[]): ReturnPoint[] =>
+  points.map((point) => ({
+    ...point,
+    returnPercent:
+      point.netInvestedPln > 0
+        ? round((point.profitLossPln / point.netInvestedPln) * 100, 2)
+        : 0,
+  }));
+
+const buildDrawdownSeries = (points: PortfolioHistoryPoint[]): DrawdownPoint[] => {
+  let runningPeakPln = 0;
+
+  return points.map((point) => {
+    runningPeakPln = Math.max(runningPeakPln, point.portfolioValuePln);
+
+    return {
+      ...point,
+      runningPeakPln,
+      drawdownPercent:
+        runningPeakPln > 0
+          ? round(((point.portfolioValuePln - runningPeakPln) / runningPeakPln) * 100, 2)
+          : 0,
+    };
+  });
+};
+
+const buildDailyChangeSeries = (points: PortfolioHistoryPoint[]): DailyChangePoint[] =>
+  points.map((point, index) => {
+    const previousPoint = index > 0 ? points[index - 1] : null;
+    const dailyChangePln = previousPoint
+      ? round(point.portfolioValuePln - previousPoint.portfolioValuePln)
+      : 0;
+    const dailyChangePercent =
+      previousPoint && previousPoint.portfolioValuePln > 0
+        ? round((dailyChangePln / previousPoint.portfolioValuePln) * 100, 2)
+        : 0;
+
+    return {
+      ...point,
+      dailyChangePln,
+      dailyChangePercent,
+    };
+  });
+
+const getToneClass = (value: number): ToneClass => {
+  if (value > 0) {
+    return "tone-positive";
+  }
+
+  if (value < 0) {
+    return "tone-negative";
+  }
+
+  return "tone-neutral";
+};
+
+const START_GAP_WARNING_PATTERN =
+  /^Historia (.+) ma braki na poczatku zakresu; brakujace dni wyceniono po cenie zakupu\.$/;
+
+const compactWarnings = (warnings: string[]) => {
+  const startingGapSymbols: string[] = [];
+  const remainingWarnings: string[] = [];
+
+  warnings.forEach((warning) => {
+    const match = warning.match(START_GAP_WARNING_PATTERN);
+
+    if (match?.[1]) {
+      startingGapSymbols.push(match[1]);
+      return;
+    }
+
+    remainingWarnings.push(warning);
+  });
+
+  if (startingGapSymbols.length > 0) {
+    remainingWarnings.unshift(
+      startingGapSymbols.length === 1
+        ? `Historia ${startingGapSymbols[0]} startuje kilka sesji po poczatku zakresu; pierwsze dni wyceniono po cenie zakupu.`
+        : `Czesc aktywow startuje kilka sesji po poczatku zakresu (${startingGapSymbols.join(", ")}); pierwsze dni wyceniono po cenie zakupu.`
+    );
+  }
+
+  return remainingWarnings;
+};
+
+const getLastNumericValue = (values: Array<number | null | undefined>) => {
+  for (let index = values.length - 1; index >= 0; index -= 1) {
+    const value = values[index];
+
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+  }
+
+  return null;
+};
+
+const buildNormalizedIndexSeries = (
+  points: Array<{ date: string; valuePln: number }>,
+  visibleDates: string[]
+) => {
+  const valueByDate = new Map(points.map((point) => [point.date, point.valuePln] as const));
+  const rawValues = visibleDates.map((date) => valueByDate.get(date));
+  const baseIndex = rawValues.findIndex(
+    (value) => typeof value === "number" && Number.isFinite(value) && value !== 0
+  );
+
+  if (baseIndex === -1) {
+    return {
+      values: visibleDates.map(() => null),
+      lastValue: null,
+      changePercent: null,
+    };
+  }
+
+  const baseValue = rawValues[baseIndex] ?? 0;
+  const values = rawValues.map((value, index) => {
+    if (index < baseIndex || typeof value !== "number" || !Number.isFinite(value)) {
+      return null;
+    }
+
+    return round((value / baseValue) * 100, 2);
+  });
+  const lastValue = getLastNumericValue(values);
+
+  return {
+    values,
+    lastValue,
+    changePercent: lastValue === null ? null : round(lastValue - 100, 2),
+  };
+};
+
+function ChartTooltip({
+  active,
+  label,
+  payload,
+  lines,
+}: TooltipContentProps & {
+  lines: ChartLineDefinition[];
+}) {
+  if (!active || !label || !payload || payload.length === 0) {
+    return null;
+  }
+
+  const row = payload[0]?.payload as ChartRow | undefined;
+  const payloadByKey = new Map(
+    payload.map((entry) => [String(entry.dataKey ?? ""), entry] as const)
+  );
+
+  return (
+    <div className="line-chart-tooltip line-visual-tooltip">
+      <p className="table-title">{formatDate(String(label))}</p>
+      <div className="line-chart-tooltip-list">
+        {lines.map((line) => {
+          const entry = payloadByKey.get(line.dataKey) as TooltipPayloadEntry | undefined;
+          const value = entry?.value;
+
+          if (typeof value !== "number" || !Number.isFinite(value)) {
+            return null;
+          }
+
+          return (
+            <div key={line.dataKey} className="line-chart-tooltip-row">
+              <span className="line-chart-tooltip-key">
+                <span
+                  className="line-chart-tooltip-dot"
+                  style={{ background: line.color }}
+                />
+                <span className="line-chart-tooltip-label">{line.label}</span>
+              </span>
+              <div className="line-visual-tooltip-values">
+                <strong className="line-chart-tooltip-value">
+                  {line.valueFormatter(value)}
+                </strong>
+                {row && line.detailFormatter ? (
+                  <span className="table-note">{line.detailFormatter(row)}</span>
+                ) : null}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+export default function PortfolioLineCharts({
+  assets,
+  sales,
+  realizedAdjustments,
+  fxRates,
+}: PortfolioLineChartsProps) {
+  const [mode, setMode] = useState<ChartMode>("value");
+  const [rangePreset, setRangePreset] = useState<RangePreset>("1M");
+  const [selectedBenchmarkId, setSelectedBenchmarkId] = useState("");
+  const [selectedBenchmarks, setSelectedBenchmarks] = useState<PortfolioBenchmarkDefinition[]>(
+    []
+  );
+  const [benchmarkSearchMode, setBenchmarkSearchMode] = useState<AssetSearchMode>(
+    DEFAULT_BENCHMARK_SEARCH_MODE
+  );
+  const [benchmarkQuery, setBenchmarkQuery] = useState("");
+  const [benchmarkResults, setBenchmarkResults] = useState<AssetSearchResult[]>([]);
+  const [isSearchingBenchmarks, setIsSearchingBenchmarks] = useState(false);
+  const [benchmarkSearchError, setBenchmarkSearchError] = useState<string | null>(null);
+  const [serverHistory, setServerHistory] = useState<PortfolioHistoryResponse>(EMPTY_HISTORY);
+  const [warnings, setWarnings] = useState<string[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+
+  const fallbackHistory = useMemo(
+    () =>
+      buildFallbackHistory({
+        assets,
+        sales,
+        realizedAdjustments,
+        fxRates,
+      }),
+    [assets, fxRates, realizedAdjustments, sales]
+  );
+
+  useEffect(() => {
+    let isCancelled = false;
+    const abortController = new AbortController();
+
+    if (assets.length === 0 && sales.length === 0 && realizedAdjustments.length === 0) {
+      setServerHistory(EMPTY_HISTORY);
+      setWarnings([]);
+      setError(null);
+      setIsLoading(false);
+
+      return () => {
+        abortController.abort();
+      };
+    }
+
+    setIsLoading(true);
+    setError(null);
+
+    void (async () => {
+      try {
+        const response = await fetchPortfolioHistory({
+          assets,
+          sales,
+          realizedAdjustments,
+          benchmarks: selectedBenchmarks,
+          signal: abortController.signal,
+        });
+
+        if (isCancelled) {
+          return;
+        }
+
+        setServerHistory(response);
+        setWarnings(response.warnings);
+      } catch (fetchError) {
+        if (isCancelled) {
+          return;
+        }
+
+        if (fetchError instanceof Error && fetchError.name === "AbortError") {
+          return;
+        }
+
+        setError(
+          fetchError instanceof Error
+            ? fetchError.message
+            : "Nie udalo sie pobrac historii portfela."
+        );
+        setServerHistory(EMPTY_HISTORY);
+        setWarnings([]);
+      } finally {
+        if (!isCancelled) {
+          setIsLoading(false);
+        }
+      }
+    })();
+
+    return () => {
+      isCancelled = true;
+      abortController.abort();
+    };
+  }, [assets, realizedAdjustments, sales, selectedBenchmarks]);
+
+  const displayPoints =
+    serverHistory.points.length > 0 ? serverHistory.points : fallbackHistory.points;
+  const displayBenchmarkSeries = serverHistory.benchmarkSeries;
+  const isUsingFallbackHistory =
+    serverHistory.points.length === 0 && fallbackHistory.points.length > 0;
+  const displayWarnings = useMemo(() => compactWarnings(warnings), [warnings]);
+  const benchmarkSearchMinimumLength = getMinimumSearchLength(benchmarkSearchMode);
+  const hasActiveBenchmarkQuery = benchmarkQuery.trim().length > 0;
+  const hasReachedBenchmarkMinimumLength =
+    benchmarkQuery.trim().length >= benchmarkSearchMinimumLength;
+  const selectedBenchmark = selectedBenchmarks.find(
+    (benchmark) => benchmark.id === selectedBenchmarkId
+  );
+  const selectedBenchmarkSeries = displayBenchmarkSeries.find(
+    (benchmark) => benchmark.id === selectedBenchmarkId
+  );
+
+  useEffect(() => {
+    if (selectedBenchmarks.length === 0) {
+      if (selectedBenchmarkId) {
+        setSelectedBenchmarkId("");
+      }
+      return;
+    }
+
+    if (selectedBenchmarks.some((benchmark) => benchmark.id === selectedBenchmarkId)) {
+      return;
+    }
+
+    setSelectedBenchmarkId(selectedBenchmarks[0]?.id ?? "");
+  }, [selectedBenchmarkId, selectedBenchmarks]);
+
+  useEffect(() => {
+    const trimmedQuery = benchmarkQuery.trim();
+
+    if (mode !== "portfolio-vs-benchmark" || trimmedQuery.length < benchmarkSearchMinimumLength) {
+      setBenchmarkResults([]);
+      setBenchmarkSearchError(null);
+      setIsSearchingBenchmarks(false);
+      return;
+    }
+
+    let isCancelled = false;
+    const timeoutId = window.setTimeout(async () => {
+      setIsSearchingBenchmarks(true);
+      setBenchmarkSearchError(null);
+
+      try {
+        const nextResults = await searchAssets({
+          query: trimmedQuery,
+          kind: SEARCH_MODE_OPTIONS.find((option) => option.value === benchmarkSearchMode)?.kind ?? "etf",
+          mode: benchmarkSearchMode,
+        });
+
+        if (!isCancelled) {
+          setBenchmarkResults(nextResults);
+        }
+      } catch (searchError) {
+        if (isCancelled) {
+          return;
+        }
+
+        setBenchmarkResults([]);
+        setBenchmarkSearchError(
+          searchError instanceof Error
+            ? searchError.message
+            : "Nie udalo sie pobrac benchmarkow."
+        );
+      } finally {
+        if (!isCancelled) {
+          setIsSearchingBenchmarks(false);
+        }
+      }
+    }, SEARCH_DEBOUNCE_MS);
+
+    return () => {
+      isCancelled = true;
+      window.clearTimeout(timeoutId);
+    };
+  }, [benchmarkQuery, benchmarkSearchMinimumLength, benchmarkSearchMode, mode]);
+
+  const visiblePoints = useMemo(
+    () => filterByRange(displayPoints, rangePreset),
+    [displayPoints, rangePreset]
+  );
+  const visibleReturnPoints = useMemo(
+    () => filterByRange(buildReturnSeries(displayPoints), rangePreset),
+    [displayPoints, rangePreset]
+  );
+  const visibleDrawdownPoints = useMemo(
+    () => filterByRange(buildDrawdownSeries(displayPoints), rangePreset),
+    [displayPoints, rangePreset]
+  );
+  const visibleDailyChangePoints = useMemo(
+    () => filterByRange(buildDailyChangeSeries(displayPoints), rangePreset),
+    [displayPoints, rangePreset]
+  );
+  const visibleDates = visiblePoints.map((point) => point.date);
+
+  const handleAddBenchmark = (result: AssetSearchResult) => {
+    const benchmark = toBenchmarkDefinition(result, benchmarkSearchMode);
+
+    setSelectedBenchmarks((currentBenchmarks) => {
+      if (currentBenchmarks.some((currentBenchmark) => currentBenchmark.id === benchmark.id)) {
+        return currentBenchmarks;
+      }
+
+      return [...currentBenchmarks, benchmark];
+    });
+    setSelectedBenchmarkId(benchmark.id);
+    setBenchmarkQuery("");
+    setBenchmarkResults([]);
+    setBenchmarkSearchError(null);
+    setMode("portfolio-vs-benchmark");
+  };
+
+  const handleRemoveBenchmark = (benchmarkId: string) => {
+    const nextBenchmarks = selectedBenchmarks.filter(
+      (benchmark) => benchmark.id !== benchmarkId
+    );
+
+    setSelectedBenchmarks(nextBenchmarks);
+
+    if (selectedBenchmarkId === benchmarkId) {
+      setSelectedBenchmarkId(nextBenchmarks[0]?.id ?? "");
+    }
+  };
+
+  const chartModel = useMemo<ChartModel>(() => {
+    if (mode === "value") {
+      const firstPoint = visiblePoints[0];
+      const lastPoint = visiblePoints.at(-1);
+
+      if (!firstPoint || !lastPoint) {
+        return {
+          title: "Wartosc portfela",
+          copy: "Glowny widok portfela w PLN z kapitalem netto jako linia odniesienia.",
+          data: [],
+          lines: [],
+          summaryLabel: "Brak danych",
+          summaryValue: "0 zl",
+          deltaLabel: "Zmiana w zakresie",
+          deltaValue: "0 zl",
+          deltaTone: "tone-neutral",
+          stats: [],
+          yAxisTickFormatter: formatCompactCurrency,
+          emptyTitle: "Brakuje historii do wykresu wartosci",
+          emptyCopy: "Dodaj aktywa albo poczekaj, az pojawi sie seria dziennych punktow.",
+        };
+      }
+
+      const rangeChangePln = round(lastPoint.portfolioValuePln - firstPoint.portfolioValuePln);
+      const totalReturnPercent =
+        lastPoint.netInvestedPln > 0
+          ? round((lastPoint.profitLossPln / lastPoint.netInvestedPln) * 100, 2)
+          : 0;
+
+      return {
+        title: "Wartosc portfela",
+        copy: "Najczystszy widok fintech: dominujaca krzywa portfela z kapitalem netto jako cicha linia odniesienia.",
+        data: visiblePoints,
+        lines: [
+          {
+            dataKey: "portfolioValuePln",
+            label: "Portfel",
+            color: SERIES_COLORS[0],
+            variant: "area",
+            strokeWidth: 3,
+            valueFormatter: (value) => formatCurrency(value),
+          },
+          {
+            dataKey: "netInvestedPln",
+            label: "Kapital netto",
+            color: SERIES_COLORS[1],
+            strokeWidth: 2.2,
+            valueFormatter: (value) => formatCurrency(value),
+          },
+        ],
+        summaryLabel: "Wartosc teraz",
+        summaryValue: formatCurrency(lastPoint.portfolioValuePln),
+        deltaLabel: "Zmiana w zakresie",
+        deltaValue: formatSignedCurrency(rangeChangePln),
+        deltaTone: getToneClass(rangeChangePln),
+        stats: [
+          {
+            label: "Wynik od poczatku",
+            value: formatSignedCurrency(lastPoint.profitLossPln),
+            tone: getToneClass(lastPoint.profitLossPln),
+          },
+          {
+            label: "Zwrot od poczatku",
+            value: formatSignedPercent(totalReturnPercent),
+            tone: getToneClass(totalReturnPercent),
+          },
+          {
+            label: "Kapital netto",
+            value: formatCurrency(lastPoint.netInvestedPln),
+          },
+        ],
+        yAxisTickFormatter: formatCompactCurrency,
+        emptyTitle: "Brakuje historii do wykresu wartosci",
+        emptyCopy: "Dodaj aktywa albo poczekaj, az pojawi sie seria dziennych punktow.",
+      };
+    }
+
+    if (mode === "return") {
+      const firstPoint = visibleReturnPoints[0];
+      const lastPoint = visibleReturnPoints.at(-1);
+
+      if (!firstPoint || !lastPoint) {
+        return {
+          title: "Zwrot procentowy",
+          copy: "Procentowy wynik portfela liczony od poczatku historii.",
+          data: [],
+          lines: [],
+          summaryLabel: "Brak danych",
+          summaryValue: "0,00%",
+          deltaLabel: "Zmiana w zakresie",
+          deltaValue: "0,00%",
+          deltaTone: "tone-neutral",
+          stats: [],
+          referenceValue: 0,
+          yAxisTickFormatter: formatAxisPercent,
+          emptyTitle: "Brakuje danych do liczenia zwrotu",
+          emptyCopy: "Zwrot pojawi sie, gdy portfel bedzie mial historie wartosci i kapitalu.",
+        };
+      }
+
+      const maxReturnPercent = Math.max(
+        ...visibleReturnPoints.map((point) => point.returnPercent)
+      );
+      const rangeChangePercent = round(lastPoint.returnPercent - firstPoint.returnPercent, 2);
+
+      return {
+        title: "Zwrot procentowy",
+        copy: "Ten widok pokazuje, jak szybko pracuje kapital, bez mieszania nominalow w PLN.",
+        data: visibleReturnPoints,
+        lines: [
+          {
+            dataKey: "returnPercent",
+            label: "Zwrot od poczatku",
+            color: SERIES_COLORS[1],
+            strokeWidth: 2.8,
+            valueFormatter: (value) => formatSignedPercent(value),
+            detailFormatter: (row) =>
+              typeof row.profitLossPln === "number"
+                ? formatSignedCurrency(row.profitLossPln)
+                : null,
+          },
+        ],
+        summaryLabel: "Zwrot teraz",
+        summaryValue: formatSignedPercent(lastPoint.returnPercent),
+        deltaLabel: "Zmiana w zakresie",
+        deltaValue: formatSignedPercent(rangeChangePercent),
+        deltaTone: getToneClass(rangeChangePercent),
+        stats: [
+          {
+            label: "Wynik w PLN",
+            value: formatSignedCurrency(lastPoint.profitLossPln),
+            tone: getToneClass(lastPoint.profitLossPln),
+          },
+          {
+            label: "Kapital netto",
+            value: formatCurrency(lastPoint.netInvestedPln),
+          },
+          {
+            label: "Najwyzej w zakresie",
+            value: formatSignedPercent(maxReturnPercent),
+            tone: getToneClass(maxReturnPercent),
+          },
+        ],
+        referenceValue: 0,
+        yAxisTickFormatter: formatAxisPercent,
+        emptyTitle: "Brakuje danych do liczenia zwrotu",
+        emptyCopy: "Zwrot pojawi sie, gdy portfel bedzie mial historie wartosci i kapitalu.",
+      };
+    }
+
+    if (mode === "drawdown") {
+      const firstPoint = visibleDrawdownPoints[0];
+      const lastPoint = visibleDrawdownPoints.at(-1);
+
+      if (!firstPoint || !lastPoint) {
+        return {
+          title: "Drawdown",
+          copy: "Spadek od najwyzszego punktu do biezacej wyceny.",
+          data: [],
+          lines: [],
+          summaryLabel: "Brak danych",
+          summaryValue: "0,00%",
+          deltaLabel: "Najglebszy spadek",
+          deltaValue: "0,00%",
+          deltaTone: "tone-neutral",
+          stats: [],
+          referenceValue: 0,
+          yAxisTickFormatter: formatAxisPercent,
+          emptyTitle: "Brakuje danych do drawdownu",
+          emptyCopy: "Drawdown potrzebuje ciaglej serii wycen portfela.",
+        };
+      }
+
+      const worstDrawdown = Math.min(
+        ...visibleDrawdownPoints.map((point) => point.drawdownPercent)
+      );
+      const lastRecoveryPercent = round(100 + lastPoint.drawdownPercent, 2);
+
+      return {
+        title: "Drawdown",
+        copy: "Widok ryzyka w stylu TradingView: ile portfel oddal od ostatniego maksimum.",
+        data: visibleDrawdownPoints,
+        lines: [
+          {
+            dataKey: "drawdownPercent",
+            label: "Drawdown",
+            color: SERIES_COLORS[4],
+            strokeWidth: 2.8,
+            valueFormatter: (value) => formatPercent(value),
+            detailFormatter: (row) =>
+              typeof row.runningPeakPln === "number"
+                ? `szczyt ${formatCurrency(row.runningPeakPln)}`
+                : null,
+          },
+        ],
+        summaryLabel: "Biezacy drawdown",
+        summaryValue: formatPercent(lastPoint.drawdownPercent),
+        deltaLabel: "Najglebszy spadek",
+        deltaValue: formatPercent(worstDrawdown),
+        deltaTone: getToneClass(worstDrawdown),
+        stats: [
+          {
+            label: "Biezaca wartosc",
+            value: formatCurrency(lastPoint.portfolioValuePln),
+          },
+          {
+            label: "Ostatni szczyt",
+            value: formatCurrency(lastPoint.runningPeakPln),
+          },
+          {
+            label: "Odbicie od dolka",
+            value: formatPercent(lastRecoveryPercent),
+            tone: getToneClass(lastRecoveryPercent - 100),
+          },
+        ],
+        referenceValue: 0,
+        yAxisTickFormatter: formatAxisPercent,
+        emptyTitle: "Brakuje danych do drawdownu",
+        emptyCopy: "Drawdown potrzebuje ciaglej serii wycen portfela.",
+      };
+    }
+
+    if (mode === "portfolio-vs-benchmark") {
+      if (!selectedBenchmark || visibleDates.length === 0) {
+        return {
+          title: "Portfel vs benchmark",
+          copy: "Porownanie na jednej bazie, z uwzglednieniem przeplywow gotowki do benchmarku.",
+          data: [],
+          lines: [],
+          summaryLabel: "Dodaj benchmark",
+          summaryValue: "0,00%",
+          deltaLabel: "Przewaga",
+          deltaValue: "0,00%",
+          deltaTone: "tone-neutral",
+          stats: [],
+          referenceValue: 100,
+          yAxisTickFormatter: formatAxisNormalized,
+          emptyTitle: "Dodaj benchmark z wyszukiwarki",
+          emptyCopy:
+            "Wyszukaj akcje, ETF albo krypto, zeby porownac portfel z tym samym strumieniem wplat.",
+        };
+      }
+
+      if (!selectedBenchmarkSeries) {
+        return {
+          title: "Portfel vs benchmark",
+          copy: "Porownanie na jednej bazie, z uwzglednieniem przeplywow gotowki do benchmarku.",
+          data: [],
+          lines: [],
+          summaryLabel: selectedBenchmark.name,
+          summaryValue: "0,00%",
+          deltaLabel: "Przewaga",
+          deltaValue: "0,00%",
+          deltaTone: "tone-neutral",
+          stats: [],
+          referenceValue: 100,
+          yAxisTickFormatter: formatAxisNormalized,
+          emptyTitle: `Brakuje serii dla ${selectedBenchmark.name}`,
+          emptyCopy:
+            "Ten benchmark nie zwrocil uzywalnej historii. Wybierz inny albo sprawdz komunikaty nad wykresem.",
+        };
+      }
+
+      const normalizedPortfolio = buildNormalizedIndexSeries(
+        visiblePoints.map((point) => ({
+          date: point.date,
+          valuePln: point.portfolioValuePln,
+        })),
+        visibleDates
+      );
+      const normalizedBenchmark = buildNormalizedIndexSeries(
+        selectedBenchmarkSeries.points,
+        visibleDates
+      );
+      const data = visibleDates
+        .map((date, index) => ({
+          date,
+          portfolio: normalizedPortfolio.values[index],
+          benchmark: normalizedBenchmark.values[index],
+        }))
+        .filter(
+          (row) => typeof row.portfolio === "number" || typeof row.benchmark === "number"
+        );
+      const portfolioChangePercent = normalizedPortfolio.changePercent ?? 0;
+      const benchmarkChangePercent = normalizedBenchmark.changePercent ?? 0;
+      const outperformance = round(portfolioChangePercent - benchmarkChangePercent, 2);
+
+      return {
+        title: "Portfel vs benchmark",
+        copy: "Obie linie startuja z tej samej bazy, wiec od razu widac przewage albo opoznienie wzgledem rynku.",
+        data,
+        lines: [
+          {
+            dataKey: "portfolio",
+            label: "Portfel",
+            color: SERIES_COLORS[0],
+            strokeWidth: 2.8,
+            valueFormatter: (value) => formatSignedPercent(value - 100),
+            detailFormatter: (row) =>
+              typeof row.portfolio === "number"
+                ? `indeks ${formatNumber(Number(row.portfolio), 1)}`
+                : null,
+          },
+          {
+            dataKey: "benchmark",
+            label: selectedBenchmarkSeries.label,
+            color: SERIES_COLORS[1],
+            strokeWidth: 2.4,
+            valueFormatter: (value) => formatSignedPercent(value - 100),
+            detailFormatter: (row) =>
+              typeof row.benchmark === "number"
+                ? `indeks ${formatNumber(Number(row.benchmark), 1)}`
+                : null,
+          },
+        ],
+        summaryLabel: "Portfel w zakresie",
+        summaryValue: formatSignedPercent(portfolioChangePercent),
+        deltaLabel: `Przewaga vs ${selectedBenchmarkSeries.label}`,
+        deltaValue: formatSignedPercent(outperformance),
+        deltaTone: getToneClass(outperformance),
+        stats: [
+          {
+            label: selectedBenchmarkSeries.label,
+            value: formatSignedPercent(benchmarkChangePercent),
+            tone: getToneClass(benchmarkChangePercent),
+          },
+          {
+            label: "Portfel",
+            value: formatSignedPercent(portfolioChangePercent),
+            tone: getToneClass(portfolioChangePercent),
+          },
+          {
+            label: "Baza wykresu",
+            value: "100 = start zakresu",
+          },
+        ],
+        referenceValue: 100,
+        yAxisTickFormatter: formatAxisNormalized,
+        emptyTitle: `Brakuje serii dla ${selectedBenchmarkSeries.label}`,
+        emptyCopy:
+          "Ten tryb potrzebuje danych rynkowych benchmarku, zeby zestawic go z portfelem.",
+      };
+    }
+
+    const firstPoint = visibleDailyChangePoints[0];
+    const lastPoint = visibleDailyChangePoints.at(-1);
+
+    if (!firstPoint || !lastPoint) {
+      return {
+        title: "Zmiana dzienna",
+        copy: "Dzien do dnia, z szybkim odczytem rytmu portfela.",
+        data: [],
+        lines: [],
+        summaryLabel: "Brak danych",
+        summaryValue: "0 zl",
+        deltaLabel: "Dzienna stopa",
+        deltaValue: "0,00%",
+        deltaTone: "tone-neutral",
+        stats: [],
+        referenceValue: 0,
+        yAxisTickFormatter: formatCompactCurrency,
+        emptyTitle: "Brakuje danych do zmian dziennych",
+        emptyCopy: "Zmiana dzienna pojawi sie po zebraniu kolejnych punktow historii.",
+      };
+    }
+
+    const bestDayPln = Math.max(
+      ...visibleDailyChangePoints.map((point) => point.dailyChangePln)
+    );
+    const worstDayPln = Math.min(
+      ...visibleDailyChangePoints.map((point) => point.dailyChangePln)
+    );
+
+    return {
+      title: "Zmiana dzienna",
+      copy: "Szybki widok sesja do sesji, dobry do oceny zmiennosci i tempa portfela.",
+      data: visibleDailyChangePoints,
+      lines: [
+        {
+          dataKey: "dailyChangePln",
+          label: "Zmiana dzienna",
+          color: SERIES_COLORS[2],
+          strokeWidth: 2.6,
+          valueFormatter: (value) => formatSignedCurrency(value),
+          detailFormatter: (row) =>
+            typeof row.dailyChangePercent === "number"
+              ? formatSignedPercent(Number(row.dailyChangePercent))
+              : null,
+        },
+      ],
+      summaryLabel: "Ostatnia zmiana",
+      summaryValue: formatSignedCurrency(lastPoint.dailyChangePln),
+      deltaLabel: "Dzienna stopa",
+      deltaValue: formatSignedPercent(lastPoint.dailyChangePercent),
+      deltaTone: getToneClass(lastPoint.dailyChangePercent),
+      stats: [
+        {
+          label: "Najlepszy dzien",
+          value: formatSignedCurrency(bestDayPln),
+          tone: getToneClass(bestDayPln),
+        },
+        {
+            label: "Najslabszy dzien",
+          value: formatSignedCurrency(worstDayPln),
+          tone: getToneClass(worstDayPln),
+        },
+        {
+          label: "Zakres",
+          value:
+            firstPoint.date && lastPoint.date
+              ? `${formatDate(firstPoint.date)} - ${formatDate(lastPoint.date)}`
+              : "-",
+        },
+      ],
+      referenceValue: 0,
+      yAxisTickFormatter: formatCompactCurrency,
+      emptyTitle: "Brakuje danych do zmian dziennych",
+      emptyCopy: "Zmiana dzienna pojawi sie po zebraniu kolejnych punktow historii.",
+    };
+  }, [
+    mode,
+    selectedBenchmark,
+    selectedBenchmarkSeries,
+    visibleDailyChangePoints,
+    visibleDates,
+    visibleDrawdownPoints,
+    visiblePoints,
+    visibleReturnPoints,
+  ]);
+
+  if (
+    !isLoading &&
+    !error &&
+    assets.length === 0 &&
+    sales.length === 0 &&
+    realizedAdjustments.length === 0
+  ) {
+    return (
+      <section className="panel chart-card chart-card-wide">
+        <p className="eyebrow">Wykresy liniowe</p>
+        <h2 className="section-title">Najpierw dodaj historie portfela</h2>
+        <p className="section-copy">
+          Tutaj pojawi sie jeden nowoczesny wykres z wieloma trybami: wartosc,
+          zwrot, drawdown, benchmarki i zmiana dzienna.
+        </p>
+      </section>
+    );
+  }
+
+  const hasRenderableData = chartModel.data.length > 0 && chartModel.lines.length > 0;
+
+  return (
+    <section className="panel chart-card chart-card-wide line-visual-panel">
+      <div className="line-visual-topbar">
+        <div>
+          <p className="eyebrow">Wykresy liniowe</p>
+          <h2 className="section-title">Jeden wykres, piec trybow analizy</h2>
+          <p className="section-copy">
+            Widok inspirowany TradingView i myfund: mniej szumu, szybszy odczyt,
+            te same dane w roznych perspektywach.
+          </p>
+        </div>
+
+        <div className="line-chart-range-tabs line-visual-range">
+          {RANGE_PRESETS.map((preset) => (
+            <button
+              key={preset}
+              type="button"
+              className={
+                rangePreset === preset
+                  ? "line-chart-range-tab is-active"
+                  : "line-chart-range-tab"
+              }
+              onClick={() => setRangePreset(preset)}
+            >
+              {preset}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="line-visual-mode-strip mt-6">
+        {MODE_OPTIONS.map((option) => (
+          <button
+            key={option.value}
+            type="button"
+            className={
+              mode === option.value
+                ? "line-visual-mode-tab is-active"
+                : "line-visual-mode-tab"
+            }
+            onClick={() => setMode(option.value)}
+          >
+            <span className="line-visual-mode-name">{option.label}</span>
+            <span className="line-visual-mode-copy">{option.copy}</span>
+          </button>
+        ))}
+      </div>
+
+      {mode === "portfolio-vs-benchmark" ? (
+        <section className="line-visual-benchmark-panel mt-6">
+          <div className="line-visual-benchmark-head">
+            <div>
+              <p className="table-title">Wyszukaj benchmark</p>
+              <p className="table-note">
+                Dodaj akcje, ETF-y lub krypto i porownaj je z tym samym strumieniem wplat co
+                portfel.
+              </p>
+            </div>
+            {selectedBenchmarks.length > 0 ? (
+              <span className="search-panel-count">{selectedBenchmarks.length}</span>
+            ) : null}
+          </div>
+
+          <div className="line-chart-range-tabs line-visual-benchmark-search-modes mt-4">
+            {SEARCH_MODE_OPTIONS.map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                className={
+                  benchmarkSearchMode === option.value
+                    ? "line-chart-range-tab is-active"
+                    : "line-chart-range-tab"
+                }
+                onClick={() => setBenchmarkSearchMode(option.value)}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+
+          <label className="field line-visual-benchmark-field mt-4">
+            <span>Symbol lub nazwa benchmarku</span>
+            <input
+              type="text"
+              value={benchmarkQuery}
+              onChange={(event) => setBenchmarkQuery(event.target.value)}
+              placeholder={getSearchPlaceholder(benchmarkSearchMode)}
+            />
+          </label>
+
+          {selectedBenchmarks.length > 0 ? (
+            <div className="line-visual-benchmark-list mt-4">
+              {selectedBenchmarks.map((benchmark) => (
+                <article
+                  key={benchmark.id}
+                  className={
+                    selectedBenchmarkId === benchmark.id
+                      ? "line-visual-benchmark-card is-active"
+                      : "line-visual-benchmark-card"
+                  }
+                >
+                  <button
+                    type="button"
+                    className="line-visual-benchmark-card-main"
+                    onClick={() => setSelectedBenchmarkId(benchmark.id)}
+                  >
+                    <span className="line-visual-benchmark-card-name">{benchmark.name}</span>
+                    <span className="line-visual-benchmark-card-meta">
+                      {benchmark.symbol}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    className="ghost-button line-visual-benchmark-remove"
+                    onClick={() => handleRemoveBenchmark(benchmark.id)}
+                  >
+                    Usun
+                  </button>
+                </article>
+              ))}
+            </div>
+          ) : null}
+
+          {(hasActiveBenchmarkQuery || benchmarkResults.length > 0 || benchmarkSearchError) ? (
+            <div className="search-stack-panel mt-4">
+              <div className="search-panel-header">
+                <p className="search-panel-title">Sugestie</p>
+                {benchmarkResults.length > 0 ? (
+                  <span className="search-panel-count">{benchmarkResults.length}</span>
+                ) : null}
+              </div>
+
+              {hasActiveBenchmarkQuery && isSearchingBenchmarks ? (
+                <p className="field-note">Szukam benchmarkow...</p>
+              ) : null}
+
+              {hasActiveBenchmarkQuery && benchmarkSearchError ? (
+                <p className="field-note field-note-error">{benchmarkSearchError}</p>
+              ) : null}
+
+              {!isSearchingBenchmarks && hasActiveBenchmarkQuery && !hasReachedBenchmarkMinimumLength ? (
+                <p className="field-note">
+                  Wpisz min. {benchmarkSearchMinimumLength} znaki, aby zobaczyc wyniki.
+                </p>
+              ) : null}
+
+              {!isSearchingBenchmarks &&
+              hasReachedBenchmarkMinimumLength &&
+              benchmarkResults.length === 0 &&
+              !benchmarkSearchError ? (
+                <p className="field-note">Brak wynikow</p>
+              ) : null}
+
+              {benchmarkResults.length > 0 ? (
+                <div className="search-result-list">
+                  {benchmarkResults.map((result) => {
+                    const benchmark = toBenchmarkDefinition(result, benchmarkSearchMode);
+                    const isSelected = selectedBenchmarks.some(
+                      (selectedItem) => selectedItem.id === benchmark.id
+                    );
+
+                    return (
+                      <button
+                        key={`${benchmark.id}:${result.symbol}`}
+                        type="button"
+                        className="search-result-card text-left"
+                        onClick={() => handleAddBenchmark(result)}
+                      >
+                        <p className="search-result-title">{result.name}</p>
+                        <p className="search-result-meta">
+                          {result.symbol}
+                          {isSelected ? " | dodany" : ""}
+                        </p>
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+        </section>
+      ) : null}
+
+      <div className="line-visual-summary mt-6">
+        <article className="line-visual-hero">
+          <span className="line-visual-hero-label">{chartModel.summaryLabel}</span>
+          <strong className="line-visual-hero-value">{chartModel.summaryValue}</strong>
+          <span className={`line-visual-hero-delta ${chartModel.deltaTone}`}>
+            {chartModel.deltaLabel}: {chartModel.deltaValue}
+          </span>
+        </article>
+
+        {chartModel.stats.map((stat) => (
+          <article key={stat.label} className="line-visual-stat-card">
+            <span className="line-visual-stat-label">{stat.label}</span>
+            <strong className={stat.tone ?? "tone-neutral"}>{stat.value}</strong>
+          </article>
+        ))}
+      </div>
+
+      {isUsingFallbackHistory || isLoading || error || displayWarnings.length > 0 ? (
+        <div className="line-visual-status mt-6">
+          {isUsingFallbackHistory ? (
+            <p className="field-note">
+              Pokazujemy lokalna, przyblizona historie. Gdy serwer odda pelniejsza
+              serie, wykres podmieni ja automatycznie.
+            </p>
+          ) : null}
+          {isLoading ? (
+            <p className="field-note">Dociagam dokladniejsza historie portfela...</p>
+          ) : null}
+          {error ? <p className="field-note field-note-error">{error}</p> : null}
+          {displayWarnings.length > 0 ? (
+            <div className="line-chart-warning-list">
+              {displayWarnings.slice(0, 4).map((warning) => (
+                <p key={warning} className="field-note">
+                  {warning}
+                </p>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      <div className="line-chart-shell line-visual-chart-shell mt-6">
+        {hasRenderableData ? (
+          <>
+            <div className="line-visual-chart-head">
+              <div>
+                <p className="table-title">{chartModel.title}</p>
+                <p className="table-note">{chartModel.copy}</p>
+              </div>
+
+              <div className="line-visual-legend">
+                {chartModel.lines.map((line) => (
+                  <div key={line.dataKey} className="line-visual-legend-item">
+                    <span
+                      className="line-visual-legend-dot"
+                      style={{ background: line.color }}
+                    />
+                    <span>{line.label}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="line-visual-chart-frame mt-4">
+              <ResponsiveContainer width="100%" height={420}>
+                <ComposedChart data={chartModel.data} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                  {chartModel.lines.some((line) => line.variant === "area") ? (
+                    <defs>
+                      {chartModel.lines
+                        .filter((line) => line.variant === "area")
+                        .map((line) => (
+                          <linearGradient
+                            key={`gradient-${line.dataKey}`}
+                            id={`gradient-${line.dataKey}`}
+                            x1="0"
+                            x2="0"
+                            y1="0"
+                            y2="1"
+                          >
+                            <stop
+                              offset="0%"
+                              stopColor={line.color}
+                              stopOpacity={0.3}
+                            />
+                            <stop
+                              offset="100%"
+                              stopColor={line.color}
+                              stopOpacity={0.02}
+                            />
+                          </linearGradient>
+                        ))}
+                    </defs>
+                  ) : null}
+
+                  <CartesianGrid
+                    stroke="rgba(20, 35, 48, 0.08)"
+                    strokeDasharray="3 10"
+                    vertical={false}
+                  />
+                  <XAxis
+                    axisLine={false}
+                    dataKey="date"
+                    minTickGap={36}
+                    tick={{ fill: "#7b8895", fontSize: 12, fontWeight: 600 }}
+                    tickFormatter={(value) => formatShortDate(String(value))}
+                    tickLine={false}
+                  />
+                  <YAxis
+                    axisLine={false}
+                    orientation="right"
+                    tick={{ fill: "#7b8895", fontSize: 12, fontWeight: 600 }}
+                    tickFormatter={(value: number) => chartModel.yAxisTickFormatter(value)}
+                    tickLine={false}
+                    width={84}
+                  />
+                  <Tooltip
+                    content={(props) => (
+                      <ChartTooltip
+                        {...props}
+                        lines={chartModel.lines}
+                      />
+                    )}
+                    cursor={{
+                      stroke: "rgba(20, 35, 48, 0.16)",
+                      strokeDasharray: "6 8",
+                      strokeWidth: 1.2,
+                    }}
+                  />
+
+                  {typeof chartModel.referenceValue === "number" ? (
+                    <ReferenceLine
+                      stroke="rgba(180, 35, 24, 0.24)"
+                      strokeDasharray="8 8"
+                      strokeWidth={1}
+                      y={chartModel.referenceValue}
+                    />
+                  ) : null}
+
+                  {chartModel.lines.map((line) =>
+                    line.variant === "area" ? (
+                      <Area
+                        key={line.dataKey}
+                        activeDot={{
+                          r: 4.5,
+                          fill: line.color,
+                          stroke: "#ffffff",
+                          strokeWidth: 3,
+                        }}
+                        animationDuration={360}
+                        connectNulls={line.connectNulls}
+                        dataKey={line.dataKey}
+                        fill={`url(#gradient-${line.dataKey})`}
+                        fillOpacity={1}
+                        stroke={line.color}
+                        strokeWidth={line.strokeWidth ?? 2.8}
+                        type="monotone"
+                      />
+                    ) : (
+                      <Line
+                        key={line.dataKey}
+                        activeDot={{
+                          r: 4.5,
+                          fill: line.color,
+                          stroke: "#ffffff",
+                          strokeWidth: 3,
+                        }}
+                        animationDuration={360}
+                        connectNulls={line.connectNulls}
+                        dataKey={line.dataKey}
+                        dot={false}
+                        stroke={line.color}
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={line.strokeWidth ?? 2.4}
+                        type="monotone"
+                      />
+                    )
+                  )}
+                </ComposedChart>
+              </ResponsiveContainer>
+            </div>
+          </>
+        ) : (
+          <div className="line-chart-empty">
+            <p className="table-title">{chartModel.emptyTitle}</p>
+            <p className="table-note mt-2">{chartModel.emptyCopy}</p>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}

@@ -59,11 +59,12 @@ export const getPortfolioAssetGroupKey = (
 };
 
 export const getDefaultCurrencyForKind = (kind: AssetKind): CurrencyCode => {
-  if (kind === "stock") return "PLN";
+  if (kind === "stock" || kind === "bond") return "PLN";
   return "USD";
 };
 
 export const getDefaultProviderForKind = (kind: AssetKind): QuoteProvider => {
+  if (kind === "bond") return "obligacjeskarbowe";
   if (kind === "crypto") return "coingecko";
   if (kind === "etf") return "eodhd";
   return "catalog";

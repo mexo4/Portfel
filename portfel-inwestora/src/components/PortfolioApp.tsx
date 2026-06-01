@@ -46,9 +46,12 @@ import {
   getPortfolioSummary,
 } from "@/lib/pricing";
 import {
+  buildTickerFallbackResults,
   getMinimumSearchLength,
   getModeConfig,
+  mergeSearchResults,
   pickBestSearchResult,
+  searchCatalogAssets,
 } from "@/lib/search";
 import {
   createAssetId,
@@ -158,9 +161,22 @@ const getResolvedResultSymbolForMode = (
 
   return normalizedResultSymbol;
 };
-const shouldRetryQuoteRequest = (mode: AssetSearchMode) => !isGpwMode(mode);
-const shouldSyncPurchaseCurrencyWithResult = (mode: AssetSearchMode) => mode === "etf";
-const doesQuoteProviderRequireProviderId = (kind: AssetDraft["kind"]) => kind === "etf";
+const shouldRetryQuoteRequest = (mode: AssetSearchMode) =>
+  !isGpwMode(mode) && mode !== "stock-international";
+const shouldSyncPurchaseCurrencyWithResult = (mode: AssetSearchMode) =>
+  mode === "etf" || mode === "stock-international";
+const doesQuoteProviderRequireProviderId = (
+  draft: Pick<AssetDraft, "kind" | "provider">
+) => draft.kind === "etf" || (draft.kind === "stock" && draft.provider === "eodhd");
+const getQuickSearchResults = (
+  query: string,
+  kind: AssetDraft["kind"],
+  mode: AssetSearchMode
+) =>
+  mergeSearchResults([
+    ...searchCatalogAssets(query, kind, mode),
+    ...buildTickerFallbackResults(query, kind, mode),
+  ]);
 const getDraftQuotePreviewRequest = (draft: AssetDraft, mode: AssetSearchMode) => {
   const normalizedSymbol = normalizeSymbolForMode(draft.symbol, mode);
   const trimmedName = draft.name.trim();
@@ -169,7 +185,7 @@ const getDraftQuotePreviewRequest = (draft: AssetDraft, mode: AssetSearchMode) =
     return null;
   }
 
-  if (doesQuoteProviderRequireProviderId(draft.kind) && !draft.providerId) {
+  if (doesQuoteProviderRequireProviderId(draft) && !draft.providerId) {
     return null;
   }
 
@@ -419,7 +435,75 @@ export default function PortfolioApp({
       return;
     }
 
+    const applyAutoResult = (nextResults: AssetSearchResult[]) => {
+      if (isManualSymbolRef.current) {
+        return;
+      }
+
+      const autoResult = pickBestSearchResult(trimmedQuery, nextResults, {
+        allowFirstItemFallback: true,
+        mode: searchMode,
+      });
+
+      if (!autoResult) {
+        return;
+      }
+
+      setDraft((currentDraft) => {
+        if (normalizeText(currentDraft.query) !== normalizeText(trimmedQuery)) {
+          return currentDraft;
+        }
+
+        const normalizedCurrentSymbol = normalizeSymbolForMode(
+          currentDraft.symbol,
+          searchMode
+        );
+        const normalizedAutoSymbol = normalizeSymbolForMode(
+          autoResult.symbol,
+          searchMode
+        );
+        const hasSameAutoValues =
+          getComparableSymbolForMode(normalizedCurrentSymbol, searchMode) ===
+            getComparableSymbolForMode(normalizedAutoSymbol, searchMode) &&
+          currentDraft.provider === autoResult.provider &&
+          currentDraft.providerId === autoResult.providerId &&
+          currentDraft.marketCurrency === autoResult.marketCurrency &&
+          currentDraft.priceScale === autoResult.priceScale;
+
+        if (hasSameAutoValues) {
+          return currentDraft;
+        }
+
+        return {
+          ...currentDraft,
+          name: autoResult.name,
+          symbol: getResolvedResultSymbolForMode(
+            currentDraft.symbol,
+            autoResult.symbol,
+            searchMode
+          ),
+          purchaseCurrency: shouldSyncPurchaseCurrencyWithResult(searchMode)
+            ? autoResult.marketCurrency
+            : currentDraft.purchaseCurrency,
+          marketCurrency: autoResult.marketCurrency,
+          provider: autoResult.provider,
+          providerId: autoResult.providerId,
+          priceScale: autoResult.priceScale,
+          latestPrice: undefined,
+          previousClose: undefined,
+        };
+      });
+    };
+
+    const quickResults = getQuickSearchResults(trimmedQuery, draft.kind, searchMode);
+
+    setResults(quickResults);
+    setSearchError(null);
+    setIsSearching(true);
+    applyAutoResult(quickResults);
+
     let isCancelled = false;
+    const searchController = new AbortController();
     const timeoutId = window.setTimeout(async () => {
       setIsSearching(true);
       setSearchError(null);
@@ -429,64 +513,12 @@ export default function PortfolioApp({
           query: trimmedQuery,
           kind: draft.kind,
           mode: searchMode,
+          signal: searchController.signal,
         });
 
         if (!isCancelled) {
           setResults(nextResults);
-
-          if (!isManualSymbolRef.current) {
-            const autoResult = pickBestSearchResult(trimmedQuery, nextResults, {
-              allowFirstItemFallback: true,
-              mode: searchMode,
-            });
-
-            if (autoResult) {
-              setDraft((currentDraft) => {
-                if (normalizeText(currentDraft.query) !== normalizeText(trimmedQuery)) {
-                  return currentDraft;
-                }
-
-                const normalizedCurrentSymbol = normalizeSymbolForMode(
-                  currentDraft.symbol,
-                  searchMode
-                );
-                const normalizedAutoSymbol = normalizeSymbolForMode(
-                  autoResult.symbol,
-                  searchMode
-                );
-                const hasSameAutoValues =
-                  getComparableSymbolForMode(normalizedCurrentSymbol, searchMode) ===
-                    getComparableSymbolForMode(normalizedAutoSymbol, searchMode) &&
-                  currentDraft.provider === autoResult.provider &&
-                  currentDraft.providerId === autoResult.providerId &&
-                  currentDraft.marketCurrency === autoResult.marketCurrency &&
-                  currentDraft.priceScale === autoResult.priceScale;
-
-                if (hasSameAutoValues) {
-                  return currentDraft;
-                }
-
-                return {
-                  ...currentDraft,
-                  name: autoResult.name,
-                  symbol: getResolvedResultSymbolForMode(
-                    currentDraft.symbol,
-                    autoResult.symbol,
-                    searchMode
-                  ),
-                  purchaseCurrency: shouldSyncPurchaseCurrencyWithResult(searchMode)
-                    ? autoResult.marketCurrency
-                    : currentDraft.purchaseCurrency,
-                  marketCurrency: autoResult.marketCurrency,
-                  provider: autoResult.provider,
-                  providerId: autoResult.providerId,
-                  priceScale: autoResult.priceScale,
-                  latestPrice: undefined,
-                  previousClose: undefined,
-                };
-              });
-            }
-          }
+          applyAutoResult(nextResults);
         }
       } catch (error) {
         if (isCancelled) return;
@@ -502,6 +534,7 @@ export default function PortfolioApp({
 
     return () => {
       isCancelled = true;
+      searchController.abort();
       window.clearTimeout(timeoutId);
     };
   }, [draft.kind, draft.query, searchMode]);
@@ -510,12 +543,90 @@ export default function PortfolioApp({
     const trimmedSymbol = draft.symbol.trim();
     const minimumSearchLength = getMinimumSearchLength(searchMode);
 
-    if (!isManualSymbolRef.current || trimmedSymbol.length < minimumSearchLength) {
+    if (!isManualSymbolRef.current) {
       setIsSearching(false);
       return;
     }
 
+    if (trimmedSymbol.length < minimumSearchLength) {
+      setIsSearching(false);
+      setResults([]);
+      setSearchError(null);
+      return;
+    }
+
+    const applyManualSymbolResult = (nextResults: AssetSearchResult[]) => {
+      const autoResult = pickBestSearchResult(trimmedSymbol, nextResults, {
+        mode: searchMode,
+        preferSymbol: true,
+      });
+
+      setDraft((currentDraft) => {
+        if (
+          !isManualSymbolRef.current ||
+          getComparableSymbolForMode(currentDraft.symbol, searchMode) !==
+            getComparableSymbolForMode(trimmedSymbol, searchMode)
+        ) {
+          return currentDraft;
+        }
+
+        if (!autoResult) {
+          return {
+            ...currentDraft,
+            query: "",
+            name: "",
+            providerId: undefined,
+            priceScale: undefined,
+            latestPrice: undefined,
+            previousClose: undefined,
+          };
+        }
+
+        const hasSameResolvedValues =
+          getComparableSymbolForMode(currentDraft.symbol, searchMode) ===
+            getComparableSymbolForMode(autoResult.symbol, searchMode) &&
+          normalizeText(currentDraft.query) === normalizeText(autoResult.name) &&
+          normalizeText(currentDraft.name) === normalizeText(autoResult.name) &&
+          currentDraft.provider === autoResult.provider &&
+          currentDraft.providerId === autoResult.providerId &&
+          currentDraft.marketCurrency === autoResult.marketCurrency &&
+          currentDraft.priceScale === autoResult.priceScale;
+
+        if (hasSameResolvedValues) {
+          return currentDraft;
+        }
+
+        return {
+          ...currentDraft,
+          symbol: getResolvedResultSymbolForMode(
+            currentDraft.symbol,
+            autoResult.symbol,
+            searchMode
+          ),
+          query: autoResult.name,
+          name: autoResult.name,
+          purchaseCurrency: shouldSyncPurchaseCurrencyWithResult(searchMode)
+            ? autoResult.marketCurrency
+            : currentDraft.purchaseCurrency,
+          marketCurrency: autoResult.marketCurrency,
+          provider: autoResult.provider,
+          providerId: autoResult.providerId,
+          priceScale: autoResult.priceScale,
+          latestPrice: undefined,
+          previousClose: undefined,
+        };
+      });
+    };
+
+    const quickResults = getQuickSearchResults(trimmedSymbol, draft.kind, searchMode);
+
+    setResults(quickResults);
+    setSearchError(null);
+    setIsSearching(true);
+    applyManualSymbolResult(quickResults);
+
     let isCancelled = false;
+    const searchController = new AbortController();
     const timeoutId = window.setTimeout(async () => {
       setIsSearching(true);
       setSearchError(null);
@@ -525,75 +636,19 @@ export default function PortfolioApp({
           query: trimmedSymbol,
           kind: draft.kind,
           mode: searchMode,
+          signal: searchController.signal,
         });
 
         if (isCancelled) {
           return;
         }
 
-        const autoResult = pickBestSearchResult(trimmedSymbol, nextResults, {
-          mode: searchMode,
-          preferSymbol: true,
-        });
-
-        setDraft((currentDraft) => {
-          if (
-            !isManualSymbolRef.current ||
-            getComparableSymbolForMode(currentDraft.symbol, searchMode) !==
-              getComparableSymbolForMode(trimmedSymbol, searchMode)
-          ) {
-            return currentDraft;
-          }
-
-          if (!autoResult) {
-            return {
-              ...currentDraft,
-              query: "",
-              name: "",
-              providerId: undefined,
-              priceScale: undefined,
-              latestPrice: undefined,
-              previousClose: undefined,
-            };
-          }
-
-          const hasSameResolvedValues =
-            getComparableSymbolForMode(currentDraft.symbol, searchMode) ===
-              getComparableSymbolForMode(autoResult.symbol, searchMode) &&
-            normalizeText(currentDraft.query) === normalizeText(autoResult.name) &&
-            normalizeText(currentDraft.name) === normalizeText(autoResult.name) &&
-            currentDraft.provider === autoResult.provider &&
-            currentDraft.providerId === autoResult.providerId &&
-            currentDraft.marketCurrency === autoResult.marketCurrency &&
-            currentDraft.priceScale === autoResult.priceScale;
-
-          if (hasSameResolvedValues) {
-            return currentDraft;
-          }
-
-          return {
-            ...currentDraft,
-            symbol: getResolvedResultSymbolForMode(
-              currentDraft.symbol,
-              autoResult.symbol,
-              searchMode
-            ),
-            query: autoResult.name,
-            name: autoResult.name,
-            purchaseCurrency: shouldSyncPurchaseCurrencyWithResult(searchMode)
-              ? autoResult.marketCurrency
-              : currentDraft.purchaseCurrency,
-            marketCurrency: autoResult.marketCurrency,
-            provider: autoResult.provider,
-            providerId: autoResult.providerId,
-            priceScale: autoResult.priceScale,
-            latestPrice: undefined,
-            previousClose: undefined,
-          };
-        });
+        setResults(nextResults);
+        applyManualSymbolResult(nextResults);
       } catch (error) {
         if (!isCancelled) {
           setSearchError(toErrorMessage(error, "Nie udalo sie pobrac wynikow."));
+          setResults([]);
         }
       } finally {
         if (!isCancelled) {
@@ -604,6 +659,7 @@ export default function PortfolioApp({
 
     return () => {
       isCancelled = true;
+      searchController.abort();
       window.clearTimeout(timeoutId);
     };
   }, [draft.kind, draft.symbol, searchMode]);
@@ -1579,6 +1635,16 @@ export default function PortfolioApp({
       isManualSymbolRef.current = false;
       setAssets(result.assets);
       setSales((currentSales) => getSortedPortfolioSales([result.sale, ...currentSales]));
+      setLastAddedResult({
+        symbol,
+        name: name || targetGroup.name,
+        kind: targetGroup.kind,
+        marketCurrency: targetGroup.marketCurrency,
+        provider: representativeLot?.provider ?? draft.provider,
+        providerId: representativeLot?.providerId ?? draft.providerId,
+        priceScale: representativeLot?.priceScale ?? draft.priceScale,
+        source: "catalog",
+      });
       setDraft(createDraftFromMode(searchMode));
       setResults([]);
       setSearchError(null);
@@ -1948,8 +2014,8 @@ export default function PortfolioApp({
             <PortfolioCharts
               assets={assets}
               sales={sales}
-              realizedAdjustments={realizedAdjustments}
               fxRates={fxRates}
+              combinedProfitLossPln={summary.combinedProfitLossPln}
             />
           </>
         ) : (
@@ -1959,6 +2025,7 @@ export default function PortfolioApp({
               sales={sales}
               realizedAdjustments={effectiveRealizedAdjustments}
               fxRates={fxRates}
+              combinedProfitLossPln={summary.combinedProfitLossPln}
             />
           </>
         )}

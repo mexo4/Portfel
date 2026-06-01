@@ -36,6 +36,7 @@ import type {
   PortfolioAsset,
   PortfolioAssetHistorySeries,
   PortfolioBenchmarkDefinition,
+  PortfolioBenchmarkHistorySeries,
   PortfolioHistoryPoint,
   PortfolioHistoryResponse,
   PortfolioRealizedAdjustment,
@@ -47,6 +48,7 @@ type PortfolioLineChartsProps = {
   sales: PortfolioSale[];
   realizedAdjustments: PortfolioRealizedAdjustment[];
   fxRates: FxRates;
+  combinedProfitLossPln: number;
 };
 
 type RangePreset = "1D" | "1W" | "1M" | "1Q" | "1Y" | "ALL";
@@ -63,7 +65,7 @@ type ChartRow = {
 } & Record<string, number | string | null>;
 
 type ReturnPoint = PortfolioHistoryPoint & {
-  returnPercent: number;
+  returnPercent: number | null;
 };
 
 type DrawdownPoint = PortfolioHistoryPoint & {
@@ -105,6 +107,7 @@ type ChartModel = {
   deltaTone: ToneClass;
   stats: ChartStat[];
   referenceValue?: number;
+  yAxisDomain?: [number, number];
   yAxisTickFormatter: (value: number) => string;
   emptyTitle: string;
   emptyCopy: string;
@@ -154,7 +157,7 @@ const MODE_OPTIONS: Array<{
   {
     value: "portfolio-vs-benchmark",
     label: "Portfel vs benchmark",
-    copy: "wyszukiwane benchmarki, jedna baza startowa",
+    copy: "stopa zwrotu jak w myfund",
   },
   {
     value: "daily-change",
@@ -300,6 +303,12 @@ const formatSignedPercent = (value: number, fractionDigits = 2) =>
 const formatSignedCurrency = (value: number) =>
   `${value > 0 ? "+" : ""}${formatCurrency(value)}`;
 
+const formatSignedPercentagePoints = (value: number, fractionDigits = 2) =>
+  `${value > 0 ? "+" : ""}${new Intl.NumberFormat("pl-PL", {
+    minimumFractionDigits: fractionDigits,
+    maximumFractionDigits: fractionDigits,
+  }).format(value)} p.p.`;
+
 const formatCompactCurrency = (value: number) => {
   const absValue = Math.abs(value);
   const prefix = value < 0 ? "-" : "";
@@ -316,11 +325,6 @@ const formatCompactCurrency = (value: number) => {
 };
 
 const formatAxisPercent = (value: number) => formatPercent(value, 0);
-
-const formatAxisNormalized = (value: number) => {
-  const relativeValue = round(value - 100, 0);
-  return `${relativeValue > 0 ? "+" : ""}${formatPercent(relativeValue, 0)}`;
-};
 
 const formatShortDate = (value: string) =>
   new Intl.DateTimeFormat("pl-PL", {
@@ -536,13 +540,18 @@ const buildFallbackHistory = ({
   const points: PortfolioHistoryPoint[] = [];
   let cumulativeNetInvestedPln = 0;
   let cumulativeAdjustmentsPln = 0;
+  let cumulativeTimeWeightedReturnFactor = 1;
+  let previousPortfolioValuePln: number | null = null;
 
   for (const date of dates) {
+    const externalFlowPln = netInvestedEvents.get(date) ?? 0;
+    const realizedAdjustmentPln = adjustmentEvents.get(date) ?? 0;
+
     cumulativeNetInvestedPln = round(
-      cumulativeNetInvestedPln + (netInvestedEvents.get(date) ?? 0)
+      cumulativeNetInvestedPln + externalFlowPln
     );
     cumulativeAdjustmentsPln = round(
-      cumulativeAdjustmentsPln + (adjustmentEvents.get(date) ?? 0)
+      cumulativeAdjustmentsPln + realizedAdjustmentPln
     );
 
     const portfolioValuePln = round(
@@ -564,6 +573,19 @@ const buildFallbackHistory = ({
       }, 0)
     );
 
+    if (previousPortfolioValuePln !== null && previousPortfolioValuePln > 0) {
+      const dailyReturn =
+        (portfolioValuePln +
+          realizedAdjustmentPln -
+          previousPortfolioValuePln -
+          externalFlowPln) /
+        previousPortfolioValuePln;
+
+      if (Number.isFinite(dailyReturn)) {
+        cumulativeTimeWeightedReturnFactor *= 1 + dailyReturn;
+      }
+    }
+
     points.push({
       date,
       portfolioValuePln,
@@ -571,7 +593,13 @@ const buildFallbackHistory = ({
       profitLossPln: round(
         portfolioValuePln - cumulativeNetInvestedPln + cumulativeAdjustmentsPln
       ),
+      timeWeightedReturnPercent: round(
+        (cumulativeTimeWeightedReturnFactor - 1) * 100,
+        2
+      ),
     });
+
+    previousPortfolioValuePln = portfolioValuePln;
   }
 
   const assetSeries = Array.from(assetMetaByGroupKey.values())
@@ -593,13 +621,15 @@ const buildFallbackHistory = ({
   };
 };
 
+const calculateCapitalReturnPercent = (profitLossPln: number, netInvestedPln: number) =>
+  netInvestedPln > 0 && Number.isFinite(profitLossPln) && Number.isFinite(netInvestedPln)
+    ? round((profitLossPln / netInvestedPln) * 100, 2)
+    : null;
+
 const buildReturnSeries = (points: PortfolioHistoryPoint[]): ReturnPoint[] =>
   points.map((point) => ({
     ...point,
-    returnPercent:
-      point.netInvestedPln > 0
-        ? round((point.profitLossPln / point.netInvestedPln) * 100, 2)
-        : 0,
+    returnPercent: calculateCapitalReturnPercent(point.profitLossPln, point.netInvestedPln),
   }));
 
 const buildDrawdownSeries = (points: PortfolioHistoryPoint[]): DrawdownPoint[] => {
@@ -678,51 +708,69 @@ const compactWarnings = (warnings: string[]) => {
   return remainingWarnings;
 };
 
-const getLastNumericValue = (values: Array<number | null | undefined>) => {
-  for (let index = values.length - 1; index >= 0; index -= 1) {
-    const value = values[index];
+const getFiniteNumber = (value: unknown) =>
+  typeof value === "number" && Number.isFinite(value) ? value : null;
 
-    if (typeof value === "number" && Number.isFinite(value)) {
-      return value;
+const getPreviousPointBeforeDate = <T extends { date: string }>(
+  points: T[],
+  date: string
+) => {
+  let previousPoint: T | null = null;
+
+  for (const point of points) {
+    if (point.date >= date) {
+      break;
     }
+
+    previousPoint = point;
   }
 
-  return null;
+  return previousPoint;
 };
 
-const buildNormalizedIndexSeries = (
-  points: Array<{ date: string; valuePln: number }>,
-  visibleDates: string[]
+const calculateRelativeReturnPercent = (
+  currentPercent: number | null | undefined,
+  baselinePercent: number | null | undefined
 ) => {
-  const valueByDate = new Map(points.map((point) => [point.date, point.valuePln] as const));
-  const rawValues = visibleDates.map((date) => valueByDate.get(date));
-  const baseIndex = rawValues.findIndex(
-    (value) => typeof value === "number" && Number.isFinite(value) && value !== 0
-  );
+  const currentNumber = getFiniteNumber(currentPercent);
+  const baselineNumber = getFiniteNumber(baselinePercent);
 
-  if (baseIndex === -1) {
-    return {
-      values: visibleDates.map(() => null),
-      lastValue: null,
-      changePercent: null,
-    };
+  if (currentNumber === null) {
+    return null;
   }
 
-  const baseValue = rawValues[baseIndex] ?? 0;
-  const values = rawValues.map((value, index) => {
-    if (index < baseIndex || typeof value !== "number" || !Number.isFinite(value)) {
-      return null;
-    }
+  if (baselineNumber === null) {
+    return currentNumber;
+  }
 
-    return round((value / baseValue) * 100, 2);
-  });
-  const lastValue = getLastNumericValue(values);
+  const baselineFactor = 1 + baselineNumber / 100;
 
-  return {
-    values,
-    lastValue,
-    changePercent: lastValue === null ? null : round(lastValue - 100, 2),
-  };
+  if (!Number.isFinite(baselineFactor) || baselineFactor === 0) {
+    return currentNumber;
+  }
+
+  return round(((1 + currentNumber / 100) / baselineFactor - 1) * 100, 2);
+};
+
+const getPaddedNumberDomain = (values: Array<number | null | undefined>) => {
+  const numericValues = values.filter(
+    (value): value is number => typeof value === "number" && Number.isFinite(value)
+  );
+
+  if (numericValues.length === 0) {
+    return undefined;
+  }
+
+  const minValue = Math.min(...numericValues);
+  const maxValue = Math.max(...numericValues);
+  const range = maxValue - minValue;
+  const maxAbsValue = Math.max(Math.abs(minValue), Math.abs(maxValue), 1);
+  const padding =
+    range > 0 ? Math.max(range * 0.14, maxAbsValue * 0.003) : Math.max(maxAbsValue * 0.02, 1);
+  const lowerBound = minValue >= 0 ? Math.max(0, minValue - padding) : minValue - padding;
+  const upperBound = maxValue + padding;
+
+  return [round(lowerBound, 2), round(upperBound, 2)] satisfies [number, number];
 };
 
 function ChartTooltip({
@@ -748,9 +796,9 @@ function ChartTooltip({
       <div className="line-chart-tooltip-list">
         {lines.map((line) => {
           const entry = payloadByKey.get(line.dataKey) as TooltipPayloadEntry | undefined;
-          const value = entry?.value;
+          const value = getFiniteNumber(entry?.value);
 
-          if (typeof value !== "number" || !Number.isFinite(value)) {
+          if (value === null) {
             return null;
           }
 
@@ -784,13 +832,14 @@ export default function PortfolioLineCharts({
   sales,
   realizedAdjustments,
   fxRates,
+  combinedProfitLossPln,
 }: PortfolioLineChartsProps) {
   const [mode, setMode] = useState<ChartMode>("value");
   const [rangePreset, setRangePreset] = useState<RangePreset>("1M");
-  const [selectedBenchmarkId, setSelectedBenchmarkId] = useState("");
   const [selectedBenchmarks, setSelectedBenchmarks] = useState<PortfolioBenchmarkDefinition[]>(
     []
   );
+  const [visibleBenchmarkIds, setVisibleBenchmarkIds] = useState<string[]>([]);
   const [benchmarkSearchMode, setBenchmarkSearchMode] = useState<AssetSearchMode>(
     DEFAULT_BENCHMARK_SEARCH_MODE
   );
@@ -887,27 +936,26 @@ export default function PortfolioLineCharts({
   const hasActiveBenchmarkQuery = benchmarkQuery.trim().length > 0;
   const hasReachedBenchmarkMinimumLength =
     benchmarkQuery.trim().length >= benchmarkSearchMinimumLength;
-  const selectedBenchmark = selectedBenchmarks.find(
-    (benchmark) => benchmark.id === selectedBenchmarkId
+  const visibleBenchmarkIdSet = useMemo(
+    () => new Set(visibleBenchmarkIds),
+    [visibleBenchmarkIds]
   );
-  const selectedBenchmarkSeries = displayBenchmarkSeries.find(
-    (benchmark) => benchmark.id === selectedBenchmarkId
+  const visibleBenchmarkDefinitions = useMemo(
+    () => selectedBenchmarks.filter((benchmark) => visibleBenchmarkIdSet.has(benchmark.id)),
+    [selectedBenchmarks, visibleBenchmarkIdSet]
+  );
+  const benchmarkSeriesById = useMemo(
+    () => new Map(displayBenchmarkSeries.map((series) => [series.id, series] as const)),
+    [displayBenchmarkSeries]
   );
 
   useEffect(() => {
-    if (selectedBenchmarks.length === 0) {
-      if (selectedBenchmarkId) {
-        setSelectedBenchmarkId("");
-      }
-      return;
-    }
+    const selectedBenchmarkIds = new Set(selectedBenchmarks.map((benchmark) => benchmark.id));
 
-    if (selectedBenchmarks.some((benchmark) => benchmark.id === selectedBenchmarkId)) {
-      return;
-    }
-
-    setSelectedBenchmarkId(selectedBenchmarks[0]?.id ?? "");
-  }, [selectedBenchmarkId, selectedBenchmarks]);
+    setVisibleBenchmarkIds((currentIds) =>
+      currentIds.filter((benchmarkId) => selectedBenchmarkIds.has(benchmarkId))
+    );
+  }, [selectedBenchmarks]);
 
   useEffect(() => {
     const trimmedQuery = benchmarkQuery.trim();
@@ -986,7 +1034,9 @@ export default function PortfolioLineCharts({
 
       return [...currentBenchmarks, benchmark];
     });
-    setSelectedBenchmarkId(benchmark.id);
+    setVisibleBenchmarkIds((currentIds) =>
+      currentIds.includes(benchmark.id) ? currentIds : [...currentIds, benchmark.id]
+    );
     setBenchmarkQuery("");
     setBenchmarkResults([]);
     setBenchmarkSearchError(null);
@@ -994,15 +1044,20 @@ export default function PortfolioLineCharts({
   };
 
   const handleRemoveBenchmark = (benchmarkId: string) => {
-    const nextBenchmarks = selectedBenchmarks.filter(
-      (benchmark) => benchmark.id !== benchmarkId
+    setSelectedBenchmarks((currentBenchmarks) =>
+      currentBenchmarks.filter((benchmark) => benchmark.id !== benchmarkId)
     );
+    setVisibleBenchmarkIds((currentIds) =>
+      currentIds.filter((visibleBenchmarkId) => visibleBenchmarkId !== benchmarkId)
+    );
+  };
 
-    setSelectedBenchmarks(nextBenchmarks);
-
-    if (selectedBenchmarkId === benchmarkId) {
-      setSelectedBenchmarkId(nextBenchmarks[0]?.id ?? "");
-    }
+  const handleToggleBenchmarkVisibility = (benchmarkId: string) => {
+    setVisibleBenchmarkIds((currentIds) =>
+      currentIds.includes(benchmarkId)
+        ? currentIds.filter((visibleBenchmarkId) => visibleBenchmarkId !== benchmarkId)
+        : [...currentIds, benchmarkId]
+    );
   };
 
   const chartModel = useMemo<ChartModel>(() => {
@@ -1033,6 +1088,9 @@ export default function PortfolioLineCharts({
         lastPoint.netInvestedPln > 0
           ? round((lastPoint.profitLossPln / lastPoint.netInvestedPln) * 100, 2)
           : 0;
+      const yAxisDomain = getPaddedNumberDomain(
+        visiblePoints.flatMap((point) => [point.portfolioValuePln, point.netInvestedPln])
+      );
 
       return {
         title: "Wartosc portfela",
@@ -1076,6 +1134,7 @@ export default function PortfolioLineCharts({
             value: formatCurrency(lastPoint.netInvestedPln),
           },
         ],
+        yAxisDomain,
         yAxisTickFormatter: formatCompactCurrency,
         emptyTitle: "Brakuje historii do wykresu wartosci",
         emptyCopy: "Dodaj aktywa albo poczekaj, az pojawi sie seria dziennych punktow.",
@@ -1083,13 +1142,16 @@ export default function PortfolioLineCharts({
     }
 
     if (mode === "return") {
-      const firstPoint = visibleReturnPoints[0];
-      const lastPoint = visibleReturnPoints.at(-1);
+      const numericReturnPoints = visibleReturnPoints.filter(
+        (point) => getFiniteNumber(point.returnPercent) !== null
+      );
+      const firstPoint = numericReturnPoints[0];
+      const lastPoint = numericReturnPoints.at(-1);
 
       if (!firstPoint || !lastPoint) {
         return {
           title: "Zwrot procentowy",
-          copy: "Procentowy wynik portfela liczony od poczatku historii.",
+          copy: "Wynik portfela liczony jako procent kapitalu netto.",
           data: [],
           lines: [],
           summaryLabel: "Brak danych",
@@ -1101,18 +1163,18 @@ export default function PortfolioLineCharts({
           referenceValue: 0,
           yAxisTickFormatter: formatAxisPercent,
           emptyTitle: "Brakuje danych do liczenia zwrotu",
-          emptyCopy: "Zwrot pojawi sie, gdy portfel bedzie mial historie wartosci i kapitalu.",
+          emptyCopy: "Zwrot pojawi sie, gdy portfel bedzie mial dodatni kapital netto.",
         };
       }
 
       const maxReturnPercent = Math.max(
-        ...visibleReturnPoints.map((point) => point.returnPercent)
+        ...numericReturnPoints.map((point) => point.returnPercent!)
       );
-      const rangeChangePercent = round(lastPoint.returnPercent - firstPoint.returnPercent, 2);
+      const rangeChangePercent = round(lastPoint.returnPercent! - firstPoint.returnPercent!, 2);
 
       return {
         title: "Zwrot procentowy",
-        copy: "Ten widok pokazuje, jak szybko pracuje kapital, bez mieszania nominalow w PLN.",
+        copy: "Ten widok pokazuje, jaki procent kapitalu netto stanowi biezacy wynik portfela.",
         data: visibleReturnPoints,
         lines: [
           {
@@ -1128,7 +1190,7 @@ export default function PortfolioLineCharts({
           },
         ],
         summaryLabel: "Zwrot teraz",
-        summaryValue: formatSignedPercent(lastPoint.returnPercent),
+        summaryValue: formatSignedPercent(lastPoint.returnPercent!),
         deltaLabel: "Zmiana w zakresie",
         deltaValue: formatSignedPercent(rangeChangePercent),
         deltaTone: getToneClass(rangeChangePercent),
@@ -1151,7 +1213,7 @@ export default function PortfolioLineCharts({
         referenceValue: 0,
         yAxisTickFormatter: formatAxisPercent,
         emptyTitle: "Brakuje danych do liczenia zwrotu",
-        emptyCopy: "Zwrot pojawi sie, gdy portfel bedzie mial historie wartosci i kapitalu.",
+        emptyCopy: "Zwrot pojawi sie, gdy portfel bedzie mial dodatni kapital netto.",
       };
     }
 
@@ -1228,124 +1290,315 @@ export default function PortfolioLineCharts({
     }
 
     if (mode === "portfolio-vs-benchmark") {
-      if (!selectedBenchmark || visibleDates.length === 0) {
+      if (selectedBenchmarks.length === 0 || visibleDates.length === 0) {
         return {
           title: "Portfel vs benchmark",
-          copy: "Porownanie na jednej bazie, z uwzglednieniem przeplywow gotowki do benchmarku.",
+          copy: "Porownanie stopy zwrotu portfela z benchmarkami w stylu myfund.",
           data: [],
           lines: [],
           summaryLabel: "Dodaj benchmark",
           summaryValue: "0,00%",
           deltaLabel: "Przewaga",
-          deltaValue: "0,00%",
+          deltaValue: "0,00 p.p.",
           deltaTone: "tone-neutral",
           stats: [],
-          referenceValue: 100,
-          yAxisTickFormatter: formatAxisNormalized,
+          referenceValue: 0,
+          yAxisTickFormatter: formatAxisPercent,
           emptyTitle: "Dodaj benchmark z wyszukiwarki",
           emptyCopy:
-            "Wyszukaj akcje, ETF albo krypto, zeby porownac portfel z tym samym strumieniem wplat.",
+            "Wyszukaj akcje, ETF albo krypto, zeby porownac stopy zwrotu w czasie.",
         };
       }
 
-      if (!selectedBenchmarkSeries) {
+      const visibleDateSet = new Set(visibleDates);
+      const firstVisibleDate = visibleDates[0] ?? null;
+      const portfolioBaselinePercent =
+        rangePreset !== "ALL" && firstVisibleDate
+          ? getPreviousPointBeforeDate(displayPoints, firstVisibleDate)
+              ?.timeWeightedReturnPercent
+          : null;
+      const portfolioPercentByDate = new Map(
+        visiblePoints.map(
+          (point) =>
+            [
+              point.date,
+              calculateRelativeReturnPercent(
+                point.timeWeightedReturnPercent,
+                portfolioBaselinePercent
+              ),
+            ] as const
+        )
+      );
+      const portfolioPointByDate = new Map(
+        visiblePoints.map((point) => [point.date, point] as const)
+      );
+      const numericPortfolioPoints = visiblePoints
+        .map((point) => ({
+          point,
+          percent: portfolioPercentByDate.get(point.date) ?? null,
+        }))
+        .filter((entry) => getFiniteNumber(entry.percent) !== null);
+      const lastPortfolioPoint = numericPortfolioPoints.at(-1);
+      const portfolioPercent = lastPortfolioPoint?.percent ?? 0;
+      const portfolioLine: ChartLineDefinition = {
+        dataKey: "portfolio",
+        label: "Portfel",
+        color: SERIES_COLORS[0],
+        strokeWidth: 2.8,
+        valueFormatter: (value) => formatSignedPercent(value),
+        detailFormatter: (row) => {
+          const valuePln = getFiniteNumber(row.portfolioValuePln);
+          const profitLossPln = getFiniteNumber(row.portfolioProfitLossPln);
+
+          return [
+            valuePln === null ? null : `wartosc ${formatCurrency(valuePln)}`,
+            profitLossPln === null ? null : `wynik ${formatSignedCurrency(profitLossPln)}`,
+          ]
+            .filter(Boolean)
+            .join(" | ");
+        },
+      };
+      const visibleBenchmarkModels = visibleBenchmarkDefinitions.reduce<
+        Array<{
+          color: string;
+          currentPercent: number;
+          dataKey: string;
+          label: string;
+          percentByDate: Map<string, number | null>;
+          pointByDate: Map<string, PortfolioBenchmarkHistorySeries["points"][number]>;
+        }>
+      >((models, benchmark, index) => {
+        const series = benchmarkSeriesById.get(benchmark.id);
+
+        if (!series) {
+          return models;
+        }
+
+        const baselinePercent =
+          rangePreset !== "ALL" && firstVisibleDate
+            ? getPreviousPointBeforeDate(series.points, firstVisibleDate)?.returnPercent
+            : null;
+        const visibleBenchmarkPoints = series.points.filter((point) =>
+          visibleDateSet.has(point.date)
+        );
+        const percentByDate = new Map(
+          visibleBenchmarkPoints.map(
+            (point) =>
+              [
+                point.date,
+                calculateRelativeReturnPercent(point.returnPercent, baselinePercent),
+              ] as const
+          )
+        );
+        const numericBenchmarkPoints = visibleBenchmarkPoints
+          .map((point) => ({
+            point,
+            percent: percentByDate.get(point.date) ?? null,
+          }))
+          .filter((entry) => getFiniteNumber(entry.percent) !== null);
+        const lastBenchmarkPoint = numericBenchmarkPoints.at(-1);
+
+        if (!lastBenchmarkPoint) {
+          return models;
+        }
+
+        models.push({
+          color: SERIES_COLORS[(index + 1) % SERIES_COLORS.length] ?? SERIES_COLORS[1],
+          currentPercent: lastBenchmarkPoint.percent!,
+          dataKey: `benchmark${index}`,
+          label: series.label,
+          percentByDate,
+          pointByDate: new Map(series.points.map((point) => [point.date, point] as const)),
+        });
+
+        return models;
+      }, []);
+      const data = visibleDates
+        .map((date) => {
+          const portfolioPoint = portfolioPointByDate.get(date);
+          const row: ChartRow = {
+            date,
+            portfolio: portfolioPercentByDate.get(date) ?? null,
+            portfolioProfitLossPln: portfolioPoint?.profitLossPln ?? null,
+            portfolioValuePln: portfolioPoint?.portfolioValuePln ?? null,
+          };
+
+          visibleBenchmarkModels.forEach((benchmarkModel) => {
+            const point = benchmarkModel.pointByDate.get(date);
+
+            row[benchmarkModel.dataKey] = benchmarkModel.percentByDate.get(date) ?? null;
+            row[`${benchmarkModel.dataKey}Price`] = point?.price ?? null;
+            row[`${benchmarkModel.dataKey}PricePln`] = point?.pricePln ?? null;
+          });
+
+          return row;
+        })
+        .filter(
+          (row) =>
+            getFiniteNumber(row.portfolio) !== null ||
+            visibleBenchmarkModels.some(
+              (benchmarkModel) => getFiniteNumber(row[benchmarkModel.dataKey]) !== null
+            )
+        );
+      const benchmarkLines: ChartLineDefinition[] = visibleBenchmarkModels.map(
+        (benchmarkModel) => ({
+          dataKey: benchmarkModel.dataKey,
+          label: benchmarkModel.label,
+          color: benchmarkModel.color,
+          strokeWidth: 2.3,
+          valueFormatter: (value) => formatSignedPercent(value),
+          detailFormatter: (row) => {
+            const returnPercent = getFiniteNumber(row[benchmarkModel.dataKey]);
+            const price = getFiniteNumber(row[`${benchmarkModel.dataKey}Price`]);
+            const pricePln = getFiniteNumber(row[`${benchmarkModel.dataKey}PricePln`]);
+
+            return [
+              returnPercent === null ? null : `stopa ${formatSignedPercent(returnPercent)}`,
+              price === null ? null : `kurs ${formatNumber(price, 2)}`,
+              pricePln === null ? null : `kurs PLN ${formatCurrency(pricePln)}`,
+            ]
+              .filter(Boolean)
+              .join(" | ");
+          },
+        })
+      );
+      const missingBenchmarkCount =
+        visibleBenchmarkDefinitions.length - visibleBenchmarkModels.length;
+
+      if (visibleBenchmarkDefinitions.length === 0) {
         return {
           title: "Portfel vs benchmark",
-          copy: "Porownanie na jednej bazie, z uwzglednieniem przeplywow gotowki do benchmarku.",
-          data: [],
-          lines: [],
-          summaryLabel: selectedBenchmark.name,
-          summaryValue: "0,00%",
-          deltaLabel: "Przewaga",
-          deltaValue: "0,00%",
+          copy: "Dodane benchmarki sa ukryte, a portfel zostaje widoczny jako zmiana procentowa.",
+          data,
+          lines: [portfolioLine],
+          summaryLabel: "Portfel w zakresie",
+          summaryValue: formatSignedPercent(portfolioPercent),
+          deltaLabel: "Benchmarki",
+          deltaValue: "ukryte",
           deltaTone: "tone-neutral",
-          stats: [],
-          referenceValue: 100,
-          yAxisTickFormatter: formatAxisNormalized,
-          emptyTitle: `Brakuje serii dla ${selectedBenchmark.name}`,
-          emptyCopy:
-            "Ten benchmark nie zwrocil uzywalnej historii. Wybierz inny albo sprawdz komunikaty nad wykresem.",
+          stats: [
+            {
+              label: "Dodane benchmarki",
+              value: String(selectedBenchmarks.length),
+            },
+            {
+              label: "Portfel",
+              value: formatSignedPercent(portfolioPercent),
+              tone: getToneClass(portfolioPercent),
+            },
+            {
+              label: "Wynik laczny",
+              value: formatSignedCurrency(combinedProfitLossPln),
+              tone: getToneClass(combinedProfitLossPln),
+            },
+          ],
+          referenceValue: 0,
+          yAxisTickFormatter: formatAxisPercent,
+          emptyTitle: "Brakuje danych portfela",
+          emptyCopy: "Ten tryb potrzebuje historii portfela do policzenia stopy zwrotu.",
         };
       }
 
-      const normalizedPortfolio = buildNormalizedIndexSeries(
-        visiblePoints.map((point) => ({
-          date: point.date,
-          valuePln: point.portfolioValuePln,
+      if (visibleBenchmarkModels.length === 0) {
+        return {
+          title: "Portfel vs benchmark",
+          copy: "Portfel jest widoczny, ale wybrane benchmarki nie zwrocily uzywalnej historii kursu.",
+          data,
+          lines: [portfolioLine],
+          summaryLabel: "Portfel w zakresie",
+          summaryValue: formatSignedPercent(portfolioPercent),
+          deltaLabel: "Widoczne benchmarki",
+          deltaValue: "brak danych",
+          deltaTone: "tone-neutral",
+          stats: [
+            {
+              label: "Portfel",
+              value: formatSignedPercent(portfolioPercent),
+              tone: getToneClass(portfolioPercent),
+            },
+            {
+              label: "Brak serii",
+              value: String(missingBenchmarkCount),
+            },
+            {
+              label: "Wynik laczny",
+              value: formatSignedCurrency(combinedProfitLossPln),
+              tone: getToneClass(combinedProfitLossPln),
+            },
+          ],
+          referenceValue: 0,
+          yAxisTickFormatter: formatAxisPercent,
+          emptyTitle: "Brakuje danych portfela",
+          emptyCopy: "Ten tryb potrzebuje historii portfela do policzenia stopy zwrotu.",
+        };
+      }
+
+      const comparisons = visibleBenchmarkModels.map((benchmarkModel) => ({
+        label: benchmarkModel.label,
+        outperformance: round(portfolioPercent - benchmarkModel.currentPercent, 2),
+      }));
+      const hasPositiveOutperformance = comparisons.some(
+        (comparison) => comparison.outperformance >= 0
+      );
+      const focusComparison =
+        comparisons.length === 1
+          ? comparisons[0]!
+          : hasPositiveOutperformance
+            ? comparisons.reduce((bestComparison, comparison) =>
+                comparison.outperformance > bestComparison.outperformance
+                  ? comparison
+                  : bestComparison
+              )
+            : comparisons.reduce((worstComparison, comparison) =>
+                comparison.outperformance < worstComparison.outperformance
+                  ? comparison
+                  : worstComparison
+              );
+      const stats = [
+        {
+          label: "Portfel",
+          value: formatSignedPercent(portfolioPercent),
+          tone: getToneClass(portfolioPercent),
+        },
+        ...visibleBenchmarkModels.map((benchmarkModel) => ({
+          label: benchmarkModel.label,
+          value: formatSignedPercent(benchmarkModel.currentPercent),
+          tone: getToneClass(benchmarkModel.currentPercent),
         })),
-        visibleDates
-      );
-      const normalizedBenchmark = buildNormalizedIndexSeries(
-        selectedBenchmarkSeries.points,
-        visibleDates
-      );
-      const data = visibleDates
-        .map((date, index) => ({
-          date,
-          portfolio: normalizedPortfolio.values[index],
-          benchmark: normalizedBenchmark.values[index],
-        }))
-        .filter(
-          (row) => typeof row.portfolio === "number" || typeof row.benchmark === "number"
-        );
-      const portfolioChangePercent = normalizedPortfolio.changePercent ?? 0;
-      const benchmarkChangePercent = normalizedBenchmark.changePercent ?? 0;
-      const outperformance = round(portfolioChangePercent - benchmarkChangePercent, 2);
+        missingBenchmarkCount > 0
+          ? {
+              label: "Brak serii",
+              value: String(missingBenchmarkCount),
+            }
+          : null,
+        {
+          label: "Wynik laczny",
+          value: formatSignedCurrency(combinedProfitLossPln),
+          tone: getToneClass(combinedProfitLossPln),
+        },
+      ].filter((stat): stat is ChartStat => Boolean(stat));
 
       return {
         title: "Portfel vs benchmark",
-        copy: "Obie linie startuja z tej samej bazy, wiec od razu widac przewage albo opoznienie wzgledem rynku.",
+        copy: "Stopa zwrotu portfela i benchmarkow jest liczona dziennie, a zakres odnosi sie do poprzedniego punktu wyceny.",
         data,
-        lines: [
-          {
-            dataKey: "portfolio",
-            label: "Portfel",
-            color: SERIES_COLORS[0],
-            strokeWidth: 2.8,
-            valueFormatter: (value) => formatSignedPercent(value - 100),
-            detailFormatter: (row) =>
-              typeof row.portfolio === "number"
-                ? `indeks ${formatNumber(Number(row.portfolio), 1)}`
-                : null,
-          },
-          {
-            dataKey: "benchmark",
-            label: selectedBenchmarkSeries.label,
-            color: SERIES_COLORS[1],
-            strokeWidth: 2.4,
-            valueFormatter: (value) => formatSignedPercent(value - 100),
-            detailFormatter: (row) =>
-              typeof row.benchmark === "number"
-                ? `indeks ${formatNumber(Number(row.benchmark), 1)}`
-                : null,
-          },
-        ],
-        summaryLabel: "Portfel w zakresie",
-        summaryValue: formatSignedPercent(portfolioChangePercent),
-        deltaLabel: `Przewaga vs ${selectedBenchmarkSeries.label}`,
-        deltaValue: formatSignedPercent(outperformance),
-        deltaTone: getToneClass(outperformance),
-        stats: [
-          {
-            label: selectedBenchmarkSeries.label,
-            value: formatSignedPercent(benchmarkChangePercent),
-            tone: getToneClass(benchmarkChangePercent),
-          },
-          {
-            label: "Portfel",
-            value: formatSignedPercent(portfolioChangePercent),
-            tone: getToneClass(portfolioChangePercent),
-          },
-          {
-            label: "Baza wykresu",
-            value: "100 = start zakresu",
-          },
-        ],
-        referenceValue: 100,
-        yAxisTickFormatter: formatAxisNormalized,
-        emptyTitle: `Brakuje serii dla ${selectedBenchmarkSeries.label}`,
+        lines: [portfolioLine, ...benchmarkLines],
+        summaryLabel: "Stopa portfela",
+        summaryValue: formatSignedPercent(portfolioPercent),
+        deltaLabel:
+          comparisons.length === 1
+            ? `Przewaga vs ${focusComparison.label}`
+            : focusComparison.outperformance >= 0
+              ? `Najwieksza przewaga vs ${focusComparison.label}`
+              : `Najwieksze opoznienie vs ${focusComparison.label}`,
+        deltaValue: formatSignedPercentagePoints(focusComparison.outperformance),
+        deltaTone: getToneClass(focusComparison.outperformance),
+        stats,
+        referenceValue: 0,
+        yAxisTickFormatter: formatAxisPercent,
+        emptyTitle: "Brakuje serii benchmarkow",
         emptyCopy:
-          "Ten tryb potrzebuje danych rynkowych benchmarku, zeby zestawic go z portfelem.",
+          "Ten tryb potrzebuje historii kursu benchmarku do policzenia stopy zwrotu.",
       };
     }
 
@@ -1425,9 +1678,13 @@ export default function PortfolioLineCharts({
       emptyCopy: "Zmiana dzienna pojawi sie po zebraniu kolejnych punktow historii.",
     };
   }, [
+    benchmarkSeriesById,
+    combinedProfitLossPln,
+    displayPoints,
     mode,
-    selectedBenchmark,
-    selectedBenchmarkSeries,
+    rangePreset,
+    selectedBenchmarks,
+    visibleBenchmarkDefinitions,
     visibleDailyChangePoints,
     visibleDates,
     visibleDrawdownPoints,
@@ -1510,8 +1767,7 @@ export default function PortfolioLineCharts({
             <div>
               <p className="table-title">Wyszukaj benchmark</p>
               <p className="table-note">
-                Dodaj akcje, ETF-y lub krypto i porownaj je z tym samym strumieniem wplat co
-                portfel.
+                Dodaj akcje, ETF-y lub krypto i porownaj ich stopy zwrotu z portfelem.
               </p>
             </div>
             {selectedBenchmarks.length > 0 ? (
@@ -1548,34 +1804,42 @@ export default function PortfolioLineCharts({
 
           {selectedBenchmarks.length > 0 ? (
             <div className="line-visual-benchmark-list mt-4">
-              {selectedBenchmarks.map((benchmark) => (
-                <article
-                  key={benchmark.id}
-                  className={
-                    selectedBenchmarkId === benchmark.id
-                      ? "line-visual-benchmark-card is-active"
-                      : "line-visual-benchmark-card"
-                  }
-                >
-                  <button
-                    type="button"
-                    className="line-visual-benchmark-card-main"
-                    onClick={() => setSelectedBenchmarkId(benchmark.id)}
+              {selectedBenchmarks.map((benchmark) => {
+                const isVisible = visibleBenchmarkIdSet.has(benchmark.id);
+
+                return (
+                  <article
+                    key={benchmark.id}
+                    className={
+                      isVisible
+                        ? "line-visual-benchmark-card is-active"
+                        : "line-visual-benchmark-card"
+                    }
                   >
-                    <span className="line-visual-benchmark-card-name">{benchmark.name}</span>
-                    <span className="line-visual-benchmark-card-meta">
-                      {benchmark.symbol}
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    className="ghost-button line-visual-benchmark-remove"
-                    onClick={() => handleRemoveBenchmark(benchmark.id)}
-                  >
-                    Usun
-                  </button>
-                </article>
-              ))}
+                    <div className="line-visual-benchmark-card-main">
+                      <span className="line-visual-benchmark-card-name">{benchmark.name}</span>
+                      <span className="line-visual-benchmark-card-meta">
+                        {benchmark.symbol}
+                      </span>
+                    </div>
+                    <label className="line-visual-benchmark-toggle">
+                      <input
+                        type="checkbox"
+                        checked={isVisible}
+                        onChange={() => handleToggleBenchmarkVisibility(benchmark.id)}
+                      />
+                      <span>Pokaz</span>
+                    </label>
+                    <button
+                      type="button"
+                      className="ghost-button line-visual-benchmark-remove"
+                      onClick={() => handleRemoveBenchmark(benchmark.id)}
+                    >
+                      Usun
+                    </button>
+                  </article>
+                );
+              })}
             </div>
           ) : null}
 
@@ -1689,22 +1953,27 @@ export default function PortfolioLineCharts({
                 <p className="table-note">{chartModel.copy}</p>
               </div>
 
-              <div className="line-visual-legend">
-                {chartModel.lines.map((line) => (
-                  <div key={line.dataKey} className="line-visual-legend-item">
-                    <span
-                      className="line-visual-legend-dot"
-                      style={{ background: line.color }}
-                    />
-                    <span>{line.label}</span>
-                  </div>
-                ))}
+              <div className="line-visual-chart-side">
+                <div className="line-visual-legend">
+                  {chartModel.lines.map((line) => (
+                    <div key={line.dataKey} className="line-visual-legend-item">
+                      <span
+                        className="line-visual-legend-dot"
+                        style={{ background: line.color }}
+                      />
+                      <span>{line.label}</span>
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
 
             <div className="line-visual-chart-frame mt-4">
               <ResponsiveContainer width="100%" height={420}>
-                <ComposedChart data={chartModel.data} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                <ComposedChart
+                  data={chartModel.data}
+                  margin={{ top: 8, right: 8, left: 0, bottom: 0 }}
+                >
                   {chartModel.lines.some((line) => line.variant === "area") ? (
                     <defs>
                       {chartModel.lines
@@ -1748,6 +2017,7 @@ export default function PortfolioLineCharts({
                   />
                   <YAxis
                     axisLine={false}
+                    domain={chartModel.yAxisDomain}
                     orientation="right"
                     tick={{ fill: "#7b8895", fontSize: 12, fontWeight: 600 }}
                     tickFormatter={(value: number) => chartModel.yAxisTickFormatter(value)}
@@ -1755,6 +2025,7 @@ export default function PortfolioLineCharts({
                     width={84}
                   />
                   <Tooltip
+                    allowEscapeViewBox={{ x: false, y: false }}
                     content={(props) => (
                       <ChartTooltip
                         {...props}
@@ -1765,6 +2036,11 @@ export default function PortfolioLineCharts({
                       stroke: "rgba(20, 35, 48, 0.16)",
                       strokeDasharray: "6 8",
                       strokeWidth: 1.2,
+                    }}
+                    wrapperStyle={{
+                      outline: "none",
+                      pointerEvents: "none",
+                      zIndex: 20,
                     }}
                   />
 

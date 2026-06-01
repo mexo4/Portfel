@@ -2,6 +2,7 @@ import db from "@/lib/server/db";
 import { normalizeSymbol } from "@/lib/ticker";
 import { normalizeText, round, toCurrencyCode, uniqueBy } from "@/lib/utils";
 import type {
+  AssetKind,
   AssetQuote,
   AssetSearchResult,
   CurrencyCode,
@@ -48,10 +49,13 @@ type EodhdHistoricalItem = {
   adjusted_close?: number;
 };
 
-type EodhdEtfListing = {
+type EodhdSearchKind = Extract<AssetKind, "stock" | "etf">;
+
+type EodhdListing = {
   symbol: string;
   providerId: string;
   name: string;
+  kind: EodhdSearchKind;
   exchange: string;
   country?: string;
   marketCurrency: CurrencyCode;
@@ -61,13 +65,16 @@ type EodhdEtfListing = {
 
 const EODHD_API_KEY = process.env.EODHD_API_KEY ?? "";
 const EODHD_API_ROOT = "https://eodhd.com/api";
-const ETF_SEARCH_RESULT_LIMIT = 16;
-const ETF_SEARCH_CACHE_TTL_MS = 5 * 60 * 1_000;
-const ETF_EXCHANGE_CACHE_TTL_MS = 24 * 60 * 60 * 1_000;
-const ETF_QUOTE_CACHE_TTL_MS = 30_000;
+const EODHD_SEARCH_RESULT_LIMIT = 16;
+const EODHD_SEARCH_TIMEOUT_MS = 4_000;
+const EODHD_EXCHANGE_SEARCH_TIMEOUT_MS = 5_000;
+const EODHD_SEARCH_CACHE_TTL_MS = 5 * 60 * 1_000;
+const EODHD_EXCHANGE_CACHE_TTL_MS = 24 * 60 * 60 * 1_000;
+const EODHD_QUOTE_CACHE_TTL_MS = 30_000;
 const FX_RATE_CACHE_TTL_MS = 5 * 60 * 1_000;
 
-const ETF_FALLBACK_EXCHANGES = [
+const EODHD_FALLBACK_EXCHANGES = [
+  "WAR",
   "US",
   "LSE",
   "XETRA",
@@ -101,6 +108,7 @@ const EODHD_EXCHANGE_SUFFIX: Record<string, string> = {
   TO: "TO",
   US: "",
   V: "V",
+  WAR: "PL",
   XETRA: "DE",
 };
 
@@ -123,6 +131,7 @@ const DISPLAY_SUFFIX_TO_EODHD_EXCHANGES: Record<string, string[]> = {
   TO: ["TO"],
   US: ["US"],
   V: ["V"],
+  PL: ["WAR"],
 };
 
 const readCacheStatement = db.prepare(
@@ -217,8 +226,13 @@ const normalizeMoneyUnit = (value?: string) => {
   };
 };
 
-const toProviderId = (code: string, exchange: string) =>
-  `${normalizeSymbol(code)}.${normalizeSymbol(exchange)}`;
+const toProviderId = (code: string, exchange: string) => {
+  const normalizedCode = normalizeSymbol(code);
+  const normalizedExchange = normalizeSymbol(exchange);
+  const providerSuffix = normalizedExchange === "WAR" ? "PL" : normalizedExchange;
+
+  return `${normalizedCode}.${providerSuffix}`;
+};
 
 const toDisplaySymbol = (code: string, exchange: string) => {
   const normalizedCode = normalizeSymbol(code);
@@ -261,9 +275,10 @@ const getQueryDisplaySuffix = (query: string) => {
 const getListingIsin = (item: { ISIN?: string | null; Isin?: string | null }) =>
   normalizeSymbol(item.ISIN ?? item.Isin ?? "");
 
-const toEtfListing = (
-  item: EodhdSearchItem | EodhdExchangeItem
-): EodhdEtfListing | null => {
+const toEodhdListing = (
+  item: EodhdSearchItem | EodhdExchangeItem,
+  kind: EodhdSearchKind
+): EodhdListing | null => {
   const code = normalizeSymbol(item.Code ?? "");
   const exchange = normalizeSymbol(item.Exchange ?? "");
   const name = item.Name?.trim() ?? "";
@@ -279,6 +294,7 @@ const toEtfListing = (
     symbol: toDisplaySymbol(code, exchange),
     providerId: toProviderId(code, exchange),
     name,
+    kind,
     exchange,
     country: item.Country?.trim(),
     marketCurrency: currency,
@@ -287,7 +303,7 @@ const toEtfListing = (
   };
 };
 
-const getListingMatchScore = (query: string, item: EodhdEtfListing) => {
+const getListingMatchScore = (query: string, item: EodhdListing) => {
   const normalizedQuerySymbol = normalizeSymbol(query);
   const normalizedQueryText = normalizeText(query);
   const normalizedItemName = normalizeText(item.name);
@@ -306,10 +322,10 @@ const getListingMatchScore = (query: string, item: EodhdEtfListing) => {
   return 9;
 };
 
-const toSearchResult = (item: EodhdEtfListing): AssetSearchResult => ({
+const toSearchResult = (item: EodhdListing): AssetSearchResult => ({
   symbol: item.symbol,
   name: item.name,
-  kind: "etf",
+  kind: item.kind,
   marketCurrency: item.marketCurrency,
   provider: "eodhd",
   providerId: item.providerId,
@@ -319,22 +335,23 @@ const toSearchResult = (item: EodhdEtfListing): AssetSearchResult => ({
   priceScale: item.priceScale,
 });
 
-const fetchSearchListings = async (query: string) => {
+const fetchSearchListings = async (query: string, kind: EodhdSearchKind) => {
   if (!hasEodhdApiKey()) {
     return [];
   }
 
-  const cacheKey = `eodhd:etf:search:${normalizeText(query)}`;
-  const cachedPayload = getCachedPayload<EodhdSearchItem[]>(cacheKey, ETF_SEARCH_CACHE_TTL_MS);
+  const cacheKey = `eodhd:${kind}:search:${normalizeText(query)}`;
+  const cachedPayload = getCachedPayload<EodhdSearchItem[]>(cacheKey, EODHD_SEARCH_CACHE_TTL_MS);
 
   if (cachedPayload) {
     return cachedPayload
-      .map((item) => toEtfListing(item))
-      .filter((item): item is EodhdEtfListing => Boolean(item));
+      .map((item) => toEodhdListing(item, kind))
+      .filter((item): item is EodhdListing => Boolean(item));
   }
 
   const payload = await fetchJson<EodhdSearchItem[]>(
-    `${EODHD_API_ROOT}/search/${encodeURIComponent(query)}?api_token=${encodeURIComponent(EODHD_API_KEY)}&fmt=json&type=etf&limit=50`
+    `${EODHD_API_ROOT}/search/${encodeURIComponent(query)}?api_token=${encodeURIComponent(EODHD_API_KEY)}&fmt=json&type=${kind}&limit=50`,
+    EODHD_SEARCH_TIMEOUT_MS
   );
 
   if (!payload) {
@@ -344,31 +361,31 @@ const fetchSearchListings = async (query: string) => {
   setCachedPayload(cacheKey, payload);
 
   return payload
-    .map((item) => toEtfListing(item))
-    .filter((item): item is EodhdEtfListing => Boolean(item));
+    .map((item) => toEodhdListing(item, kind))
+    .filter((item): item is EodhdListing => Boolean(item));
 };
 
-const fetchExchangeListings = async (exchange: string) => {
+const fetchExchangeListings = async (exchange: string, kind: EodhdSearchKind) => {
   if (!hasEodhdApiKey()) {
     return [];
   }
 
   const normalizedExchange = normalizeSymbol(exchange);
-  const cacheKey = `eodhd:etf:exchange:${normalizedExchange}`;
+  const cacheKey = `eodhd:${kind}:exchange:${normalizedExchange}`;
   const cachedPayload = getCachedPayload<EodhdExchangeItem[]>(
     cacheKey,
-    ETF_EXCHANGE_CACHE_TTL_MS
+    EODHD_EXCHANGE_CACHE_TTL_MS
   );
 
   if (cachedPayload) {
     return cachedPayload
-      .map((item) => toEtfListing(item))
-      .filter((item): item is EodhdEtfListing => Boolean(item));
+      .map((item) => toEodhdListing(item, kind))
+      .filter((item): item is EodhdListing => Boolean(item));
   }
 
   const payload = await fetchJson<EodhdExchangeItem[]>(
-    `${EODHD_API_ROOT}/exchange-symbol-list/${encodeURIComponent(normalizedExchange)}?api_token=${encodeURIComponent(EODHD_API_KEY)}&fmt=json&type=etf`,
-    25_000
+    `${EODHD_API_ROOT}/exchange-symbol-list/${encodeURIComponent(normalizedExchange)}?api_token=${encodeURIComponent(EODHD_API_KEY)}&fmt=json&type=${kind}`,
+    EODHD_EXCHANGE_SEARCH_TIMEOUT_MS
   );
 
   if (!payload) {
@@ -378,11 +395,11 @@ const fetchExchangeListings = async (exchange: string) => {
   setCachedPayload(cacheKey, payload);
 
   return payload
-    .map((item) => toEtfListing(item))
-    .filter((item): item is EodhdEtfListing => Boolean(item));
+    .map((item) => toEodhdListing(item, kind))
+    .filter((item): item is EodhdListing => Boolean(item));
 };
 
-const searchExchangeFallbackListings = async (query: string) => {
+const searchExchangeFallbackListings = async (query: string, kind: EodhdSearchKind) => {
   const normalizedQuery = normalizeSymbol(query);
 
   if (!normalizedQuery) {
@@ -392,14 +409,14 @@ const searchExchangeFallbackListings = async (query: string) => {
   const displaySuffix = getQueryDisplaySuffix(query);
   const candidateExchanges = displaySuffix
     ? DISPLAY_SUFFIX_TO_EODHD_EXCHANGES[displaySuffix] ?? []
-    : [...ETF_FALLBACK_EXCHANGES];
+    : [...EODHD_FALLBACK_EXCHANGES];
 
   if (candidateExchanges.length === 0) {
     return [];
   }
 
   const listings = (
-    await Promise.all(candidateExchanges.map((exchange) => fetchExchangeListings(exchange)))
+    await Promise.all(candidateExchanges.map((exchange) => fetchExchangeListings(exchange, kind)))
   ).flat();
 
   const normalizedQueryText = normalizeText(query);
@@ -421,7 +438,10 @@ const searchExchangeFallbackListings = async (query: string) => {
   });
 };
 
-export const searchEodhdEtfs = async (query: string): Promise<AssetSearchResult[]> => {
+export const searchEodhdAssets = async (
+  query: string,
+  kind: EodhdSearchKind
+): Promise<AssetSearchResult[]> => {
   if (!hasEodhdApiKey()) {
     return [];
   }
@@ -433,7 +453,7 @@ export const searchEodhdEtfs = async (query: string): Promise<AssetSearchResult[
   }
 
   const remoteListings = (
-    await Promise.all(queryCandidates.map((candidate) => fetchSearchListings(candidate)))
+    await Promise.all(queryCandidates.map((candidate) => fetchSearchListings(candidate, kind)))
   ).flat();
 
   let combinedListings = uniqueBy(remoteListings, (item) => item.providerId);
@@ -445,7 +465,7 @@ export const searchEodhdEtfs = async (query: string): Promise<AssetSearchResult[
   );
 
   if (!hasExactMatch || combinedListings.length === 0) {
-    const fallbackListings = await searchExchangeFallbackListings(query);
+    const fallbackListings = await searchExchangeFallbackListings(query, kind);
     combinedListings = uniqueBy(
       [...combinedListings, ...fallbackListings],
       (item) => item.providerId
@@ -458,9 +478,13 @@ export const searchEodhdEtfs = async (query: string): Promise<AssetSearchResult[
         getListingMatchScore(query, left) - getListingMatchScore(query, right) ||
         left.name.localeCompare(right.name, "en")
     )
-    .slice(0, ETF_SEARCH_RESULT_LIMIT)
+    .slice(0, EODHD_SEARCH_RESULT_LIMIT)
     .map(toSearchResult);
 };
+
+export const searchEodhdEtfs = (query: string) => searchEodhdAssets(query, "etf");
+
+export const searchEodhdStocks = (query: string) => searchEodhdAssets(query, "stock");
 
 const getCachedQuote = (
   providerId: string,
@@ -495,14 +519,14 @@ const setCachedQuote = (providerId: string, quote: AssetQuote) => {
       ...quote,
       providerId: normalizeSymbol(providerId),
     },
-    expiresAt: Date.now() + ETF_QUOTE_CACHE_TTL_MS,
+    expiresAt: Date.now() + EODHD_QUOTE_CACHE_TTL_MS,
   });
 };
 
 const normalizeQuotePrice = (price: number, priceScale?: number) =>
   round(price * (priceScale ?? 1), 4);
 
-export const fetchEodhdEtfQuote = async ({
+export const fetchEodhdQuote = async ({
   symbol,
   providerId,
   marketCurrency,
@@ -601,6 +625,8 @@ export const fetchEodhdEtfQuote = async ({
   setCachedQuote(normalizedProviderId, quote);
   return quote;
 };
+
+export const fetchEodhdEtfQuote = fetchEodhdQuote;
 
 const getCachedFxRate = (code: string) => {
   const normalizedCode = normalizeSymbol(code);

@@ -5,20 +5,19 @@ import { fetchBenchmarkComparisons } from "@/lib/api";
 import { buildPortfolioBenchmarkInvestments } from "@/lib/portfolio-state";
 import { getGroupedPortfolioAssets } from "@/lib/pricing";
 import { isGpwSymbol } from "@/lib/ticker";
-import { formatCurrency } from "@/lib/utils";
+import { formatCurrency, round } from "@/lib/utils";
 import type {
   BenchmarkComparison,
   FxRates,
   PortfolioAsset,
-  PortfolioRealizedAdjustment,
   PortfolioSale,
 } from "@/types/portfolio";
 
 type PortfolioChartsProps = {
   assets: PortfolioAsset[];
   sales: PortfolioSale[];
-  realizedAdjustments: PortfolioRealizedAdjustment[];
   fxRates: FxRates;
+  combinedProfitLossPln: number;
 };
 
 type AssetClassBreakdownTarget = Pick<PortfolioAsset, "kind" | "symbol">;
@@ -42,7 +41,7 @@ const ASSET_CLASS_BREAKDOWN = [
   },
   {
     id: "stock-global",
-    label: "Akcje amerykanskie",
+    label: "Akcje zagraniczne",
     color: CHART_COLORS[1],
     matches: (asset: AssetClassBreakdownTarget) =>
       asset.kind === "stock" && !isGpwSymbol(asset.symbol),
@@ -105,8 +104,8 @@ const createDonutBackground = (
 export default function PortfolioCharts({
   assets,
   sales,
-  realizedAdjustments,
   fxRates,
+  combinedProfitLossPln,
 }: PortfolioChartsProps) {
   const [benchmarkComparisons, setBenchmarkComparisons] = useState<BenchmarkComparison[]>([]);
   const [benchmarkError, setBenchmarkError] = useState<string | null>(null);
@@ -128,13 +127,10 @@ export default function PortfolioCharts({
     () => benchmarkInvestments.reduce((total, investment) => total + investment.amountPln, 0),
     [benchmarkInvestments]
   );
-  const manualRealizedAdjustmentsPln = useMemo(
-    () =>
-      realizedAdjustments
-        .filter((adjustment) => adjustment.source === "manual")
-        .reduce((total, adjustment) => total + adjustment.amountPlnSnapshot, 0),
-    [realizedAdjustments]
-  );
+  const toCapitalReturnPercent = (profitLossPln: number, netInvestedPln: number) =>
+    netInvestedPln > 0 && Number.isFinite(profitLossPln) && Number.isFinite(netInvestedPln)
+      ? round((profitLossPln / netInvestedPln) * 100, 2)
+      : 0;
 
   useEffect(() => {
     if (benchmarkInvestments.length === 0) {
@@ -227,19 +223,14 @@ export default function PortfolioCharts({
     id: "portfolio",
     label: "Twoj portfel",
     investedPln: comparisonInvestedPln,
-    currentValuePln: totalValuePln + manualRealizedAdjustmentsPln,
-    profitLossPln: totalValuePln + manualRealizedAdjustmentsPln - comparisonInvestedPln,
-    returnPercent:
-      comparisonInvestedPln > 0
-        ? ((totalValuePln + manualRealizedAdjustmentsPln - comparisonInvestedPln) /
-            comparisonInvestedPln) *
-          100
-        : 0,
+    currentValuePln: round(totalValuePln),
+    profitLossPln: combinedProfitLossPln,
+    returnPercent: toCapitalReturnPercent(combinedProfitLossPln, comparisonInvestedPln),
   };
 
   const comparisonItems = [portfolioComparison, ...benchmarkComparisons].map((item) => ({
     ...item,
-    returnPercent: Number(item.returnPercent.toFixed(2)),
+    returnPercent: toCapitalReturnPercent(item.profitLossPln, item.investedPln),
   }));
   const maxAbsoluteReturn = Math.max(
     6,
@@ -252,8 +243,8 @@ export default function PortfolioCharts({
         <p className="eyebrow">Porownanie</p>
         <h2 className="section-title">Portfel vs benchmarki</h2>
         <p className="section-copy">
-          Porownujemy twoj wynik z tym, co wyszloby, gdyby te same kwoty z
-          poszczegolnych zakupow trafialy tego samego dnia w benchmark.
+          Benchmarki liczymy na tych samych przeplywach gotowki co portfel, a procent
+          pokazuje wynik wzgledem kapitalu netto.
         </p>
 
         <div className="comparison-list mt-6">

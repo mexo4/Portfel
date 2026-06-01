@@ -35,6 +35,7 @@ const SUPPORTED_QUOTE_PROVIDERS = new Set<QuoteProvider>([
   "finnhub",
   "obligacjeskarbowe",
   "stooq",
+  "yahoo",
 ]);
 
 const hasFiniteNumber = (value: unknown): value is number =>
@@ -70,6 +71,40 @@ const isSupportedAssetKind = (value: unknown): value is AssetKind =>
 
 const isBondTransactionKind = (value: unknown): value is BondTransactionKind =>
   value === "sale" || value === "bond-redemption" || value === "bond-swap";
+
+const normalizePortfolioSymbol = (value: string, kind?: AssetKind) => {
+  const normalized = normalizeSymbol(value);
+
+  if (kind === "etf" && normalized.endsWith(".WAR")) {
+    return `${normalized.slice(0, -4)}.PL`;
+  }
+
+  return normalized;
+};
+
+const normalizePortfolioProviderId = (value: unknown, kind?: AssetKind) => {
+  if (typeof value !== "string" || !value) {
+    return undefined;
+  }
+
+  return normalizePortfolioSymbol(value, kind);
+};
+
+const getFallbackProviderId = (
+  kind: AssetKind,
+  provider: QuoteProvider,
+  symbol: string
+) => {
+  if (kind === "etf" && provider === "eodhd") {
+    return symbol;
+  }
+
+  if (kind === "stock" && provider === "yahoo") {
+    return symbol;
+  }
+
+  return undefined;
+};
 
 const normalizeTreasuryBondRateEntry = (
   entry: Partial<TreasuryBondRateEntry>
@@ -231,21 +266,30 @@ export const normalizeStoredPortfolioAssets = (assets: PortfolioAsset[]) => {
         hasFiniteNumber(asset.quantity) &&
         asset.quantity > 0
     )
-    .map((asset) => ({
-      ...asset,
-      symbol: normalizeSymbol(asset.symbol),
-      quantity: round(asset.quantity, 6),
-      feePln: hasFiniteNumber(asset.feePln) ? round(asset.feePln, 6) : 0,
-      purchaseDate: toDateInputValue(asset.purchaseDate, getTodayDateInputValue()),
-      createdAt:
-        typeof asset.createdAt === "string" && asset.createdAt
-          ? asset.createdAt
-          : new Date().toISOString(),
-      groupOrder:
-        typeof asset.groupOrder === "number" && Number.isFinite(asset.groupOrder)
-          ? asset.groupOrder
-          : undefined,
-    }));
+    .map((asset) => {
+      const symbol = normalizePortfolioSymbol(asset.symbol, asset.kind);
+      const provider = getSafeQuoteProvider(asset.provider, asset.kind);
+
+      return {
+        ...asset,
+        symbol,
+        provider,
+        providerId:
+          normalizePortfolioProviderId(asset.providerId, asset.kind) ??
+          getFallbackProviderId(asset.kind, provider, symbol),
+        quantity: round(asset.quantity, 6),
+        feePln: hasFiniteNumber(asset.feePln) ? round(asset.feePln, 6) : 0,
+        purchaseDate: toDateInputValue(asset.purchaseDate, getTodayDateInputValue()),
+        createdAt:
+          typeof asset.createdAt === "string" && asset.createdAt
+            ? asset.createdAt
+            : new Date().toISOString(),
+        groupOrder:
+          typeof asset.groupOrder === "number" && Number.isFinite(asset.groupOrder)
+            ? asset.groupOrder
+            : undefined,
+      };
+    });
   const orderedKeys = getManualOrderKeys(normalizedAssets);
   const groupOrderByKey = new Map(
     orderedKeys.map((groupKey, index) => [groupKey, index] as const)
@@ -258,7 +302,8 @@ export const normalizeStoredPortfolioAssets = (assets: PortfolioAsset[]) => {
 };
 
 const normalizePortfolioSaleAllocation = (
-  allocation: Partial<PortfolioSaleAllocation>
+  allocation: Partial<PortfolioSaleAllocation>,
+  fallbackKind?: AssetKind
 ): PortfolioSaleAllocation | null => {
   if (
     typeof allocation.lotId !== "string" ||
@@ -268,6 +313,8 @@ const normalizePortfolioSaleAllocation = (
   ) {
     return null;
   }
+
+  const kind = isSupportedAssetKind(allocation.kind) ? allocation.kind : fallbackKind;
 
   return {
     lotId: allocation.lotId,
@@ -286,20 +333,20 @@ const normalizePortfolioSaleAllocation = (
     name: typeof allocation.name === "string" && allocation.name ? allocation.name : undefined,
     symbol:
       typeof allocation.symbol === "string" && allocation.symbol
-        ? normalizeSymbol(allocation.symbol)
+        ? normalizePortfolioSymbol(allocation.symbol, kind)
         : undefined,
-    kind: isSupportedAssetKind(allocation.kind) ? allocation.kind : undefined,
+    kind,
     marketCurrency:
       typeof allocation.marketCurrency === "string" && allocation.marketCurrency
         ? toCurrencyCode(allocation.marketCurrency)
         : undefined,
     provider:
-      isSupportedAssetKind(allocation.kind) && allocation.provider
-        ? getSafeQuoteProvider(allocation.provider, allocation.kind)
+      kind && allocation.provider
+        ? getSafeQuoteProvider(allocation.provider, kind)
         : undefined,
     providerId:
       typeof allocation.providerId === "string" && allocation.providerId
-        ? allocation.providerId
+        ? normalizePortfolioProviderId(allocation.providerId, kind)
         : undefined,
     priceScale:
       hasFiniteNumber(allocation.priceScale) && allocation.priceScale > 0
@@ -344,12 +391,10 @@ const normalizePortfolioSale = (
     return null;
   }
 
-  const symbol = normalizeSymbol(sale.symbol);
   const kind = sale.kind;
-  const assetKey =
-    typeof sale.assetKey === "string" && sale.assetKey
-      ? sale.assetKey
-      : getPortfolioAssetGroupKey({ kind, symbol });
+  const symbol = normalizePortfolioSymbol(sale.symbol, kind);
+  const provider = getSafeQuoteProvider(sale.provider, kind);
+  const assetKey = getPortfolioAssetGroupKey({ kind, symbol });
 
   return {
     id: sale.id,
@@ -372,8 +417,10 @@ const normalizePortfolioSale = (
       sale.marketCurrency,
       kind === "stock" || kind === "bond" ? "PLN" : "USD"
     ),
-    provider: getSafeQuoteProvider(sale.provider, kind),
-    providerId: typeof sale.providerId === "string" ? sale.providerId : undefined,
+    provider,
+    providerId:
+      normalizePortfolioProviderId(sale.providerId, kind) ??
+      getFallbackProviderId(kind, provider, symbol),
     priceScale:
       hasFiniteNumber(sale.priceScale) && sale.priceScale > 0
         ? sale.priceScale
@@ -436,7 +483,7 @@ const normalizePortfolioSale = (
         : undefined,
     allocations: Array.isArray(sale.allocations)
       ? sale.allocations
-          .map((allocation) => normalizePortfolioSaleAllocation(allocation))
+          .map((allocation) => normalizePortfolioSaleAllocation(allocation, kind))
           .filter((allocation): allocation is PortfolioSaleAllocation => Boolean(allocation))
       : [],
     createdAt:
@@ -464,12 +511,14 @@ const normalizePortfolioAsset = (
   }
 
   const kind = asset.kind;
+  const symbol = normalizePortfolioSymbol(asset.symbol, kind);
+  const provider = getSafeQuoteProvider(asset.provider, kind);
 
   return {
     id: asset.id,
     name:
-      typeof asset.name === "string" && asset.name ? asset.name : normalizeSymbol(asset.symbol),
-    symbol: normalizeSymbol(asset.symbol),
+      typeof asset.name === "string" && asset.name ? asset.name : symbol,
+    symbol,
     kind,
     purchaseDate: toDateInputValue(asset.purchaseDate, getTodayDateInputValue()),
     quantity: round(asset.quantity, 6),
@@ -483,8 +532,10 @@ const normalizePortfolioAsset = (
       asset.marketCurrency,
       kind === "stock" || kind === "bond" ? "PLN" : "USD"
     ),
-    provider: getSafeQuoteProvider(asset.provider, kind),
-    providerId: typeof asset.providerId === "string" ? asset.providerId : undefined,
+    provider,
+    providerId:
+      normalizePortfolioProviderId(asset.providerId, kind) ??
+      getFallbackProviderId(kind, provider, symbol),
     priceScale:
       hasFiniteNumber(asset.priceScale) && asset.priceScale > 0
         ? asset.priceScale

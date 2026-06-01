@@ -23,6 +23,7 @@ type SearchParams = {
   query: string;
   kind: AssetKind;
   mode?: AssetSearchMode;
+  signal?: AbortSignal;
 };
 
 type QuoteRequest = Pick<
@@ -53,7 +54,7 @@ const requestJson = async <T,>(url: string, init?: RequestInit): Promise<T> => {
   return (await response.json()) as T;
 };
 
-export const searchAssets = async ({ query, kind, mode }: SearchParams) => {
+export const searchAssets = async ({ query, kind, mode, signal }: SearchParams) => {
   const params = new URLSearchParams({
     q: query,
     kind,
@@ -64,7 +65,8 @@ export const searchAssets = async ({ query, kind, mode }: SearchParams) => {
   }
 
   const data = await requestJson<{ results: AssetSearchResult[] }>(
-    `/api/search?${params.toString()}`
+    `/api/search?${params.toString()}`,
+    { signal }
   );
 
   return data.results;

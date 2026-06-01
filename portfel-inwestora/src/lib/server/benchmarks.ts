@@ -2,7 +2,6 @@ import { round } from "@/lib/utils";
 import type {
   BenchmarkComparison,
   BenchmarkInvestment,
-  PortfolioBenchmarkHistorySeries,
 } from "@/types/portfolio";
 
 type PricePoint = {
@@ -19,6 +18,15 @@ type BenchmarkDefinition = {
   label: string;
   source: "stooq" | "coingecko";
   symbol: string;
+};
+
+type BenchmarkValueHistorySeries = {
+  id: string;
+  label: string;
+  points: Array<{
+    date: string;
+    valuePln: number;
+  }>;
 };
 
 const BENCHMARKS: BenchmarkDefinition[] = [
@@ -158,7 +166,7 @@ const buildBenchmarkValueSeriesEntry = (
   series: PricePoint[],
   dates: string[],
   investmentsByDate: Map<string, number>
-): PortfolioBenchmarkHistorySeries | null => {
+): BenchmarkValueHistorySeries | null => {
   if (series.length === 0 || dates.length === 0) {
     return null;
   }
@@ -283,7 +291,7 @@ export const buildBenchmarkValueSeries = async ({
 }: {
   dates: string[];
   investmentsByDate: Map<string, number>;
-}): Promise<PortfolioBenchmarkHistorySeries[]> => {
+}): Promise<BenchmarkValueHistorySeries[]> => {
   if (dates.length === 0 || investmentsByDate.size === 0) {
     return [];
   }
@@ -299,5 +307,5 @@ export const buildBenchmarkValueSeries = async ({
     .map(({ benchmark, series }) =>
       buildBenchmarkValueSeriesEntry(benchmark, series, dates, investmentsByDate)
     )
-    .filter((entry): entry is PortfolioBenchmarkHistorySeries => Boolean(entry));
+    .filter((entry): entry is BenchmarkValueHistorySeries => Boolean(entry));
 };

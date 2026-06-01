@@ -1,8 +1,10 @@
 import {
-  fetchEodhdEtfQuote,
+  fetchEodhdQuote,
   fetchEodhdFxRates,
   searchEodhdEtfs,
+  searchEodhdStocks,
 } from "@/lib/server/eodhd";
+import { fetchYahooQuote, searchYahooStocks } from "@/lib/server/yahoo";
 import {
   findGpwCatalogEntry,
   findGpwCatalogEntryWithPrice,
@@ -88,6 +90,12 @@ const shouldUseGpwStooqQuote = ({
 }) => kind === "stock" && (isGpwSymbol(symbol) || marketCurrency === "PLN");
 
 const isUsFinnhubSymbol = (symbol: string) => /^[A-Z]{1,5}(\.[A-Z])?$/.test(symbol);
+const US_YAHOO_EXCHANGE_PATTERN = /\b(NYSE|NASDAQ|AMEX|BATS|CBOE|OTC)\b/i;
+
+const isUsYahooSearchResult = (result: AssetSearchResult) =>
+  result.provider === "yahoo" &&
+  result.marketCurrency === "USD" &&
+  US_YAHOO_EXCHANGE_PATTERN.test(result.subtitle ?? "");
 
 const isStockLikeFinnhubType = (type?: string) => {
   const normalizedType = normalizeText(type ?? "");
@@ -129,6 +137,8 @@ const STOOQ_DOMAINS = ["https://stooq.pl", "https://stooq.com"] as const;
 const STOOQ_TEXT_PROXY_URL = "https://r.jina.ai/http://stooq.pl/q/?s=";
 const STOOQ_RATE_LIMIT_PATTERN = /przekroczony\s+dzienny\s+limit\s+wywolan/i;
 const GPW_QUOTE_CACHE_TTL_MS = 30_000;
+const GPW_SEARCH_FALLBACK_TIMEOUT_MS = 1_500;
+const FINNHUB_SEARCH_TIMEOUT_MS = 3_500;
 const COINGECKO_SEARCH_CACHE_TTL_MS = 60_000;
 const COINGECKO_QUOTE_CACHE_TTL_MS = 30_000;
 
@@ -510,7 +520,7 @@ const searchGpwStooqTickerFallback = async (
     return [];
   }
 
-  const quote = await fetchStooqPageQuote(tickerCore, "PLN", 20_000);
+  const quote = await fetchStooqPageQuote(tickerCore, "PLN", GPW_SEARCH_FALLBACK_TIMEOUT_MS);
 
   if (!quote) {
     return [];
@@ -538,17 +548,18 @@ const searchFinnhub = async (
 ): Promise<AssetSearchResult[]> => {
   if (!FINNHUB_API_KEY) return [];
 
-  const response = await fetch(
+  const response = await safeFetch(
     `https://finnhub.io/api/v1/search?q=${encodeURIComponent(query)}&token=${FINNHUB_API_KEY}`,
     {
       headers: {
         Accept: "application/json",
       },
       cache: "no-store",
-    }
+    },
+    FINNHUB_SEARCH_TIMEOUT_MS
   );
 
-  if (!response.ok) return [];
+  if (!response?.ok) return [];
 
   const payload: FinnhubSearchResponse = await response.json();
   const filteredResults = (payload.result ?? []).filter(
@@ -1036,6 +1047,31 @@ export const searchMarketAssets = async (
     return searchGpwStooqTickerFallback(query);
   }
 
+  if (kind === "stock" && mode === "stock-international") {
+    const yahooResults = await searchYahooStocks(query);
+
+    if (yahooResults.length > 0) {
+      return yahooResults;
+    }
+
+    const eodhdResults = await searchEodhdStocks(query);
+
+    return eodhdResults.length > 0 ? eodhdResults : searchFinnhub(query, kind, mode);
+  }
+
+  if (kind === "stock" && mode === "stock-global") {
+    const finnhubResults = await searchFinnhub(query, kind, mode);
+
+    if (finnhubResults.length > 0) {
+      return finnhubResults;
+    }
+
+    const yahooResults = await searchYahooStocks(query);
+    const usYahooResults = yahooResults.filter(isUsYahooSearchResult);
+
+    return usYahooResults.length > 0 ? usYahooResults : yahooResults;
+  }
+
   if (kind === "etf" || mode === "etf") {
     return searchEodhdEtfs(query);
   }
@@ -1073,22 +1109,53 @@ export const fetchAssetQuoteServer = async ({
     return fetchCoinGeckoQuote(normalizedSymbol, providerId);
   }
 
-  if (kind === "etf" && provider === "eodhd") {
-    return fetchEodhdEtfQuote({
+  if (provider === "eodhd" && (kind === "stock" || kind === "etf")) {
+    const eodhdQuote = await fetchEodhdQuote({
       symbol: normalizedSymbol,
       providerId,
       marketCurrency,
       priceScale,
     });
+
+    if (eodhdQuote) {
+      return eodhdQuote;
+    }
+
+    if (kind === "stock") {
+      const yahooQuote = await fetchYahooQuote({
+        symbol: normalizedSymbol,
+        fallbackCurrency: marketCurrency,
+      });
+
+      if (yahooQuote) {
+        return yahooQuote;
+      }
+    }
+
+    if (kind === "etf") {
+      return eodhdQuote;
+    }
   }
 
   if (isGpwStockRequest) {
     return fetchGpwStooqQuote(normalizedSymbol);
   }
 
+  if (provider === "yahoo" && kind === "stock") {
+    return fetchYahooQuote({
+      symbol: normalizedSymbol,
+      providerId,
+      fallbackCurrency: marketCurrency,
+    });
+  }
+
   if (provider === "finnhub") {
     return (
       (await fetchFinnhubQuote(normalizedSymbol, marketCurrency)) ??
+      (await fetchYahooQuote({
+        symbol: normalizedSymbol,
+        fallbackCurrency: marketCurrency,
+      })) ??
       (await fetchStooqQuote(normalizedSymbol, marketCurrency)) ??
       (await fetchStooqQuote(`${normalizedSymbol}.US`, marketCurrency))
     );
@@ -1097,12 +1164,20 @@ export const fetchAssetQuoteServer = async ({
   if (provider === "stooq") {
     return (
       (await fetchStooqQuote(normalizedSymbol, marketCurrency)) ??
+      (await fetchYahooQuote({
+        symbol: normalizedSymbol,
+        fallbackCurrency: marketCurrency,
+      })) ??
       (await fetchFinnhubQuote(normalizedSymbol, marketCurrency))
     );
   }
 
   const autoQuote =
     (await fetchFinnhubQuote(normalizedSymbol, marketCurrency)) ??
+    (await fetchYahooQuote({
+      symbol: normalizedSymbol,
+      fallbackCurrency: marketCurrency,
+    })) ??
     (await fetchStooqQuote(normalizedSymbol, marketCurrency));
 
   return autoQuote;

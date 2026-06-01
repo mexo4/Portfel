@@ -3,6 +3,7 @@ export type AssetKind = "stock" | "etf" | "crypto" | "bond";
 export type AssetSearchMode =
   | "stock-global"
   | "stock-gpw"
+  | "stock-international"
   | "etf"
   | "crypto";
 
@@ -15,6 +16,7 @@ export type InvestorExperience = "beginner" | "intermediate" | "advanced";
 export type QuoteProvider =
   | "finnhub"
   | "stooq"
+  | "yahoo"
   | "eodhd"
   | "coingecko"
   | "catalog"
@@ -359,6 +361,7 @@ export type PortfolioHistoryPoint = {
   portfolioValuePln: number;
   netInvestedPln: number;
   profitLossPln: number;
+  timeWeightedReturnPercent: number | null;
 };
 
 export type PortfolioAssetHistorySeriesPoint = {
@@ -376,7 +379,9 @@ export type PortfolioAssetHistorySeries = {
 
 export type PortfolioBenchmarkHistoryPoint = {
   date: string;
-  valuePln: number;
+  price: number;
+  pricePln: number;
+  returnPercent: number | null;
 };
 
 export type PortfolioBenchmarkHistorySeries = {

@@ -1,6 +1,7 @@
 import db from "@/lib/server/db";
 import { fetchFxRatesServer } from "@/lib/server/market-data";
 import { fetchTreasuryBondQuoteSeriesServer } from "@/lib/server/treasury-bonds";
+import { normalizeYahooMoneyUnit } from "@/lib/server/yahoo";
 import {
   getGpwTickerCore,
   getPortfolioAssetGroupKey,
@@ -271,6 +272,9 @@ const parseStooqHistory = (csv: string) =>
 type YahooChartResponse = {
   chart?: {
     result?: Array<{
+      meta?: {
+        currency?: string;
+      };
       timestamp?: number[];
       indicators?: {
         quote?: Array<{
@@ -297,14 +301,17 @@ const toYahooStockSymbol = (symbol: string) => {
 const fetchYahooStockHistory = async (
   symbol: string,
   startDate: string,
-  endDate: string
+  endDate: string,
+  fallbackPriceScale = 1
 ) => {
   const yahooSymbol = toYahooStockSymbol(symbol);
   const period1 = Math.floor(new Date(`${startDate}T00:00:00.000Z`).getTime() / 1_000);
   const period2 = Math.floor(new Date(`${endDate}T23:59:59.000Z`).getTime() / 1_000);
 
   return getCachedOrFetch<PricePoint[]>(
-    `portfolio-history:yahoo:${normalizeSymbol(yahooSymbol)}:${startDate}:${endDate}`,
+    `portfolio-history:yahoo:${normalizeSymbol(yahooSymbol)}:${startDate}:${endDate}:${
+      fallbackPriceScale ?? 1
+    }`,
     HISTORY_CACHE_TTL_MS,
     async () => {
       const payload = await safeFetchJson<YahooChartResponse>(
@@ -317,11 +324,14 @@ const fetchYahooStockHistory = async (
       const timestamps = result?.timestamp ?? [];
       const closes = result?.indicators?.quote?.[0]?.close ?? [];
       const adjustedCloses = result?.indicators?.adjclose?.[0]?.adjclose ?? [];
+      const yahooMoneyUnit = normalizeYahooMoneyUnit(result?.meta?.currency);
+      const priceScale =
+        yahooMoneyUnit.priceScale !== 1 ? yahooMoneyUnit.priceScale : fallbackPriceScale;
 
       return dedupeAndSortPricePoints(
         timestamps.map((timestamp, index) => ({
           date: formatDateOnly(new Date(timestamp * 1_000)),
-          close: Number(adjustedCloses[index] ?? closes[index]),
+          close: Number(adjustedCloses[index] ?? closes[index]) * priceScale,
         }))
       );
     }
@@ -371,9 +381,15 @@ const fetchStooqStockHistory = async (
 const fetchStockHistory = async (
   symbol: string,
   startDate: string,
-  endDate: string
+  endDate: string,
+  yahooFallbackPriceScale?: number
 ) => {
-  const yahooPoints = await fetchYahooStockHistory(symbol, startDate, endDate);
+  const yahooPoints = await fetchYahooStockHistory(
+    symbol,
+    startDate,
+    endDate,
+    yahooFallbackPriceScale
+  );
 
   if (yahooPoints.length > 0) {
     return yahooPoints;
@@ -382,7 +398,22 @@ const fetchStockHistory = async (
   return fetchStooqStockHistory(symbol, startDate, endDate);
 };
 
-const fetchEodhdEtfHistory = async (
+const getEodhdHistoryProviderIdCandidates = (providerId: string) => {
+  const normalizedProviderId = normalizeSymbol(providerId);
+  const providerCore = normalizedProviderId.replace(/\.(PL|WAR)$/i, "");
+
+  if (normalizedProviderId.endsWith(".PL")) {
+    return [normalizedProviderId, `${providerCore}.WAR`];
+  }
+
+  if (normalizedProviderId.endsWith(".WAR")) {
+    return [`${providerCore}.PL`, normalizedProviderId];
+  }
+
+  return [normalizedProviderId];
+};
+
+const fetchEodhdHistoryForProviderId = async (
   providerId: string,
   startDate: string,
   endDate: string,
@@ -392,8 +423,10 @@ const fetchEodhdEtfHistory = async (
     return [];
   }
 
+  const normalizedProviderId = normalizeSymbol(providerId);
+
   return getCachedOrFetch<PricePoint[]>(
-    `portfolio-history:eodhd:${normalizeSymbol(providerId)}:${startDate}:${endDate}:${
+    `portfolio-history:eodhd:${normalizedProviderId}:${startDate}:${endDate}:${
       priceScale ?? 1
     }`,
     HISTORY_CACHE_TTL_MS,
@@ -406,7 +439,7 @@ const fetchEodhdEtfHistory = async (
         }>
       >(
         `https://eodhd.com/api/eod/${encodeURIComponent(
-          normalizeSymbol(providerId)
+          normalizedProviderId
         )}?api_token=${encodeURIComponent(
           EODHD_API_KEY
         )}&fmt=json&from=${startDate}&to=${endDate}`,
@@ -424,6 +457,28 @@ const fetchEodhdEtfHistory = async (
       );
     }
   );
+};
+
+const fetchEodhdHistory = async (
+  providerId: string,
+  startDate: string,
+  endDate: string,
+  priceScale?: number
+) => {
+  for (const candidateProviderId of getEodhdHistoryProviderIdCandidates(providerId)) {
+    const points = await fetchEodhdHistoryForProviderId(
+      candidateProviderId,
+      startDate,
+      endDate,
+      priceScale
+    );
+
+    if (points.length > 0) {
+      return points;
+    }
+  }
+
+  return [];
 };
 
 const fetchCoinGeckoHistory = async (providerId: string) => {
@@ -454,6 +509,7 @@ const fetchInstrumentHistory = async ({
   kind,
   symbol,
   marketCurrency,
+  provider,
   providerId,
   priceScale,
   purchaseDate,
@@ -481,7 +537,26 @@ const fetchInstrumentHistory = async ({
     }
 
     if (kind === "stock") {
-      const points = await fetchStockHistory(symbol, startDate, endDate);
+      if (provider === "eodhd" && providerId) {
+        const eodhdPoints = await fetchEodhdHistory(
+          providerId,
+          startDate,
+          endDate,
+          priceScale
+        );
+
+        if (eodhdPoints.length > 0) {
+          return { points: eodhdPoints };
+        }
+      }
+
+      const stockHistorySymbol = provider === "yahoo" && providerId ? providerId : symbol;
+      const points = await fetchStockHistory(
+        stockHistorySymbol,
+        startDate,
+        endDate,
+        priceScale
+      );
 
       return points.length > 0
         ? { points }
@@ -499,7 +574,7 @@ const fetchInstrumentHistory = async ({
         };
       }
 
-      const points = await fetchEodhdEtfHistory(providerId, startDate, endDate, priceScale);
+      const points = await fetchEodhdHistory(providerId, startDate, endDate, priceScale);
 
       return points.length > 0
         ? { points }
@@ -700,7 +775,7 @@ const getSegmentHistoryKey = ({
     return `${kind}:${normalizeSymbol(symbol)}:${purchaseDate}`;
   }
 
-  if (kind === "crypto" || kind === "etf") {
+  if (kind === "crypto" || kind === "etf" || (kind === "stock" && providerId)) {
     return `${kind}:${normalizeSymbol(providerId ?? symbol)}`;
   }
 
@@ -771,7 +846,7 @@ const buildSoldAllocationSegment = (
 const getNeededFxCodes = (
   assets: PortfolioAsset[],
   sales: PortfolioSale[],
-  benchmarks: PortfolioBenchmarkDefinition[]
+  benchmarks: PortfolioBenchmarkDefinition[] = []
 ) => {
   const codes = new Set<CurrencyCode>(["PLN"]);
 
@@ -835,21 +910,6 @@ const convertToPlnOnDate = (
   date: string,
   fxSeriesByCode: Map<CurrencyCode, Map<string, number>>
 ) => round(amount * getFxRateForDate(fxSeriesByCode, currency, date));
-
-const convertFromPlnOnDate = (
-  amountPln: number,
-  currency: CurrencyCode,
-  date: string,
-  fxSeriesByCode: Map<CurrencyCode, Map<string, number>>
-) => {
-  const fxRate = getFxRateForDate(fxSeriesByCode, currency, date);
-
-  if (!Number.isFinite(fxRate) || fxRate <= 0) {
-    return round(amountPln, 8);
-  }
-
-  return round(amountPln / fxRate, 8);
-};
 
 const buildBuyCashflowEvents = (
   assets: PortfolioAsset[],
@@ -927,7 +987,9 @@ const buildInstrumentDefinitions = (segments: PortfolioHistorySegment[]) => {
 };
 
 const getBenchmarkHistoryKey = (benchmark: PortfolioBenchmarkDefinition) =>
-  benchmark.kind === "crypto" || benchmark.kind === "etf"
+  benchmark.kind === "crypto" ||
+  benchmark.kind === "etf" ||
+  (benchmark.kind === "stock" && benchmark.providerId)
     ? `${benchmark.kind}:${normalizeSymbol(benchmark.providerId ?? benchmark.symbol)}`
     : `${benchmark.kind}:${normalizeSymbol(benchmark.symbol)}`;
 
@@ -962,25 +1024,24 @@ const buildBenchmarkInstrumentDefinitions = ({
   return Array.from(definitions.values());
 };
 
-const buildBenchmarkValueSeries = ({
+const buildBenchmarkReturnSeries = ({
   benchmarks,
   dates,
-  investmentsByDate,
-  instrumentHistoryByKey,
   fxSeriesByCode,
+  instrumentHistoryByKey,
   warnings,
 }: {
   benchmarks: PortfolioBenchmarkDefinition[];
   dates: string[];
-  investmentsByDate: Map<string, number>;
-  instrumentHistoryByKey: Map<string, InstrumentHistoryResult>;
   fxSeriesByCode: Map<CurrencyCode, Map<string, number>>;
+  instrumentHistoryByKey: Map<string, InstrumentHistoryResult>;
   warnings: Set<string>;
 }): PortfolioBenchmarkHistorySeries[] =>
   benchmarks
     .map((benchmark) => {
       const history = instrumentHistoryByKey.get(getBenchmarkHistoryKey(benchmark));
       const historyPoints = history?.points ?? [];
+      const marketCurrency = toCurrencyCode(benchmark.marketCurrency);
 
       if (historyPoints.length === 0 || dates.length === 0) {
         if (!history?.warning) {
@@ -993,48 +1054,48 @@ const buildBenchmarkValueSeries = ({
 
       let pointIndex = 0;
       let lastKnownClose: number | undefined;
-      let cumulativeUnits = 0;
-      let pendingFlowPln = 0;
+      let previousPricePln: number | null = null;
+      let cumulativeReturnFactor = 1;
 
-      const points = dates.map((date) => {
+      const points = dates.reduce<PortfolioBenchmarkHistorySeries["points"]>((nextPoints, date) => {
         while (pointIndex < historyPoints.length && historyPoints[pointIndex]!.date <= date) {
           lastKnownClose = historyPoints[pointIndex]!.close;
           pointIndex += 1;
         }
 
-        pendingFlowPln = round(pendingFlowPln + (investmentsByDate.get(date) ?? 0));
-
         if (
-          pendingFlowPln !== 0 &&
           typeof lastKnownClose === "number" &&
           Number.isFinite(lastKnownClose) &&
           lastKnownClose > 0
         ) {
-          cumulativeUnits +=
-            convertFromPlnOnDate(
-              pendingFlowPln,
-              benchmark.marketCurrency,
+          const pricePln =
+            lastKnownClose * getFxRateForDate(fxSeriesByCode, marketCurrency, date);
+
+          if (pricePln > 0) {
+            if (previousPricePln !== null && previousPricePln > 0) {
+              cumulativeReturnFactor *= pricePln / previousPricePln;
+            }
+
+            previousPricePln = pricePln;
+
+            nextPoints.push({
               date,
-              fxSeriesByCode
-            ) / lastKnownClose;
-          pendingFlowPln = 0;
+              price: round(lastKnownClose, 8),
+              pricePln: round(pricePln, 6),
+              returnPercent: round((cumulativeReturnFactor - 1) * 100, 2),
+            });
+          }
         }
 
-        const valueInBenchmarkCurrency =
-          typeof lastKnownClose === "number" && Number.isFinite(lastKnownClose) && lastKnownClose > 0
-            ? cumulativeUnits * lastKnownClose
-            : 0;
+        return nextPoints;
+      }, []);
 
-        return {
-          date,
-          valuePln: convertToPlnOnDate(
-            valueInBenchmarkCurrency,
-            benchmark.marketCurrency,
-            date,
-            fxSeriesByCode
-          ),
-        };
-      });
+      if (points.length === 0) {
+        warnings.add(
+          `Nie udalo sie dopasowac historii kursu dla benchmarku ${benchmark.name}; pominieto go na wykresie.`
+        );
+        return null;
+      }
 
       return {
         id: benchmark.id,
@@ -1169,12 +1230,11 @@ export const buildPortfolioHistory = async ({
     }
   }
 
-  const benchmarkSeries = buildBenchmarkValueSeries({
+  const benchmarkSeries = buildBenchmarkReturnSeries({
     benchmarks,
     dates,
-    investmentsByDate: netInvestedEvents,
-    instrumentHistoryByKey,
     fxSeriesByCode,
+    instrumentHistoryByKey,
     warnings,
   });
 
@@ -1236,13 +1296,18 @@ export const buildPortfolioHistory = async ({
   const points: PortfolioHistoryPoint[] = [];
   let cumulativeNetInvestedPln = 0;
   let cumulativeAdjustmentsPln = 0;
+  let cumulativeTimeWeightedReturnFactor = 1;
+  let previousPortfolioValuePln: number | null = null;
 
   for (const date of dates) {
+    const externalFlowPln = netInvestedEvents.get(date) ?? 0;
+    const realizedAdjustmentPln = adjustmentEvents.get(date) ?? 0;
+
     cumulativeNetInvestedPln = round(
-      cumulativeNetInvestedPln + (netInvestedEvents.get(date) ?? 0)
+      cumulativeNetInvestedPln + externalFlowPln
     );
     cumulativeAdjustmentsPln = round(
-      cumulativeAdjustmentsPln + (adjustmentEvents.get(date) ?? 0)
+      cumulativeAdjustmentsPln + realizedAdjustmentPln
     );
 
     const portfolioValuePln = round(portfolioValueByDate.get(date) ?? 0);
@@ -1251,12 +1316,31 @@ export const buildPortfolioHistory = async ({
       portfolioValuePln - netInvestedPln + cumulativeAdjustmentsPln
     );
 
+    if (previousPortfolioValuePln !== null && previousPortfolioValuePln > 0) {
+      const dailyReturn =
+        (portfolioValuePln +
+          realizedAdjustmentPln -
+          previousPortfolioValuePln -
+          externalFlowPln) /
+        previousPortfolioValuePln;
+
+      if (Number.isFinite(dailyReturn)) {
+        cumulativeTimeWeightedReturnFactor *= 1 + dailyReturn;
+      }
+    }
+
     points.push({
       date,
       portfolioValuePln,
       netInvestedPln,
       profitLossPln,
+      timeWeightedReturnPercent: round(
+        (cumulativeTimeWeightedReturnFactor - 1) * 100,
+        2
+      ),
     });
+
+    previousPortfolioValuePln = portfolioValuePln;
   }
 
   const assetSeries: PortfolioAssetHistorySeries[] = assetSeriesDefinitions

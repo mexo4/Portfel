@@ -76,11 +76,47 @@ export const createEmptyDraft = (kind: AssetKind = "stock"): AssetDraft =>
 export const createAssetId = () =>
   `asset-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
+const MARKET_SUFFIX_CURRENCY: Record<string, CurrencyCode> = {
+  AS: "EUR",
+  BO: "INR",
+  BE: "EUR",
+  BD: "BDT",
+  DE: "EUR",
+  DU: "EUR",
+  F: "EUR",
+  HE: "EUR",
+  HM: "EUR",
+  IR: "EUR",
+  HK: "HKD",
+  L: "GBP",
+  LS: "EUR",
+  MC: "EUR",
+  MI: "EUR",
+  MU: "EUR",
+  MX: "MXN",
+  NS: "INR",
+  PA: "EUR",
+  STU: "EUR",
+  SW: "CHF",
+  TO: "CAD",
+  V: "CAD",
+  T: "JPY",
+};
+
 export const inferCurrencyFromSymbol = (
   symbol: string,
   fallback: CurrencyCode = "USD"
 ): CurrencyCode => {
   if (isGpwSymbol(symbol)) return "PLN";
-  if (/\.(DE|AS|DU|F|HM|MI|MU)$/i.test(symbol)) return "EUR";
+
+  const normalizedSymbol = normalizeSymbol(symbol);
+  const suffix = normalizedSymbol.includes(".")
+    ? normalizedSymbol.split(".").at(-1)
+    : undefined;
+
+  if (suffix && MARKET_SUFFIX_CURRENCY[suffix]) {
+    return MARKET_SUFFIX_CURRENCY[suffix];
+  }
+
   return fallback;
 };

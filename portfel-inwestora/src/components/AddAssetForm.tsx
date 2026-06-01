@@ -65,13 +65,15 @@ export default function AddAssetForm({
   onSellSubmit,
 }: AddAssetFormProps) {
   const trimmedQuery = draft.query.trim();
+  const trimmedSymbol = draft.symbol.trim();
+  const activeSearchText = trimmedQuery || trimmedSymbol;
   const minimumSearchLength = getMinimumSearchLength(searchMode);
-  const hasActiveSearchQuery = trimmedQuery.length > 0;
-  const hasReachedMinimumSearchLength = trimmedQuery.length >= minimumSearchLength;
+  const hasActiveSearchText = activeSearchText.length > 0;
+  const hasReachedMinimumSearchLength = activeSearchText.length >= minimumSearchLength;
   const shouldShowSearchPanel =
-    hasActiveSearchQuery || results.length > 0 || isSearching;
+    hasActiveSearchText || results.length > 0 || isSearching;
   const shouldShowLastAdded =
-    !hasActiveSearchQuery && !isSearching && !searchError && Boolean(lastAddedResult);
+    !hasActiveSearchText && !isSearching && !searchError && Boolean(lastAddedResult);
   const currencyOptions = getCurrencyOptions(draft.purchaseCurrency, draft.marketCurrency);
   const priceCurrency = draft.marketCurrency || "PLN";
 
@@ -119,13 +121,14 @@ export default function AddAssetForm({
             {!isSearching && draft.symbol ? (
               <small className="field-note">Wybrany ticker: {draft.symbol}</small>
             ) : null}
-            {!hasActiveSearchQuery && searchError ? (
+            {!hasActiveSearchText && searchError ? (
               <small className="field-note field-note-error">{searchError}</small>
             ) : null}
             {quoteError ? (
               <small className="field-note field-note-error">{quoteError}</small>
             ) : null}
           </label>
+
         </div>
 
         <label className="field">
@@ -188,7 +191,7 @@ export default function AddAssetForm({
 
       {shouldShowSearchPanel ? (
         <div className="mt-4">
-          <div className="search-stack-panel">
+          <div className="search-stack-panel search-stack-panel-prominent">
             <div className="search-panel-header">
               <p className="search-panel-title">Sugestie</p>
               {results.length > 0 ? (
@@ -198,15 +201,15 @@ export default function AddAssetForm({
               ) : null}
             </div>
 
-            {hasActiveSearchQuery && isSearching ? (
+            {hasActiveSearchText && isSearching ? (
               <p className="field-note">Szukam wynikow...</p>
             ) : null}
 
-            {hasActiveSearchQuery && searchError ? (
+            {hasActiveSearchText && searchError ? (
               <p className="field-note field-note-error">{searchError}</p>
             ) : null}
 
-            {!isSearching && hasActiveSearchQuery && !hasReachedMinimumSearchLength ? (
+            {!isSearching && hasActiveSearchText && !hasReachedMinimumSearchLength ? (
               <p className="field-note">
                 Wpisz min. {minimumSearchLength} znaki, aby zobaczyc wyniki.
               </p>
@@ -220,12 +223,12 @@ export default function AddAssetForm({
             ) : null}
 
             {results.length > 0 ? (
-              <div className="search-result-list">
+              <div className="search-result-list search-result-list-prominent">
                 {results.map((result) => (
                   <button
                     key={`${result.symbol}-${result.providerId ?? "none"}`}
                     type="button"
-                    className="search-result-card text-left"
+                    className="search-result-card search-result-card-prominent text-left"
                     onClick={() => onPickResult(result)}
                   >
                     <p className="search-result-title">{result.name}</p>

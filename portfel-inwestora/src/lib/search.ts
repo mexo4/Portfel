@@ -5,8 +5,10 @@ import {
 } from "@/lib/constants";
 import {
   getGpwTickerCore,
+  inferCurrencyFromSymbol,
   isGpwSymbol,
   normalizeGpwSymbol,
+  normalizeSymbol,
 } from "@/lib/ticker";
 import { normalizeText, uniqueBy } from "@/lib/utils";
 import type {
@@ -19,7 +21,12 @@ import type {
 const SEARCH_RESULT_LIMIT = 16;
 
 export const getMinimumSearchLength = (mode: AssetSearchMode) => {
-  if (mode === "stock-global" || mode === "stock-gpw" || mode === "etf") {
+  if (
+    mode === "stock-global" ||
+    mode === "stock-gpw" ||
+    mode === "stock-international" ||
+    mode === "etf"
+  ) {
     return 1;
   }
 
@@ -29,6 +36,7 @@ export const getMinimumSearchLength = (mode: AssetSearchMode) => {
 export const getSearchPlaceholder = (mode: AssetSearchMode) => {
   if (mode === "stock-global") return "Np. Apple, NVIDIA, Microsoft";
   if (mode === "stock-gpw") return "Np. XTB, Orlen, PZU";
+  if (mode === "stock-international") return "Np. Siemens, Toyota, Nestle, AAPL";
   if (mode === "etf") return "Np. VWCE, SXR8, SPY";
   return "Np. bitcoin, solana, BTC";
 };
@@ -72,6 +80,15 @@ const getCatalogEntries = (
   }
 
   if (mode === "stock-global") {
+    return LOCAL_STOCK_CATALOG.filter(
+      (item) =>
+        !isGpwCatalogSymbol(item.symbol) &&
+        item.marketCurrency === "USD" &&
+        !item.symbol.includes(".")
+    );
+  }
+
+  if (mode === "stock-international") {
     return LOCAL_STOCK_CATALOG.filter((item) => !isGpwCatalogSymbol(item.symbol));
   }
 
@@ -166,7 +183,9 @@ export const buildTickerFallbackResults = (
   if (!isLikelyTickerInput(query)) return [];
 
   if (
-    (mode === "stock-gpw" || mode === "stock-global") &&
+    (mode === "stock-gpw" ||
+      mode === "stock-global" ||
+      mode === "stock-international") &&
     !isExplicitTickerInput(query)
   ) {
     return [];
@@ -186,6 +205,36 @@ export const buildTickerFallbackResults = (
       marketCurrency: "PLN",
       provider: "stooq",
       subtitle: "Ticker GPW / Stooq",
+      source: "fallback",
+    });
+  }
+
+  if (mode === "stock-international") {
+    const canonicalSymbol = normalizeSymbol(normalized);
+
+    candidates.push({
+      symbol: canonicalSymbol,
+      name: canonicalSymbol,
+      kind: "stock",
+      marketCurrency: inferCurrencyFromSymbol(canonicalSymbol, "USD"),
+      provider: "yahoo",
+      providerId: canonicalSymbol,
+      subtitle: "Ticker akcji / Yahoo",
+      source: "fallback",
+    });
+  }
+
+  if (kind === "etf" || mode === "etf") {
+    const canonicalSymbol = normalizeSymbol(normalized);
+
+    candidates.push({
+      symbol: canonicalSymbol,
+      name: canonicalSymbol,
+      kind: "etf",
+      marketCurrency: inferCurrencyFromSymbol(canonicalSymbol, "USD"),
+      provider: "eodhd",
+      providerId: canonicalSymbol,
+      subtitle: "Ticker ETF",
       source: "fallback",
     });
   }

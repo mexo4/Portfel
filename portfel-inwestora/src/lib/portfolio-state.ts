@@ -743,7 +743,7 @@ export const buildPortfolioBenchmarkInvestments = (
     ),
     ...sales.map((sale) => ({
       date: sale.saleDate || toDateInputValue(sale.createdAt),
-      amountPln: -round(sale.realizedProceedsPln),
+      amountPln: -round(sale.realizedInvestedPln),
     })),
   ]
     .filter(

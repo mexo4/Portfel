@@ -9,6 +9,8 @@ import db from "@/lib/server/db";
 import type {
   AuthenticatedUser,
   PortfolioState,
+  SubscriptionPlan,
+  SubscriptionStatus,
   UserProfile,
 } from "@/types/portfolio";
 
@@ -16,6 +18,7 @@ const SESSION_COOKIE_NAME = "portfel_inwestora_session";
 const SESSION_MAX_AGE_MS = 1000 * 60 * 60 * 24 * 30;
 const EMAIL_VERIFICATION_MAX_AGE_MS = 1000 * 60 * 60 * 24;
 const PASSWORD_RESET_MAX_AGE_MS = 1000 * 60 * 60 * 2;
+export const FREE_PLAN_ASSET_LIMIT = 8;
 
 type UserRow = {
   id: string;
@@ -23,6 +26,9 @@ type UserRow = {
   password_hash: string;
   display_name: string;
   email_verified_at: string | null;
+  subscription_plan: string;
+  subscription_status: string;
+  subscription_updated_at: string | null;
   profile_json: string;
   portfolio_json: string;
   created_at: string;
@@ -46,14 +52,46 @@ const createRawToken = () => randomBytes(32).toString("hex");
 
 const isEmailValid = (email: string) => /^\S+@\S+\.\S+$/.test(email);
 
+const normalizeSubscriptionPlan = (plan: string | null | undefined): SubscriptionPlan =>
+  plan === "pro" ? "pro" : "free";
+
+const normalizeSubscriptionStatus = (
+  status: string | null | undefined
+): SubscriptionStatus => {
+  if (
+    status === "trialing" ||
+    status === "past_due" ||
+    status === "canceled"
+  ) {
+    return status;
+  }
+
+  return "active";
+};
+
+export const canUseProFeatures = (user: Pick<AuthenticatedUser, "subscriptionPlan" | "subscriptionStatus">) =>
+  user.subscriptionPlan === "pro" &&
+  (user.subscriptionStatus === "active" || user.subscriptionStatus === "trialing");
+
 const toAuthenticatedUser = (
-  user: Pick<UserRow, "id" | "email" | "display_name" | "created_at" | "email_verified_at">
+  user: Pick<
+    UserRow,
+    | "id"
+    | "email"
+    | "display_name"
+    | "created_at"
+    | "email_verified_at"
+    | "subscription_plan"
+    | "subscription_status"
+  >
 ): AuthenticatedUser => ({
   id: user.id,
   email: user.email,
   displayName: user.display_name,
   createdAt: user.created_at,
   emailVerifiedAt: user.email_verified_at,
+  subscriptionPlan: normalizeSubscriptionPlan(user.subscription_plan),
+  subscriptionStatus: normalizeSubscriptionStatus(user.subscription_status),
 });
 
 const parsePortfolio = (portfolioJson: string): PortfolioState => {
@@ -239,12 +277,15 @@ export const registerAccount = async ({
         password_hash,
         display_name,
         email_verified_at,
+        subscription_plan,
+        subscription_status,
+        subscription_updated_at,
         profile_json,
         portfolio_json,
         created_at,
         updated_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `
   ).run(
     userId,
@@ -252,6 +293,9 @@ export const registerAccount = async ({
     passwordHash,
     normalizedName,
     null,
+    "free",
+    "active",
+    now,
     JSON.stringify(profile),
     JSON.stringify({
       assets: [],
@@ -268,6 +312,8 @@ export const registerAccount = async ({
     displayName: normalizedName,
     createdAt: now,
     emailVerifiedAt: null,
+    subscriptionPlan: "free",
+    subscriptionStatus: "active",
   } satisfies AuthenticatedUser;
 };
 
@@ -400,6 +446,14 @@ export const updateCurrentUserPortfolio = async (
     throw new Error("Nie znaleziono uzytkownika.");
   }
 
+  const account = toAuthenticatedUser(existingUser);
+
+  if (!canUseProFeatures(account) && portfolio.assets.length > FREE_PLAN_ASSET_LIMIT) {
+    throw new Error(
+      `Plan Free pozwala zapisac do ${FREE_PLAN_ASSET_LIMIT} pozycji. Przejdz na Pro, aby dodawac kolejne.`
+    );
+  }
+
   db.prepare(
     `
       UPDATE users
@@ -409,6 +463,35 @@ export const updateCurrentUserPortfolio = async (
   ).run(JSON.stringify(normalizePortfolioState(portfolio)), new Date().toISOString(), userId);
 
   return normalizePortfolioState(portfolio);
+};
+
+export const updateCurrentUserSubscription = async (
+  userId: string,
+  plan: SubscriptionPlan
+) => {
+  const existingUser = getUserById(userId);
+
+  if (!existingUser) {
+    throw new Error("Nie znaleziono uzytkownika.");
+  }
+
+  const now = new Date().toISOString();
+
+  db.prepare(
+    `
+      UPDATE users
+      SET subscription_plan = ?, subscription_status = ?, subscription_updated_at = ?, updated_at = ?
+      WHERE id = ?
+    `
+  ).run(plan, "active", now, now, userId);
+
+  const updatedUser = getUserById(userId);
+
+  if (!updatedUser) {
+    throw new Error("Nie udalo sie zapisac planu.");
+  }
+
+  return toAuthenticatedUser(updatedUser);
 };
 
 export const requestEmailVerificationForUser = async (userId: string, baseUrl: string) => {

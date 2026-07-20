@@ -14,6 +14,7 @@ import type {
   PortfolioHistoryResponse,
   PortfolioRealizedAdjustment,
   PortfolioSale,
+  SubscriptionPlan,
   TreasuryBondQuote,
   TreasuryBondSeries,
   UserProfile,
@@ -289,6 +290,13 @@ export const resetPassword = async (payload: { token: string; password: string }
   return requestJson<{ success: boolean }>("/api/auth/reset-password", {
     method: "POST",
     body: JSON.stringify(payload),
+  });
+};
+
+export const updateSubscriptionPlan = async (plan: SubscriptionPlan) => {
+  return requestJson<{ user: AuthenticatedUser; plan: SubscriptionPlan }>("/api/subscription", {
+    method: "PUT",
+    body: JSON.stringify({ plan }),
   });
 };
 

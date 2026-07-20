@@ -10,12 +10,14 @@ import type {
   BenchmarkComparison,
   FxRates,
   PortfolioAsset,
+  PortfolioRealizedAdjustment,
   PortfolioSale,
 } from "@/types/portfolio";
 
 type PortfolioChartsProps = {
   assets: PortfolioAsset[];
   sales: PortfolioSale[];
+  realizedAdjustments: PortfolioRealizedAdjustment[];
   fxRates: FxRates;
   combinedProfitLossPln: number;
 };
@@ -260,8 +262,10 @@ export default function PortfolioCharts({
                     <p className="table-note">
                       inwestycja: {formatCurrency(item.investedPln)} · dzisiaj:{" "}
                       {formatCurrency(item.currentValuePln)}
-                    </p>
-                  </div>
+                    </p>                    <p className="table-note">
+                      zwrot: {item.returnPercent >= 0 ? "+" : ""}
+                      {item.returnPercent.toFixed(2)}%
+                    </p>                  </div>
                   <strong
                     className={
                       item.profitLossPln >= 0 ? "tone-positive" : "tone-negative"

@@ -12,6 +12,8 @@ export type AssetEntryMode = AssetSearchMode | "bond";
 export type CurrencyCode = string;
 
 export type InvestorExperience = "beginner" | "intermediate" | "advanced";
+export type SubscriptionPlan = "free" | "pro";
+export type SubscriptionStatus = "active" | "trialing" | "past_due" | "canceled";
 
 export type QuoteProvider =
   | "finnhub"
@@ -414,6 +416,8 @@ export type AuthenticatedUser = {
   displayName: string;
   createdAt: string;
   emailVerifiedAt: string | null;
+  subscriptionPlan: SubscriptionPlan;
+  subscriptionStatus: SubscriptionStatus;
 };
 
 export type UserProfile = {

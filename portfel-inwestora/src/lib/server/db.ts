@@ -18,6 +18,9 @@ db.exec(`
     password_hash TEXT NOT NULL,
     display_name TEXT NOT NULL,
     email_verified_at TEXT,
+    subscription_plan TEXT NOT NULL DEFAULT 'free',
+    subscription_status TEXT NOT NULL DEFAULT 'active',
+    subscription_updated_at TEXT,
     profile_json TEXT NOT NULL,
     portfolio_json TEXT NOT NULL,
     created_at TEXT NOT NULL,
@@ -78,5 +81,8 @@ const ensureColumn = (tableName: string, columnName: string, definition: string)
 };
 
 ensureColumn("users", "email_verified_at", "TEXT");
+ensureColumn("users", "subscription_plan", "TEXT NOT NULL DEFAULT 'free'");
+ensureColumn("users", "subscription_status", "TEXT NOT NULL DEFAULT 'active'");
+ensureColumn("users", "subscription_updated_at", "TEXT");
 
 export default db;

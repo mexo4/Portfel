@@ -51,7 +51,7 @@ type PortfolioLineChartsProps = {
   combinedProfitLossPln: number;
 };
 
-type RangePreset = "1D" | "1W" | "1M" | "1Q" | "1Y" | "ALL";
+type RangePreset = "1D" | "1W" | "1M" | "1Q" | "YTD" | "ALL";
 type ChartMode =
   | "value"
   | "return"
@@ -133,7 +133,7 @@ type FallbackHistoryState = {
 
 const DEFAULT_BENCHMARK_SEARCH_MODE: AssetSearchMode = "etf";
 
-const RANGE_PRESETS: RangePreset[] = ["1D", "1W", "1M", "1Q", "1Y", "ALL"];
+const RANGE_PRESETS: RangePreset[] = ["1D", "1W", "1M", "1Q", "YTD", "ALL"];
 const MODE_OPTIONS: Array<{
   value: ChartMode;
   label: string;
@@ -261,6 +261,16 @@ const getPresetStartDate = (preset: RangePreset, lastDate: string) => {
     return nextDate.toISOString().slice(0, 10);
   }
 
+  if (preset === "YTD") {
+    // Year-to-date: start at Jan 1 of the same year as lastDate
+    const start = getPointDate(lastDate);
+    start.setUTCMonth(0);
+    start.setUTCDate(1);
+    start.setUTCHours(12, 0, 0, 0);
+    return start.toISOString().slice(0, 10);
+  }
+
+  // Fallback to 1 year back for any other preset (shouldn't normally happen)
   nextDate.setUTCFullYear(nextDate.getUTCFullYear() - 1);
   return nextDate.toISOString().slice(0, 10);
 };
@@ -473,7 +483,7 @@ const buildFallbackHistory = ({
   }
 
   for (const sale of sales) {
-    addAmountToDateMap(netInvestedEvents, sale.saleDate, -round(sale.realizedProceedsPln));
+    addAmountToDateMap(netInvestedEvents, sale.saleDate, -round(sale.realizedInvestedPln));
 
     for (const allocation of sale.allocations) {
       const kind = allocation.kind ?? sale.kind;

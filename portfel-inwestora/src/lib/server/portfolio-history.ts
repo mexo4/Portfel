@@ -947,7 +947,7 @@ const buildBuyCashflowEvents = (
   }
 
   for (const sale of sales) {
-    addAmountToDateMap(events, sale.saleDate, -round(sale.realizedProceedsPln));
+    addAmountToDateMap(events, sale.saleDate, -round(sale.realizedInvestedPln));
   }
 
   return events;

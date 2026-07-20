@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo } from "react";
 import { formatCurrency, formatDate, formatNumber } from "@/lib/utils";
 import type { PortfolioSale } from "@/types/portfolio";
 
@@ -9,11 +10,27 @@ type SalesHistoryPanelProps = {
   onUndoSale: (saleId: string) => void;
 };
 
+const getTime = (value?: string) => {
+  const time = value ? new Date(value).getTime() : Number.NaN;
+  return Number.isFinite(time) ? time : 0;
+};
+
 export default function SalesHistoryPanel({
   sales,
   canUndoSale,
   onUndoSale,
 }: SalesHistoryPanelProps) {
+  const displaySales = useMemo(
+    () =>
+      [...sales].sort(
+        (left, right) =>
+          getTime(right.createdAt) - getTime(left.createdAt) ||
+          getTime(right.saleDate) - getTime(left.saleDate) ||
+          right.id.localeCompare(left.id)
+      ),
+    [sales]
+  );
+
   return (
     <section className="panel">
       <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
@@ -22,25 +39,21 @@ export default function SalesHistoryPanel({
           <h2 className="section-title">Historia sprzedazy, wykupu i zamian</h2>
         </div>
 
-        <p className="section-copy">Najnowsze transakcje sa na gorze.</p>
+        <p className="section-copy">Ostatnio dodane transakcje sa na gorze.</p>
       </div>
 
-      {sales.length === 0 ? (
-        <p className="field-note mt-5">Brak zapisanych sprzedazy.</p>
+      {displaySales.length === 0 ? (
+        <p className="field-note mt-5">Brak zapisanych transakcji.</p>
       ) : (
         <div className="mt-6 grid gap-4">
-          {sales.map((sale) => {
+          {displaySales.map((sale) => {
             const isUndoAvailable = canUndoSale(sale.id);
             const isBondSettlement =
               sale.transactionKind === "bond-redemption" ||
               sale.transactionKind === "bond-swap";
             const displayCurrency = sale.realizedValueCurrency ?? "PLN";
-            const displayProfit = isBondSettlement
-              ? sale.grossProfitLossValue ??
-                sale.grossProfitLossPln ??
-                sale.realizedProfitLossValue ??
-                sale.realizedProfitLossPln
-              : sale.realizedProfitLossValue ?? sale.realizedProfitLossPln;
+            const displayProfit =
+              sale.realizedProfitLossValue ?? sale.realizedProfitLossPln;
             const displayInvested =
               sale.realizedInvestedValue ?? sale.realizedInvestedPln;
             const displayProceeds = isBondSettlement
@@ -63,6 +76,12 @@ export default function SalesHistoryPanel({
                 : sale.transactionKind === "bond-redemption"
                   ? "Cena wykupu"
                   : "Cena sprzedazy";
+            const transactionName =
+              sale.transactionKind === "bond-swap"
+                ? "zamiany"
+                : sale.transactionKind === "bond-redemption"
+                  ? "wykupu"
+                  : "sprzedazy";
 
             return (
               <article key={sale.id} className="lot-card">
@@ -131,6 +150,17 @@ export default function SalesHistoryPanel({
                 {isBondSettlement ? (
                   <div className="lot-grid mt-4">
                     <div>
+                      <p className="table-note">Wynik brutto</p>
+                      <strong>
+                        {formatCurrency(
+                          sale.grossProfitLossValue ??
+                            sale.grossProfitLossPln ??
+                            displayProfit,
+                          displayCurrency
+                        )}
+                      </strong>
+                    </div>
+                    <div>
                       <p className="table-note">Podatek</p>
                       <strong>{formatCurrency(sale.taxTotalPln ?? 0)}</strong>
                     </div>
@@ -168,7 +198,7 @@ export default function SalesHistoryPanel({
                 <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
                   {!isUndoAvailable ? (
                     <p className="table-note">
-                      Tej sprzedazy nie mozna juz cofnac, bo nowsza sprzedaz rozliczyla
+                      Tej {transactionName} nie mozna juz cofnac, bo nowsza transakcja rozliczyla
                       te same zakupy.
                     </p>
                   ) : (

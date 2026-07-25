@@ -1,0 +1,18 @@
+{
+  "name": "portfel-inwestora-vercel",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "portfel-inwestora"
+  ],
+  "scripts": {
+    "dev": "npm --workspace portfel-inwestora run dev",
+    "build": "npm --workspace portfel-inwestora run build",
+    "start": "npm --workspace portfel-inwestora run start",
+    "lint": "npm --workspace portfel-inwestora run lint"
+  },
+  "engines": {
+    "node": "20.x"
+  },
+  "packageManager": "npm@10"
+}

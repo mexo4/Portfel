@@ -1,18 +1,37 @@
 {
-  "name": "portfel-inwestora-vercel",
+  "name": "portfel-inwestora",
   "version": "0.1.0",
   "private": true,
-  "workspaces": [
-    "portfel-inwestora"
-  ],
   "scripts": {
-    "dev": "npm --workspace portfel-inwestora run dev",
-    "build": "npm --workspace portfel-inwestora run build",
-    "start": "npm --workspace portfel-inwestora run start",
-    "lint": "npm --workspace portfel-inwestora run lint"
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint"
   },
   "engines": {
-    "node": ">=20.18.0"
+    "node": "20.x"
   },
-  "packageManager": "npm@10"
+  "packageManager": "npm@10",
+  "dependencies": {
+    "@dnd-kit/core": "^6.3.1",
+    "@dnd-kit/sortable": "^10.0.0",
+    "@dnd-kit/utilities": "^3.2.2",
+    "@types/better-sqlite3": "^7.6.13",
+    "bcryptjs": "^3.0.3",
+    "better-sqlite3": "^12.8.0",
+    "next": "16.1.6",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "recharts": "^3.8.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.1.6",
+    "tailwindcss": "^4",
+    "typescript": "^5"
+  }
 }

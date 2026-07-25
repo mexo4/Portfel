@@ -12,7 +12,7 @@
     "lint": "npm --workspace portfel-inwestora run lint"
   },
   "engines": {
-    "node": "20.x"
+    "node": "24.x"
   },
   "packageManager": "npm@10"
 }

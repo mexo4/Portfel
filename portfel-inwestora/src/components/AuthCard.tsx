@@ -37,7 +37,7 @@ export default function AuthCard({ mode }: AuthCardProps) {
         });
       }
 
-      router.push("/");
+      router.push("/app");
       router.refresh();
     } catch (submitError) {
       setError(

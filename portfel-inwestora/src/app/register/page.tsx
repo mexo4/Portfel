@@ -6,7 +6,7 @@ export default async function RegisterPage() {
   const accountData = await getCurrentAccountData();
 
   if (accountData) {
-    redirect("/");
+    redirect("/app");
   }
 
   return <AuthCard mode="register" />;

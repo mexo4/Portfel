@@ -1,9 +1,13 @@
 "use client";
 
-import { AUTO_REFRESH_INTERVAL_MS } from "@/lib/constants";
+import {
+  AUTO_REFRESH_INTERVAL_MS,
+  FREE_PLAN_ASSET_LIMIT,
+  FREE_PLAN_PORTFOLIO_LIMIT,
+} from "@/lib/constants";
 import { getBaseCurrency } from "@/lib/pricing";
 import { formatCurrency, formatDateTime } from "@/lib/utils";
-import type { PortfolioSummary as SummaryModel } from "@/types/portfolio";
+import type { PortfolioSummary as SummaryModel, SubscriptionPlan } from "@/types/portfolio";
 
 type PortfolioSummaryProps = {
   summary: SummaryModel;
@@ -17,6 +21,7 @@ type PortfolioSummaryProps = {
   verificationMessage?: string | null;
   verificationError?: string | null;
   verificationPreviewUrl?: string | null;
+  subscriptionPlan: SubscriptionPlan;
   onRefresh: () => void;
   onLogout?: () => void;
   onRequestVerification?: () => void;
@@ -34,6 +39,7 @@ export default function PortfolioSummary({
   verificationMessage,
   verificationError,
   verificationPreviewUrl,
+  subscriptionPlan,
   onRefresh,
   onLogout,
   onRequestVerification,
@@ -55,6 +61,10 @@ export default function PortfolioSummary({
         </div>
 
         <div className="summary-actions">
+          <a className="ghost-button" href="/pricing">
+            Plan {subscriptionPlan === "pro" ? "Pro" : "Free"}
+          </a>
+
           {canVerifyEmail && onRequestVerification ? (
             <button
               className="ghost-button"
@@ -146,6 +156,9 @@ export default function PortfolioSummary({
         <span className="tag">pozycje: {summary.positionsCount}</span>
         <span className="tag">unikalne aktywa: {summary.assetsCount}</span>
         <span className="tag">sprzedaze: {summary.salesCount}</span>
+        <span className="tag">
+          plan: {subscriptionPlan === "pro" ? "Pro bez limitu" : `Free: ${FREE_PLAN_PORTFOLIO_LIMIT} portfel, do ${FREE_PLAN_ASSET_LIMIT} pozycji`}
+        </span>
         <span className="tag">auto refresh: co {AUTO_REFRESH_INTERVAL_MS / 1000}s</span>
         <span className="tag">baza: {getBaseCurrency()}</span>
       </div>

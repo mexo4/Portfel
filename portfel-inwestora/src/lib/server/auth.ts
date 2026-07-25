@@ -2,6 +2,7 @@ import bcrypt from "bcryptjs";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
+import { FREE_PLAN_ASSET_LIMIT } from "@/lib/constants";
 import { normalizePortfolioState } from "@/lib/portfolio-state";
 import type { NextResponse } from "next/server";
 import { createFreshUserProfile, normalizeUserProfile } from "@/lib/profile";
@@ -18,7 +19,6 @@ const SESSION_COOKIE_NAME = "portfel_inwestora_session";
 const SESSION_MAX_AGE_MS = 1000 * 60 * 60 * 24 * 30;
 const EMAIL_VERIFICATION_MAX_AGE_MS = 1000 * 60 * 60 * 24;
 const PASSWORD_RESET_MAX_AGE_MS = 1000 * 60 * 60 * 2;
-export const FREE_PLAN_ASSET_LIMIT = 8;
 
 type UserRow = {
   id: string;
@@ -447,8 +447,9 @@ export const updateCurrentUserPortfolio = async (
   }
 
   const account = toAuthenticatedUser(existingUser);
+  const normalizedPortfolio = normalizePortfolioState(portfolio);
 
-  if (!canUseProFeatures(account) && portfolio.assets.length > FREE_PLAN_ASSET_LIMIT) {
+  if (!canUseProFeatures(account) && normalizedPortfolio.assets.length > FREE_PLAN_ASSET_LIMIT) {
     throw new Error(
       `Plan Free pozwala zapisac do ${FREE_PLAN_ASSET_LIMIT} pozycji. Przejdz na Pro, aby dodawac kolejne.`
     );
@@ -460,9 +461,9 @@ export const updateCurrentUserPortfolio = async (
       SET portfolio_json = ?, updated_at = ?
       WHERE id = ?
     `
-  ).run(JSON.stringify(normalizePortfolioState(portfolio)), new Date().toISOString(), userId);
+  ).run(JSON.stringify(normalizedPortfolio), new Date().toISOString(), userId);
 
-  return normalizePortfolioState(portfolio);
+  return normalizedPortfolio;
 };
 
 export const updateCurrentUserSubscription = async (

@@ -5,6 +5,7 @@ import AddAssetForm from "@/components/AddAssetForm";
 import AssetModeSelector from "@/components/AssetModeSelector";
 import AppSectionTabs, { type AppSection } from "@/components/AppSectionTabs";
 import AssetTable from "@/components/AssetTable";
+import BrokerImportPanel from "@/components/BrokerImportPanel";
 import PortfolioCharts from "@/components/PortfolioCharts";
 import PortfolioLineCharts from "@/components/PortfolioLineCharts";
 import RealizedAdjustmentsPanel from "@/components/RealizedAdjustmentsPanel";
@@ -14,6 +15,7 @@ import TreasuryBondForm from "@/components/TreasuryBondForm";
 import {
   AUTO_REFRESH_INTERVAL_MS,
   FALLBACK_FX_RATES,
+  FREE_PLAN_ASSET_LIMIT,
   SEARCH_DEBOUNCE_MS,
 } from "@/lib/constants";
 import {
@@ -91,6 +93,7 @@ import type {
   TreasuryBondQuote,
   TreasuryBondSeries,
 } from "@/types/portfolio";
+import type { ImportedBrokerOperation } from "@/lib/import-operations";
 
 type PortfolioAppProps = {
   account: AuthenticatedUser;
@@ -218,6 +221,10 @@ const getTrackedCurrencies = (
     )
   ).sort();
 
+const canUseProFeatures = (account: AuthenticatedUser) =>
+  account.subscriptionPlan === "pro" &&
+  (account.subscriptionStatus === "active" || account.subscriptionStatus === "trialing");
+
 export default function PortfolioApp({
   account,
   initialAssets,
@@ -300,6 +307,11 @@ export default function PortfolioApp({
       ]),
     [assets, realizedAdjustments, sales]
   );
+  const hasProFeatures = canUseProFeatures(account);
+  const getFreePlanAssetLimitError = (nextAssetCount = assets.length + 1) =>
+    !hasProFeatures && nextAssetCount > FREE_PLAN_ASSET_LIMIT
+      ? `Plan Free pozwala miec do ${FREE_PLAN_ASSET_LIMIT} pozycji w jednym portfelu. Przejdz na Pro, aby dodawac kolejne.`
+      : null;
 
   useEffect(() => {
     assetsRef.current = assets;
@@ -1163,6 +1175,13 @@ export default function PortfolioApp({
       return;
     }
 
+    const planLimitError = getFreePlanAssetLimitError();
+
+    if (planLimitError) {
+      setBondError(planLimitError);
+      return;
+    }
+
     try {
       const response =
         bondSeries &&
@@ -1433,6 +1452,13 @@ export default function PortfolioApp({
       return;
     }
 
+    const planLimitError = getFreePlanAssetLimitError();
+
+    if (planLimitError) {
+      setSearchError(planLimitError);
+      return;
+    }
+
     if (symbol !== normalizeSymbolForMode(draft.symbol, searchMode)) {
       setDraft((currentDraft) => ({
         ...currentDraft,
@@ -1587,6 +1613,114 @@ export default function PortfolioApp({
     } catch (error) {
       setSearchError(toErrorMessage(error, "Nie udalo sie zapisac sprzedazy."));
     }
+  };
+
+  const handleImportBrokerOperations = async (operations: ImportedBrokerOperation[]) => {
+    let nextAssets = normalizeStoredPortfolioAssets(assets);
+    let nextSales = getSortedPortfolioSales(sales);
+    let importedBuys = 0;
+    let importedSells = 0;
+    let skippedSells = 0;
+
+    const orderedOperations = [...operations].sort(
+      (left, right) =>
+        left.date.localeCompare(right.date) || left.rowNumber - right.rowNumber
+    );
+
+    for (const operation of orderedOperations) {
+      const groupKey = getPortfolioAssetGroupKey({
+        kind: operation.kind,
+        symbol: operation.symbol,
+      });
+
+      if (operation.side === "buy") {
+        const planLimitError = getFreePlanAssetLimitError(nextAssets.length + 1);
+
+        if (planLimitError) {
+          throw new Error(planLimitError);
+        }
+
+        const existingGroupOrder = nextAssets.find(
+          (asset) => getPortfolioAssetGroupKey(asset) === groupKey
+        )?.groupOrder;
+        const nextAsset: PortfolioAsset = {
+          id: createAssetId(),
+          name: operation.name,
+          symbol: operation.symbol,
+          kind: operation.kind,
+          purchaseDate: operation.date,
+          quantity: operation.quantity,
+          purchasePrice: operation.price,
+          purchaseCurrency: operation.currency,
+          feePln: operation.feePln,
+          marketCurrency: operation.currency,
+          provider: operation.provider,
+          providerId: operation.providerId,
+          groupOrder: existingGroupOrder ?? getNextGroupOrder(nextAssets),
+          createdAt: new Date(`${operation.date}T00:00:00.000Z`).toISOString(),
+        };
+
+        nextAssets = normalizeStoredPortfolioAssets([nextAsset, ...nextAssets]);
+        importedBuys += 1;
+        continue;
+      }
+
+      const targetGroup = getGroupedPortfolioAssets(nextAssets, fxRates).find(
+        (group) => group.key === groupKey
+      );
+
+      if (!targetGroup) {
+        skippedSells += 1;
+        continue;
+      }
+
+      try {
+        const representativeLot = targetGroup.lots[0];
+        const result = applySaleToPortfolio({
+          assets: nextAssets,
+          group: targetGroup,
+          draft: {
+            groupKey,
+            name: operation.name || targetGroup.name,
+            symbol: operation.symbol,
+            kind: operation.kind,
+            purchaseCurrency: operation.currency,
+            marketCurrency: operation.currency,
+            provider: representativeLot?.provider ?? operation.provider,
+            providerId: representativeLot?.providerId ?? operation.providerId,
+            priceScale: representativeLot?.priceScale,
+            maxQuantity: targetGroup.quantity,
+            quantity: operation.quantity,
+            quantityInput: String(operation.quantity),
+            salePrice: operation.price,
+            salePriceInput: String(operation.price),
+            saleDate: operation.date,
+            feePln: operation.feePln,
+          },
+          fxRates,
+        });
+
+        nextAssets = result.assets;
+        nextSales = getSortedPortfolioSales([result.sale, ...nextSales]);
+        importedSells += 1;
+      } catch {
+        skippedSells += 1;
+      }
+    }
+
+    if (importedBuys + importedSells === 0) {
+      throw new Error("Nie udalo sie dodac zadnej operacji z pliku.");
+    }
+
+    setAssets(nextAssets);
+    setSales(nextSales);
+    setSyncError(null);
+
+    return {
+      importedBuys,
+      importedSells,
+      skippedSells,
+    };
   };
 
   const handleAddRealizedAdjustment = async () => {
@@ -1757,6 +1891,7 @@ export default function PortfolioApp({
       verificationMessage={verificationMessage}
       verificationError={verificationError}
       verificationPreviewUrl={verificationPreviewUrl}
+      subscriptionPlan={account.subscriptionPlan}
       onRefresh={() => {
         void syncFxRates(trackedCurrencies);
         void syncQuotes();
@@ -1902,6 +2037,8 @@ export default function PortfolioApp({
                 }}
               />
             )}
+
+            <BrokerImportPanel onImport={handleImportBrokerOperations} />
 
             <AssetTable
               assets={assets}

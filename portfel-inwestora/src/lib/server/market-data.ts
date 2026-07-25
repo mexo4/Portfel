@@ -5,6 +5,7 @@ import {
   searchEodhdStocks,
 } from "@/lib/server/eodhd";
 import { fetchYahooQuote, searchYahooStocks } from "@/lib/server/yahoo";
+import https from "node:https";
 import {
   findGpwCatalogEntry,
   findGpwCatalogEntryWithPrice,
@@ -71,6 +72,12 @@ type CoinGeckoCoin = {
   symbol: string;
 };
 
+type BinanceTickerResponse = {
+  lastPrice?: string;
+  prevClosePrice?: string;
+  price?: string;
+};
+
 type StooqHistorySnapshot = {
   price: number;
   previousClose?: number;
@@ -108,11 +115,20 @@ const isStockLikeFinnhubType = (type?: string) => {
   );
 };
 
+const GPW_STOOQ_SYMBOL_ALIASES: Record<string, string> = {
+  ORLEN: "PKN",
+};
+
+const getStooqTickerCore = (symbol: string) => {
+  const tickerCore = getGpwTickerCore(symbol);
+  return GPW_STOOQ_SYMBOL_ALIASES[tickerCore] ?? tickerCore;
+};
+
 const getStooqSymbolCandidates = (symbol: string) => {
   const normalized = normalizeSymbol(symbol);
 
   if (isGpwSymbol(normalized)) {
-    const tickerCore = getGpwTickerCore(normalized);
+    const tickerCore = getStooqTickerCore(normalized);
 
     return uniqueBy(
       [`${tickerCore}.wa`, tickerCore.toLowerCase(), `${tickerCore}.WA`, tickerCore],
@@ -140,7 +156,12 @@ const GPW_QUOTE_CACHE_TTL_MS = 30_000;
 const GPW_SEARCH_FALLBACK_TIMEOUT_MS = 1_500;
 const FINNHUB_SEARCH_TIMEOUT_MS = 3_500;
 const COINGECKO_SEARCH_CACHE_TTL_MS = 60_000;
-const COINGECKO_QUOTE_CACHE_TTL_MS = 30_000;
+const CRYPTO_QUOTE_CACHE_TTL_MS = 5_000;
+const COINGECKO_HEADERS = {
+  Accept: "application/json",
+  "User-Agent": "PortfelInwestora/0.1 price-sync",
+};
+const BINANCE_HEADERS = COINGECKO_HEADERS;
 
 const gpwQuoteCache = new Map<string, { quote: AssetQuote; expiresAt: number }>();
 const gpwQuoteInFlight = new Map<string, Promise<AssetQuote | null>>();
@@ -168,6 +189,78 @@ const safeFetch = async (
   }
 };
 
+const fetchJsonWithNodeHttps = <T>(
+  url: string,
+  headers: Record<string, string>,
+  timeoutMs: number
+) =>
+  new Promise<T | null>((resolve) => {
+    const request = https.get(
+      url,
+      {
+        headers: {
+          ...headers,
+          "Accept-Encoding": "identity",
+        },
+        rejectUnauthorized: false,
+        timeout: timeoutMs,
+      },
+      (response) => {
+        if (!response.statusCode || response.statusCode < 200 || response.statusCode >= 300) {
+          response.resume();
+          resolve(null);
+          return;
+        }
+
+        let body = "";
+        response.setEncoding("utf8");
+        response.on("data", (chunk) => {
+          body += chunk;
+        });
+        response.on("end", () => {
+          try {
+            resolve(JSON.parse(body) as T);
+          } catch {
+            resolve(null);
+          }
+        });
+      }
+    );
+
+    request.on("timeout", () => {
+      request.destroy();
+      resolve(null);
+    });
+    request.on("error", () => {
+      resolve(null);
+    });
+  });
+
+const safeFetchJson = async <T>(
+  url: string,
+  headers: Record<string, string>,
+  timeoutMs = 7_500
+) => {
+  const response = await safeFetch(
+    url,
+    {
+      headers,
+      cache: "no-store",
+    },
+    timeoutMs
+  );
+
+  if (response?.ok) {
+    try {
+      return (await response.json()) as T;
+    } catch {
+      return null;
+    }
+  }
+
+  return fetchJsonWithNodeHttps<T>(url, headers, timeoutMs);
+};
+
 const parseStooqPageNumber = (value: string) => {
   const normalized = value.replace(/\s+/g, "").replace(",", ".");
   const parsed = Number(normalized);
@@ -179,7 +272,7 @@ const getStooqPageSymbolCandidates = (symbol: string) => {
   const normalized = normalizeSymbol(symbol);
 
   if (isGpwSymbol(normalized)) {
-    const tickerCore = getGpwTickerCore(normalized);
+    const tickerCore = getStooqTickerCore(normalized);
     return uniqueBy([tickerCore.toLowerCase(), `${tickerCore.toLowerCase()}.wa`, tickerCore], (item) => item);
   }
 
@@ -200,7 +293,10 @@ const normalizeGpwTickerQuery = (query: string) => {
 const containsStooqRateLimitMessage = (value: string) =>
   STOOQ_RATE_LIMIT_PATTERN.test(value);
 
-const getGpwQuoteCacheKey = (symbol: string) => `stooq:${toStooqGpwSymbol(symbol)}`;
+const getGpwQuoteCacheKey = (symbol: string) => {
+  const tickerCore = getStooqTickerCore(symbol);
+  return `stooq:${tickerCore ? `${tickerCore}.WA` : toStooqGpwSymbol(symbol)}`;
+};
 
 const getCachedGpwQuote = (symbol: string) => {
   const cacheKey = getGpwQuoteCacheKey(symbol);
@@ -440,7 +536,7 @@ const fetchStooqLiveCsvQuote = async (
   fallbackCurrency: CurrencyCode,
   timeoutMs = 1_000
 ): Promise<AssetQuote | null> => {
-  const requestSymbols = [getGpwTickerCore(symbol).toLowerCase()];
+  const requestSymbols = [getStooqTickerCore(symbol).toLowerCase()];
 
   for (const requestSymbol of requestSymbols) {
     const response = await safeFetch(
@@ -493,7 +589,7 @@ const fetchStooqHistoryQuote = async (
   fallbackCurrency: CurrencyCode,
   timeoutMs = 800
 ): Promise<AssetQuote | null> => {
-  const requestSymbols = [getGpwTickerCore(symbol).toLowerCase()];
+  const requestSymbols = [getStooqTickerCore(symbol).toLowerCase()];
 
   for (const requestSymbol of requestSymbols) {
     const historyQuote = await fetchStooqHistoryQuoteForRequestSymbol(
@@ -612,6 +708,47 @@ const getCoinGeckoMatchScore = (query: string, coin: CoinGeckoCoin) => {
   return 6;
 };
 
+const COINGECKO_SYMBOL_PROVIDER_IDS: Record<string, string> = {
+  BTC: "bitcoin",
+  ETH: "ethereum",
+  BNB: "binancecoin",
+  SOL: "solana",
+  XRP: "ripple",
+  ADA: "cardano",
+  DOGE: "dogecoin",
+  DOT: "polkadot",
+  TRX: "tron",
+  AVAX: "avalanche-2",
+};
+
+const CRYPTO_SPOT_PAIRS: Record<string, string> = {
+  BTC: "BTCUSDT",
+  ETH: "ETHUSDT",
+  BNB: "BNBUSDT",
+  SOL: "SOLUSDT",
+  XRP: "XRPUSDT",
+  ADA: "ADAUSDT",
+  DOGE: "DOGEUSDT",
+  DOT: "DOTUSDT",
+  TRX: "TRXUSDT",
+  AVAX: "AVAXUSDT",
+};
+
+const normalizeCoinGeckoProviderId = (symbol: string, providerId?: string) => {
+  const normalizedSymbol = normalizeSymbol(symbol);
+  const normalizedProviderId = providerId?.trim();
+
+  if (!normalizedProviderId) {
+    return COINGECKO_SYMBOL_PROVIDER_IDS[normalizedSymbol];
+  }
+
+  if (normalizeSymbol(normalizedProviderId) === normalizedSymbol) {
+    return COINGECKO_SYMBOL_PROVIDER_IDS[normalizedSymbol] ?? normalizedProviderId.toLowerCase();
+  }
+
+  return normalizedProviderId.toLowerCase();
+};
+
 const fetchCoinGeckoCoins = async (query: string): Promise<CoinGeckoCoin[]> => {
   const cacheKey = normalizeText(query);
   const cachedSearch = coinGeckoSearchCache.get(cacheKey);
@@ -661,8 +798,10 @@ const fetchCoinGeckoCoins = async (query: string): Promise<CoinGeckoCoin[]> => {
 };
 
 const resolveCoinGeckoProviderId = async (symbol: string, providerId?: string) => {
-  if (providerId) {
-    return providerId;
+  const normalizedProviderId = normalizeCoinGeckoProviderId(symbol, providerId);
+
+  if (normalizedProviderId) {
+    return normalizedProviderId;
   }
 
   const normalizedSymbol = normalizeSymbol(symbol);
@@ -862,7 +1001,10 @@ const fetchStooqQuote = async (
 const fetchGpwStooqQuote = async (symbol: string): Promise<AssetQuote | null> => {
   warmGpwCatalog();
   const normalizedGpwSymbol = normalizeGpwSymbol(symbol);
-  const requestGpwSymbol = toStooqGpwSymbol(normalizedGpwSymbol);
+  const requestTickerCore = getStooqTickerCore(normalizedGpwSymbol);
+  const requestGpwSymbol = requestTickerCore
+    ? `${requestTickerCore}.WA`
+    : toStooqGpwSymbol(normalizedGpwSymbol);
 
   if (!normalizedGpwSymbol || !requestGpwSymbol) {
     return null;
@@ -908,15 +1050,8 @@ const fetchGpwStooqQuote = async (symbol: string): Promise<AssetQuote | null> =>
       return normalizedQuote;
     }
 
-    const catalogQuote = getCachedGpwCatalogQuote(normalizedGpwSymbol);
-
-    if (catalogQuote) {
-      setCachedGpwQuote(catalogQuote);
-      return catalogQuote;
-    }
-
     const pageQuote = await fetchStooqPageQuote(
-      getGpwTickerCore(requestGpwSymbol),
+      getStooqTickerCore(requestGpwSymbol),
       "PLN",
       20_000
     );
@@ -929,6 +1064,13 @@ const fetchGpwStooqQuote = async (symbol: string): Promise<AssetQuote | null> =>
       );
       setCachedGpwQuote(normalizedQuote);
       return normalizedQuote;
+    }
+
+    const catalogQuote = getCachedGpwCatalogQuote(normalizedGpwSymbol);
+
+    if (catalogQuote) {
+      setCachedGpwQuote(catalogQuote);
+      return catalogQuote;
     }
 
     const refreshedCatalogQuote = await getRefreshedGpwCatalogQuote(normalizedGpwSymbol);
@@ -946,6 +1088,43 @@ const fetchGpwStooqQuote = async (symbol: string): Promise<AssetQuote | null> =>
   gpwQuoteInFlight.set(cacheKey, quotePromise);
 
   return quotePromise;
+};
+
+const fetchBinanceSpotQuote = async (
+  symbol: string,
+  providerId: string
+): Promise<AssetQuote | null> => {
+  const normalizedSymbol = normalizeSymbol(symbol);
+  const pair = CRYPTO_SPOT_PAIRS[normalizedSymbol];
+
+  if (!pair) {
+    return null;
+  }
+
+  const payload = await safeFetchJson<BinanceTickerResponse>(
+    `https://api.binance.com/api/v3/ticker/24hr?symbol=${encodeURIComponent(pair)}`,
+    BINANCE_HEADERS,
+    7_500
+  );
+  const price = Number(payload?.lastPrice ?? payload?.price);
+  const previousClose = Number(payload?.prevClosePrice);
+
+  if (!Number.isFinite(price) || price <= 0) {
+    return null;
+  }
+
+  return {
+    symbol: normalizedSymbol,
+    price: round(price, 4),
+    marketCurrency: "USD",
+    provider: "coingecko",
+    providerId,
+    fetchedAt: new Date().toISOString(),
+    previousClose:
+      Number.isFinite(previousClose) && previousClose > 0
+        ? round(previousClose, 4)
+        : undefined,
+  };
 };
 
 const fetchCoinGeckoQuote = async (
@@ -966,20 +1145,34 @@ const fetchCoinGeckoQuote = async (
     };
   }
 
-  const response = await safeFetch(
+  const exchangeQuote = await fetchBinanceSpotQuote(normalizedSymbol, coinId);
+
+  if (exchangeQuote) {
+    coinGeckoQuoteCache.set(coinId, {
+      quote: exchangeQuote,
+      expiresAt: Date.now() + CRYPTO_QUOTE_CACHE_TTL_MS,
+    });
+
+    return exchangeQuote;
+  }
+
+  const payload = await safeFetchJson<
+    Record<
+      string,
+      {
+        usd?: number;
+        usd_24h_change?: number;
+      }
+    >
+  >(
     `https://api.coingecko.com/api/v3/simple/price?ids=${encodeURIComponent(
       coinId
     )}&vs_currencies=usd&include_24hr_change=true`,
-    {
-      headers: {
-        Accept: "application/json",
-      },
-      cache: "no-store",
-    },
+    COINGECKO_HEADERS,
     7_500
   );
 
-  if (!response?.ok) {
+  if (!payload) {
     return cachedQuote?.quote
       ? {
           ...cachedQuote.quote,
@@ -988,13 +1181,6 @@ const fetchCoinGeckoQuote = async (
       : null;
   }
 
-  const payload = (await response.json()) as Record<
-    string,
-    {
-      usd?: number;
-      usd_24h_change?: number;
-    }
-  >;
   const price = payload[coinId]?.usd;
   const dailyChangePercent = payload[coinId]?.usd_24h_change;
 
@@ -1009,7 +1195,7 @@ const fetchCoinGeckoQuote = async (
 
   const quote: AssetQuote = {
     symbol: normalizedSymbol,
-    price: round(price),
+    price: round(price, 4),
     marketCurrency: "USD",
     provider: "coingecko",
     providerId: coinId,
@@ -1019,7 +1205,7 @@ const fetchCoinGeckoQuote = async (
 
   coinGeckoQuoteCache.set(coinId, {
     quote,
-    expiresAt: Date.now() + COINGECKO_QUOTE_CACHE_TTL_MS,
+    expiresAt: Date.now() + CRYPTO_QUOTE_CACHE_TTL_MS,
   });
 
   return quote;

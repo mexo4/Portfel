@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import {
   getCurrentAccountData,
-  requestEmailVerificationForUser,
+  sendEmailVerificationForUser,
 } from "@/lib/server/auth";
 
 export const runtime = "nodejs";
@@ -15,11 +15,12 @@ export async function POST(request: Request) {
 
   try {
     const baseUrl = request.headers.get("origin") ?? new URL(request.url).origin;
-    const result = await requestEmailVerificationForUser(accountData.user.id, baseUrl);
+    const result = await sendEmailVerificationForUser(accountData.user.id, baseUrl);
 
     return NextResponse.json({
       success: true,
       alreadyVerified: result.alreadyVerified,
+      sent: result.sent,
       previewUrl: process.env.NODE_ENV === "production" ? null : result.previewUrl,
     });
   } catch (error) {

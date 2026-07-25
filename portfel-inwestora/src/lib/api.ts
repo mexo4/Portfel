@@ -34,6 +34,18 @@ type QuoteRequest = Pick<
   purchaseDate?: string;
 };
 
+export class ApiError extends Error {
+  status: number;
+  payload: unknown;
+
+  constructor(message: string, status: number, payload: unknown) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.payload = payload;
+  }
+}
+
 const requestJson = async <T,>(url: string, init?: RequestInit): Promise<T> => {
   const headers = new Headers(init?.headers);
 
@@ -49,7 +61,11 @@ const requestJson = async <T,>(url: string, init?: RequestInit): Promise<T> => {
 
   if (!response.ok) {
     const payload = await response.json().catch(() => null);
-    throw new Error(payload?.error ?? "Request failed");
+    const message =
+      payload && typeof payload === "object" && "error" in payload
+        ? String(payload.error)
+        : "Request failed";
+    throw new ApiError(message, response.status, payload);
   }
 
   return (await response.json()) as T;
@@ -254,7 +270,12 @@ export const registerUser = async (payload: {
   email: string;
   password: string;
 }) => {
-  return requestJson<{ user: AuthenticatedUser }>("/api/auth/register", {
+  return requestJson<{
+    user: AuthenticatedUser;
+    requiresVerification: boolean;
+    verificationSent: boolean;
+    previewUrl: string | null;
+  }>("/api/auth/register", {
     method: "POST",
     body: JSON.stringify(payload),
   });
@@ -270,9 +291,16 @@ export const requestEmailVerification = async () => {
   return requestJson<{
     success: boolean;
     alreadyVerified: boolean;
+    sent: boolean;
     previewUrl: string | null;
   }>("/api/auth/request-verification", {
     method: "POST",
+  });
+};
+
+export const deleteAdminUser = async (userId: string) => {
+  return requestJson<{ success: boolean }>(`/api/admin/users/${encodeURIComponent(userId)}`, {
+    method: "DELETE",
   });
 };
 

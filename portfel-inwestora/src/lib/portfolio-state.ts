@@ -87,6 +87,10 @@ const normalizePortfolioProviderId = (value: unknown, kind?: AssetKind) => {
     return undefined;
   }
 
+  if (kind === "crypto") {
+    return value.trim().toLowerCase();
+  }
+
   return normalizePortfolioSymbol(value, kind);
 };
 

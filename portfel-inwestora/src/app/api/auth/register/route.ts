@@ -1,8 +1,7 @@
 import { NextResponse } from "next/server";
 import {
-  appendSessionCookie,
-  createSessionForUser,
   registerAccount,
+  sendEmailVerificationForUser,
 } from "@/lib/server/auth";
 
 export const runtime = "nodejs";
@@ -21,11 +20,15 @@ export async function POST(request: Request) {
       password: payload.password ?? "",
     });
 
-    const session = createSessionForUser(user.id);
-    const response = NextResponse.json({ user });
-    appendSessionCookie(response, session.token, session.expiresAt);
+    const baseUrl = request.headers.get("origin") ?? new URL(request.url).origin;
+    const verification = await sendEmailVerificationForUser(user.id, baseUrl);
 
-    return response;
+    return NextResponse.json({
+      user,
+      requiresVerification: true,
+      verificationSent: verification.sent,
+      previewUrl: process.env.NODE_ENV === "production" ? null : verification.previewUrl,
+    });
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Nie udalo sie zalozyc konta.";

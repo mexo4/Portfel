@@ -97,6 +97,7 @@ import type { ImportedBrokerOperation } from "@/lib/import-operations";
 
 type PortfolioAppProps = {
   account: AuthenticatedUser;
+  isAdmin?: boolean;
   initialAssets: PortfolioAsset[];
   initialSales: PortfolioSale[];
   initialRealizedAdjustments: PortfolioRealizedAdjustment[];
@@ -227,6 +228,7 @@ const canUseProFeatures = (account: AuthenticatedUser) =>
 
 export default function PortfolioApp({
   account,
+  isAdmin = false,
   initialAssets,
   initialSales,
   initialRealizedAdjustments,
@@ -1896,9 +1898,6 @@ export default function PortfolioApp({
         void syncFxRates(trackedCurrencies);
         void syncQuotes();
       }}
-      onLogout={() => {
-        void handleLogout();
-      }}
       onRequestVerification={() => {
         void handleVerificationRequest();
       }}
@@ -1908,6 +1907,24 @@ export default function PortfolioApp({
   return (
     <main className="page-shell">
       <div className="page-grid">
+        <div className="summary-actions">
+          {isAdmin ? (
+            <a className="ghost-button" href="/admin">
+              Panel admina
+            </a>
+          ) : null}
+          <button
+            className="ghost-button"
+            type="button"
+            onClick={() => {
+              void handleLogout();
+            }}
+            disabled={isLoggingOut}
+          >
+            {isLoggingOut ? "Wylogowuje..." : "Wyloguj"}
+          </button>
+        </div>
+
         <AppSectionTabs activeSection={activeSection} onChange={setActiveSection} />
 
         {activeSection === "portfolio" ? (

@@ -1,4 +1,5 @@
 import { getCurrentAccountData } from "@/lib/server/auth";
+import { isAdminEmail } from "@/lib/server/access";
 import db from "@/lib/server/db";
 import { normalizePortfolioState } from "@/lib/portfolio-state";
 import type { PortfolioState, SubscriptionPlan, SubscriptionStatus } from "@/types/portfolio";
@@ -46,22 +47,12 @@ export type AdminDashboardData = {
     freeUsers: number;
     proUsers: number;
     verifiedUsers: number;
+    paidPlans: number;
     activeSessions: number;
     openPositions: number;
     sales: number;
   };
 };
-
-const getAdminEmails = () => 
-  [
-    process.env.ADMIN_EMAIL,
-    ...(process.env.ADMIN_EMAILS ?? "").split(","),
-  ]
-    .map((email) => email?.trim().toLowerCase())
-    .filter((email): email is string => Boolean(email));
-
-export const isAdminEmail = (email: string) =>
-  getAdminEmails().includes(email.trim().toLowerCase());
 
 const normalizeSubscriptionPlan = (plan: string): SubscriptionPlan =>
   plan === "pro" ? "pro" : "free";
@@ -154,6 +145,11 @@ export const getAdminDashboardData = async (): Promise<AdminDashboardData | null
       freeUsers: users.filter((user) => user.subscriptionPlan === "free").length,
       proUsers: users.filter((user) => user.subscriptionPlan === "pro").length,
       verifiedUsers: users.filter((user) => Boolean(user.emailVerifiedAt)).length,
+      paidPlans: users.filter(
+        (user) =>
+          user.subscriptionPlan === "pro" &&
+          (user.subscriptionStatus === "active" || user.subscriptionStatus === "trialing")
+      ).length,
       activeSessions: users.reduce((total, user) => total + user.activeSessions, 0),
       openPositions: users.reduce((total, user) => total + user.assetsCount, 0),
       sales: users.reduce((total, user) => total + user.salesCount, 0),

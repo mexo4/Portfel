@@ -3,18 +3,36 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { loginUser, registerUser } from "@/lib/api";
+import { ApiError, loginUser, registerUser } from "@/lib/api";
 
 type AuthCardProps = {
   mode: "login" | "register";
+  initialNotice?: string | null;
 };
 
-export default function AuthCard({ mode }: AuthCardProps) {
+type VerificationErrorPayload = {
+  requiresVerification?: boolean;
+  verificationSent?: boolean;
+  previewUrl?: string | null;
+};
+
+const getVerificationPayload = (error: unknown) => {
+  if (!(error instanceof ApiError) || !error.payload || typeof error.payload !== "object") {
+    return null;
+  }
+
+  const payload = error.payload as VerificationErrorPayload;
+  return payload.requiresVerification ? payload : null;
+};
+
+export default function AuthCard({ mode, initialNotice = null }: AuthCardProps) {
   const router = useRouter();
   const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(initialNotice);
+  const [verificationPreviewUrl, setVerificationPreviewUrl] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const isRegister = mode === "register";
@@ -22,14 +40,24 @@ export default function AuthCard({ mode }: AuthCardProps) {
   const handleSubmit = async () => {
     setIsSubmitting(true);
     setError(null);
+    setNotice(null);
+    setVerificationPreviewUrl(null);
 
     try {
       if (isRegister) {
-        await registerUser({
+        const response = await registerUser({
           displayName,
           email,
           password,
         });
+
+        setNotice(
+          response.verificationSent
+            ? "Konto utworzone. Wyslalismy email z linkiem potwierdzajacym."
+            : "Konto utworzone. Skonfiguruj RESEND_API_KEY, aby wysylac maile w produkcji."
+        );
+        setVerificationPreviewUrl(response.previewUrl);
+        return;
       } else {
         await loginUser({
           email,
@@ -40,6 +68,17 @@ export default function AuthCard({ mode }: AuthCardProps) {
       router.push("/app");
       router.refresh();
     } catch (submitError) {
+      const verificationPayload = getVerificationPayload(submitError);
+
+      if (verificationPayload) {
+        setNotice(
+          verificationPayload.verificationSent
+            ? "Wyslalismy nowy link potwierdzajacy email."
+            : "Potwierdz email przed logowaniem. Skonfiguruj RESEND_API_KEY, aby wysylac maile."
+        );
+        setVerificationPreviewUrl(verificationPayload.previewUrl ?? null);
+      }
+
       setError(
         submitError instanceof Error ? submitError.message : "Nie udalo sie zapisac formularza."
       );
@@ -103,6 +142,15 @@ export default function AuthCard({ mode }: AuthCardProps) {
             ) : null}
 
             {error ? <p className="field-note field-note-error">{error}</p> : null}
+            {notice ? <p className="field-note">{notice}</p> : null}
+            {verificationPreviewUrl ? (
+              <p className="field-note">
+                Tryb developerski:{" "}
+                <a className="auth-link" href={verificationPreviewUrl}>
+                  otworz link weryfikacyjny
+                </a>
+              </p>
+            ) : null}
 
             <button
               className="primary-button"
@@ -116,6 +164,21 @@ export default function AuthCard({ mode }: AuthCardProps) {
                   ? "Utworz konto"
                   : "Zaloguj sie"}
             </button>
+          </div>
+
+          <div className="auth-divider" aria-hidden="true">
+            <span />
+            <strong>lub</strong>
+            <span />
+          </div>
+
+          <div className="auth-oauth-actions">
+            <a className="ghost-button auth-oauth-button" href="/api/auth/oauth/google/start">
+              Google
+            </a>
+            <a className="ghost-button auth-oauth-button" href="/api/auth/oauth/apple/start">
+              Apple
+            </a>
           </div>
 
           <div className="hero-meta mt-6">

@@ -6,7 +6,9 @@ import { FREE_PLAN_ASSET_LIMIT } from "@/lib/constants";
 import { normalizePortfolioState } from "@/lib/portfolio-state";
 import type { NextResponse } from "next/server";
 import { createFreshUserProfile, normalizeUserProfile } from "@/lib/profile";
+import { isForcedProEmail } from "@/lib/server/access";
 import db from "@/lib/server/db";
+import { sendVerificationEmail } from "@/lib/server/email";
 import type {
   AuthenticatedUser,
   PortfolioState,
@@ -43,6 +45,16 @@ type TokenRow = {
   user_id: string;
   expires_at: string;
 };
+
+export class EmailVerificationRequiredError extends Error {
+  userId: string;
+
+  constructor(userId: string) {
+    super("Potwierdz adres email przed logowaniem.");
+    this.name = "EmailVerificationRequiredError";
+    this.userId = userId;
+  }
+}
 
 const getSessionExpiry = () => new Date(Date.now() + SESSION_MAX_AGE_MS);
 
@@ -149,6 +161,34 @@ const getTokenRow = (tableName: "email_verification_tokens" | "password_reset_to
   db
     .prepare(`SELECT user_id, expires_at FROM ${tableName} WHERE token_hash = ?`)
     .get(hashToken(token)) as TokenRow | undefined;
+
+const withForcedProSubscription = <T extends UserRow>(user: T): T => {
+  if (!isForcedProEmail(user.email)) {
+    return user;
+  }
+
+  if (user.subscription_plan === "pro" && user.subscription_status === "active") {
+    return user;
+  }
+
+  const now = new Date().toISOString();
+
+  db.prepare(
+    `
+      UPDATE users
+      SET subscription_plan = ?, subscription_status = ?, subscription_updated_at = ?, updated_at = ?
+      WHERE id = ?
+    `
+  ).run("pro", "active", now, now, user.id);
+
+  return {
+    ...user,
+    subscription_plan: "pro",
+    subscription_status: "active",
+    subscription_updated_at: now,
+    updated_at: now,
+  };
+};
 
 const removeSessionByToken = (token: string) => {
   db.prepare("DELETE FROM sessions WHERE token_hash = ?").run(hashToken(token));
@@ -269,6 +309,8 @@ export const registerAccount = async ({
     updatedAt: now,
   };
 
+  const initialSubscriptionPlan = isForcedProEmail(normalizedEmail) ? "pro" : "free";
+
   db.prepare(
     `
       INSERT INTO users (
@@ -293,7 +335,7 @@ export const registerAccount = async ({
     passwordHash,
     normalizedName,
     null,
-    "free",
+    initialSubscriptionPlan,
     "active",
     now,
     JSON.stringify(profile),
@@ -312,9 +354,98 @@ export const registerAccount = async ({
     displayName: normalizedName,
     createdAt: now,
     emailVerifiedAt: null,
-    subscriptionPlan: "free",
+    subscriptionPlan: initialSubscriptionPlan,
     subscriptionStatus: "active",
   } satisfies AuthenticatedUser;
+};
+
+export const upsertOAuthAccount = async ({
+  email,
+  displayName,
+}: {
+  email: string;
+  displayName?: string | null;
+}) => {
+  const normalizedEmail = email.trim().toLowerCase();
+  const normalizedName = displayName?.trim() || normalizedEmail.split("@")[0] || "Uzytkownik";
+
+  if (!normalizedEmail || !isEmailValid(normalizedEmail)) {
+    throw new Error("Dostawca logowania nie zwrocil poprawnego adresu email.");
+  }
+
+  const existingUser = getUserByEmail(normalizedEmail);
+  const now = new Date().toISOString();
+
+  if (existingUser) {
+    if (!existingUser.email_verified_at) {
+      db.prepare("UPDATE users SET email_verified_at = ?, updated_at = ? WHERE id = ?").run(
+        now,
+        now,
+        existingUser.id
+      );
+      purgeTokensForUser("email_verification_tokens", existingUser.id);
+    }
+
+    const updatedUser = getUserById(existingUser.id) ?? existingUser;
+    return toAuthenticatedUser(withForcedProSubscription(updatedUser));
+  }
+
+  const userId = randomUUID();
+  const passwordHash = await bcrypt.hash(randomUUID(), 12);
+  const profile = {
+    ...createFreshUserProfile({
+      displayName: normalizedName,
+      email: normalizedEmail,
+    }),
+    createdAt: now,
+    updatedAt: now,
+  };
+  const initialSubscriptionPlan = isForcedProEmail(normalizedEmail) ? "pro" : "free";
+
+  db.prepare(
+    `
+      INSERT INTO users (
+        id,
+        email,
+        password_hash,
+        display_name,
+        email_verified_at,
+        subscription_plan,
+        subscription_status,
+        subscription_updated_at,
+        profile_json,
+        portfolio_json,
+        created_at,
+        updated_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `
+  ).run(
+    userId,
+    normalizedEmail,
+    passwordHash,
+    normalizedName,
+    now,
+    initialSubscriptionPlan,
+    "active",
+    now,
+    JSON.stringify(profile),
+    JSON.stringify({
+      assets: [],
+      sales: [],
+      realizedAdjustments: [],
+    }),
+    now,
+    now
+  );
+
+  const createdUser = getUserById(userId);
+
+  if (!createdUser) {
+    throw new Error("Nie udalo sie utworzyc konta przez logowanie zewnetrzne.");
+  }
+
+  return toAuthenticatedUser(withForcedProSubscription(createdUser));
 };
 
 export const loginAccount = async ({
@@ -337,7 +468,11 @@ export const loginAccount = async ({
     throw new Error("Niepoprawny email lub haslo.");
   }
 
-  return toAuthenticatedUser(user);
+  if (!user.email_verified_at) {
+    throw new EmailVerificationRequiredError(user.id);
+  }
+
+  return toAuthenticatedUser(withForcedProSubscription(user));
 };
 
 export const getCurrentAccountData = async () => {
@@ -355,10 +490,12 @@ export const getCurrentAccountData = async () => {
     return null;
   }
 
+  const user = withForcedProSubscription(sessionUser);
+
   return {
-    user: toAuthenticatedUser(sessionUser),
-    profile: parseUserProfile(sessionUser),
-    ...parsePortfolio(sessionUser.portfolio_json),
+    user: toAuthenticatedUser(user),
+    profile: parseUserProfile(user),
+    ...parsePortfolio(user.portfolio_json),
   };
 };
 
@@ -446,7 +583,7 @@ export const updateCurrentUserPortfolio = async (
     throw new Error("Nie znaleziono uzytkownika.");
   }
 
-  const account = toAuthenticatedUser(existingUser);
+  const account = toAuthenticatedUser(withForcedProSubscription(existingUser));
   const normalizedPortfolio = normalizePortfolioState(portfolio);
 
   if (!canUseProFeatures(account) && normalizedPortfolio.assets.length > FREE_PLAN_ASSET_LIMIT) {
@@ -477,6 +614,7 @@ export const updateCurrentUserSubscription = async (
   }
 
   const now = new Date().toISOString();
+  const nextPlan = isForcedProEmail(existingUser.email) ? "pro" : plan;
 
   db.prepare(
     `
@@ -484,7 +622,7 @@ export const updateCurrentUserSubscription = async (
       SET subscription_plan = ?, subscription_status = ?, subscription_updated_at = ?, updated_at = ?
       WHERE id = ?
     `
-  ).run(plan, "active", now, now, userId);
+  ).run(nextPlan, "active", now, now, userId);
 
   const updatedUser = getUserById(userId);
 
@@ -492,7 +630,22 @@ export const updateCurrentUserSubscription = async (
     throw new Error("Nie udalo sie zapisac planu.");
   }
 
-  return toAuthenticatedUser(updatedUser);
+  return toAuthenticatedUser(withForcedProSubscription(updatedUser));
+};
+
+export const deleteUserByAdmin = async (adminUserId: string, targetUserId: string) => {
+  const adminUser = getUserById(adminUserId);
+  const targetUser = getUserById(targetUserId);
+
+  if (!adminUser || !targetUser) {
+    throw new Error("Nie znaleziono uzytkownika.");
+  }
+
+  if (adminUser.id === targetUser.id) {
+    throw new Error("Nie mozesz usunac wlasnego konta admina.");
+  }
+
+  db.prepare("DELETE FROM users WHERE id = ?").run(targetUser.id);
 };
 
 export const requestEmailVerificationForUser = async (userId: string, baseUrl: string) => {
@@ -520,6 +673,25 @@ export const requestEmailVerificationForUser = async (userId: string, baseUrl: s
   return {
     previewUrl: `${baseUrl}/verify-email?token=${verification.token}`,
     alreadyVerified: false,
+  };
+};
+
+export const sendEmailVerificationForUser = async (userId: string, baseUrl: string) => {
+  const result = await requestEmailVerificationForUser(userId, baseUrl);
+  const user = getUserById(userId);
+
+  if (!user || result.alreadyVerified || !result.previewUrl) {
+    return {
+      ...result,
+      sent: false,
+    };
+  }
+
+  const emailResult = await sendVerificationEmail(user.email, result.previewUrl);
+
+  return {
+    ...result,
+    sent: emailResult.sent,
   };
 };
 

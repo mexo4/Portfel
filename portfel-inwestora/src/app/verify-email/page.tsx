@@ -39,7 +39,7 @@ export default async function VerifyEmailPage({
           </p>
 
           <p className="section-copy mt-6">
-            <Link href={isError ? "/" : "/login"} className="auth-link">
+            <Link href={isError ? "/" : "/login?verified=1"} className="auth-link">
               {isError ? "Wroc do aplikacji" : "Przejdz do logowania"}
             </Link>
           </p>

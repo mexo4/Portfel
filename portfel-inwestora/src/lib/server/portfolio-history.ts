@@ -2,6 +2,8 @@ import db from "@/lib/server/db";
 import { fetchFxRatesServer } from "@/lib/server/market-data";
 import { fetchTreasuryBondQuoteSeriesServer } from "@/lib/server/treasury-bonds";
 import { normalizeYahooMoneyUnit } from "@/lib/server/yahoo";
+import { createHash } from "node:crypto";
+import https from "node:https";
 import {
   getGpwTickerCore,
   getPortfolioAssetGroupKey,
@@ -109,7 +111,13 @@ const getCachedPayload = <T,>(key: string, ttlMs: number) => {
   }
 
   try {
-    return JSON.parse(row.payload_json) as T;
+    const payload = JSON.parse(row.payload_json) as T;
+
+    if (Array.isArray(payload) && payload.length === 0) {
+      return null;
+    }
+
+    return payload;
   } catch {
     return null;
   }
@@ -123,16 +131,58 @@ const setCachedPayload = (key: string, payload: unknown) => {
   });
 };
 
+const fetchTextWithNodeHttps = (
+  url: string,
+  headers: Record<string, string>,
+  timeoutMs: number
+) =>
+  new Promise<string | null>((resolve) => {
+    const request = https.get(
+      url,
+      {
+        headers,
+        rejectUnauthorized: false,
+        timeout: timeoutMs,
+      },
+      (response) => {
+        if (!response.statusCode || response.statusCode < 200 || response.statusCode >= 300) {
+          response.resume();
+          resolve(null);
+          return;
+        }
+
+        let body = "";
+        response.setEncoding("utf8");
+        response.on("data", (chunk) => {
+          body += chunk;
+        });
+        response.on("end", () => {
+          resolve(body);
+        });
+      }
+    );
+
+    request.on("timeout", () => {
+      request.destroy();
+      resolve(null);
+    });
+    request.on("error", () => {
+      resolve(null);
+    });
+  });
+
 const safeFetchText = async (url: string, timeoutMs = 20_000) => {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  const headers = {
+    Accept: "text/plain, text/csv",
+    "Accept-Encoding": "identity",
+    "User-Agent": "Mozilla/5.0",
+  };
 
   try {
     const response = await fetch(url, {
-      headers: {
-        Accept: "text/plain, text/csv",
-        "User-Agent": "Mozilla/5.0",
-      },
+      headers,
       cache: "no-store",
       signal: controller.signal,
     });
@@ -141,24 +191,118 @@ const safeFetchText = async (url: string, timeoutMs = 20_000) => {
       return null;
     }
 
-    return await response.text();
+    const text = await response.text();
+
+    if (!text.includes("/__verify")) {
+      return text;
+    }
+
+    return await fetchTextAfterStooqVerification(url, text, response, timeoutMs);
   } catch {
-    return null;
+    const text = await fetchTextWithNodeHttps(url, headers, timeoutMs);
+    return text?.includes("/__verify") ? null : text;
   } finally {
     clearTimeout(timeoutId);
   }
 };
 
+const getSetCookieHeader = (response: Response) => {
+  const headersWithGetSetCookie = response.headers as Headers & {
+    getSetCookie?: () => string[];
+  };
+  const cookies = headersWithGetSetCookie.getSetCookie?.();
+
+  if (cookies && cookies.length > 0) {
+    return cookies.map((cookie) => cookie.split(";")[0]).join("; ");
+  }
+
+  return response.headers.get("set-cookie")?.split(",").map((cookie) => cookie.split(";")[0]).join("; ");
+};
+
+const solveStooqChallenge = (html: string) => {
+  const challenge = html.match(/const c="([^"]+)"/)?.[1];
+  const difficulty = Number(html.match(/d=(\d+)/)?.[1] ?? 0);
+
+  if (!challenge || !Number.isFinite(difficulty) || difficulty <= 0) {
+    return null;
+  }
+
+  const prefix = "0".repeat(difficulty);
+
+  for (let nonce = 0; nonce < 2_000_000; nonce += 1) {
+    const hash = createHash("sha256").update(`${challenge}${nonce}`).digest("hex");
+
+    if (hash.startsWith(prefix)) {
+      return { challenge, nonce };
+    }
+  }
+
+  return null;
+};
+
+const fetchTextAfterStooqVerification = async (
+  url: string,
+  challengeHtml: string,
+  response: Response,
+  timeoutMs: number
+) => {
+  const solution = solveStooqChallenge(challengeHtml);
+
+  if (!solution) {
+    return null;
+  }
+
+  const cookie = getSetCookieHeader(response);
+  const targetUrl = new URL(url);
+  const verifyResponse = await fetch(`${targetUrl.origin}/__verify`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      ...(cookie ? { Cookie: cookie } : {}),
+    },
+    body: new URLSearchParams({
+      c: solution.challenge,
+      n: String(solution.nonce),
+    }),
+    cache: "no-store",
+    signal: AbortSignal.timeout(timeoutMs),
+  }).catch(() => null);
+
+  if (!verifyResponse?.ok) {
+    return null;
+  }
+
+  const verifyCookie = getSetCookieHeader(verifyResponse);
+  const verifiedResponse = await fetch(url, {
+    headers: {
+      Accept: "text/plain, text/csv",
+      "User-Agent": "Mozilla/5.0",
+      ...(verifyCookie || cookie ? { Cookie: verifyCookie ?? cookie } : {}),
+    },
+    cache: "no-store",
+    signal: AbortSignal.timeout(timeoutMs),
+  }).catch(() => null);
+
+  if (!verifiedResponse?.ok) {
+    return null;
+  }
+
+  const verifiedText = await verifiedResponse.text();
+  return verifiedText.includes("/__verify") ? null : verifiedText;
+};
+
 const safeFetchJson = async <T,>(url: string, timeoutMs = 20_000) => {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  const headers = {
+    Accept: "application/json",
+    "Accept-Encoding": "identity",
+    "User-Agent": "Mozilla/5.0",
+  };
 
   try {
     const response = await fetch(url, {
-      headers: {
-        Accept: "application/json",
-        "User-Agent": "Mozilla/5.0",
-      },
+      headers,
       cache: "no-store",
       signal: controller.signal,
     });
@@ -169,7 +313,17 @@ const safeFetchJson = async <T,>(url: string, timeoutMs = 20_000) => {
 
     return (await response.json()) as T;
   } catch {
-    return null;
+    const text = await fetchTextWithNodeHttps(url, headers, timeoutMs);
+
+    if (!text) {
+      return null;
+    }
+
+    try {
+      return JSON.parse(text) as T;
+    } catch {
+      return null;
+    }
   } finally {
     clearTimeout(timeoutId);
   }
@@ -481,9 +635,44 @@ const fetchEodhdHistory = async (
   return [];
 };
 
-const fetchCoinGeckoHistory = async (providerId: string) => {
+const COINGECKO_SYMBOL_PROVIDER_IDS: Record<string, string> = {
+  BTC: "bitcoin",
+  ETH: "ethereum",
+  BNB: "binancecoin",
+  SOL: "solana",
+  XRP: "ripple",
+  ADA: "cardano",
+  DOGE: "dogecoin",
+  DOT: "polkadot",
+  TRX: "tron",
+  AVAX: "avalanche-2",
+};
+
+const normalizeCoinGeckoHistoryProviderId = (symbol: string, providerId?: string) => {
+  const normalizedSymbol = normalizeSymbol(symbol);
+  const normalizedProviderId = providerId?.trim();
+
+  if (!normalizedProviderId) {
+    return COINGECKO_SYMBOL_PROVIDER_IDS[normalizedSymbol];
+  }
+
+  if (normalizeSymbol(normalizedProviderId) === normalizedSymbol) {
+    return COINGECKO_SYMBOL_PROVIDER_IDS[normalizedSymbol] ?? normalizedProviderId.toLowerCase();
+  }
+
+  return normalizedProviderId.toLowerCase();
+};
+
+const fetchCoinGeckoHistory = async (
+  providerId: string,
+  startDate: string,
+  endDate: string
+) => {
+  const from = Math.floor(new Date(`${startDate}T00:00:00.000Z`).getTime() / 1_000);
+  const to = Math.floor(new Date(`${endDate}T23:59:59.000Z`).getTime() / 1_000);
+
   return getCachedOrFetch<PricePoint[]>(
-    `portfolio-history:coingecko:${normalizeSymbol(providerId)}`,
+    `portfolio-history:coingecko:${providerId.toLowerCase()}:${startDate}:${endDate}`,
     HISTORY_CACHE_TTL_MS,
     async () => {
       const payload = await safeFetchJson<{
@@ -491,7 +680,7 @@ const fetchCoinGeckoHistory = async (providerId: string) => {
       }>(
         `https://api.coingecko.com/api/v3/coins/${encodeURIComponent(
           providerId
-        )}/market_chart?vs_currency=usd&days=max&interval=daily`,
+        )}/market_chart/range?vs_currency=usd&from=${from}&to=${to}`,
         25_000
       );
 
@@ -567,17 +756,18 @@ const fetchInstrumentHistory = async ({
     }
 
     if (kind === "etf") {
-      if (!providerId) {
-        return {
-          points: [],
-          warning: `ETF ${symbol} nie ma providerId do historii EODHD; uzyto fallbacku z danych zakupu.`,
-        };
+      const eodhdPoints = providerId
+        ? await fetchEodhdHistory(providerId, startDate, endDate, priceScale)
+        : [];
+
+      if (eodhdPoints.length > 0) {
+        return { points: eodhdPoints };
       }
 
-      const points = await fetchEodhdHistory(providerId, startDate, endDate, priceScale);
+      const fallbackPoints = await fetchStockHistory(symbol, startDate, endDate, priceScale);
 
-      return points.length > 0
-        ? { points }
+      return fallbackPoints.length > 0
+        ? { points: fallbackPoints }
         : {
             points: [],
             warning: `Nie udalo sie pobrac pelnej historii cen dla ETF ${symbol}; uzyto fallbacku z danych zakupu.`,
@@ -585,14 +775,20 @@ const fetchInstrumentHistory = async ({
     }
 
     if (kind === "crypto") {
-      if (!providerId) {
+      const coinGeckoProviderId = normalizeCoinGeckoHistoryProviderId(symbol, providerId);
+
+      if (!coinGeckoProviderId) {
         return {
           points: [],
           warning: `Krypto ${symbol} nie ma providerId CoinGecko; uzyto fallbacku z danych zakupu.`,
         };
       }
 
-      const points = await fetchCoinGeckoHistory(providerId);
+      const points = await fetchCoinGeckoHistory(
+        coinGeckoProviderId,
+        startDate,
+        endDate
+      );
       const filteredPoints = points.filter(
         (point) => point.date >= startDate && point.date <= endDate
       );

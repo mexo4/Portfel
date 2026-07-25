@@ -10,6 +10,7 @@ import type {
   BondSwapQuote,
   FxRates,
   PortfolioAsset,
+  InvestmentPortfolio,
   PortfolioBenchmarkDefinition,
   PortfolioHistoryResponse,
   PortfolioRealizedAdjustment,
@@ -241,18 +242,28 @@ export const savePortfolioState = async ({
   assets,
   sales,
   realizedAdjustments,
+  portfolios,
+  activePortfolioId,
 }: {
-  assets: PortfolioAsset[];
-  sales: PortfolioSale[];
-  realizedAdjustments: PortfolioRealizedAdjustment[];
+  assets?: PortfolioAsset[];
+  sales?: PortfolioSale[];
+  realizedAdjustments?: PortfolioRealizedAdjustment[];
+  portfolios?: InvestmentPortfolio[];
+  activePortfolioId?: string;
 }) => {
   const data = await requestJson<{
     assets: PortfolioAsset[];
     sales: PortfolioSale[];
     realizedAdjustments: PortfolioRealizedAdjustment[];
+    portfolios?: InvestmentPortfolio[];
+    activePortfolioId?: string;
   }>("/api/portfolio", {
     method: "PUT",
-    body: JSON.stringify({ assets, sales, realizedAdjustments }),
+    body: JSON.stringify(
+      portfolios
+        ? { portfolios, activePortfolioId }
+        : { assets: assets ?? [], sales: sales ?? [], realizedAdjustments: realizedAdjustments ?? [] }
+    ),
   });
 
   return data;

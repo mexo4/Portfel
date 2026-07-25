@@ -3,7 +3,6 @@
 import {
   AUTO_REFRESH_INTERVAL_MS,
   FREE_PLAN_ASSET_LIMIT,
-  FREE_PLAN_PORTFOLIO_LIMIT,
 } from "@/lib/constants";
 import { getBaseCurrency } from "@/lib/pricing";
 import { formatCurrency, formatDateTime } from "@/lib/utils";
@@ -157,7 +156,7 @@ export default function PortfolioSummary({
         <span className="tag">unikalne aktywa: {summary.assetsCount}</span>
         <span className="tag">sprzedaze: {summary.salesCount}</span>
         <span className="tag">
-          plan: {subscriptionPlan === "pro" ? "Pro bez limitu" : `Free: ${FREE_PLAN_PORTFOLIO_LIMIT} portfel, do ${FREE_PLAN_ASSET_LIMIT} pozycji`}
+          plan: {subscriptionPlan === "pro" ? "Pro bez limitu" : `Free: do ${FREE_PLAN_ASSET_LIMIT} pozycji w portfelu`}
         </span>
         <span className="tag">auto refresh: co {AUTO_REFRESH_INTERVAL_MS / 1000}s</span>
         <span className="tag">baza: {getBaseCurrency()}</span>

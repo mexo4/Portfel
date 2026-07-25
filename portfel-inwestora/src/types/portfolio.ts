@@ -329,6 +329,18 @@ export type PortfolioState = {
   realizedAdjustments: PortfolioRealizedAdjustment[];
 };
 
+export type InvestmentPortfolio = PortfolioState & {
+  id: string;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type PortfolioBook = {
+  portfolios: InvestmentPortfolio[];
+  activePortfolioId: string;
+};
+
 export type FxRates = Record<CurrencyCode, number>;
 
 export type PortfolioSummary = {

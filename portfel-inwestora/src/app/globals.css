@@ -1503,6 +1503,97 @@ select {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.portfolio-hub-panel::after {
+  display: none;
+}
+
+.portfolio-hub-head {
+  display: grid;
+  align-items: end;
+  gap: 18px;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.portfolio-hub-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.portfolio-hub-total {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.portfolio-hub-total article {
+  display: grid;
+  gap: 4px;
+  border: 1px solid rgba(20, 35, 48, 0.08);
+  border-radius: 8px;
+  padding: 12px 14px;
+  background: rgba(244, 248, 246, 0.7);
+}
+
+.portfolio-hub-total span,
+.portfolio-switch-card > span,
+.portfolio-switch-card small {
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.portfolio-hub-total strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: 1.05rem;
+}
+
+.portfolio-card-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.portfolio-switch-card {
+  display: grid;
+  gap: 8px;
+  min-height: 136px;
+  border: 1px solid rgba(20, 35, 48, 0.1);
+  border-radius: 8px;
+  padding: 14px;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.76);
+  text-align: left;
+  cursor: pointer;
+}
+
+.portfolio-switch-card:hover {
+  border-color: rgba(15, 118, 110, 0.24);
+  background: rgba(244, 248, 246, 0.9);
+}
+
+.portfolio-switch-card.is-active {
+  border-color: rgba(15, 118, 110, 0.38);
+  background: linear-gradient(180deg, rgba(220, 245, 239, 0.84), rgba(255, 255, 255, 0.92));
+  box-shadow: 0 14px 26px rgba(15, 118, 110, 0.12);
+}
+
+.portfolio-switch-card strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: 1.02rem;
+}
+
+.portfolio-switch-card div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  font-weight: 800;
+}
+
 .admin-users-panel::after {
   display: none;
 }
@@ -2196,6 +2287,19 @@ select {
 
   .summary-actions > * {
     width: 100%;
+  }
+
+  .portfolio-hub-head,
+  .portfolio-hub-total {
+    grid-template-columns: 1fr;
+  }
+
+  .portfolio-hub-actions {
+    justify-content: stretch;
+  }
+
+  .portfolio-hub-actions > * {
+    flex: 1 1 160px;
   }
 
   .section-tabs {

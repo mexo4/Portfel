@@ -15,6 +15,8 @@ import type {
   BenchmarkInvestment,
   BondTransactionKind,
   FxRates,
+  InvestmentPortfolio,
+  PortfolioBook,
   PortfolioAsset,
   PortfolioRealizedAdjustment,
   PortfolioSale,
@@ -225,6 +227,8 @@ const createSaleId = () =>
   `sale-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 const createRealizedAdjustmentId = () =>
   `realized-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+const createPortfolioId = () =>
+  `portfolio-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
 export const getManualOrderKeys = (assets: PortfolioAsset[]) => {
   const groupedAssets = new Map<
@@ -600,7 +604,30 @@ const normalizePortfolioRealizedAdjustment = (
   };
 };
 
+const isPortfolioBookLike = (value: unknown): value is { portfolios?: unknown[] } => {
+  if (value === null || typeof value !== "object") {
+    return false;
+  }
+
+  return (
+    "portfolios" in value &&
+    Array.isArray((value as { portfolios?: unknown[] }).portfolios)
+  );
+};
+
 export const normalizePortfolioState = (value: unknown): PortfolioState => {
+  if (isPortfolioBookLike(value)) {
+    const book = normalizePortfolioBook(value);
+
+    return normalizePortfolioState({
+      assets: book.portfolios.flatMap((portfolio) => portfolio.assets),
+      sales: book.portfolios.flatMap((portfolio) => portfolio.sales),
+      realizedAdjustments: book.portfolios.flatMap(
+        (portfolio) => portfolio.realizedAdjustments
+      ),
+    });
+  }
+
   const rawState: {
     assets?: unknown[];
     sales?: unknown[];
@@ -650,6 +677,95 @@ export const normalizePortfolioState = (value: unknown): PortfolioState => {
           new Date(left.date || left.createdAt).getTime() ||
         new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
     ),
+  };
+};
+
+const normalizePortfolioName = (value: unknown, fallback: string) => {
+  if (typeof value !== "string") {
+    return fallback;
+  }
+
+  const trimmedValue = value.trim();
+  return trimmedValue ? trimmedValue.slice(0, 64) : fallback;
+};
+
+export const createInvestmentPortfolio = (
+  name = "Nowy portfel",
+  state: PortfolioState = createEmptyPortfolioState()
+): InvestmentPortfolio => {
+  const now = new Date().toISOString();
+  const normalizedState = normalizePortfolioState(state);
+
+  return {
+    id: createPortfolioId(),
+    name: normalizePortfolioName(name, "Nowy portfel"),
+    assets: normalizedState.assets,
+    sales: normalizedState.sales,
+    realizedAdjustments: normalizedState.realizedAdjustments,
+    createdAt: now,
+    updatedAt: now,
+  };
+};
+
+const normalizeInvestmentPortfolio = (
+  value: unknown,
+  index: number
+): InvestmentPortfolio | null => {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const rawPortfolio = value as Partial<InvestmentPortfolio>;
+  const normalizedState = normalizePortfolioState(rawPortfolio);
+  const now = new Date().toISOString();
+  const createdAt =
+    typeof rawPortfolio.createdAt === "string" && rawPortfolio.createdAt
+      ? rawPortfolio.createdAt
+      : now;
+  const updatedAt =
+    typeof rawPortfolio.updatedAt === "string" && rawPortfolio.updatedAt
+      ? rawPortfolio.updatedAt
+      : createdAt;
+
+  return {
+    id:
+      typeof rawPortfolio.id === "string" && rawPortfolio.id
+        ? rawPortfolio.id
+        : createPortfolioId(),
+    name: normalizePortfolioName(rawPortfolio.name, index === 0 ? "Portfel 1" : `Portfel ${index + 1}`),
+    assets: normalizedState.assets,
+    sales: normalizedState.sales,
+    realizedAdjustments: normalizedState.realizedAdjustments,
+    createdAt,
+    updatedAt,
+  };
+};
+
+export const normalizePortfolioBook = (value: unknown): PortfolioBook => {
+  if (isPortfolioBookLike(value)) {
+    const rawBook = value as { portfolios?: unknown[]; activePortfolioId?: unknown };
+    const portfolios = (rawBook.portfolios ?? [])
+      .map((portfolio, index) => normalizeInvestmentPortfolio(portfolio, index))
+      .filter((portfolio): portfolio is InvestmentPortfolio => Boolean(portfolio));
+    const fallbackPortfolio = portfolios[0] ?? createInvestmentPortfolio("Portfel 1");
+    const activePortfolioId =
+      typeof rawBook.activePortfolioId === "string" &&
+      portfolios.some((portfolio) => portfolio.id === rawBook.activePortfolioId)
+        ? rawBook.activePortfolioId
+        : fallbackPortfolio.id;
+
+    return {
+      portfolios: portfolios.length > 0 ? portfolios : [fallbackPortfolio],
+      activePortfolioId,
+    };
+  }
+
+  const legacyState = normalizePortfolioState(value);
+  const defaultPortfolio = createInvestmentPortfolio("Portfel 1", legacyState);
+
+  return {
+    portfolios: [defaultPortfolio],
+    activePortfolioId: defaultPortfolio.id,
   };
 };
 

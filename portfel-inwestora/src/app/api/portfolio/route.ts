@@ -3,7 +3,7 @@ import {
   getCurrentAccountData,
   updateCurrentUserPortfolio,
 } from "@/lib/server/auth";
-import type { PortfolioState } from "@/types/portfolio";
+import type { PortfolioBook, PortfolioState } from "@/types/portfolio";
 
 export const runtime = "nodejs";
 
@@ -18,6 +18,8 @@ export async function GET() {
     assets: accountData.assets,
     sales: accountData.sales,
     realizedAdjustments: accountData.realizedAdjustments,
+    portfolios: accountData.portfolios,
+    activePortfolioId: accountData.activePortfolioId,
   });
 }
 
@@ -33,15 +35,28 @@ export async function PUT(request: Request) {
       assets?: PortfolioState["assets"];
       sales?: PortfolioState["sales"];
       realizedAdjustments?: PortfolioState["realizedAdjustments"];
+      portfolios?: PortfolioBook["portfolios"];
+      activePortfolioId?: PortfolioBook["activePortfolioId"];
     };
 
-    const updatedPortfolio = await updateCurrentUserPortfolio(accountData.user.id, {
-      assets: Array.isArray(payload.assets) ? payload.assets : [],
-      sales: Array.isArray(payload.sales) ? payload.sales : [],
-      realizedAdjustments: Array.isArray(payload.realizedAdjustments)
-        ? payload.realizedAdjustments
-        : [],
-    });
+    const nextPortfolio =
+      Array.isArray(payload.portfolios)
+        ? {
+            portfolios: payload.portfolios,
+            activePortfolioId:
+              typeof payload.activePortfolioId === "string"
+                ? payload.activePortfolioId
+                : payload.portfolios[0]?.id ?? "",
+          }
+        : {
+            assets: Array.isArray(payload.assets) ? payload.assets : [],
+            sales: Array.isArray(payload.sales) ? payload.sales : [],
+            realizedAdjustments: Array.isArray(payload.realizedAdjustments)
+              ? payload.realizedAdjustments
+              : [],
+          };
+
+    const updatedPortfolio = await updateCurrentUserPortfolio(accountData.user.id, nextPortfolio);
 
     return NextResponse.json(updatedPortfolio);
   } catch (error) {

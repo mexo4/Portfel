@@ -1,6 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import AddAssetForm from "@/components/AddAssetForm";
 import AssetModeSelector from "@/components/AssetModeSelector";
 import AppSectionTabs, { type AppSection } from "@/components/AppSectionTabs";
@@ -34,12 +36,14 @@ import {
   applySaleToPortfolio,
   buildAutomaticBondCouponAdjustments,
   canUndoPortfolioSale,
+  createInvestmentPortfolio,
   createEmptyRealizedAdjustmentDraft,
   createPortfolioRealizedAdjustment,
   getManualOrderKeys,
   getNextGroupOrder,
   getSortedPortfolioRealizedAdjustments,
   getSortedPortfolioSales,
+  normalizePortfolioBook,
   normalizeStoredPortfolioAssets,
   undoPortfolioSale,
 } from "@/lib/portfolio-state";
@@ -62,6 +66,7 @@ import {
 } from "@/lib/ticker";
 import {
   getTodayDateInputValue,
+  formatCurrency,
   normalizeText,
   round,
   toCurrencyCode,
@@ -85,6 +90,7 @@ import type {
   BondRedemptionQuote,
   BondSwapQuote,
   FxRates,
+  InvestmentPortfolio,
   PortfolioAsset,
   PortfolioRealizedAdjustment,
   PortfolioSale,
@@ -101,6 +107,14 @@ type PortfolioAppProps = {
   initialAssets: PortfolioAsset[];
   initialSales: PortfolioSale[];
   initialRealizedAdjustments: PortfolioRealizedAdjustment[];
+  initialPortfolios?: InvestmentPortfolio[];
+  initialActivePortfolioId?: string;
+};
+
+type PortfolioWorkspaceState = {
+  assets: PortfolioAsset[];
+  sales: PortfolioSale[];
+  realizedAdjustments: PortfolioRealizedAdjustment[];
 };
 
 const SAVE_DEBOUNCE_MS = 700;
@@ -205,6 +219,7 @@ const isAssetTableSortMode = (value: string | null): value is AssetTableSortMode
 
 const getTrackedCurrencies = (
   assets: PortfolioAsset[],
+  portfolios: InvestmentPortfolio[],
   draft: AssetDraft,
   realizedAdjustmentDraft: RealizedAdjustmentDraft
 ) =>
@@ -216,6 +231,12 @@ const getTrackedCurrencies = (
         draft.marketCurrency,
         realizedAdjustmentDraft.currency,
         ...assets.flatMap((asset) => [asset.purchaseCurrency, asset.marketCurrency]),
+        ...portfolios.flatMap((portfolio) =>
+          portfolio.assets.flatMap((asset) => [asset.purchaseCurrency, asset.marketCurrency])
+        ),
+        ...portfolios.flatMap((portfolio) =>
+          portfolio.realizedAdjustments.map((adjustment) => adjustment.currency)
+        ),
       ]
         .map((code) => toCurrencyCode(code))
         .filter(Boolean)
@@ -226,25 +247,91 @@ const canUseProFeatures = (account: AuthenticatedUser) =>
   account.subscriptionPlan === "pro" &&
   (account.subscriptionStatus === "active" || account.subscriptionStatus === "trialing");
 
+const buildInitialPortfolioBook = ({
+  initialAssets,
+  initialSales,
+  initialRealizedAdjustments,
+  initialPortfolios,
+  initialActivePortfolioId,
+}: Pick<
+  PortfolioAppProps,
+  | "initialAssets"
+  | "initialSales"
+  | "initialRealizedAdjustments"
+  | "initialPortfolios"
+  | "initialActivePortfolioId"
+>) =>
+  normalizePortfolioBook(
+    initialPortfolios && initialPortfolios.length > 0
+      ? {
+          portfolios: initialPortfolios,
+          activePortfolioId: initialActivePortfolioId,
+        }
+      : {
+          assets: initialAssets,
+          sales: initialSales,
+          realizedAdjustments: initialRealizedAdjustments,
+        }
+  );
+
 export default function PortfolioApp({
   account,
   isAdmin = false,
   initialAssets,
   initialSales,
   initialRealizedAdjustments,
+  initialPortfolios,
+  initialActivePortfolioId,
 }: PortfolioAppProps) {
-  const assetsRef = useRef<PortfolioAsset[]>(normalizeStoredPortfolioAssets(initialAssets));
+  const router = useRouter();
+  const initialPortfolioBook = useMemo(
+    () =>
+      buildInitialPortfolioBook({
+        initialAssets,
+        initialSales,
+        initialRealizedAdjustments,
+        initialPortfolios,
+        initialActivePortfolioId,
+      }),
+    [
+      initialActivePortfolioId,
+      initialAssets,
+      initialPortfolios,
+      initialRealizedAdjustments,
+      initialSales,
+    ]
+  );
+  const initialActivePortfolio =
+    initialPortfolioBook.portfolios.find(
+      (portfolio) => portfolio.id === initialPortfolioBook.activePortfolioId
+    ) ?? initialPortfolioBook.portfolios[0];
+  const portfoliosRef = useRef<InvestmentPortfolio[]>(initialPortfolioBook.portfolios);
+  const activePortfolioIdRef = useRef(initialPortfolioBook.activePortfolioId);
+  const workspaceRef = useRef<PortfolioWorkspaceState>({
+    assets: normalizeStoredPortfolioAssets(initialActivePortfolio.assets),
+    sales: getSortedPortfolioSales(initialActivePortfolio.sales),
+    realizedAdjustments: getSortedPortfolioRealizedAdjustments(
+      initialActivePortfolio.realizedAdjustments
+    ),
+  });
+  const isSwitchingPortfolioRef = useRef(false);
   const hasSavedAssetsRef = useRef(false);
   const quoteRefreshSeqRef = useRef(0);
   const quoteRequestSeqRef = useRef(0);
   const lastPreviewRequestKeyRef = useRef("");
   const isManualSymbolRef = useRef(false);
   const [activeSection, setActiveSection] = useState<AppSection>("portfolio");
+  const [portfolios, setPortfolios] = useState<InvestmentPortfolio[]>(
+    () => initialPortfolioBook.portfolios
+  );
+  const [activePortfolioId, setActivePortfolioId] = useState(
+    initialPortfolioBook.activePortfolioId
+  );
   const [assets, setAssets] = useState<PortfolioAsset[]>(() =>
-    normalizeStoredPortfolioAssets(initialAssets)
+    normalizeStoredPortfolioAssets(initialActivePortfolio.assets)
   );
   const [sales, setSales] = useState<PortfolioSale[]>(() =>
-    getSortedPortfolioSales(initialSales)
+    getSortedPortfolioSales(initialActivePortfolio.sales)
   );
   const [entryMode, setEntryMode] = useState<AssetEntryMode>("stock-global");
   const [searchMode, setSearchMode] = useState<AssetSearchMode>("stock-global");
@@ -283,14 +370,14 @@ export default function PortfolioApp({
   const [lastSyncAt, setLastSyncAt] = useState<string>();
   const [fxUpdatedAt, setFxUpdatedAt] = useState<string>();
   const [realizedAdjustments, setRealizedAdjustments] = useState<PortfolioRealizedAdjustment[]>(
-    () => getSortedPortfolioRealizedAdjustments(initialRealizedAdjustments)
+    () => getSortedPortfolioRealizedAdjustments(initialActivePortfolio.realizedAdjustments)
   );
   const [realizedAdjustmentDraft, setRealizedAdjustmentDraft] =
     useState<RealizedAdjustmentDraft>(() => createEmptyRealizedAdjustmentDraft());
   const [realizedAdjustmentError, setRealizedAdjustmentError] = useState<string | null>(null);
   const trackedCurrencies = useMemo(
-    () => getTrackedCurrencies(assets, draft, realizedAdjustmentDraft),
-    [assets, draft, realizedAdjustmentDraft]
+    () => getTrackedCurrencies(assets, portfolios, draft, realizedAdjustmentDraft),
+    [assets, draft, portfolios, realizedAdjustmentDraft]
   );
   const trackedCurrenciesKey = trackedCurrencies.join("|");
   const draftQuotePreviewRequest = useMemo(
@@ -314,10 +401,82 @@ export default function PortfolioApp({
     !hasProFeatures && nextAssetCount > FREE_PLAN_ASSET_LIMIT
       ? `Plan Free pozwala miec do ${FREE_PLAN_ASSET_LIMIT} pozycji w jednym portfelu. Przejdz na Pro, aby dodawac kolejne.`
       : null;
+  const activePortfolio =
+    portfolios.find((portfolio) => portfolio.id === activePortfolioId) ?? portfolios[0];
+
+  const commitActivePortfolioSnapshot = useCallback(
+    (portfolioList: InvestmentPortfolio[]) => {
+      const now = new Date().toISOString();
+      return portfolioList.map((portfolio) =>
+        portfolio.id === activePortfolioId
+          ? {
+              ...portfolio,
+              assets: normalizeStoredPortfolioAssets(assets),
+              sales: getSortedPortfolioSales(sales),
+              realizedAdjustments: getSortedPortfolioRealizedAdjustments(realizedAdjustments),
+              updatedAt: now,
+            }
+          : portfolio
+      );
+    },
+    [activePortfolioId, assets, realizedAdjustments, sales]
+  );
+
+  const portfolioSummaries = useMemo(
+    () =>
+      portfolios.map((portfolio) => {
+        const portfolioEffectiveAdjustments = getSortedPortfolioRealizedAdjustments([
+          ...portfolio.realizedAdjustments,
+          ...buildAutomaticBondCouponAdjustments(portfolio.assets, portfolio.sales),
+        ]);
+
+        return {
+          portfolio,
+          summary: getPortfolioSummary(
+            portfolio.assets,
+            portfolio.sales,
+            portfolioEffectiveAdjustments,
+            fxRates
+          ),
+        };
+      }),
+    [fxRates, portfolios]
+  );
+
+  const allPortfoliosSummary = useMemo(() => {
+    const allAssets = portfolios.flatMap((portfolio) => portfolio.assets);
+    const allSales = portfolios.flatMap((portfolio) => portfolio.sales);
+    const allRealizedAdjustments = portfolios.flatMap((portfolio) => [
+      ...portfolio.realizedAdjustments,
+      ...buildAutomaticBondCouponAdjustments(portfolio.assets, portfolio.sales),
+    ]);
+
+    return getPortfolioSummary(allAssets, allSales, allRealizedAdjustments, fxRates);
+  }, [fxRates, portfolios]);
 
   useEffect(() => {
-    assetsRef.current = assets;
-  }, [assets]);
+    if (isSwitchingPortfolioRef.current) {
+      return;
+    }
+
+    setPortfolios((currentPortfolios) => commitActivePortfolioSnapshot(currentPortfolios));
+  }, [assets, commitActivePortfolioSnapshot, realizedAdjustments, sales]);
+
+  useEffect(() => {
+    portfoliosRef.current = portfolios;
+  }, [portfolios]);
+
+  useEffect(() => {
+    activePortfolioIdRef.current = activePortfolioId;
+  }, [activePortfolioId]);
+
+  useEffect(() => {
+    workspaceRef.current = {
+      assets,
+      sales,
+      realizedAdjustments,
+    };
+  }, [assets, realizedAdjustments, sales]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -632,7 +791,7 @@ export default function PortfolioApp({
 
     const timeoutId = window.setTimeout(async () => {
       try {
-        await savePortfolioState({ assets, sales, realizedAdjustments });
+        await savePortfolioState({ portfolios, activePortfolioId });
 
         if (!isCancelled) {
           setSyncError(null);
@@ -648,7 +807,7 @@ export default function PortfolioApp({
       isCancelled = true;
       window.clearTimeout(timeoutId);
     };
-  }, [assets, sales, realizedAdjustments]);
+  }, [activePortfolioId, portfolios]);
 
   const syncFxRates = async (codes: string[]) => {
     try {
@@ -666,20 +825,35 @@ export default function PortfolioApp({
     }
   };
 
-  const syncQuotes = async () => {
-    if (assetsRef.current.length === 0) return;
+  const syncQuotes = useCallback(async () => {
+    const now = new Date().toISOString();
+    const activeWorkspace = workspaceRef.current;
+    const currentPortfolios = portfoliosRef.current.map((portfolio) =>
+      portfolio.id === activePortfolioIdRef.current
+        ? {
+            ...portfolio,
+            assets: normalizeStoredPortfolioAssets(activeWorkspace.assets),
+            sales: getSortedPortfolioSales(activeWorkspace.sales),
+            realizedAdjustments: getSortedPortfolioRealizedAdjustments(
+              activeWorkspace.realizedAdjustments
+            ),
+            updatedAt: now,
+          }
+        : portfolio
+    );
+    const allAssets = currentPortfolios.flatMap((portfolio) => portfolio.assets);
+
+    if (allAssets.length === 0) return;
 
     const refreshSeq = ++quoteRefreshSeqRef.current;
     setIsRefreshing(true);
 
     try {
-      const refreshedAssets = await refreshPortfolioQuotes(assetsRef.current);
-
-      setAssets((currentAssets) => {
-        const refreshedById = new Map(refreshedAssets.map((asset) => [asset.id, asset]));
-
-        return normalizeStoredPortfolioAssets(
-          currentAssets.map((asset) => {
+      const refreshedAssets = await refreshPortfolioQuotes(allAssets);
+      const refreshedById = new Map(refreshedAssets.map((asset) => [asset.id, asset]));
+      const applyRefreshedAssets = (portfolioAssets: PortfolioAsset[]) =>
+        normalizeStoredPortfolioAssets(
+          portfolioAssets.map((asset) => {
             const refreshed = refreshedById.get(asset.id);
             if (!refreshed) return asset;
 
@@ -698,6 +872,17 @@ export default function PortfolioApp({
             };
           })
         );
+
+      setPortfolios(
+        currentPortfolios.map((portfolio) => ({
+          ...portfolio,
+          assets: applyRefreshedAssets(portfolio.assets),
+          updatedAt: now,
+        }))
+      );
+
+      setAssets((currentAssets) => {
+        return applyRefreshedAssets(currentAssets);
       });
 
       if (refreshSeq === quoteRefreshSeqRef.current) {
@@ -713,7 +898,7 @@ export default function PortfolioApp({
         setIsRefreshing(false);
       }
     }
-  };
+  }, []);
 
   useEffect(() => {
     void syncFxRates(trackedCurrencies);
@@ -729,7 +914,7 @@ export default function PortfolioApp({
     }, AUTO_REFRESH_INTERVAL_MS);
 
     return () => window.clearInterval(intervalId);
-  }, [assets.length]);
+  }, [assets.length, syncQuotes]);
 
   const applyQuoteToDraftIfCurrent = (
     targetSymbol: string,
@@ -1839,6 +2024,107 @@ export default function PortfolioApp({
     });
   };
 
+  const loadPortfolioIntoWorkspace = (portfolio: InvestmentPortfolio) => {
+    isSwitchingPortfolioRef.current = true;
+    setActivePortfolioId(portfolio.id);
+    setAssets(normalizeStoredPortfolioAssets(portfolio.assets));
+    setSales(getSortedPortfolioSales(portfolio.sales));
+    setRealizedAdjustments(
+      getSortedPortfolioRealizedAdjustments(portfolio.realizedAdjustments)
+    );
+    setFilter("");
+    setSyncError(null);
+    setResults([]);
+    setSearchError(null);
+    setQuoteError(null);
+    window.setTimeout(() => {
+      isSwitchingPortfolioRef.current = false;
+    }, 0);
+  };
+
+  const handleSelectPortfolio = (portfolioId: string) => {
+    if (portfolioId === activePortfolioId) {
+      return;
+    }
+
+    const currentPortfolios = commitActivePortfolioSnapshot(portfolios);
+    const nextPortfolio = currentPortfolios.find((portfolio) => portfolio.id === portfolioId);
+
+    if (!nextPortfolio) {
+      return;
+    }
+
+    setPortfolios(currentPortfolios);
+    loadPortfolioIntoWorkspace(nextPortfolio);
+    router.push(`/app/portfel/${nextPortfolio.id}`);
+  };
+
+  const handleCreatePortfolio = () => {
+    const name = window.prompt("Nazwa nowego portfela", `Portfel ${portfolios.length + 1}`);
+
+    if (!name?.trim()) {
+      return;
+    }
+
+    const currentPortfolios = commitActivePortfolioSnapshot(portfolios);
+    const nextPortfolio = createInvestmentPortfolio(name.trim());
+    const nextPortfolios = [...currentPortfolios, nextPortfolio];
+
+    setPortfolios(nextPortfolios);
+    loadPortfolioIntoWorkspace(nextPortfolio);
+    router.push(`/app/portfel/${nextPortfolio.id}`);
+  };
+
+  const handleRenamePortfolio = () => {
+    if (!activePortfolio) {
+      return;
+    }
+
+    const name = window.prompt("Nowa nazwa portfela", activePortfolio.name);
+
+    if (!name?.trim()) {
+      return;
+    }
+
+    const now = new Date().toISOString();
+    setPortfolios((currentPortfolios) =>
+      commitActivePortfolioSnapshot(currentPortfolios).map((portfolio) =>
+        portfolio.id === activePortfolioId
+          ? {
+              ...portfolio,
+              name: name.trim().slice(0, 64),
+              updatedAt: now,
+            }
+          : portfolio
+      )
+    );
+  };
+
+  const handleDeletePortfolio = () => {
+    if (!activePortfolio || portfolios.length <= 1) {
+      setSyncError("Nie mozna usunac ostatniego portfela.");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Usunac portfel "${activePortfolio.name}" razem z jego transakcjami? Tej operacji nie da sie cofnac.`
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    const currentPortfolios = commitActivePortfolioSnapshot(portfolios);
+    const nextPortfolios = currentPortfolios.filter(
+      (portfolio) => portfolio.id !== activePortfolioId
+    );
+    const nextPortfolio = nextPortfolios[0];
+
+    setPortfolios(nextPortfolios);
+    loadPortfolioIntoWorkspace(nextPortfolio);
+    router.push(`/app/portfel/${nextPortfolio.id}`);
+  };
+
   const handleLogout = async () => {
     setIsLoggingOut(true);
 
@@ -1924,6 +2210,97 @@ export default function PortfolioApp({
             {isLoggingOut ? "Wylogowuje..." : "Wyloguj"}
           </button>
         </div>
+
+        <section className="panel portfolio-hub-panel">
+          <div className="portfolio-hub-head">
+            <div>
+              <p className="eyebrow">Glowna portfeli</p>
+              <h1 className="section-title">Wszystkie portfele</h1>
+              <p className="section-copy">
+                Przelaczaj osobne portfele i zarzadzaj nimi jak niezaleznymi rachunkami,
+                a tutaj widzisz wspolny wynik calego majatku.
+              </p>
+            </div>
+
+            <div className="portfolio-hub-actions">
+              <button className="ghost-button" type="button" onClick={handleRenamePortfolio}>
+                Zmien nazwe
+              </button>
+              <button
+                className="ghost-button admin-danger-button"
+                type="button"
+                onClick={handleDeletePortfolio}
+                disabled={portfolios.length <= 1}
+              >
+                Usun portfel
+              </button>
+              <button className="primary-button" type="button" onClick={handleCreatePortfolio}>
+                Dodaj portfel
+              </button>
+            </div>
+          </div>
+
+          <div className="portfolio-hub-total mt-5">
+            <article>
+              <span>Wartosc laczna</span>
+              <strong>{formatCurrency(allPortfoliosSummary.totalValuePln)}</strong>
+            </article>
+            <article>
+              <span>Wynik laczny</span>
+              <strong
+                className={
+                  allPortfoliosSummary.combinedProfitLossPln >= 0
+                    ? "tone-positive"
+                    : "tone-negative"
+                }
+              >
+                {formatCurrency(allPortfoliosSummary.combinedProfitLossPln)}
+              </strong>
+            </article>
+            <article>
+              <span>Portfele</span>
+              <strong>{portfolios.length}</strong>
+            </article>
+            <article>
+              <span>Aktywny</span>
+              <strong>{activePortfolio?.name ?? "Portfel"}</strong>
+            </article>
+          </div>
+
+          <div className="portfolio-card-grid mt-5">
+            {portfolioSummaries.map(({ portfolio, summary: portfolioSummary }) => {
+              const isActive = portfolio.id === activePortfolioId;
+
+              return (
+                <Link
+                  key={portfolio.id}
+                  className={`portfolio-switch-card${isActive ? " is-active" : ""}`}
+                  href={`/app/portfel/${portfolio.id}`}
+                  onClick={() => handleSelectPortfolio(portfolio.id)}
+                  aria-pressed={isActive}
+                >
+                  <span>{isActive ? "Aktywny portfel" : "Przelacz"}</span>
+                  <strong>{portfolio.name}</strong>
+                  <div>
+                    <span>{formatCurrency(portfolioSummary.totalValuePln)}</span>
+                    <span
+                      className={
+                        portfolioSummary.combinedProfitLossPln >= 0
+                          ? "tone-positive"
+                          : "tone-negative"
+                      }
+                    >
+                      {formatCurrency(portfolioSummary.combinedProfitLossPln)}
+                    </span>
+                  </div>
+                  <small>
+                    {portfolioSummary.positionsCount} pozycji / {portfolioSummary.salesCount} sprzedazy
+                  </small>
+                </Link>
+              );
+            })}
+          </div>
+        </section>
 
         <AppSectionTabs activeSection={activeSection} onChange={setActiveSection} />
 

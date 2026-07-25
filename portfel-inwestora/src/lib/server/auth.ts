@@ -3,7 +3,7 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { FREE_PLAN_ASSET_LIMIT } from "@/lib/constants";
-import { normalizePortfolioState } from "@/lib/portfolio-state";
+import { normalizePortfolioBook, normalizePortfolioState } from "@/lib/portfolio-state";
 import type { NextResponse } from "next/server";
 import { createFreshUserProfile, normalizeUserProfile } from "@/lib/profile";
 import { isForcedProEmail } from "@/lib/server/access";
@@ -11,6 +11,7 @@ import db from "@/lib/server/db";
 import { sendVerificationEmail } from "@/lib/server/email";
 import type {
   AuthenticatedUser,
+  PortfolioBook,
   PortfolioState,
   SubscriptionPlan,
   SubscriptionStatus,
@@ -106,11 +107,11 @@ const toAuthenticatedUser = (
   subscriptionStatus: normalizeSubscriptionStatus(user.subscription_status),
 });
 
-const parsePortfolio = (portfolioJson: string): PortfolioState => {
+const parsePortfolioBook = (portfolioJson: string): PortfolioBook => {
   try {
-    return normalizePortfolioState(JSON.parse(portfolioJson));
+    return normalizePortfolioBook(JSON.parse(portfolioJson));
   } catch {
-    return normalizePortfolioState([]);
+    return normalizePortfolioBook([]);
   }
 };
 
@@ -491,11 +492,13 @@ export const getCurrentAccountData = async () => {
   }
 
   const user = withForcedProSubscription(sessionUser);
+  const portfolioBook = parsePortfolioBook(user.portfolio_json);
 
   return {
     user: toAuthenticatedUser(user),
     profile: parseUserProfile(user),
-    ...parsePortfolio(user.portfolio_json),
+    ...normalizePortfolioState(portfolioBook),
+    ...portfolioBook,
   };
 };
 
@@ -575,7 +578,7 @@ export const updateCurrentUserProfile = async (
 
 export const updateCurrentUserPortfolio = async (
   userId: string,
-  portfolio: PortfolioState
+  portfolio: PortfolioState | PortfolioBook
 ) => {
   const existingUser = getUserById(userId);
 
@@ -584,9 +587,14 @@ export const updateCurrentUserPortfolio = async (
   }
 
   const account = toAuthenticatedUser(withForcedProSubscription(existingUser));
-  const normalizedPortfolio = normalizePortfolioState(portfolio);
+  const normalizedPortfolio = normalizePortfolioBook(portfolio);
+  const aggregatedPortfolio = normalizePortfolioState(normalizedPortfolio);
 
-  if (!canUseProFeatures(account) && normalizedPortfolio.assets.length > FREE_PLAN_ASSET_LIMIT) {
+  const hasPortfolioOverFreeLimit = normalizedPortfolio.portfolios.some(
+    (item) => item.assets.length > FREE_PLAN_ASSET_LIMIT
+  );
+
+  if (!canUseProFeatures(account) && hasPortfolioOverFreeLimit) {
     throw new Error(
       `Plan Free pozwala zapisac do ${FREE_PLAN_ASSET_LIMIT} pozycji. Przejdz na Pro, aby dodawac kolejne.`
     );
@@ -600,7 +608,10 @@ export const updateCurrentUserPortfolio = async (
     `
   ).run(JSON.stringify(normalizedPortfolio), new Date().toISOString(), userId);
 
-  return normalizedPortfolio;
+  return {
+    ...aggregatedPortfolio,
+    ...normalizedPortfolio,
+  };
 };
 
 export const updateCurrentUserSubscription = async (

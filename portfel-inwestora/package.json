@@ -6,6 +6,7 @@
     "dev": "next dev --webpack",
     "build": "next build",
     "start": "next start",
+    "migrate:sqlite-to-postgres": "node --experimental-strip-types scripts/migrate-sqlite-to-postgres.ts",
     "lint": "eslint"
   },
   "engines": {

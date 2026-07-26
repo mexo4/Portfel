@@ -292,20 +292,26 @@ export const registerAccount = async ({
   const normalizedEmail = email.trim().toLowerCase();
   const normalizedName = displayName.trim();
 
-  if (!normalizedName || normalizedName.length < 2) {
-    throw new Error("Podaj nazwe uzytkownika zlozona z co najmniej 2 znakow.");
-  }
-
   if (!normalizedEmail || !isEmailValid(normalizedEmail)) {
     throw new Error("Podaj poprawny adres email.");
   }
 
-  if (password.length < 8) {
-    throw new Error("Haslo musi miec co najmniej 8 znakow.");
+  const existingUser = await getUserByEmail(normalizedEmail);
+
+  if (existingUser) {
+    if (existingUser.email_verified_at) {
+      throw new Error("Konto z tym adresem email juz istnieje.");
+    }
+
+    return toAuthenticatedUser(await withForcedProSubscription(existingUser));
   }
 
-  if (await getUserByEmail(normalizedEmail)) {
-    throw new Error("Konto z tym adresem email juz istnieje.");
+  if (!normalizedName || normalizedName.length < 2) {
+    throw new Error("Podaj nazwe uzytkownika zlozona z co najmniej 2 znakow.");
+  }
+
+  if (password.length < 8) {
+    throw new Error("Haslo musi miec co najmniej 8 znakow.");
   }
 
   const now = new Date().toISOString();
@@ -714,7 +720,18 @@ export const sendEmailVerificationForUser = async (userId: string, baseUrl: stri
     };
   }
 
+  console.log("verification email triggered", {
+    userId,
+    email: user.email.replace(/^(.{0,2}).*(@.*)$/, "$1***$2"),
+  });
+
   const emailResult = await sendVerificationEmail(user.email, result.previewUrl);
+
+  console.log("verification email result", {
+    userId,
+    sent: emailResult.sent,
+    reason: emailResult.reason,
+  });
 
   return {
     ...result,

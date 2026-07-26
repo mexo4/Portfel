@@ -5,22 +5,62 @@ type EmailPayload = {
   html: string;
 };
 
-const RESEND_API_KEY = process.env.RESEND_API_KEY ?? "";
-const EMAIL_FROM = process.env.EMAIL_FROM ?? "Portfel inwestora <onboarding@resend.dev>";
+const DEFAULT_EMAIL_FROM = "Portfel inwestora <onboarding@resend.dev>";
+
+const getResendApiKey = () => process.env.RESEND_API_KEY ?? "";
+
+const getEmailFrom = () => process.env.EMAIL_FROM ?? DEFAULT_EMAIL_FROM;
+
+const redactEmailForLogs = (email: string) => {
+  const [localPart, domain] = email.split("@");
+
+  if (!localPart || !domain) {
+    return "***";
+  }
+
+  return `${localPart.slice(0, 2)}***@${domain}`;
+};
+
+const readResendResponseBody = async (response: Response) => {
+  const responseText = await response.text().catch(() => "");
+
+  if (!responseText) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(responseText) as unknown;
+  } catch {
+    return responseText;
+  }
+};
 
 export const sendEmail = async ({ to, subject, text, html }: EmailPayload) => {
-  if (!RESEND_API_KEY) {
+  const resendApiKey = getResendApiKey();
+  const from = getEmailFrom();
+  const logContext = {
+    to: redactEmailForLogs(to),
+    from,
+    subject,
+  };
+
+  if (!resendApiKey) {
+    console.warn("resend.emails.send skipped", {
+      ...logContext,
+      reason: "missing_resend_key",
+    });
+
     return { sent: false, reason: "missing_resend_key" as const };
   }
 
   const response = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${RESEND_API_KEY}`,
+      Authorization: `Bearer ${resendApiKey}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      from: EMAIL_FROM,
+      from,
       to,
       subject,
       text,
@@ -28,8 +68,23 @@ export const sendEmail = async ({ to, subject, text, html }: EmailPayload) => {
     }),
   });
 
+  const responseBody = await readResendResponseBody(response);
+
+  console.log("resend.emails.send result", {
+    ...logContext,
+    ok: response.ok,
+    status: response.status,
+    response: responseBody,
+  });
+
   if (!response.ok) {
-    throw new Error("Nie udalo sie wyslac emaila weryfikacyjnego.");
+    console.error("resend.emails.send rejected", {
+      ...logContext,
+      status: response.status,
+      response: responseBody,
+    });
+
+    throw new Error(`Nie udalo sie wyslac emaila weryfikacyjnego. Resend status: ${response.status}.`);
   }
 
   return { sent: true, reason: null };

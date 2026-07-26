@@ -1,6 +1,6 @@
 import { getCurrentAccountData } from "@/lib/server/auth";
 import { isAdminEmail } from "@/lib/server/access";
-import db from "@/lib/server/db";
+import { query } from "@/lib/server/db";
 import { normalizePortfolioState } from "@/lib/portfolio-state";
 import type { PortfolioState, SubscriptionPlan, SubscriptionStatus } from "@/types/portfolio";
 
@@ -16,7 +16,7 @@ type AdminUserRow = {
   portfolio_json: string;
   created_at: string;
   updated_at: string;
-  active_sessions: number;
+  active_sessions: number | string;
 };
 
 export type AdminUserOverview = {
@@ -96,7 +96,7 @@ const toAdminUserOverview = (row: AdminUserRow): AdminUserOverview => {
     uniqueAssetsCount: getUniqueAssetCount(portfolio),
     salesCount: portfolio.sales.length,
     realizedAdjustmentsCount: portfolio.realizedAdjustments.length,
-    activeSessions: row.active_sessions,
+    activeSessions: Number(row.active_sessions) || 0,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     portfolio,
@@ -110,31 +110,30 @@ export const getAdminDashboardData = async (): Promise<AdminDashboardData | null
     return null;
   }
 
-  const rows = db
-    .prepare(
-      `
-        SELECT
-          users.id,
-          users.email,
-          users.display_name,
-          users.email_verified_at,
-          users.subscription_plan,
-          users.subscription_status,
-          users.subscription_updated_at,
-          users.profile_json,
-          users.portfolio_json,
-          users.created_at,
-          users.updated_at,
-          COUNT(sessions.id) AS active_sessions
-        FROM users
-        LEFT JOIN sessions
-          ON sessions.user_id = users.id
-          AND sessions.expires_at > ?
-        GROUP BY users.id
-        ORDER BY users.created_at DESC
-      `
-    )
-    .all(new Date().toISOString()) as AdminUserRow[];
+  const rows = await query<AdminUserRow>(
+    `
+      SELECT
+        users.id,
+        users.email,
+        users.display_name,
+        users.email_verified_at,
+        users.subscription_plan,
+        users.subscription_status,
+        users.subscription_updated_at,
+        users.profile_json,
+        users.portfolio_json,
+        users.created_at,
+        users.updated_at,
+        COUNT(sessions.id) AS active_sessions
+      FROM users
+      LEFT JOIN sessions
+        ON sessions.user_id = users.id
+        AND sessions.expires_at > $1
+      GROUP BY users.id
+      ORDER BY users.created_at DESC
+    `,
+    [new Date().toISOString()]
+  );
 
   const users = rows.map(toAdminUserOverview);
 

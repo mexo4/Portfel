@@ -1,4 +1,4 @@
-import db from "@/lib/server/db";
+import { getMarketCachePayload, setMarketCachePayload } from "@/lib/server/market-cache";
 import {
   addUtcYears,
   clampBondFee,
@@ -23,11 +23,6 @@ import type {
   TreasuryBondRateEntry,
   TreasuryBondSeries,
 } from "@/types/portfolio";
-
-type CacheRow = {
-  payload_json: string;
-  updated_at: string;
-};
 
 type GusDataPoint = {
   val?: number | null;
@@ -57,47 +52,11 @@ const CPI_CACHE_TTL_MS = 31 * 24 * 60 * 60 * 1_000;
 const GUS_VARIABLE_CANDIDATES = [2955, 2496];
 const POLAND_UNIT_LEVEL = 0;
 const POLISH_TAX_RATE = 0.19;
-const readCacheStatement = db.prepare(
-  "SELECT payload_json, updated_at FROM market_cache WHERE key = ?"
-);
-const writeCacheStatement = db.prepare(`
-  INSERT INTO market_cache (key, payload_json, updated_at)
-  VALUES (@key, @payloadJson, @updatedAt)
-  ON CONFLICT(key) DO UPDATE SET
-    payload_json = excluded.payload_json,
-    updated_at = excluded.updated_at
-`);
+const getCachedPayload = getMarketCachePayload;
+const setCachedPayload = setMarketCachePayload;
 
 const isFiniteNumber = (value: unknown): value is number =>
   typeof value === "number" && Number.isFinite(value);
-
-const getCachedPayload = <T,>(key: string, ttlMs: number) => {
-  const row = readCacheStatement.get(key) as CacheRow | undefined;
-
-  if (!row?.payload_json) {
-    return null;
-  }
-
-  const updatedAt = Date.parse(row.updated_at);
-
-  if (!Number.isFinite(updatedAt) || Date.now() - updatedAt > ttlMs) {
-    return null;
-  }
-
-  try {
-    return JSON.parse(row.payload_json) as T;
-  } catch {
-    return null;
-  }
-};
-
-const setCachedPayload = (key: string, payload: unknown) => {
-  writeCacheStatement.run({
-    key,
-    payloadJson: JSON.stringify(payload),
-    updatedAt: new Date().toISOString(),
-  });
-};
 
 const safeFetchText = async (url: string, timeoutMs = 15_000) => {
   const controller = new AbortController();
@@ -311,7 +270,7 @@ const parseInflationResponseValue = (payload: GusDataResponse | null) => {
 
 const fetchInflationRateForMonth = async (referenceMonth: string) => {
   const cacheKey = `${CPI_CACHE_PREFIX}${referenceMonth}`;
-  const cachedValue = getCachedPayload<number>(cacheKey, CPI_CACHE_TTL_MS);
+  const cachedValue = await getCachedPayload<number>(cacheKey, CPI_CACHE_TTL_MS);
 
   if (cachedValue !== null) {
     return cachedValue;
@@ -334,7 +293,7 @@ const fetchInflationRateForMonth = async (referenceMonth: string) => {
   }
 
   const finalValue = resolvedValue ?? 0;
-  setCachedPayload(cacheKey, finalValue);
+  await setCachedPayload(cacheKey, finalValue);
   return finalValue;
 };
 
@@ -373,7 +332,10 @@ const buildRateSchedule = async (series: TreasuryBondSeries) => {
 export const resolveTreasuryBondSeries = async (code: string) => {
   const normalizedCode = normalizeSymbol(code);
   const cacheKey = `${SERIES_CACHE_PREFIX}${normalizedCode}`;
-  const cachedSeries = getCachedPayload<TreasuryBondSeries>(cacheKey, SERIES_CACHE_TTL_MS);
+  const cachedSeries = await getCachedPayload<TreasuryBondSeries>(
+    cacheKey,
+    SERIES_CACHE_TTL_MS
+  );
 
   if (cachedSeries) {
     return cachedSeries;
@@ -387,7 +349,7 @@ export const resolveTreasuryBondSeries = async (code: string) => {
     resolvedAt: new Date().toISOString(),
   } satisfies TreasuryBondSeries;
 
-  setCachedPayload(cacheKey, resolvedSeries);
+  await setCachedPayload(cacheKey, resolvedSeries);
   return resolvedSeries;
 };
 

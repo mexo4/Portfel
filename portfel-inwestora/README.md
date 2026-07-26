@@ -34,3 +34,15 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
 The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
 
 Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+
+## Production Database
+
+The app uses Neon PostgreSQL through `DATABASE_URL`.
+
+For local development, create `portfel-inwestora/.env.local` and add:
+
+```bash
+DATABASE_URL="postgresql://USER:PASSWORD@HOST.neon.tech/DBNAME?sslmode=require"
+```
+
+On Vercel, add the same `DATABASE_URL` value in Project Settings -> Environment Variables for Production, Preview, and Development as needed. The app creates required tables automatically on first database access.

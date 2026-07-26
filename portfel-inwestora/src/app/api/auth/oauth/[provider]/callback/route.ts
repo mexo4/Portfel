@@ -65,7 +65,7 @@ const finishOAuthLogin = async ({
       code,
     });
     const user = await upsertOAuthAccount(identity);
-    const session = createSessionForUser(user.id);
+    const session = await createSessionForUser(user.id);
     const response = NextResponse.redirect(buildRedirect(request.url, "/app"));
 
     appendSessionCookie(response, session.token, session.expiresAt);

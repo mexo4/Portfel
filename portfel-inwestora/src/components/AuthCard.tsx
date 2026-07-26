@@ -183,7 +183,7 @@ export default function AuthCard({ mode, initialNotice = null }: AuthCardProps) 
 
           <div className="hero-meta mt-6">
             <span className="tag">sesja w bezpiecznym cookie</span>
-            <span className="tag">konto zapisane w SQLite</span>
+            <span className="tag">konto zapisane w PostgreSQL</span>
             <span className="tag">haslo szyfrowane przez bcrypt</span>
             <span className="tag">weryfikacja email i reset hasla</span>
           </div>

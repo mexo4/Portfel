@@ -7,7 +7,7 @@ import { normalizePortfolioBook, normalizePortfolioState } from "@/lib/portfolio
 import type { NextResponse } from "next/server";
 import { createFreshUserProfile, normalizeUserProfile } from "@/lib/profile";
 import { isForcedProEmail } from "@/lib/server/access";
-import db from "@/lib/server/db";
+import { execute, queryOne } from "@/lib/server/db";
 import { sendVerificationEmail } from "@/lib/server/email";
 import type {
   AuthenticatedUser,
@@ -141,29 +141,36 @@ const parseUserProfile = (
 };
 
 const getUserByEmail = (email: string) =>
-  db.prepare("SELECT * FROM users WHERE email = ?").get(email) as UserRow | undefined;
+  queryOne<UserRow>("SELECT * FROM users WHERE email = $1", [email]);
 
 const getUserById = (id: string) =>
-  db.prepare("SELECT * FROM users WHERE id = ?").get(id) as UserRow | undefined;
+  queryOne<UserRow>("SELECT * FROM users WHERE id = $1", [id]);
 
 const getSessionUser = (token: string) =>
-  db
-    .prepare(
-      `
-        SELECT users.*, sessions.expires_at
-        FROM sessions
-        INNER JOIN users ON users.id = sessions.user_id
-        WHERE sessions.token_hash = ?
-      `
-    )
-    .get(hashToken(token)) as SessionUserRow | undefined;
+  queryOne<SessionUserRow>(
+    `
+      SELECT users.*, sessions.expires_at
+      FROM sessions
+      INNER JOIN users ON users.id = sessions.user_id
+      WHERE sessions.token_hash = $1
+    `,
+    [hashToken(token)]
+  );
 
-const getTokenRow = (tableName: "email_verification_tokens" | "password_reset_tokens", token: string) =>
-  db
-    .prepare(`SELECT user_id, expires_at FROM ${tableName} WHERE token_hash = ?`)
-    .get(hashToken(token)) as TokenRow | undefined;
+const getTokenTableName = (
+  tableName: "email_verification_tokens" | "password_reset_tokens"
+) => tableName;
 
-const withForcedProSubscription = <T extends UserRow>(user: T): T => {
+const getTokenRow = (
+  tableName: "email_verification_tokens" | "password_reset_tokens",
+  token: string
+) =>
+  queryOne<TokenRow>(
+    `SELECT user_id, expires_at FROM ${getTokenTableName(tableName)} WHERE token_hash = $1`,
+    [hashToken(token)]
+  );
+
+const withForcedProSubscription = async <T extends UserRow>(user: T): Promise<T> => {
   if (!isForcedProEmail(user.email)) {
     return user;
   }
@@ -174,13 +181,14 @@ const withForcedProSubscription = <T extends UserRow>(user: T): T => {
 
   const now = new Date().toISOString();
 
-  db.prepare(
+  await execute(
     `
       UPDATE users
-      SET subscription_plan = ?, subscription_status = ?, subscription_updated_at = ?, updated_at = ?
-      WHERE id = ?
-    `
-  ).run("pro", "active", now, now, user.id);
+      SET subscription_plan = $1, subscription_status = $2, subscription_updated_at = $3, updated_at = $4
+      WHERE id = $5
+    `,
+    ["pro", "active", now, now, user.id]
+  );
 
   return {
     ...user,
@@ -191,22 +199,22 @@ const withForcedProSubscription = <T extends UserRow>(user: T): T => {
   };
 };
 
-const removeSessionByToken = (token: string) => {
-  db.prepare("DELETE FROM sessions WHERE token_hash = ?").run(hashToken(token));
+const removeSessionByToken = async (token: string) => {
+  await execute("DELETE FROM sessions WHERE token_hash = $1", [hashToken(token)]);
 };
 
-const removeSessionsByUserId = (userId: string) => {
-  db.prepare("DELETE FROM sessions WHERE user_id = ?").run(userId);
+const removeSessionsByUserId = async (userId: string) => {
+  await execute("DELETE FROM sessions WHERE user_id = $1", [userId]);
 };
 
 const purgeTokensForUser = (
   tableName: "email_verification_tokens" | "password_reset_tokens",
   userId: string
 ) => {
-  db.prepare(`DELETE FROM ${tableName} WHERE user_id = ?`).run(userId);
+  return execute(`DELETE FROM ${getTokenTableName(tableName)} WHERE user_id = $1`, [userId]);
 };
 
-const createStoredToken = (
+const createStoredToken = async (
   tableName: "email_verification_tokens" | "password_reset_tokens",
   userId: string,
   maxAgeMs: number
@@ -215,12 +223,13 @@ const createStoredToken = (
   const now = new Date().toISOString();
   const expiresAt = new Date(Date.now() + maxAgeMs).toISOString();
 
-  db.prepare(
+  await execute(
     `
-      INSERT INTO ${tableName} (id, user_id, token_hash, created_at, expires_at)
-      VALUES (?, ?, ?, ?, ?)
-    `
-  ).run(randomUUID(), userId, hashToken(token), now, expiresAt);
+      INSERT INTO ${getTokenTableName(tableName)} (id, user_id, token_hash, created_at, expires_at)
+      VALUES ($1, $2, $3, $4, $5)
+    `,
+    [randomUUID(), userId, hashToken(token), now, expiresAt]
+  );
 
   return {
     token,
@@ -252,17 +261,18 @@ export const clearSessionCookie = (response: NextResponse) => {
   });
 };
 
-export const createSessionForUser = (userId: string) => {
+export const createSessionForUser = async (userId: string) => {
   const rawToken = createRawToken();
   const now = new Date().toISOString();
   const expiresAt = getSessionExpiry();
 
-  db.prepare(
+  await execute(
     `
       INSERT INTO sessions (id, user_id, token_hash, created_at, expires_at)
-      VALUES (?, ?, ?, ?, ?)
-    `
-  ).run(randomUUID(), userId, hashToken(rawToken), now, expiresAt.toISOString());
+      VALUES ($1, $2, $3, $4, $5)
+    `,
+    [randomUUID(), userId, hashToken(rawToken), now, expiresAt.toISOString()]
+  );
 
   return {
     token: rawToken,
@@ -294,7 +304,7 @@ export const registerAccount = async ({
     throw new Error("Haslo musi miec co najmniej 8 znakow.");
   }
 
-  if (getUserByEmail(normalizedEmail)) {
+  if (await getUserByEmail(normalizedEmail)) {
     throw new Error("Konto z tym adresem email juz istnieje.");
   }
 
@@ -312,7 +322,7 @@ export const registerAccount = async ({
 
   const initialSubscriptionPlan = isForcedProEmail(normalizedEmail) ? "pro" : "free";
 
-  db.prepare(
+  await execute(
     `
       INSERT INTO users (
         id,
@@ -328,25 +338,26 @@ export const registerAccount = async ({
         created_at,
         updated_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `
-  ).run(
-    userId,
-    normalizedEmail,
-    passwordHash,
-    normalizedName,
-    null,
-    initialSubscriptionPlan,
-    "active",
-    now,
-    JSON.stringify(profile),
-    JSON.stringify({
-      assets: [],
-      sales: [],
-      realizedAdjustments: [],
-    }),
-    now,
-    now
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+    `,
+    [
+      userId,
+      normalizedEmail,
+      passwordHash,
+      normalizedName,
+      null,
+      initialSubscriptionPlan,
+      "active",
+      now,
+      JSON.stringify(profile),
+      JSON.stringify({
+        assets: [],
+        sales: [],
+        realizedAdjustments: [],
+      }),
+      now,
+      now,
+    ]
   );
 
   return {
@@ -374,21 +385,20 @@ export const upsertOAuthAccount = async ({
     throw new Error("Dostawca logowania nie zwrocil poprawnego adresu email.");
   }
 
-  const existingUser = getUserByEmail(normalizedEmail);
+  const existingUser = await getUserByEmail(normalizedEmail);
   const now = new Date().toISOString();
 
   if (existingUser) {
     if (!existingUser.email_verified_at) {
-      db.prepare("UPDATE users SET email_verified_at = ?, updated_at = ? WHERE id = ?").run(
-        now,
-        now,
-        existingUser.id
+      await execute(
+        "UPDATE users SET email_verified_at = $1, updated_at = $2 WHERE id = $3",
+        [now, now, existingUser.id]
       );
-      purgeTokensForUser("email_verification_tokens", existingUser.id);
+      await purgeTokensForUser("email_verification_tokens", existingUser.id);
     }
 
-    const updatedUser = getUserById(existingUser.id) ?? existingUser;
-    return toAuthenticatedUser(withForcedProSubscription(updatedUser));
+    const updatedUser = (await getUserById(existingUser.id)) ?? existingUser;
+    return toAuthenticatedUser(await withForcedProSubscription(updatedUser));
   }
 
   const userId = randomUUID();
@@ -403,7 +413,7 @@ export const upsertOAuthAccount = async ({
   };
   const initialSubscriptionPlan = isForcedProEmail(normalizedEmail) ? "pro" : "free";
 
-  db.prepare(
+  await execute(
     `
       INSERT INTO users (
         id,
@@ -419,34 +429,35 @@ export const upsertOAuthAccount = async ({
         created_at,
         updated_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `
-  ).run(
-    userId,
-    normalizedEmail,
-    passwordHash,
-    normalizedName,
-    now,
-    initialSubscriptionPlan,
-    "active",
-    now,
-    JSON.stringify(profile),
-    JSON.stringify({
-      assets: [],
-      sales: [],
-      realizedAdjustments: [],
-    }),
-    now,
-    now
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+    `,
+    [
+      userId,
+      normalizedEmail,
+      passwordHash,
+      normalizedName,
+      now,
+      initialSubscriptionPlan,
+      "active",
+      now,
+      JSON.stringify(profile),
+      JSON.stringify({
+        assets: [],
+        sales: [],
+        realizedAdjustments: [],
+      }),
+      now,
+      now,
+    ]
   );
 
-  const createdUser = getUserById(userId);
+  const createdUser = await getUserById(userId);
 
   if (!createdUser) {
     throw new Error("Nie udalo sie utworzyc konta przez logowanie zewnetrzne.");
   }
 
-  return toAuthenticatedUser(withForcedProSubscription(createdUser));
+  return toAuthenticatedUser(await withForcedProSubscription(createdUser));
 };
 
 export const loginAccount = async ({
@@ -457,7 +468,7 @@ export const loginAccount = async ({
   password: string;
 }) => {
   const normalizedEmail = email.trim().toLowerCase();
-  const user = getUserByEmail(normalizedEmail);
+  const user = await getUserByEmail(normalizedEmail);
 
   if (!user) {
     throw new Error("Nie znaleziono konta z tym adresem email.");
@@ -473,7 +484,7 @@ export const loginAccount = async ({
     throw new EmailVerificationRequiredError(user.id);
   }
 
-  return toAuthenticatedUser(withForcedProSubscription(user));
+  return toAuthenticatedUser(await withForcedProSubscription(user));
 };
 
 export const getCurrentAccountData = async () => {
@@ -482,16 +493,16 @@ export const getCurrentAccountData = async () => {
 
   if (!sessionToken) return null;
 
-  const sessionUser = getSessionUser(sessionToken);
+  const sessionUser = await getSessionUser(sessionToken);
 
   if (!sessionUser) return null;
 
   if (new Date(sessionUser.expires_at).getTime() <= Date.now()) {
-    removeSessionByToken(sessionToken);
+    await removeSessionByToken(sessionToken);
     return null;
   }
 
-  const user = withForcedProSubscription(sessionUser);
+  const user = await withForcedProSubscription(sessionUser);
   const portfolioBook = parsePortfolioBook(user.portfolio_json);
 
   return {
@@ -512,7 +523,7 @@ export const updateCurrentUserProfile = async (
   userId: string,
   nextProfile: UserProfile
 ) => {
-  const existingUser = getUserById(userId);
+  const existingUser = await getUserById(userId);
 
   if (!existingUser) {
     throw new Error("Nie znaleziono uzytkownika.");
@@ -533,7 +544,7 @@ export const updateCurrentUserProfile = async (
     throw new Error("Podaj poprawny adres email.");
   }
 
-  const sameEmailUser = getUserByEmail(normalizedProfile.email);
+  const sameEmailUser = await getUserByEmail(normalizedProfile.email);
   if (sameEmailUser && sameEmailUser.id !== userId) {
     throw new Error("Ten adres email jest juz zajety.");
   }
@@ -543,28 +554,29 @@ export const updateCurrentUserProfile = async (
   const nextEmailVerifiedAt = emailChanged ? null : existingUser.email_verified_at;
 
   if (emailChanged) {
-    purgeTokensForUser("email_verification_tokens", userId);
+    await purgeTokensForUser("email_verification_tokens", userId);
   }
 
-  db.prepare(
+  await execute(
     `
       UPDATE users
-      SET email = ?, display_name = ?, email_verified_at = ?, profile_json = ?, updated_at = ?
-      WHERE id = ?
-    `
-  ).run(
-    normalizedProfile.email,
-    normalizedProfile.displayName,
-    nextEmailVerifiedAt,
-    JSON.stringify({
-      ...normalizedProfile,
-      updatedAt: now,
-    }),
-    now,
-    userId
+      SET email = $1, display_name = $2, email_verified_at = $3, profile_json = $4, updated_at = $5
+      WHERE id = $6
+    `,
+    [
+      normalizedProfile.email,
+      normalizedProfile.displayName,
+      nextEmailVerifiedAt,
+      JSON.stringify({
+        ...normalizedProfile,
+        updatedAt: now,
+      }),
+      now,
+      userId,
+    ]
   );
 
-  const updatedUser = getUserById(userId);
+  const updatedUser = await getUserById(userId);
 
   if (!updatedUser) {
     throw new Error("Nie udalo sie zapisac profilu.");
@@ -580,13 +592,13 @@ export const updateCurrentUserPortfolio = async (
   userId: string,
   portfolio: PortfolioState | PortfolioBook
 ) => {
-  const existingUser = getUserById(userId);
+  const existingUser = await getUserById(userId);
 
   if (!existingUser) {
     throw new Error("Nie znaleziono uzytkownika.");
   }
 
-  const account = toAuthenticatedUser(withForcedProSubscription(existingUser));
+  const account = toAuthenticatedUser(await withForcedProSubscription(existingUser));
   const normalizedPortfolio = normalizePortfolioBook(portfolio);
   const aggregatedPortfolio = normalizePortfolioState(normalizedPortfolio);
 
@@ -600,13 +612,14 @@ export const updateCurrentUserPortfolio = async (
     );
   }
 
-  db.prepare(
+  await execute(
     `
       UPDATE users
-      SET portfolio_json = ?, updated_at = ?
-      WHERE id = ?
-    `
-  ).run(JSON.stringify(normalizedPortfolio), new Date().toISOString(), userId);
+      SET portfolio_json = $1, updated_at = $2
+      WHERE id = $3
+    `,
+    [JSON.stringify(normalizedPortfolio), new Date().toISOString(), userId]
+  );
 
   return {
     ...aggregatedPortfolio,
@@ -618,7 +631,7 @@ export const updateCurrentUserSubscription = async (
   userId: string,
   plan: SubscriptionPlan
 ) => {
-  const existingUser = getUserById(userId);
+  const existingUser = await getUserById(userId);
 
   if (!existingUser) {
     throw new Error("Nie znaleziono uzytkownika.");
@@ -627,26 +640,29 @@ export const updateCurrentUserSubscription = async (
   const now = new Date().toISOString();
   const nextPlan = isForcedProEmail(existingUser.email) ? "pro" : plan;
 
-  db.prepare(
+  await execute(
     `
       UPDATE users
-      SET subscription_plan = ?, subscription_status = ?, subscription_updated_at = ?, updated_at = ?
-      WHERE id = ?
-    `
-  ).run(nextPlan, "active", now, now, userId);
+      SET subscription_plan = $1, subscription_status = $2, subscription_updated_at = $3, updated_at = $4
+      WHERE id = $5
+    `,
+    [nextPlan, "active", now, now, userId]
+  );
 
-  const updatedUser = getUserById(userId);
+  const updatedUser = await getUserById(userId);
 
   if (!updatedUser) {
     throw new Error("Nie udalo sie zapisac planu.");
   }
 
-  return toAuthenticatedUser(withForcedProSubscription(updatedUser));
+  return toAuthenticatedUser(await withForcedProSubscription(updatedUser));
 };
 
 export const deleteUserByAdmin = async (adminUserId: string, targetUserId: string) => {
-  const adminUser = getUserById(adminUserId);
-  const targetUser = getUserById(targetUserId);
+  const [adminUser, targetUser] = await Promise.all([
+    getUserById(adminUserId),
+    getUserById(targetUserId),
+  ]);
 
   if (!adminUser || !targetUser) {
     throw new Error("Nie znaleziono uzytkownika.");
@@ -656,11 +672,11 @@ export const deleteUserByAdmin = async (adminUserId: string, targetUserId: strin
     throw new Error("Nie mozesz usunac wlasnego konta admina.");
   }
 
-  db.prepare("DELETE FROM users WHERE id = ?").run(targetUser.id);
+  await execute("DELETE FROM users WHERE id = $1", [targetUser.id]);
 };
 
 export const requestEmailVerificationForUser = async (userId: string, baseUrl: string) => {
-  const user = getUserById(userId);
+  const user = await getUserById(userId);
 
   if (!user) {
     throw new Error("Nie znaleziono uzytkownika.");
@@ -673,9 +689,9 @@ export const requestEmailVerificationForUser = async (userId: string, baseUrl: s
     };
   }
 
-  purgeTokensForUser("email_verification_tokens", userId);
+  await purgeTokensForUser("email_verification_tokens", userId);
 
-  const verification = createStoredToken(
+  const verification = await createStoredToken(
     "email_verification_tokens",
     userId,
     EMAIL_VERIFICATION_MAX_AGE_MS
@@ -689,7 +705,7 @@ export const requestEmailVerificationForUser = async (userId: string, baseUrl: s
 
 export const sendEmailVerificationForUser = async (userId: string, baseUrl: string) => {
   const result = await requestEmailVerificationForUser(userId, baseUrl);
-  const user = getUserById(userId);
+  const user = await getUserById(userId);
 
   if (!user || result.alreadyVerified || !result.previewUrl) {
     return {
@@ -713,35 +729,34 @@ export const verifyEmailToken = async (token: string) => {
     throw new Error("Brakuje tokenu weryfikacyjnego.");
   }
 
-  const tokenRow = getTokenRow("email_verification_tokens", normalizedToken);
+  const tokenRow = await getTokenRow("email_verification_tokens", normalizedToken);
 
   if (!tokenRow) {
     throw new Error("Link weryfikacyjny jest niepoprawny albo juz wygasl.");
   }
 
   if (new Date(tokenRow.expires_at).getTime() <= Date.now()) {
-    purgeTokensForUser("email_verification_tokens", tokenRow.user_id);
+    await purgeTokensForUser("email_verification_tokens", tokenRow.user_id);
     throw new Error("Link weryfikacyjny wygasl. Wyslij nowy z panelu konta.");
   }
 
-  const user = getUserById(tokenRow.user_id);
+  const user = await getUserById(tokenRow.user_id);
 
   if (!user) {
-    purgeTokensForUser("email_verification_tokens", tokenRow.user_id);
+    await purgeTokensForUser("email_verification_tokens", tokenRow.user_id);
     throw new Error("Nie znaleziono konta dla tego linku.");
   }
 
   const verifiedAt = new Date().toISOString();
 
-  db.prepare("UPDATE users SET email_verified_at = ?, updated_at = ? WHERE id = ?").run(
-    verifiedAt,
-    verifiedAt,
-    user.id
+  await execute(
+    "UPDATE users SET email_verified_at = $1, updated_at = $2 WHERE id = $3",
+    [verifiedAt, verifiedAt, user.id]
   );
 
-  purgeTokensForUser("email_verification_tokens", user.id);
+  await purgeTokensForUser("email_verification_tokens", user.id);
 
-  const updatedUser = getUserById(user.id);
+  const updatedUser = await getUserById(user.id);
 
   if (!updatedUser) {
     throw new Error("Nie udalo sie potwierdzic adresu email.");
@@ -757,7 +772,7 @@ export const requestPasswordResetForEmail = async (email: string, baseUrl: strin
     throw new Error("Podaj poprawny adres email.");
   }
 
-  const user = getUserByEmail(normalizedEmail);
+  const user = await getUserByEmail(normalizedEmail);
 
   if (!user) {
     return {
@@ -765,9 +780,9 @@ export const requestPasswordResetForEmail = async (email: string, baseUrl: strin
     };
   }
 
-  purgeTokensForUser("password_reset_tokens", user.id);
+  await purgeTokensForUser("password_reset_tokens", user.id);
 
-  const reset = createStoredToken(
+  const reset = await createStoredToken(
     "password_reset_tokens",
     user.id,
     PASSWORD_RESET_MAX_AGE_MS
@@ -789,35 +804,34 @@ export const resetPasswordWithToken = async (token: string, password: string) =>
     throw new Error("Nowe haslo musi miec co najmniej 8 znakow.");
   }
 
-  const tokenRow = getTokenRow("password_reset_tokens", normalizedToken);
+  const tokenRow = await getTokenRow("password_reset_tokens", normalizedToken);
 
   if (!tokenRow) {
     throw new Error("Link do resetu hasla jest niepoprawny albo juz wygasl.");
   }
 
   if (new Date(tokenRow.expires_at).getTime() <= Date.now()) {
-    purgeTokensForUser("password_reset_tokens", tokenRow.user_id);
+    await purgeTokensForUser("password_reset_tokens", tokenRow.user_id);
     throw new Error("Link do resetu hasla wygasl. Popros o nowy.");
   }
 
-  const user = getUserById(tokenRow.user_id);
+  const user = await getUserById(tokenRow.user_id);
 
   if (!user) {
-    purgeTokensForUser("password_reset_tokens", tokenRow.user_id);
+    await purgeTokensForUser("password_reset_tokens", tokenRow.user_id);
     throw new Error("Nie znaleziono konta dla tego linku.");
   }
 
   const passwordHash = await bcrypt.hash(password, 12);
   const now = new Date().toISOString();
 
-  db.prepare("UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?").run(
-    passwordHash,
-    now,
-    user.id
+  await execute(
+    "UPDATE users SET password_hash = $1, updated_at = $2 WHERE id = $3",
+    [passwordHash, now, user.id]
   );
 
-  purgeTokensForUser("password_reset_tokens", user.id);
-  removeSessionsByUserId(user.id);
+  await purgeTokensForUser("password_reset_tokens", user.id);
+  await removeSessionsByUserId(user.id);
 };
 
 export const logoutCurrentSession = async () => {
@@ -825,6 +839,6 @@ export const logoutCurrentSession = async () => {
   const sessionToken = cookieStore.get(SESSION_COOKIE_NAME)?.value;
 
   if (sessionToken) {
-    removeSessionByToken(sessionToken);
+    await removeSessionByToken(sessionToken);
   }
 };

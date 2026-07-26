@@ -1,4 +1,4 @@
-import db from "@/lib/server/db";
+import { getMarketCachePayload, setMarketCachePayload } from "@/lib/server/market-cache";
 import { normalizeSymbol } from "@/lib/ticker";
 import { normalizeText, round, toCurrencyCode, uniqueBy } from "@/lib/utils";
 import type {
@@ -8,11 +8,6 @@ import type {
   CurrencyCode,
   FxRates,
 } from "@/types/portfolio";
-
-type CacheRow = {
-  payload_json: string;
-  updated_at: string;
-};
 
 type EodhdSearchItem = {
   Code?: string;
@@ -134,49 +129,13 @@ const DISPLAY_SUFFIX_TO_EODHD_EXCHANGES: Record<string, string[]> = {
   PL: ["WAR"],
 };
 
-const readCacheStatement = db.prepare(
-  "SELECT payload_json, updated_at FROM market_cache WHERE key = ?"
-);
-const writeCacheStatement = db.prepare(`
-  INSERT INTO market_cache (key, payload_json, updated_at)
-  VALUES (@key, @payloadJson, @updatedAt)
-  ON CONFLICT(key) DO UPDATE SET
-    payload_json = excluded.payload_json,
-    updated_at = excluded.updated_at
-`);
-
 const quoteCache = new Map<string, { quote: AssetQuote; expiresAt: number }>();
 const fxRateCache = new Map<string, { rate: number; expiresAt: number }>();
 
 const hasEodhdApiKey = () => Boolean(EODHD_API_KEY);
 
-const getCachedPayload = <T,>(key: string, ttlMs: number) => {
-  const row = readCacheStatement.get(key) as CacheRow | undefined;
-
-  if (!row?.payload_json) {
-    return null;
-  }
-
-  const updatedAt = Date.parse(row.updated_at);
-
-  if (!Number.isFinite(updatedAt) || Date.now() - updatedAt > ttlMs) {
-    return null;
-  }
-
-  try {
-    return JSON.parse(row.payload_json) as T;
-  } catch {
-    return null;
-  }
-};
-
-const setCachedPayload = (key: string, payload: unknown) => {
-  writeCacheStatement.run({
-    key,
-    payloadJson: JSON.stringify(payload),
-    updatedAt: new Date().toISOString(),
-  });
-};
+const getCachedPayload = getMarketCachePayload;
+const setCachedPayload = setMarketCachePayload;
 
 const fetchJson = async <T,>(url: string, timeoutMs = 15_000): Promise<T | null> => {
   const controller = new AbortController();
@@ -341,7 +300,10 @@ const fetchSearchListings = async (query: string, kind: EodhdSearchKind) => {
   }
 
   const cacheKey = `eodhd:${kind}:search:${normalizeText(query)}`;
-  const cachedPayload = getCachedPayload<EodhdSearchItem[]>(cacheKey, EODHD_SEARCH_CACHE_TTL_MS);
+  const cachedPayload = await getCachedPayload<EodhdSearchItem[]>(
+    cacheKey,
+    EODHD_SEARCH_CACHE_TTL_MS
+  );
 
   if (cachedPayload) {
     return cachedPayload
@@ -358,7 +320,7 @@ const fetchSearchListings = async (query: string, kind: EodhdSearchKind) => {
     return [];
   }
 
-  setCachedPayload(cacheKey, payload);
+  await setCachedPayload(cacheKey, payload);
 
   return payload
     .map((item) => toEodhdListing(item, kind))
@@ -372,7 +334,7 @@ const fetchExchangeListings = async (exchange: string, kind: EodhdSearchKind) =>
 
   const normalizedExchange = normalizeSymbol(exchange);
   const cacheKey = `eodhd:${kind}:exchange:${normalizedExchange}`;
-  const cachedPayload = getCachedPayload<EodhdExchangeItem[]>(
+  const cachedPayload = await getCachedPayload<EodhdExchangeItem[]>(
     cacheKey,
     EODHD_EXCHANGE_CACHE_TTL_MS
   );
@@ -392,7 +354,7 @@ const fetchExchangeListings = async (exchange: string, kind: EodhdSearchKind) =>
     return [];
   }
 
-  setCachedPayload(cacheKey, payload);
+  await setCachedPayload(cacheKey, payload);
 
   return payload
     .map((item) => toEodhdListing(item, kind))

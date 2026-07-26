@@ -330,7 +330,7 @@ const setCachedGpwQuote = (quote: AssetQuote) => {
   });
 };
 
-const toGpwCatalogQuote = (
+const toGpwCatalogQuote = async (
   symbol: string,
   catalogEntry: { price: number | null; name: string } | null
 ) => {
@@ -466,14 +466,14 @@ const fetchStooqPageQuote = async (
   return null;
 };
 
-const buildGpwQuote = (
+const buildGpwQuote = async (
   symbol: string,
   price: number,
   name?: string,
   previousClose?: number
-): AssetQuote => {
+): Promise<AssetQuote> => {
   const normalizedSymbol = normalizeGpwSymbol(symbol);
-  const catalogEntry = findGpwCatalogEntry(normalizedSymbol);
+  const catalogEntry = await findGpwCatalogEntry(normalizedSymbol);
 
   return {
     symbol: normalizedSymbol,
@@ -486,8 +486,8 @@ const buildGpwQuote = (
   };
 };
 
-const getCachedGpwCatalogQuote = (symbol: string) =>
-  toGpwCatalogQuote(symbol, findGpwCatalogEntry(symbol));
+const getCachedGpwCatalogQuote = async (symbol: string) =>
+  toGpwCatalogQuote(symbol, await findGpwCatalogEntry(symbol));
 
 const getRefreshedGpwCatalogQuote = async (symbol: string) =>
   toGpwCatalogQuote(symbol, await findGpwCatalogEntryWithPrice(symbol));
@@ -999,7 +999,7 @@ const fetchStooqQuote = async (
 };
 
 const fetchGpwStooqQuote = async (symbol: string): Promise<AssetQuote | null> => {
-  warmGpwCatalog();
+  await warmGpwCatalog();
   const normalizedGpwSymbol = normalizeGpwSymbol(symbol);
   const requestTickerCore = getStooqTickerCore(normalizedGpwSymbol);
   const requestGpwSymbol = requestTickerCore
@@ -1027,7 +1027,7 @@ const fetchGpwStooqQuote = async (symbol: string): Promise<AssetQuote | null> =>
     const liveQuote = await fetchStooqLiveCsvQuote(requestGpwSymbol, "PLN");
 
     if (liveQuote) {
-      const normalizedQuote = buildGpwQuote(
+      const normalizedQuote = await buildGpwQuote(
         normalizedGpwSymbol,
         liveQuote.price,
         liveQuote.name,
@@ -1040,7 +1040,7 @@ const fetchGpwStooqQuote = async (symbol: string): Promise<AssetQuote | null> =>
     const historyQuote = await fetchStooqHistoryQuote(requestGpwSymbol, "PLN");
 
     if (historyQuote) {
-      const normalizedQuote = buildGpwQuote(
+      const normalizedQuote = await buildGpwQuote(
         normalizedGpwSymbol,
         historyQuote.price,
         historyQuote.name,
@@ -1057,7 +1057,7 @@ const fetchGpwStooqQuote = async (symbol: string): Promise<AssetQuote | null> =>
     );
 
     if (pageQuote) {
-      const normalizedQuote = buildGpwQuote(
+      const normalizedQuote = await buildGpwQuote(
         normalizedGpwSymbol,
         pageQuote.price,
         pageQuote.name
@@ -1066,7 +1066,7 @@ const fetchGpwStooqQuote = async (symbol: string): Promise<AssetQuote | null> =>
       return normalizedQuote;
     }
 
-    const catalogQuote = getCachedGpwCatalogQuote(normalizedGpwSymbol);
+    const catalogQuote = await getCachedGpwCatalogQuote(normalizedGpwSymbol);
 
     if (catalogQuote) {
       setCachedGpwQuote(catalogQuote);
@@ -1223,7 +1223,7 @@ export const searchMarketAssets = async (
   }
 
   if (kind === "stock" && mode === "stock-gpw") {
-    warmGpwCatalog();
+    await warmGpwCatalog();
     const catalogResults = await searchGpwCatalog(query);
 
     if (catalogResults.length > 0) {

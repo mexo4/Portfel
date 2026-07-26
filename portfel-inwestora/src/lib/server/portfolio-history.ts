@@ -1,4 +1,4 @@
-import db from "@/lib/server/db";
+import { getMarketCachePayload, setMarketCachePayload } from "@/lib/server/market-cache";
 import { fetchFxRatesServer } from "@/lib/server/market-data";
 import { fetchTreasuryBondQuoteSeriesServer } from "@/lib/server/treasury-bonds";
 import { normalizeYahooMoneyUnit } from "@/lib/server/yahoo";
@@ -24,11 +24,6 @@ import type {
   PortfolioSale,
   QuoteProvider,
 } from "@/types/portfolio";
-
-type CacheRow = {
-  payload_json: string;
-  updated_at: string;
-};
 
 type PricePoint = {
   date: string;
@@ -81,55 +76,13 @@ type AssetSeriesDefinition = {
   kind: AssetKind;
 };
 
-const readCacheStatement = db.prepare(
-  "SELECT payload_json, updated_at FROM market_cache WHERE key = ?"
-);
-const writeCacheStatement = db.prepare(`
-  INSERT INTO market_cache (key, payload_json, updated_at)
-  VALUES (@key, @payloadJson, @updatedAt)
-  ON CONFLICT(key) DO UPDATE SET
-    payload_json = excluded.payload_json,
-    updated_at = excluded.updated_at
-`);
+const getCachedPayload = getMarketCachePayload;
+const setCachedPayload = setMarketCachePayload;
 
 const EODHD_API_KEY = process.env.EODHD_API_KEY ?? "";
 const HISTORY_CACHE_TTL_MS = 6 * 60 * 60 * 1_000;
 const FX_HISTORY_CACHE_TTL_MS = 24 * 60 * 60 * 1_000;
 const NBP_CHUNK_MAX_DAYS = 360;
-
-const getCachedPayload = <T,>(key: string, ttlMs: number) => {
-  const row = readCacheStatement.get(key) as CacheRow | undefined;
-
-  if (!row?.payload_json) {
-    return null;
-  }
-
-  const updatedAt = Date.parse(row.updated_at);
-
-  if (!Number.isFinite(updatedAt) || Date.now() - updatedAt > ttlMs) {
-    return null;
-  }
-
-  try {
-    const payload = JSON.parse(row.payload_json) as T;
-
-    if (Array.isArray(payload) && payload.length === 0) {
-      return null;
-    }
-
-    return payload;
-  } catch {
-    return null;
-  }
-};
-
-const setCachedPayload = (key: string, payload: unknown) => {
-  writeCacheStatement.run({
-    key,
-    payloadJson: JSON.stringify(payload),
-    updatedAt: new Date().toISOString(),
-  });
-};
 
 const fetchTextWithNodeHttps = (
   url: string,
@@ -365,14 +318,16 @@ const getCachedOrFetch = async <T,>(
   ttlMs: number,
   fetcher: () => Promise<T>
 ) => {
-  const cachedPayload = getCachedPayload<T>(key, ttlMs);
+  const cachedPayload = await getCachedPayload<T>(key, ttlMs, {
+    ignoreEmptyArray: true,
+  });
 
   if (cachedPayload !== null) {
     return cachedPayload;
   }
 
   const payload = await fetcher();
-  setCachedPayload(key, payload);
+  await setCachedPayload(key, payload);
   return payload;
 };
 

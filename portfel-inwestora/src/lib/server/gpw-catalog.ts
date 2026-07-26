@@ -1,5 +1,6 @@
 import { LOCAL_STOCK_CATALOG } from "@/lib/constants";
-import db from "@/lib/server/db";
+import { queryOne } from "@/lib/server/db";
+import { setMarketCachePayload } from "@/lib/server/market-cache";
 import {
   getGpwTickerCore,
   isGpwSymbol,
@@ -47,17 +48,6 @@ const STOOQ_ROW_HTML_PATTERN =
 
 let memorySnapshot: GpwCatalogSnapshot | null = null;
 let refreshPromise: Promise<GpwCatalogSnapshot | null> | null = null;
-
-const readCacheStatement = db.prepare(
-  "SELECT payload_json, updated_at FROM market_cache WHERE key = ?"
-);
-const writeCacheStatement = db.prepare(`
-  INSERT INTO market_cache (key, payload_json, updated_at)
-  VALUES (@key, @payloadJson, @updatedAt)
-  ON CONFLICT(key) DO UPDATE SET
-    payload_json = excluded.payload_json,
-    updated_at = excluded.updated_at
-`);
 
 const isGpwCatalogSymbol = (symbol: string) => isGpwSymbol(symbol);
 
@@ -145,8 +135,11 @@ const isFresh = (updatedAt: string, ttlMs = GPW_CATALOG_REFRESH_TTL_MS) => {
 const hasSnapshotPrices = (snapshot: GpwCatalogSnapshot) =>
   snapshot.items.some((item) => typeof item.price === "number" && item.price > 0);
 
-const loadSnapshotFromDb = () => {
-  const row = readCacheStatement.get(GPW_CATALOG_CACHE_KEY) as CacheRow | undefined;
+const loadSnapshotFromDb = async () => {
+  const row = await queryOne<CacheRow>(
+    'SELECT payload_json, updated_at FROM market_cache WHERE "key" = $1',
+    [GPW_CATALOG_CACHE_KEY]
+  );
 
   if (!row?.payload_json) {
     return null;
@@ -168,26 +161,25 @@ const loadSnapshotFromDb = () => {
   }
 };
 
-const persistSnapshot = (snapshot: GpwCatalogSnapshot) => {
-  writeCacheStatement.run({
-    key: GPW_CATALOG_CACHE_KEY,
-    payloadJson: JSON.stringify({
+const persistSnapshot = (snapshot: GpwCatalogSnapshot) =>
+  setMarketCachePayload(
+    GPW_CATALOG_CACHE_KEY,
+    {
       items: snapshot.items.map((item) => ({
         symbol: item.symbol,
         name: item.name,
         price: item.price,
       })),
-    }),
-    updatedAt: snapshot.updatedAt,
-  });
-};
+    },
+    snapshot.updatedAt
+  );
 
-const getLoadedSnapshot = () => {
+const getLoadedSnapshot = async () => {
   if (memorySnapshot) {
     return memorySnapshot;
   }
 
-  const cachedSnapshot = loadSnapshotFromDb();
+  const cachedSnapshot = await loadSnapshotFromDb();
 
   if (cachedSnapshot) {
     memorySnapshot = cachedSnapshot;
@@ -311,7 +303,7 @@ const refreshSnapshotInBackground = () => {
     }
 
     memorySnapshot = refreshedSnapshot;
-    persistSnapshot(refreshedSnapshot);
+    await persistSnapshot(refreshedSnapshot);
     return refreshedSnapshot;
   })()
     .catch((error) => {
@@ -325,8 +317,8 @@ const refreshSnapshotInBackground = () => {
   return refreshPromise;
 };
 
-const getAvailableSnapshot = () => {
-  const snapshot = getLoadedSnapshot();
+const getAvailableSnapshot = async () => {
+  const snapshot = await getLoadedSnapshot();
 
   if (snapshot) {
     if (!isFresh(snapshot.updatedAt) || !hasSnapshotPrices(snapshot)) {
@@ -362,7 +354,7 @@ export const searchGpwCatalog = async (query: string): Promise<AssetSearchResult
     return [];
   }
 
-  const snapshot = getAvailableSnapshot();
+  const snapshot = await getAvailableSnapshot();
 
   return snapshot.items
     .filter((item) => item.normalizedHaystack.includes(normalizedQuery))
@@ -383,14 +375,15 @@ export const searchGpwCatalog = async (query: string): Promise<AssetSearchResult
     }));
 };
 
-export const findGpwCatalogEntry = (symbol: string) => {
+export const findGpwCatalogEntry = async (symbol: string) => {
   const symbolCore = getSymbolCore(symbol);
 
   if (!symbolCore) {
     return null;
   }
 
-  return getAvailableSnapshot().items.find((item) => item.symbolCore === symbolCore) ?? null;
+  const snapshot = await getAvailableSnapshot();
+  return snapshot.items.find((item) => item.symbolCore === symbolCore) ?? null;
 };
 
 export const findGpwCatalogEntryWithPrice = async (symbol: string) => {
@@ -400,7 +393,7 @@ export const findGpwCatalogEntryWithPrice = async (symbol: string) => {
     return null;
   }
 
-  const snapshot = getAvailableSnapshot();
+  const snapshot = await getAvailableSnapshot();
   const currentEntry = snapshot.items.find((item) => item.symbolCore === symbolCore) ?? null;
 
   if (currentEntry?.price) {
@@ -416,8 +409,8 @@ export const findGpwCatalogEntryWithPrice = async (symbol: string) => {
   return refreshedSnapshot.items.find((item) => item.symbolCore === symbolCore) ?? currentEntry;
 };
 
-export const warmGpwCatalog = () => {
-  const snapshot = getLoadedSnapshot();
+export const warmGpwCatalog = async () => {
+  const snapshot = await getLoadedSnapshot();
 
   if (!snapshot || !isFresh(snapshot.updatedAt)) {
     void refreshSnapshotInBackground();

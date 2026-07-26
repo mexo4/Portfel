@@ -21,7 +21,7 @@ export async function POST(request: Request) {
       password: payload.password ?? "",
     });
 
-    const session = createSessionForUser(user.id);
+    const session = await createSessionForUser(user.id);
     const response = NextResponse.json({ user });
     appendSessionCookie(response, session.token, session.expiresAt);
 

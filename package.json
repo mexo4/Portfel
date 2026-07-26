@@ -6,7 +6,7 @@
     "portfel-inwestora"
   ],
   "scripts": {
-    "dev": "npm --workspace portfel-inwestora run dev",
+    "dev": "npm --workspace portfel-inwestora run dev --",
     "build": "npm --workspace portfel-inwestora run build",
     "start": "npm --workspace portfel-inwestora run start",
     "lint": "npm --workspace portfel-inwestora run lint"

@@ -23,7 +23,8 @@
     "portfel-inwestora": "file:",
     "react": "19.2.3",
     "react-dom": "19.2.3",
-    "recharts": "^3.8.1"
+    "recharts": "^3.8.1",
+    "resend": "^6.18.0"
   },
   "optionalDependencies": {
     "@tailwindcss/oxide-linux-x64-gnu": "4.2.1",

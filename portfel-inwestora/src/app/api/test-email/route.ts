@@ -7,8 +7,10 @@ export const runtime = "nodejs";
 export async function GET() {
   const apiKey = process.env.RESEND_API_KEY;
 
-  console.log("TEST_VARIABLE:", process.env.TEST_VARIABLE);
-  console.log(Boolean(process.env.RESEND_API_KEY));
+  console.log("ENV CHECK", {
+    resend: Boolean(process.env.RESEND_API_KEY),
+    test: Boolean(process.env.TEST_VARIABLE),
+  });
 
   if (!apiKey) {
     return NextResponse.json(

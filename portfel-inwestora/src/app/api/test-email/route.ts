@@ -7,9 +7,7 @@ export const runtime = "nodejs";
 export async function GET() {
   const apiKey = process.env.RESEND_API_KEY;
 
-  console.log("test-email RESEND_API_KEY present", {
-    present: Boolean(apiKey),
-  });
+  console.log(Boolean(process.env.RESEND_API_KEY));
 
   if (!apiKey) {
     return NextResponse.json(

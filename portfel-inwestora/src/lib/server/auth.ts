@@ -8,7 +8,7 @@ import type { NextResponse } from "next/server";
 import { createFreshUserProfile, normalizeUserProfile } from "@/lib/profile";
 import { isForcedProEmail } from "@/lib/server/access";
 import { execute, queryOne } from "@/lib/server/db";
-import { sendVerificationEmail } from "@/lib/server/email";
+import { sendPasswordResetEmail, sendVerificationEmail } from "@/lib/server/email";
 import type {
   AuthenticatedUser,
   PortfolioBook,
@@ -720,18 +720,7 @@ export const sendEmailVerificationForUser = async (userId: string, baseUrl: stri
     };
   }
 
-  console.log("verification email triggered", {
-    userId,
-    email: user.email.replace(/^(.{0,2}).*(@.*)$/, "$1***$2"),
-  });
-
   const emailResult = await sendVerificationEmail(user.email, result.previewUrl);
-
-  console.log("verification email result", {
-    userId,
-    sent: emailResult.sent,
-    reason: emailResult.reason,
-  });
 
   return {
     ...result,
@@ -794,6 +783,7 @@ export const requestPasswordResetForEmail = async (email: string, baseUrl: strin
   if (!user) {
     return {
       previewUrl: null,
+      sent: false,
     };
   }
 
@@ -805,8 +795,12 @@ export const requestPasswordResetForEmail = async (email: string, baseUrl: strin
     PASSWORD_RESET_MAX_AGE_MS
   );
 
+  const previewUrl = `${baseUrl}/reset-password?token=${reset.token}`;
+  const emailResult = await sendPasswordResetEmail(user.email, previewUrl);
+
   return {
-    previewUrl: `${baseUrl}/reset-password?token=${reset.token}`,
+    previewUrl,
+    sent: emailResult.sent,
   };
 };
 

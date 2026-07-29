@@ -33,15 +33,68 @@ export type BrokerImportParseResult = {
 };
 
 const HEADER_ALIASES = {
-  side: ["typ", "rodzaj", "operacja", "transakcja", "transaction type", "type", "side", "action"],
-  date: ["data", "data transakcji", "data zawarcia", "czas", "date", "trade date", "time"],
-  symbol: ["symbol", "ticker", "instrument", "isin", "kod", "product", "security"],
+  side: [
+    "typ",
+    "rodzaj",
+    "operacja",
+    "transakcja",
+    "transaction type",
+    "type",
+    "side",
+    "action",
+    "buy sell",
+    "k s",
+  ],
+  date: [
+    "data",
+    "data transakcji",
+    "data zawarcia",
+    "data otwarcia",
+    "data realizacji",
+    "czas",
+    "date",
+    "trade date",
+    "time",
+    "open time",
+    "execution time",
+  ],
+  symbol: [
+    "symbol",
+    "ticker",
+    "instrument",
+    "isin",
+    "kod",
+    "walor",
+    "product",
+    "security",
+    "market",
+  ],
   name: ["nazwa", "nazwa instrumentu", "instrument name", "name", "opis", "description"],
-  quantity: ["ilosc", "liczba", "wolumen", "quantity", "shares", "units", "amount"],
-  price: ["cena", "cena transakcji", "kurs", "price", "rate", "unit price"],
+  quantity: [
+    "ilosc",
+    "liczba",
+    "wolumen",
+    "quantity",
+    "shares",
+    "units",
+    "amount",
+    "volume",
+  ],
+  price: ["cena", "cena transakcji", "kurs", "price", "rate", "unit price", "open price"],
   currency: ["waluta", "waluta ceny", "currency", "price currency", "ccy"],
   fee: ["prowizja", "oplata", "oplaty", "koszty", "fee", "fees", "commission"],
   kind: ["klasa", "typ aktywa", "asset type", "category", "market"],
+  value: [
+    "wartosc",
+    "wartosc transakcji",
+    "kwota",
+    "nominal",
+    "nominal value",
+    "transaction value",
+    "value",
+    "gross value",
+    "net value",
+  ],
 } satisfies Record<string, string[]>;
 
 const CRYPTO_SYMBOLS = new Set(["BTC", "ETH", "SOL", "BNB", "XRP", "ADA", "DOGE", "DOT", "LINK", "LTC", "BCH", "AVAX", "MATIC"]);
@@ -128,10 +181,22 @@ const parseNumber = (value: string) => {
 const parseDate = (value: string) => {
   const trimmed = value.trim();
   const europeanDate = trimmed.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{4})/);
+  const excelSerialDate = Number(trimmed.replace(",", "."));
 
   if (europeanDate) {
     const [, day, month, year] = europeanDate;
     return `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+  }
+
+  if (
+    Number.isFinite(excelSerialDate) &&
+    excelSerialDate >= 20_000 &&
+    excelSerialDate <= 80_000
+  ) {
+    const excelEpoch = Date.UTC(1899, 11, 30);
+    return new Date(excelEpoch + Math.floor(excelSerialDate) * 86_400_000)
+      .toISOString()
+      .slice(0, 10);
   }
 
   return toDateInputValue(trimmed, "");
@@ -156,6 +221,8 @@ const getCell = (
 const inferSide = (value: string): BrokerOperationSide | null => {
   const normalized = normalizeHeader(value);
 
+  if (normalized === "k" || normalized === "b") return "buy";
+  if (normalized === "s") return "sell";
   if (/\b(kupno|zakup|buy|bought|open|otwarcie)\b/.test(normalized)) return "buy";
   if (/\b(sprzedaz|sprzedaz|sell|sold|close|zamkniecie)\b/.test(normalized)) return "sell";
 
@@ -184,6 +251,115 @@ const normalizeImportedSymbol = (symbol: string, kind: AssetKind, currency: Curr
   }
 
   return normalized;
+};
+
+const countHeaderMatches = (cells: string[]) => {
+  const normalizedCells = new Set(cells.map(normalizeHeader).filter(Boolean));
+
+  return Object.values(HEADER_ALIASES).reduce(
+    (total, aliases) =>
+      total +
+      (aliases.some((alias) => normalizedCells.has(normalizeHeader(alias))) ? 1 : 0),
+    0
+  );
+};
+
+const findHeaderRowIndex = (rows: string[][]) => {
+  const candidates = rows.slice(0, 30).map((row, index) => ({
+    index,
+    score: countHeaderMatches(row),
+  }));
+  const bestCandidate = candidates.sort((left, right) => right.score - left.score)[0];
+
+  return bestCandidate && bestCandidate.score >= 3 ? bestCandidate.index : 0;
+};
+
+const getFirstSymbolCandidate = (value: string) =>
+  value.match(/\b[A-Z]{1,6}[A-Z0-9]{0,6}(?:[._-][A-Z0-9]{1,8})?\b/)?.[0] ?? value;
+
+const parseBrokerOperationRows = (
+  rows: string[][],
+  warnings: string[] = []
+): BrokerImportParseResult => {
+  const cleanedRows = rows
+    .map((row) => row.map((cell) => cell.trim()))
+    .filter((row) => row.some(Boolean));
+
+  if (cleanedRows.length < 2) {
+    return {
+      operations: [],
+      skippedRows: [{ rowNumber: 1, reason: "Plik nie ma naglowka i wierszy transakcji." }],
+      warnings,
+    };
+  }
+
+  const headerRowIndex = findHeaderRowIndex(cleanedRows);
+  const headers = cleanedRows[headerRowIndex].map(normalizeHeader);
+  const operations: ImportedBrokerOperation[] = [];
+  const skippedRows: BrokerImportParseResult["skippedRows"] = [];
+
+  cleanedRows.slice(headerRowIndex + 1).forEach((values, index) => {
+    const rowNumber = headerRowIndex + index + 2;
+    const row = Object.fromEntries(
+      headers.map((header, cellIndex) => [header, values[cellIndex] ?? ""])
+    );
+    const side = inferSide(getCell(row, HEADER_ALIASES.side));
+    const rawSymbolSource = getCell(row, HEADER_ALIASES.symbol);
+    const rawName = getCell(row, HEADER_ALIASES.name, rawSymbolSource);
+    const rawSymbol = getFirstSymbolCandidate(rawSymbolSource || rawName);
+    const rawDate = parseDate(getCell(row, HEADER_ALIASES.date));
+    const quantity = parseNumber(getCell(row, HEADER_ALIASES.quantity));
+    const transactionValue = parseNumber(getCell(row, HEADER_ALIASES.value));
+    const rawPrice = parseNumber(getCell(row, HEADER_ALIASES.price));
+    const price =
+      rawPrice ??
+      (quantity && transactionValue ? Math.abs(transactionValue) / Math.abs(quantity) : null);
+    const currency = toCurrencyCode(
+      getCell(row, HEADER_ALIASES.currency) || inferCurrencyFromSymbol(rawSymbol, "USD")
+    );
+    const fee = parseNumber(getCell(row, HEADER_ALIASES.fee)) ?? 0;
+    const kind = inferKind(getCell(row, HEADER_ALIASES.kind), rawSymbol, rawName);
+    const symbol = normalizeImportedSymbol(rawSymbol, kind, currency);
+
+    if (!side || !rawDate || !symbol || !quantity || quantity <= 0 || !price || price <= 0) {
+      skippedRows.push({
+        rowNumber,
+        reason: "Brakuje typu, daty, symbolu, ilosci albo ceny.",
+      });
+      return;
+    }
+
+    const provider = getProvider(kind, symbol, currency);
+
+    operations.push({
+      rowNumber,
+      side,
+      date: rawDate,
+      symbol,
+      name: rawName || symbol,
+      kind,
+      quantity: round(Math.abs(quantity), 6),
+      price: round(Math.abs(price), 6),
+      currency,
+      feePln: round(Math.abs(fee), 6),
+      transactionValue:
+        typeof transactionValue === "number" && Number.isFinite(transactionValue)
+          ? round(Math.abs(transactionValue), 6)
+          : undefined,
+      provider,
+      providerId: provider === "yahoo" || provider === "eodhd" ? symbol : undefined,
+      warnings:
+        currency !== "PLN" && fee !== 0
+          ? ["Prowizja z importu jest zapisana jako PLN. Sprawdz ja, jesli broker eksportuje prowizje w walucie rynku."]
+          : [],
+    });
+  });
+
+  return {
+    operations,
+    skippedRows,
+    warnings,
+  };
 };
 
 const PDF_LITERAL_PATTERN = /\((?:\\.|[^\\()])*\)/g;
@@ -324,8 +500,7 @@ const getPrintableRatio = (value: string) => {
   return printable.length / value.length;
 };
 
-const extractTextFromPdfBytes = (bytes: Uint8Array) => {
-  const rawText = new TextDecoder("latin1").decode(bytes);
+const getPdfTextPartsFromRawText = (rawText: string) => {
   const textParts: string[] = [];
   const literalMatches = rawText.match(PDF_LITERAL_PATTERN) ?? [];
 
@@ -350,7 +525,43 @@ const extractTextFromPdfBytes = (bytes: Uint8Array) => {
     .replace(/\s+/g, " ")
     .trim();
 
-  return [...textParts, readableRaw].join("\n");
+  return [...textParts, readableRaw];
+};
+
+const extractPdfFlateStreams = (rawText: string) =>
+  Array.from(
+    rawText.matchAll(
+      /<<(?:.|\r|\n){0,1800}?\/FlateDecode(?:.|\r|\n){0,800}?>>\s*stream\r?\n([\s\S]*?)\r?\nendstream/g
+    )
+  ).map((match) => {
+    const binary = match[1];
+    const streamBytes = new Uint8Array(binary.length);
+
+    for (let index = 0; index < binary.length; index += 1) {
+      streamBytes[index] = binary.charCodeAt(index) & 0xff;
+    }
+
+    return streamBytes;
+  });
+
+const extractTextFromPdfBytes = async (bytes: Uint8Array) => {
+  const rawText = new TextDecoder("latin1").decode(bytes);
+  const textParts = getPdfTextPartsFromRawText(rawText);
+  const flateStreams = extractPdfFlateStreams(rawText);
+
+  for (const streamBytes of flateStreams) {
+    const inflated = await inflatePdfBytes(streamBytes);
+
+    if (!inflated) {
+      continue;
+    }
+
+    textParts.push(
+      ...getPdfTextPartsFromRawText(new TextDecoder("latin1").decode(inflated))
+    );
+  }
+
+  return textParts.join("\n");
 };
 
 const extractLabeledNumber = (text: string, labels: string[]) => {
@@ -425,6 +636,10 @@ const extractPdfName = (chunk: string, dateText: string, symbol: string) => {
 };
 
 const buildPdfChunks = (text: string) => {
+  const lineChunks = text
+    .split(/\r?\n/)
+    .map((line) => line.replace(/\s+/g, " ").trim())
+    .filter((line) => line && line.match(PDF_DATE_PATTERN) && inferSide(line));
   const compactText = text
     .replace(/\u00a0/g, " ")
     .replace(/[ \t]+/g, " ")
@@ -433,7 +648,7 @@ const buildPdfChunks = (text: string) => {
     .trim();
   const dateMatches = Array.from(compactText.matchAll(PDF_DATE_PATTERN));
 
-  return dateMatches
+  const dateChunks = dateMatches
     .map((match, index) => {
       const startIndex = match.index ?? 0;
       const endIndex =
@@ -444,6 +659,51 @@ const buildPdfChunks = (text: string) => {
       return compactText.slice(startIndex, endIndex).trim();
     })
     .filter(Boolean);
+
+  return Array.from(new Set([...lineChunks, ...dateChunks]));
+};
+
+const inferPdfMoneyFields = ({
+  numbers,
+  quantity,
+  price,
+  labeledFee,
+  labeledTransactionValue,
+}: {
+  numbers: number[];
+  quantity: number | null;
+  price: number | null;
+  labeledFee: number | null;
+  labeledTransactionValue: number | null;
+}) => {
+  const expectedValue =
+    quantity && price && quantity > 0 && price > 0 ? Math.abs(quantity * price) : null;
+  const candidateNumbers = numbers
+    .map(Math.abs)
+    .filter((value) => value > 0)
+    .filter((value) => value !== Math.abs(quantity ?? 0) && value !== Math.abs(price ?? 0));
+  const transactionValue =
+    labeledTransactionValue ??
+    (expectedValue
+      ? candidateNumbers.find(
+          (value) => Math.abs(value - expectedValue) <= Math.max(0.05, expectedValue * 0.02)
+        ) ?? expectedValue
+      : undefined);
+  const fee =
+    labeledFee ??
+    candidateNumbers
+      .filter(
+        (value) =>
+          value !== transactionValue &&
+          (!transactionValue || value <= Math.max(100, transactionValue * 0.05))
+      )
+      .sort((left, right) => left - right)[0] ??
+    0;
+
+  return {
+    fee,
+    transactionValue,
+  };
 };
 
 const parseXtbPdfChunk = (
@@ -469,11 +729,21 @@ const parseXtbPdfChunk = (
     extractLabeledNumber(chunk, ["cena", "kurs", "price", "rate", "unit price"]) ??
     numbers[1] ??
     null;
-  const fee =
-    extractLabeledNumber(chunk, ["prowizja", "commission", "fee", "oplata", "koszt"]) ?? 0;
-  const transactionValue =
-    extractLabeledNumber(chunk, ["wartosc transakcji", "wartosc", "value", "amount", "kwota"]) ??
-    (quantity && price ? quantity * price : undefined);
+  const inferredMoneyFields = inferPdfMoneyFields({
+    numbers,
+    quantity,
+    price,
+    labeledFee: extractLabeledNumber(chunk, ["prowizja", "commission", "fee", "oplata", "koszt"]),
+    labeledTransactionValue: extractLabeledNumber(chunk, [
+      "wartosc transakcji",
+      "wartosc",
+      "value",
+      "amount",
+      "kwota",
+    ]),
+  });
+  const fee = inferredMoneyFields.fee;
+  const transactionValue = inferredMoneyFields.transactionValue;
 
   if (!side || !rawDate || !symbol || !quantity || quantity <= 0 || !price || price <= 0) {
     return null;
@@ -516,78 +786,287 @@ export const parseBrokerOperationsCsv = (
     .split(/\r?\n/)
     .filter((line) => line.trim());
 
-  if (lines.length < 2) {
+  const delimiter = getDelimiter(lines[0]);
+  return parseBrokerOperationRows(lines.map((line) => parseCsvLine(line, delimiter)));
+};
+
+const ZIP_EOCD_SIGNATURE = 0x06054b50;
+const ZIP_CENTRAL_DIRECTORY_SIGNATURE = 0x02014b50;
+const ZIP_LOCAL_FILE_SIGNATURE = 0x04034b50;
+
+type ZipEntry = {
+  name: string;
+  compressionMethod: number;
+  compressedSize: number;
+  localHeaderOffset: number;
+};
+
+const textDecoder = new TextDecoder("utf-8", { fatal: false });
+
+const toArrayBuffer = (bytes: Uint8Array) =>
+  bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+
+const readZipString = (bytes: Uint8Array, offset: number, length: number) =>
+  textDecoder.decode(bytes.slice(offset, offset + length));
+
+const findEndOfCentralDirectory = (view: DataView) => {
+  const minimumOffset = Math.max(0, view.byteLength - 65_557);
+
+  for (let offset = view.byteLength - 22; offset >= minimumOffset; offset -= 1) {
+    if (view.getUint32(offset, true) === ZIP_EOCD_SIGNATURE) {
+      return offset;
+    }
+  }
+
+  return -1;
+};
+
+const readZipCentralDirectory = (bytes: Uint8Array): ZipEntry[] => {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const eocdOffset = findEndOfCentralDirectory(view);
+
+  if (eocdOffset < 0) {
+    throw new Error("Nie znaleziono struktury ZIP w pliku XLSX.");
+  }
+
+  const entriesCount = view.getUint16(eocdOffset + 10, true);
+  const centralDirectoryOffset = view.getUint32(eocdOffset + 16, true);
+  const entries: ZipEntry[] = [];
+  let offset = centralDirectoryOffset;
+
+  for (let index = 0; index < entriesCount; index += 1) {
+    if (view.getUint32(offset, true) !== ZIP_CENTRAL_DIRECTORY_SIGNATURE) {
+      break;
+    }
+
+    const compressionMethod = view.getUint16(offset + 10, true);
+    const compressedSize = view.getUint32(offset + 20, true);
+    const fileNameLength = view.getUint16(offset + 28, true);
+    const extraLength = view.getUint16(offset + 30, true);
+    const commentLength = view.getUint16(offset + 32, true);
+    const localHeaderOffset = view.getUint32(offset + 42, true);
+    const name = readZipString(bytes, offset + 46, fileNameLength).replace(/\\/g, "/");
+
+    entries.push({
+      name,
+      compressionMethod,
+      compressedSize,
+      localHeaderOffset,
+    });
+
+    offset += 46 + fileNameLength + extraLength + commentLength;
+  }
+
+  return entries;
+};
+
+const inflateRawBytes = async (bytes: Uint8Array) => {
+  if (typeof DecompressionStream === "undefined") {
+    throw new Error("Ta przegladarka nie wspiera rozpakowywania XLSX.");
+  }
+
+  const stream = new DecompressionStream("deflate-raw");
+  const writer = stream.writable.getWriter();
+  await writer.write(toArrayBuffer(bytes));
+  await writer.close();
+  return new Uint8Array(await new Response(stream.readable).arrayBuffer());
+};
+
+const inflatePdfBytes = async (bytes: Uint8Array) => {
+  if (typeof DecompressionStream === "undefined") {
+    return null;
+  }
+
+  for (const format of ["deflate", "deflate-raw"] as CompressionFormat[]) {
+    try {
+      const stream = new DecompressionStream(format);
+      const writer = stream.writable.getWriter();
+      await writer.write(toArrayBuffer(bytes));
+      await writer.close();
+      return new Uint8Array(await new Response(stream.readable).arrayBuffer());
+    } catch {
+      // Try the next PDF deflate framing variant.
+    }
+  }
+
+  return null;
+};
+
+const readZipEntryBytes = async (
+  bytes: Uint8Array,
+  entry: ZipEntry
+): Promise<Uint8Array> => {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const localHeaderOffset = entry.localHeaderOffset;
+
+  if (view.getUint32(localHeaderOffset, true) !== ZIP_LOCAL_FILE_SIGNATURE) {
+    throw new Error(`Nieprawidlowy naglowek XLSX dla ${entry.name}.`);
+  }
+
+  const fileNameLength = view.getUint16(localHeaderOffset + 26, true);
+  const extraLength = view.getUint16(localHeaderOffset + 28, true);
+  const dataOffset = localHeaderOffset + 30 + fileNameLength + extraLength;
+  const compressedBytes = bytes.slice(dataOffset, dataOffset + entry.compressedSize);
+
+  if (entry.compressionMethod === 0) {
+    return compressedBytes;
+  }
+
+  if (entry.compressionMethod === 8) {
+    return inflateRawBytes(compressedBytes);
+  }
+
+  throw new Error(`Nieobslugiwany sposob kompresji XLSX: ${entry.compressionMethod}.`);
+};
+
+const readZipTextEntry = async (
+  bytes: Uint8Array,
+  entriesByName: Map<string, ZipEntry>,
+  entryName: string
+) => {
+  const entry = entriesByName.get(entryName);
+
+  if (!entry) {
+    return null;
+  }
+
+  return textDecoder.decode(await readZipEntryBytes(bytes, entry));
+};
+
+const parseXml = (text: string) => new DOMParser().parseFromString(text, "application/xml");
+
+const getNodeText = (node: Element) =>
+  Array.from(node.getElementsByTagName("t"))
+    .map((item) => item.textContent ?? "")
+    .join("");
+
+const readSharedStrings = (xmlText: string | null) => {
+  if (!xmlText) {
+    return [];
+  }
+
+  const xml = parseXml(xmlText);
+  return Array.from(xml.getElementsByTagName("si")).map(getNodeText);
+};
+
+const getColumnIndex = (cellRef: string) => {
+  const letters = cellRef.match(/^[A-Z]+/i)?.[0].toUpperCase() ?? "";
+
+  return Array.from(letters).reduce(
+    (total, letter) => total * 26 + letter.charCodeAt(0) - 64,
+    0
+  ) - 1;
+};
+
+const getCellText = (cell: Element, sharedStrings: string[]) => {
+  const type = cell.getAttribute("t");
+
+  if (type === "s") {
+    const sharedStringIndex = Number(cell.getElementsByTagName("v")[0]?.textContent ?? "");
+    return sharedStrings[sharedStringIndex] ?? "";
+  }
+
+  if (type === "inlineStr") {
+    const inlineString = cell.getElementsByTagName("is")[0];
+    return inlineString ? getNodeText(inlineString) : "";
+  }
+
+  return (
+    cell.getElementsByTagName("v")[0]?.textContent ??
+    cell.getElementsByTagName("t")[0]?.textContent ??
+    ""
+  ).trim();
+};
+
+const parseWorksheetRows = (xmlText: string, sharedStrings: string[]) => {
+  const xml = parseXml(xmlText);
+
+  return Array.from(xml.getElementsByTagName("row")).map((row) => {
+    const cells: string[] = [];
+
+    Array.from(row.getElementsByTagName("c")).forEach((cell) => {
+      const ref = cell.getAttribute("r") ?? "";
+      const index = getColumnIndex(ref);
+
+      if (index >= 0) {
+        cells[index] = getCellText(cell, sharedStrings);
+      } else {
+        cells.push(getCellText(cell, sharedStrings));
+      }
+    });
+
+    return cells.map((cell) => cell ?? "");
+  });
+};
+
+export const parseBrokerOperationsXlsx = async (
+  bytes: Uint8Array,
+  _preset: BrokerImportPreset = "xtb"
+): Promise<BrokerImportParseResult> => {
+  void _preset;
+
+  const entries = readZipCentralDirectory(bytes);
+  const entriesByName = new Map(entries.map((entry) => [entry.name, entry] as const));
+  const sharedStrings = readSharedStrings(
+    await readZipTextEntry(bytes, entriesByName, "xl/sharedStrings.xml")
+  );
+  const worksheetEntries = entries
+    .filter((entry) => /^xl\/worksheets\/sheet\d+\.xml$/i.test(entry.name))
+    .sort((left, right) => left.name.localeCompare(right.name));
+  const warnings = [
+    "XLSX zostal odczytany z arkuszy Excela i zmapowany tym samym silnikiem co CSV.",
+  ];
+
+  if (worksheetEntries.length === 0) {
     return {
       operations: [],
-      skippedRows: [{ rowNumber: 1, reason: "Plik nie ma naglowka i wierszy transakcji." }],
+      skippedRows: [{ rowNumber: 1, reason: "Nie znaleziono arkuszy w pliku XLSX." }],
+      warnings,
     };
   }
 
-  const delimiter = getDelimiter(lines[0]);
-  const headers = parseCsvLine(lines[0], delimiter).map(normalizeHeader);
-  const operations: ImportedBrokerOperation[] = [];
-  const skippedRows: BrokerImportParseResult["skippedRows"] = [];
+  const results: BrokerImportParseResult[] = [];
 
-  lines.slice(1).forEach((line, index) => {
-    const rowNumber = index + 2;
-    const values = parseCsvLine(line, delimiter);
-    const row = Object.fromEntries(headers.map((header, cellIndex) => [header, values[cellIndex] ?? ""]));
-    const side = inferSide(getCell(row, HEADER_ALIASES.side));
-    const rawSymbol = getCell(row, HEADER_ALIASES.symbol);
-    const rawName = getCell(row, HEADER_ALIASES.name, rawSymbol);
-    const rawDate = parseDate(getCell(row, HEADER_ALIASES.date));
-    const quantity = parseNumber(getCell(row, HEADER_ALIASES.quantity));
-    const price = parseNumber(getCell(row, HEADER_ALIASES.price));
-    const currency = toCurrencyCode(
-      getCell(row, HEADER_ALIASES.currency) || inferCurrencyFromSymbol(rawSymbol, "USD")
-    );
-    const fee = parseNumber(getCell(row, HEADER_ALIASES.fee)) ?? 0;
-    const kind = inferKind(getCell(row, HEADER_ALIASES.kind), rawSymbol, rawName);
-    const symbol = normalizeImportedSymbol(rawSymbol, kind, currency);
+  for (const entry of worksheetEntries) {
+    const worksheetText = await readZipTextEntry(bytes, entriesByName, entry.name);
 
-    if (!side || !rawDate || !symbol || !quantity || quantity <= 0 || !price || price <= 0) {
-      skippedRows.push({
-        rowNumber,
-        reason: "Brakuje typu, daty, symbolu, ilosci albo ceny.",
-      });
-      return;
+    if (!worksheetText) {
+      continue;
     }
 
-    const provider = getProvider(kind, symbol, currency);
+    const rows = parseWorksheetRows(worksheetText, sharedStrings);
+    const result = parseBrokerOperationRows(rows, warnings);
 
-    operations.push({
-      rowNumber,
-      side,
-      date: rawDate,
-      symbol,
-      name: rawName || symbol,
-      kind,
-      quantity: round(Math.abs(quantity), 6),
-      price: round(Math.abs(price), 6),
-      currency,
-      feePln: round(Math.abs(fee), 6),
-      provider,
-      providerId: provider === "yahoo" || provider === "eodhd" ? symbol : undefined,
-      warnings:
-        currency !== "PLN" && fee !== 0
-          ? ["Prowizja z importu jest zapisana jako PLN. Sprawdz ja, jesli broker eksportuje prowizje w walucie rynku."]
-          : [],
-    });
-  });
+    if (result.operations.length > 0 || result.skippedRows.length > 0) {
+      results.push(result);
+    }
+  }
+
+  if (results.length === 0) {
+    return {
+      operations: [],
+      skippedRows: [{ rowNumber: 1, reason: "Nie znaleziono tabeli operacji w XLSX." }],
+      warnings,
+    };
+  }
+
+  const operations = results.flatMap((result) => result.operations);
+  const skippedRows = results.flatMap((result) => result.skippedRows);
 
   return {
     operations,
     skippedRows,
+    warnings,
   };
 };
 
-export const parseBrokerOperationsPdf = (
+export const parseBrokerOperationsPdf = async (
   bytes: Uint8Array,
   _preset: BrokerImportPreset = "xtb"
-): BrokerImportParseResult => {
+): Promise<BrokerImportParseResult> => {
   void _preset;
 
-  const extractedText = extractTextFromPdfBytes(bytes);
+  const extractedText = await extractTextFromPdfBytes(bytes);
   const chunks = buildPdfChunks(extractedText);
   const operations: ImportedBrokerOperation[] = [];
   const skippedRows: BrokerImportParseResult["skippedRows"] = [];
@@ -601,7 +1080,10 @@ export const parseBrokerOperationsPdf = (
       skippedRows: [
         {
           rowNumber: 1,
-          reason: "Nie znaleziono dat transakcji ani warstwy tekstowej w PDF.",
+          reason:
+            extractedText.trim().length === 0
+              ? "PDF wyglada jak skan albo obraz bez warstwy tekstowej."
+              : "Nie znaleziono dat transakcji w odczytanej warstwie tekstowej PDF.",
         },
       ],
       warnings,

@@ -7,12 +7,17 @@ import {
   buildDividendForecast,
   buildDividendOperation,
   buildDividendReport,
-  getDefaultDividendAccount,
   getDefaultDividendInstrument,
   getPortfolioDividends,
 } from "@/lib/dividend-engine";
 import { buildCashHistory, buildCashOperation, type CashOperationKind } from "@/lib/cash-engine";
-import { calculateCashBalances } from "@/lib/operation-engine";
+import {
+  calculateCashBalances,
+  getDefaultCashAccountId,
+  getDefaultCurrencyAccountId,
+  getPortfolioInstrumentId,
+} from "@/lib/operation-engine";
+import { normalizeSymbol } from "@/lib/ticker";
 import {
   formatCurrency,
   formatDate,
@@ -30,19 +35,26 @@ import type {
   PortfolioDividend,
   PortfolioInstrument,
   PortfolioOperation,
+  QuoteProvider,
 } from "@/types/portfolio";
 
 type DividendCashWorkspaceProps = {
   activeView: "dividends" | "cash";
   portfolio: InvestmentPortfolio;
   fxRates: FxRates;
-  onOperationsChange: (operations: PortfolioOperation[]) => void;
+  onPortfolioChange: (portfolio: InvestmentPortfolio) => void;
 };
 
 type DividendDraft = {
   editingId: string | null;
   instrumentId: string;
+  instrumentSearch: string;
+  useCustomInstrument: boolean;
+  customInstrumentName: string;
+  customInstrumentSymbol: string;
   accountId: string;
+  newAccountName: string;
+  newAccountCurrency: string;
   quantity: number;
   dividendPerShare: number;
   withholdingTax: number;
@@ -94,6 +106,9 @@ const CASH_OPERATION_OPTIONS: Array<{
 const createClientOperationId = (prefix: string) =>
   `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
+const CREATE_DIVIDEND_ACCOUNT_VALUE = "__create_dividend_account__";
+const MANUAL_DIVIDEND_PROVIDER: QuoteProvider = "catalog";
+
 const getAccountLabel = (account: PortfolioAccount) =>
   `${account.name} (${account.currency}, ${account.kind})`;
 
@@ -117,16 +132,54 @@ const getOpenQuantityForInstrument = (
   );
 };
 
+const getDividendAccountCandidates = (accounts: PortfolioAccount[]) =>
+  accounts.filter(
+    (account) =>
+      account.kind === "cash" ||
+      account.kind === "currency" ||
+      account.kind === "investment"
+  );
+
+const getDefaultDividendAccountForCurrency = (
+  accounts: PortfolioAccount[],
+  currency: string
+) => {
+  const normalizedCurrency = toCurrencyCode(currency, "PLN");
+  const candidates = getDividendAccountCandidates(accounts);
+
+  return (
+    candidates.find(
+      (account) =>
+        account.currency === normalizedCurrency &&
+        (account.kind === "cash" || account.kind === "currency")
+    ) ??
+    candidates.find((account) => account.currency === normalizedCurrency) ??
+    candidates.find((account) => account.kind === "cash" && account.isDefault) ??
+    candidates.find((account) => account.kind === "currency" && account.isDefault) ??
+    candidates[0] ??
+    null
+  );
+};
+
+const buildManualInstrumentSymbol = (name: string, symbol: string) =>
+  normalizeSymbol(symbol || name).replace(/[^A-Z0-9._-]/g, "").slice(0, 18);
+
 const getDefaultDividendDraft = (portfolio: InvestmentPortfolio): DividendDraft => {
   const instrument = getDefaultDividendInstrument(portfolio);
-  const account = getDefaultDividendAccount(portfolio.accounts);
-  const currency = instrument?.marketCurrency ?? account?.currency ?? "PLN";
+  const currency = instrument?.marketCurrency ?? "PLN";
+  const account = getDefaultDividendAccountForCurrency(portfolio.accounts ?? [], currency);
   const today = getTodayDateInputValue();
 
   return {
     editingId: null,
     instrumentId: instrument?.id ?? "",
+    instrumentSearch: "",
+    useCustomInstrument: false,
+    customInstrumentName: "",
+    customInstrumentSymbol: "",
     accountId: account?.id ?? "",
+    newAccountName: "",
+    newAccountCurrency: currency,
     quantity: getOpenQuantityForInstrument(portfolio, instrument),
     dividendPerShare: 0,
     withholdingTax: 0,
@@ -192,7 +245,7 @@ export default function DividendCashWorkspace({
   activeView,
   portfolio,
   fxRates,
-  onOperationsChange,
+  onPortfolioChange,
 }: DividendCashWorkspaceProps) {
   const [dividendDraft, setDividendDraft] = useState(() =>
     getDefaultDividendDraft(portfolio)
@@ -202,7 +255,9 @@ export default function DividendCashWorkspace({
     useState<DividendReportBucket>("monthly");
   const [dividendError, setDividendError] = useState<string | null>(null);
   const [cashError, setCashError] = useState<string | null>(null);
-  const dividendInstrumentRef = useRef<HTMLSelectElement | null>(null);
+  const dividendInstrumentRef = useRef<HTMLInputElement | null>(null);
+  const dividendCustomNameRef = useRef<HTMLInputElement | null>(null);
+  const dividendAccountRef = useRef<HTMLSelectElement | null>(null);
   const dividendQuantityRef = useRef<HTMLInputElement | null>(null);
   const dividendPerShareRef = useRef<HTMLInputElement | null>(null);
   const dividendPaymentDateRef = useRef<HTMLInputElement | null>(null);
@@ -211,16 +266,28 @@ export default function DividendCashWorkspace({
   const cashDateRef = useRef<HTMLInputElement | null>(null);
 
   const accounts = portfolio.accounts ?? [];
-  const investmentAccounts = accounts.filter((account) => account.kind === "investment");
+  const dividendAccounts = getDividendAccountCandidates(accounts);
   const cashAccounts = accounts.filter(
     (account) =>
       account.kind === "cash" ||
       account.kind === "currency" ||
       account.kind === "investment"
   );
-  const instruments = (portfolio.instruments ?? []).filter(
+  const portfolioInstruments = portfolio.instruments ?? [];
+  const instruments = portfolioInstruments.filter(
     (instrument) => instrument.type !== "CASH"
   );
+  const filteredDividendInstruments = useMemo(() => {
+    const query = dividendDraft.instrumentSearch.trim().toLowerCase();
+
+    if (!query) {
+      return instruments;
+    }
+
+    return instruments.filter((instrument) =>
+      `${instrument.symbol} ${instrument.name}`.toLowerCase().includes(query)
+    );
+  }, [dividendDraft.instrumentSearch, instruments]);
   const dividends = useMemo(
     () => getPortfolioDividends(portfolio, fxRates),
     [fxRates, portfolio]
@@ -256,7 +323,29 @@ export default function DividendCashWorkspace({
   );
 
   const replaceOperations = (operations: PortfolioOperation[]) => {
-    onOperationsChange(operations);
+    onPortfolioChange({
+      ...portfolio,
+      operations,
+      updatedAt: new Date().toISOString(),
+    });
+  };
+
+  const replacePortfolioCore = ({
+    accounts: nextAccounts = accounts,
+    instruments: nextInstruments = instruments,
+    operations,
+  }: {
+    accounts?: PortfolioAccount[];
+    instruments?: PortfolioInstrument[];
+    operations: PortfolioOperation[];
+  }) => {
+    onPortfolioChange({
+      ...portfolio,
+      accounts: nextAccounts,
+      instruments: nextInstruments,
+      operations,
+      updatedAt: new Date().toISOString(),
+    });
   };
 
   const resetDividendDraft = () => {
@@ -267,14 +356,47 @@ export default function DividendCashWorkspace({
   const handleDividendInstrumentChange = (instrumentId: string) => {
     const instrument = instruments.find((item) => item.id === instrumentId) ?? null;
     const currency = instrument?.marketCurrency ?? "PLN";
+    const account = getDefaultDividendAccountForCurrency(accounts, currency);
 
     setDividendDraft((currentDraft) => ({
       ...currentDraft,
       instrumentId,
+      useCustomInstrument: false,
       quantity: getOpenQuantityForInstrument(portfolio, instrument),
       currency,
       exchangeRate: currency === "PLN" ? 1 : fxRates[currency] ?? 0,
+      accountId: account?.id ?? currentDraft.accountId,
+      newAccountCurrency: currency,
       country: currency === "PLN" ? "PL" : currentDraft.country,
+    }));
+    setDividendError(null);
+  };
+
+  const handleDividendCurrencyChange = (value: string) => {
+    const currency = toCurrencyCode(value, "PLN");
+    const account = getDefaultDividendAccountForCurrency(accounts, currency);
+
+    setDividendDraft((currentDraft) => ({
+      ...currentDraft,
+      currency,
+      exchangeRate: currency === "PLN" ? 1 : fxRates[currency] ?? currentDraft.exchangeRate,
+      accountId: account?.currency === currency ? account.id : CREATE_DIVIDEND_ACCOUNT_VALUE,
+      newAccountCurrency: currency,
+      newAccountName:
+        currentDraft.newAccountName || (currency === "PLN" ? "Konto PLN" : `Konto ${currency}`),
+      country: currency === "PLN" ? "PL" : currentDraft.country,
+    }));
+    setDividendError(null);
+  };
+
+  const handleToggleCustomInstrument = () => {
+    setDividendDraft((currentDraft) => ({
+      ...currentDraft,
+      useCustomInstrument: !currentDraft.useCustomInstrument,
+      instrumentId: currentDraft.useCustomInstrument ? currentDraft.instrumentId : "",
+      quantity: currentDraft.useCustomInstrument
+        ? currentDraft.quantity
+        : Math.max(1, currentDraft.quantity),
     }));
     setDividendError(null);
   };
@@ -283,7 +405,13 @@ export default function DividendCashWorkspace({
     setDividendDraft({
       editingId: dividend.operationId,
       instrumentId: dividend.instrumentId,
+      instrumentSearch: "",
+      useCustomInstrument: false,
+      customInstrumentName: "",
+      customInstrumentSymbol: "",
       accountId: dividend.accountId,
+      newAccountName: "",
+      newAccountCurrency: dividend.currency,
       quantity: dividend.quantity,
       dividendPerShare: dividend.dividendPerShare,
       withholdingTax: dividend.withholdingTax,
@@ -308,23 +436,141 @@ export default function DividendCashWorkspace({
     );
   };
 
-  const saveDividend = () => {
-    const instrument = instruments.find(
-      (item) => item.id === dividendDraft.instrumentId
-    );
-    const account = investmentAccounts.find(
-      (item) => item.id === dividendDraft.accountId
+  const getResolvedDividendInstrument = () => {
+    if (!dividendDraft.useCustomInstrument) {
+      return {
+        instrument: instruments.find((item) => item.id === dividendDraft.instrumentId) ?? null,
+        instruments: portfolioInstruments,
+      };
+    }
+
+    const name = dividendDraft.customInstrumentName.trim();
+    const symbol = buildManualInstrumentSymbol(name, dividendDraft.customInstrumentSymbol);
+
+    if (!name || !symbol) {
+      return {
+        instrument: null,
+        instruments: portfolioInstruments,
+      };
+    }
+
+    const existingInstrument = instruments.find(
+      (instrument) => instrument.symbol === symbol
     );
 
+    if (existingInstrument) {
+      return {
+        instrument: existingInstrument,
+        instruments: portfolioInstruments,
+      };
+    }
+
+    const now = new Date().toISOString();
+    const nextInstrument: PortfolioInstrument = {
+      id: getPortfolioInstrumentId(portfolio.id, { kind: "stock", symbol }),
+      portfolioId: portfolio.id,
+      type: "STOCK",
+      assetKind: "stock",
+      symbol,
+      name,
+      marketCurrency: selectedDividendCurrency,
+      provider: MANUAL_DIVIDEND_PROVIDER,
+      metadata: {
+        manualDividendInstrument: true,
+      },
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    return {
+      instrument: nextInstrument,
+      instruments: [...portfolioInstruments, nextInstrument],
+    };
+  };
+
+  const getResolvedDividendAccount = () => {
+    if (dividendDraft.accountId !== CREATE_DIVIDEND_ACCOUNT_VALUE) {
+      return {
+        account: dividendAccounts.find((item) => item.id === dividendDraft.accountId) ?? null,
+        accounts,
+      };
+    }
+
+    const now = new Date().toISOString();
+    const currency = toCurrencyCode(
+      dividendDraft.newAccountCurrency,
+      selectedDividendCurrency
+    );
+    const existingAccount = dividendAccounts.find(
+      (account) =>
+        account.currency === currency &&
+        (account.kind === "cash" || account.kind === "currency")
+    );
+
+    if (existingAccount) {
+      return {
+        account: existingAccount,
+        accounts,
+      };
+    }
+
+    const accountName =
+      dividendDraft.newAccountName.trim() ||
+      (currency === "PLN" ? "Konto PLN" : `Konto ${currency}`);
+    const nextAccount: PortfolioAccount = {
+      id:
+        currency === "PLN"
+          ? getDefaultCashAccountId(portfolio.id, currency)
+          : getDefaultCurrencyAccountId(portfolio.id, currency),
+      portfolioId: portfolio.id,
+      name: accountName.slice(0, 64),
+      kind: currency === "PLN" ? "cash" : "currency",
+      broker: currency === "PLN" ? "CASH" : "CURRENCY",
+      currency,
+      isDefault: false,
+      metadata: {
+        manualDividendAccount: true,
+      },
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    return {
+      account: nextAccount,
+      accounts: [...accounts, nextAccount],
+    };
+  };
+
+  const saveDividend = () => {
+    const resolvedInstrument = getResolvedDividendInstrument();
+    const instrument = resolvedInstrument.instrument;
+    const resolvedAccount = getResolvedDividendAccount();
+    const account = resolvedAccount.account;
+
     if (!instrument) {
-      setDividendError("Wybierz instrument dla dywidendy.");
-      dividendInstrumentRef.current?.focus();
+      setDividendError(
+        dividendDraft.useCustomInstrument
+          ? "Podaj nazwe i ticker spolki dla dywidendy."
+          : "Wybierz instrument albo dodaj wlasna nazwe."
+      );
+      (dividendDraft.useCustomInstrument
+        ? dividendCustomNameRef.current
+        : dividendInstrumentRef.current
+      )?.focus();
       return;
     }
 
     if (!account) {
-      setDividendError("Wybierz konto inwestycyjne.");
-      dividendInstrumentRef.current?.focus();
+      setDividendError("Wybierz konto wplywu albo utworz nowe konto walutowe.");
+      dividendAccountRef.current?.focus();
+      return;
+    }
+
+    if (account.currency !== selectedDividendCurrency) {
+      setDividendError(
+        `Konto wplywu musi byc w walucie ${selectedDividendCurrency}. Wybierz zgodne konto albo utworz nowe.`
+      );
+      dividendAccountRef.current?.focus();
       return;
     }
 
@@ -385,14 +631,17 @@ export default function DividendCashWorkspace({
       updatedAt: new Date().toISOString(),
     };
     const currentOperations = portfolio.operations ?? [];
+    const nextOperations = dividendDraft.editingId
+      ? currentOperations.map((item) =>
+          item.id === dividendDraft.editingId ? nextOperation : item
+        )
+      : [...currentOperations, nextOperation];
 
-    replaceOperations(
-      dividendDraft.editingId
-        ? currentOperations.map((item) =>
-            item.id === dividendDraft.editingId ? nextOperation : item
-          )
-        : [...currentOperations, nextOperation]
-    );
+    replacePortfolioCore({
+      accounts: resolvedAccount.accounts,
+      instruments: resolvedInstrument.instruments,
+      operations: nextOperations,
+    });
     resetDividendDraft();
   };
 
@@ -516,14 +765,29 @@ export default function DividendCashWorkspace({
 
             <div className="sprint-form-grid dividend-form-grid mt-6">
               <label className="field">
-                <span>Instrument</span>
-                <select
+                <span>Szukaj instrumentu</span>
+                <input
                   ref={dividendInstrumentRef}
+                  value={dividendDraft.instrumentSearch}
+                  onChange={(event) =>
+                    setDividendDraft((currentDraft) => ({
+                      ...currentDraft,
+                      instrumentSearch: event.target.value,
+                    }))
+                  }
+                  placeholder="Apple, Microsoft, Orlen..."
+                />
+              </label>
+
+              <label className="field">
+                <span>Instrument z portfela</span>
+                <select
                   value={dividendDraft.instrumentId}
+                  disabled={dividendDraft.useCustomInstrument}
                   onChange={(event) => handleDividendInstrumentChange(event.target.value)}
                 >
                   <option value="">Wybierz instrument</option>
-                  {instruments.map((instrument) => (
+                  {filteredDividendInstruments.map((instrument) => (
                     <option key={instrument.id} value={instrument.id}>
                       {getInstrumentLabel(instrument)}
                     </option>
@@ -532,8 +796,9 @@ export default function DividendCashWorkspace({
               </label>
 
               <label className="field">
-                <span>Konto inwestycyjne</span>
+                <span>Konto wplywu</span>
                 <select
+                  ref={dividendAccountRef}
                   value={dividendDraft.accountId}
                   onChange={(event) =>
                     setDividendDraft((currentDraft) => ({
@@ -543,13 +808,93 @@ export default function DividendCashWorkspace({
                   }
                 >
                   <option value="">Wybierz konto</option>
-                  {investmentAccounts.map((account) => (
+                  {dividendAccounts.map((account) => (
                     <option key={account.id} value={account.id}>
                       {getAccountLabel(account)}
                     </option>
                   ))}
+                  <option value={CREATE_DIVIDEND_ACCOUNT_VALUE}>
+                    Utworz konto {selectedDividendCurrency}
+                  </option>
                 </select>
               </label>
+
+              <div className="field">
+                <span>Wlasna spolka</span>
+                <button
+                  className="ghost-button dividend-inline-button"
+                  type="button"
+                  onClick={handleToggleCustomInstrument}
+                >
+                  {dividendDraft.useCustomInstrument
+                    ? "Wybierz z listy"
+                    : "Nie ma na liscie? Dodaj wlasna nazwe."}
+                </button>
+              </div>
+
+              {dividendDraft.useCustomInstrument ? (
+                <>
+                  <label className="field">
+                    <span>Nazwa spolki</span>
+                    <input
+                      ref={dividendCustomNameRef}
+                      value={dividendDraft.customInstrumentName}
+                      onChange={(event) =>
+                        setDividendDraft((currentDraft) => ({
+                          ...currentDraft,
+                          customInstrumentName: event.target.value,
+                        }))
+                      }
+                      placeholder="np. Coca-Cola"
+                    />
+                  </label>
+
+                  <label className="field">
+                    <span>Ticker</span>
+                    <input
+                      value={dividendDraft.customInstrumentSymbol}
+                      onChange={(event) =>
+                        setDividendDraft((currentDraft) => ({
+                          ...currentDraft,
+                          customInstrumentSymbol: event.target.value.toUpperCase(),
+                        }))
+                      }
+                      placeholder="np. KO"
+                    />
+                  </label>
+                </>
+              ) : null}
+
+              {dividendDraft.accountId === CREATE_DIVIDEND_ACCOUNT_VALUE ? (
+                <>
+                  <label className="field">
+                    <span>Nazwa nowego konta</span>
+                    <input
+                      value={dividendDraft.newAccountName}
+                      onChange={(event) =>
+                        setDividendDraft((currentDraft) => ({
+                          ...currentDraft,
+                          newAccountName: event.target.value,
+                        }))
+                      }
+                      placeholder={`Konto ${selectedDividendCurrency}`}
+                    />
+                  </label>
+
+                  <label className="field">
+                    <span>Waluta nowego konta</span>
+                    <input
+                      value={dividendDraft.newAccountCurrency}
+                      onChange={(event) =>
+                        setDividendDraft((currentDraft) => ({
+                          ...currentDraft,
+                          newAccountCurrency: event.target.value.toUpperCase(),
+                        }))
+                      }
+                    />
+                  </label>
+                </>
+              ) : null}
 
               <FormattedNumberInput
                 label="Ilosc akcji"
@@ -605,12 +950,7 @@ export default function DividendCashWorkspace({
                 <span>Waluta</span>
                 <input
                   value={dividendDraft.currency}
-                  onChange={(event) =>
-                    setDividendDraft((currentDraft) => ({
-                      ...currentDraft,
-                      currency: event.target.value.toUpperCase(),
-                    }))
-                  }
+                  onChange={(event) => handleDividendCurrencyChange(event.target.value)}
                 />
               </label>
 

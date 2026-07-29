@@ -480,8 +480,8 @@ export default function PortfolioApp({
       .reduce((total, dividend) => total + dividend.netAmountPln, 0);
   }, [activePortfolioDividends]);
 
-  const handleActivePortfolioOperationsChange = useCallback(
-    (operations: PortfolioOperation[]) => {
+  const handleActivePortfolioCoreModelChange = useCallback(
+    (nextPortfolio: InvestmentPortfolio) => {
       const now = new Date().toISOString();
       setSyncError(null);
       setPortfolios((currentPortfolios) =>
@@ -489,7 +489,9 @@ export default function PortfolioApp({
           portfolio.id === activePortfolioId
             ? {
                 ...portfolio,
-                operations,
+                accounts: nextPortfolio.accounts,
+                instruments: nextPortfolio.instruments,
+                operations: nextPortfolio.operations,
                 updatedAt: now,
               }
             : portfolio
@@ -2630,7 +2632,7 @@ export default function PortfolioApp({
               activeView={activeSection}
               portfolio={activePortfolioForEngine}
               fxRates={fxRates}
-              onOperationsChange={handleActivePortfolioOperationsChange}
+              onPortfolioChange={handleActivePortfolioCoreModelChange}
             />
           ) : null
         ) : activeSection === "wealth" ? (

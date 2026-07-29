@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Area,
   CartesianGrid,
@@ -132,6 +132,7 @@ type FallbackHistoryState = {
 };
 
 const DEFAULT_BENCHMARK_SEARCH_MODE: AssetSearchMode = "etf";
+const RANGE_PRESET_STORAGE_KEY = "mexo.lineCharts.rangePreset";
 
 const RANGE_PRESETS: RangePreset[] = ["1D", "1W", "1M", "1Q", "YTD", "ALL"];
 const MODE_OPTIONS: Array<{
@@ -181,6 +182,9 @@ const EMPTY_HISTORY: PortfolioHistoryResponse = {
   assetSeries: [],
   benchmarkSeries: [],
 };
+
+const isRangePreset = (value: string | null): value is RangePreset =>
+  RANGE_PRESETS.includes(value as RangePreset);
 
 const isGpwMode = (mode: AssetSearchMode) => mode === "stock-gpw";
 
@@ -335,6 +339,31 @@ const formatCompactCurrency = (value: number) => {
 };
 
 const formatAxisPercent = (value: number) => formatPercent(value, 0);
+
+const getChartExportBaseName = (mode: ChartMode, rangePreset: RangePreset) =>
+  `mexo-${mode}-${rangePreset.toLowerCase()}-${new Date().toISOString().slice(0, 10)}`;
+
+const toCsvCell = (value: string | number | null | undefined) => {
+  if (value === null || typeof value === "undefined") {
+    return "";
+  }
+
+  const text = String(value);
+
+  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+};
+
+const downloadBlob = (blob: Blob, fileName: string) => {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
+};
 
 const formatShortDate = (value: string) =>
   new Intl.DateTimeFormat("pl-PL", {
@@ -785,10 +814,12 @@ const getPaddedNumberDomain = (values: Array<number | null | undefined>) => {
 
 function ChartTooltip({
   active,
+  isFullscreen = false,
   label,
   payload,
   lines,
 }: TooltipContentProps & {
+  isFullscreen?: boolean;
   lines: ChartLineDefinition[];
 }) {
   if (!active || !label || !payload || payload.length === 0) {
@@ -801,7 +832,13 @@ function ChartTooltip({
   );
 
   return (
-    <div className="line-chart-tooltip line-visual-tooltip">
+    <div
+      className={
+        isFullscreen
+          ? "line-chart-tooltip line-visual-tooltip is-fullscreen"
+          : "line-chart-tooltip line-visual-tooltip"
+      }
+    >
       <p className="table-title">{formatDate(String(label))}</p>
       <div className="line-chart-tooltip-list">
         {lines.map((line) => {
@@ -846,6 +883,9 @@ export default function PortfolioLineCharts({
 }: PortfolioLineChartsProps) {
   const [mode, setMode] = useState<ChartMode>("value");
   const [rangePreset, setRangePreset] = useState<RangePreset>("1M");
+  const [hasLoadedStoredRange, setHasLoadedStoredRange] = useState(false);
+  const [hiddenSeriesKeys, setHiddenSeriesKeys] = useState<string[]>([]);
+  const [isChartModalOpen, setIsChartModalOpen] = useState(false);
   const [selectedBenchmarks, setSelectedBenchmarks] = useState<PortfolioBenchmarkDefinition[]>(
     []
   );
@@ -861,6 +901,47 @@ export default function PortfolioLineCharts({
   const [warnings, setWarnings] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const chartFrameRef = useRef<HTMLDivElement | null>(null);
+  const modalChartFrameRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const storedRange = window.localStorage.getItem(RANGE_PRESET_STORAGE_KEY);
+
+    if (isRangePreset(storedRange)) {
+      setRangePreset(storedRange);
+    }
+
+    setHasLoadedStoredRange(true);
+  }, []);
+
+  useEffect(() => {
+    if (!hasLoadedStoredRange) {
+      return;
+    }
+
+    window.localStorage.setItem(RANGE_PRESET_STORAGE_KEY, rangePreset);
+  }, [hasLoadedStoredRange, rangePreset]);
+
+  useEffect(() => {
+    if (!isChartModalOpen) {
+      return;
+    }
+
+    const previousOverflow = document.body.style.overflow;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsChartModalOpen(false);
+      }
+    };
+
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isChartModalOpen]);
 
   const fallbackHistory = useMemo(
     () =>
@@ -1702,6 +1783,160 @@ export default function PortfolioLineCharts({
     visibleReturnPoints,
   ]);
 
+  const chartLineKeySignature = chartModel.lines.map((line) => line.dataKey).join("|");
+
+  useEffect(() => {
+    const chartLineKeys = new Set(chartModel.lines.map((line) => line.dataKey));
+
+    setHiddenSeriesKeys((currentKeys) =>
+      currentKeys.filter((dataKey) => chartLineKeys.has(dataKey))
+    );
+  }, [chartLineKeySignature, chartModel.lines]);
+
+  const hiddenSeriesKeySet = useMemo(
+    () => new Set(hiddenSeriesKeys),
+    [hiddenSeriesKeys]
+  );
+  const visibleChartLines = useMemo(
+    () => chartModel.lines.filter((line) => !hiddenSeriesKeySet.has(line.dataKey)),
+    [chartModel.lines, hiddenSeriesKeySet]
+  );
+
+  const handleToggleSeriesVisibility = (dataKey: string) => {
+    setHiddenSeriesKeys((currentKeys) => {
+      const isHidden = currentKeys.includes(dataKey);
+
+      if (isHidden) {
+        return currentKeys.filter((currentKey) => currentKey !== dataKey);
+      }
+
+      const visibleCount = chartModel.lines.filter(
+        (line) => !currentKeys.includes(line.dataKey)
+      ).length;
+
+      if (visibleCount <= 1) {
+        return currentKeys;
+      }
+
+      return [...currentKeys, dataKey];
+    });
+  };
+
+  const handleResetZoom = () => {
+    setRangePreset("ALL");
+    setHiddenSeriesKeys([]);
+  };
+
+  const getActiveChartSvg = () => {
+    const activeFrame = isChartModalOpen ? modalChartFrameRef.current : chartFrameRef.current;
+
+    return activeFrame?.querySelector("svg") ?? null;
+  };
+
+  const getSerializedChartSvg = () => {
+    const svg = getActiveChartSvg();
+
+    if (!svg) {
+      return null;
+    }
+
+    const clone = svg.cloneNode(true) as SVGSVGElement;
+    const bounds = svg.getBoundingClientRect();
+    const width = Math.max(1, Math.ceil(bounds.width));
+    const height = Math.max(1, Math.ceil(bounds.height));
+
+    clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+    clone.setAttribute("width", String(width));
+    clone.setAttribute("height", String(height));
+
+    return {
+      height,
+      source: `<?xml version="1.0" encoding="UTF-8"?>${new XMLSerializer().serializeToString(
+        clone
+      )}`,
+      width,
+    };
+  };
+
+  const handleExportSvg = () => {
+    const svgExport = getSerializedChartSvg();
+
+    if (!svgExport) {
+      return;
+    }
+
+    downloadBlob(
+      new Blob([svgExport.source], { type: "image/svg+xml;charset=utf-8" }),
+      `${getChartExportBaseName(mode, rangePreset)}.svg`
+    );
+  };
+
+  const handleExportPng = () => {
+    const svgExport = getSerializedChartSvg();
+
+    if (!svgExport) {
+      return;
+    }
+
+    const svgUrl = URL.createObjectURL(
+      new Blob([svgExport.source], { type: "image/svg+xml;charset=utf-8" })
+    );
+    const image = new Image();
+
+    image.onload = () => {
+      const scale = 2;
+      const canvas = document.createElement("canvas");
+      const context = canvas.getContext("2d");
+
+      canvas.width = svgExport.width * scale;
+      canvas.height = svgExport.height * scale;
+
+      if (!context) {
+        URL.revokeObjectURL(svgUrl);
+        return;
+      }
+
+      context.scale(scale, scale);
+      context.fillStyle = "#ffffff";
+      context.fillRect(0, 0, svgExport.width, svgExport.height);
+      context.drawImage(image, 0, 0, svgExport.width, svgExport.height);
+      URL.revokeObjectURL(svgUrl);
+
+      canvas.toBlob((blob) => {
+        if (blob) {
+          downloadBlob(blob, `${getChartExportBaseName(mode, rangePreset)}.png`);
+        }
+      }, "image/png");
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(svgUrl);
+    };
+    image.src = svgUrl;
+  };
+
+  const handleExportCsv = () => {
+    const header = ["date", ...visibleChartLines.map((line) => line.label)];
+    const rows = chartModel.data.map((row) =>
+      [
+        row.date,
+        ...visibleChartLines.map((line) => {
+          const value = row[line.dataKey];
+
+          return typeof value === "number" ? value : null;
+        }),
+      ]
+        .map(toCsvCell)
+        .join(",")
+    );
+
+    downloadBlob(
+      new Blob([`\uFEFF${[header.map(toCsvCell).join(","), ...rows].join("\n")}`], {
+        type: "text/csv;charset=utf-8",
+      }),
+      `${getChartExportBaseName(mode, rangePreset)}.csv`
+    );
+  };
+
   if (
     !isLoading &&
     !error &&
@@ -1721,10 +1956,256 @@ export default function PortfolioLineCharts({
     );
   }
 
-  const hasRenderableData = chartModel.data.length > 0 && chartModel.lines.length > 0;
+  const hasRenderableData = chartModel.data.length > 0 && visibleChartLines.length > 0;
+  const handleOpenChartModal = () => {
+    if (hasRenderableData) {
+      setIsChartModalOpen(true);
+    }
+  };
+
+  const renderLegend = (isFullscreen = false) => (
+    <div
+      className={
+        isFullscreen
+          ? "line-visual-legend line-visual-legend-modal"
+          : "line-visual-legend"
+      }
+    >
+      {chartModel.lines.map((line) => {
+        const isVisible = !hiddenSeriesKeySet.has(line.dataKey);
+
+        return (
+          <button
+            key={line.dataKey}
+            type="button"
+            aria-pressed={isVisible}
+            className={
+              isVisible
+                ? "line-visual-legend-item"
+                : "line-visual-legend-item is-muted"
+            }
+            onClick={() => handleToggleSeriesVisibility(line.dataKey)}
+            title={
+              isVisible
+                ? `Ukryj serie ${line.label}`
+                : `Pokaz serie ${line.label}`
+            }
+          >
+            <span
+              className="line-visual-legend-dot"
+              style={{ background: line.color }}
+            />
+            <span>{line.label}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+
+  const renderChartActions = (isFullscreen = false) => (
+    <div className="line-visual-chart-actions" onClick={(event) => event.stopPropagation()}>
+      <button type="button" className="ghost-button" onClick={handleResetZoom}>
+        Reset zoom
+      </button>
+      <button
+        type="button"
+        className="ghost-button"
+        disabled={!hasRenderableData}
+        onClick={handleExportPng}
+      >
+        PNG
+      </button>
+      <button
+        type="button"
+        className="ghost-button"
+        disabled={!hasRenderableData}
+        onClick={handleExportSvg}
+      >
+        SVG
+      </button>
+      <button
+        type="button"
+        className="ghost-button"
+        disabled={!hasRenderableData}
+        onClick={handleExportCsv}
+      >
+        CSV
+      </button>
+      {isFullscreen ? (
+        <button
+          type="button"
+          className="ghost-button line-visual-close-button"
+          onClick={() => setIsChartModalOpen(false)}
+        >
+          Zamknij
+        </button>
+      ) : (
+        <button
+          type="button"
+          className="ghost-button line-visual-expand-button"
+          disabled={!hasRenderableData}
+          onClick={handleOpenChartModal}
+        >
+          Powieksz
+        </button>
+      )}
+    </div>
+  );
+
+  const renderChartFrame = (isFullscreen = false) => {
+    const axisFontSize = isFullscreen ? 15 : 12;
+    const axisWidth = isFullscreen ? 104 : 84;
+    const chartMargin = isFullscreen
+      ? { top: 28, right: 30, left: 14, bottom: 18 }
+      : { top: 8, right: 8, left: 0, bottom: 0 };
+
+    return (
+      <div
+        ref={isFullscreen ? modalChartFrameRef : chartFrameRef}
+        className={
+          isFullscreen
+            ? "line-visual-chart-frame line-visual-modal-chart-frame mt-4"
+            : "line-visual-chart-frame mt-4"
+        }
+        role={isFullscreen ? undefined : "button"}
+        tabIndex={isFullscreen ? undefined : 0}
+        onClick={isFullscreen ? undefined : handleOpenChartModal}
+        onKeyDown={
+          isFullscreen
+            ? undefined
+            : (event) => {
+                if (event.key === "Enter" || event.key === " " || event.key === "Spacebar") {
+                  event.preventDefault();
+                  handleOpenChartModal();
+                }
+              }
+        }
+      >
+        <ResponsiveContainer width="100%" height={isFullscreen ? "100%" : 420}>
+          <ComposedChart data={chartModel.data} margin={chartMargin}>
+            {visibleChartLines.some((line) => line.variant === "area") ? (
+              <defs>
+                {visibleChartLines
+                  .filter((line) => line.variant === "area")
+                  .map((line) => (
+                    <linearGradient
+                      key={`gradient-${line.dataKey}`}
+                      id={`gradient-${isFullscreen ? "modal-" : ""}${line.dataKey}`}
+                      x1="0"
+                      x2="0"
+                      y1="0"
+                      y2="1"
+                    >
+                      <stop offset="0%" stopColor={line.color} stopOpacity={0.3} />
+                      <stop offset="100%" stopColor={line.color} stopOpacity={0.02} />
+                    </linearGradient>
+                  ))}
+              </defs>
+            ) : null}
+
+            <CartesianGrid
+              stroke="rgba(20, 35, 48, 0.08)"
+              strokeDasharray="3 10"
+              vertical={false}
+            />
+            <XAxis
+              axisLine={false}
+              dataKey="date"
+              minTickGap={isFullscreen ? 48 : 36}
+              tick={{ fill: "#7b8895", fontSize: axisFontSize, fontWeight: 700 }}
+              tickFormatter={(value) => formatShortDate(String(value))}
+              tickLine={false}
+            />
+            <YAxis
+              axisLine={false}
+              domain={chartModel.yAxisDomain}
+              orientation="right"
+              tick={{ fill: "#7b8895", fontSize: axisFontSize, fontWeight: 700 }}
+              tickFormatter={(value: number) => chartModel.yAxisTickFormatter(value)}
+              tickLine={false}
+              width={axisWidth}
+            />
+            <Tooltip
+              allowEscapeViewBox={{ x: false, y: false }}
+              content={(props) => (
+                <ChartTooltip
+                  {...props}
+                  isFullscreen={isFullscreen}
+                  lines={visibleChartLines}
+                />
+              )}
+              cursor={{
+                stroke: "rgba(20, 35, 48, 0.16)",
+                strokeDasharray: "6 8",
+                strokeWidth: isFullscreen ? 1.6 : 1.2,
+              }}
+              wrapperStyle={{
+                outline: "none",
+                pointerEvents: "none",
+                zIndex: isFullscreen ? 1200 : 20,
+              }}
+            />
+
+            {typeof chartModel.referenceValue === "number" ? (
+              <ReferenceLine
+                stroke="rgba(180, 35, 24, 0.24)"
+                strokeDasharray="8 8"
+                strokeWidth={1}
+                y={chartModel.referenceValue}
+              />
+            ) : null}
+
+            {visibleChartLines.map((line) =>
+              line.variant === "area" ? (
+                <Area
+                  key={line.dataKey}
+                  activeDot={{
+                    r: isFullscreen ? 6 : 4.5,
+                    fill: line.color,
+                    stroke: "#ffffff",
+                    strokeWidth: 3,
+                  }}
+                  animationDuration={isFullscreen ? 640 : 480}
+                  animationEasing="ease-out"
+                  connectNulls={line.connectNulls}
+                  dataKey={line.dataKey}
+                  fill={`url(#gradient-${isFullscreen ? "modal-" : ""}${line.dataKey})`}
+                  fillOpacity={1}
+                  stroke={line.color}
+                  strokeWidth={isFullscreen ? (line.strokeWidth ?? 2.8) + 0.8 : line.strokeWidth ?? 2.8}
+                  type="monotone"
+                />
+              ) : (
+                <Line
+                  key={line.dataKey}
+                  activeDot={{
+                    r: isFullscreen ? 6 : 4.5,
+                    fill: line.color,
+                    stroke: "#ffffff",
+                    strokeWidth: 3,
+                  }}
+                  animationDuration={isFullscreen ? 640 : 480}
+                  animationEasing="ease-out"
+                  connectNulls={line.connectNulls}
+                  dataKey={line.dataKey}
+                  dot={false}
+                  stroke={line.color}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={isFullscreen ? (line.strokeWidth ?? 2.4) + 0.8 : line.strokeWidth ?? 2.4}
+                  type="monotone"
+                />
+              )
+            )}
+          </ComposedChart>
+        </ResponsiveContainer>
+      </div>
+    );
+  };
 
   return (
-    <section className="panel chart-card chart-card-wide line-visual-panel">
+    <>
+      <section className="panel chart-card chart-card-wide line-visual-panel">
       <div className="line-visual-topbar">
         <div>
           <p className="eyebrow">Wykresy liniowe</p>
@@ -1964,148 +2445,12 @@ export default function PortfolioLineCharts({
               </div>
 
               <div className="line-visual-chart-side">
-                <div className="line-visual-legend">
-                  {chartModel.lines.map((line) => (
-                    <div key={line.dataKey} className="line-visual-legend-item">
-                      <span
-                        className="line-visual-legend-dot"
-                        style={{ background: line.color }}
-                      />
-                      <span>{line.label}</span>
-                    </div>
-                  ))}
-                </div>
+                {renderChartActions()}
+                {renderLegend()}
               </div>
             </div>
 
-            <div className="line-visual-chart-frame mt-4">
-              <ResponsiveContainer width="100%" height={420}>
-                <ComposedChart
-                  data={chartModel.data}
-                  margin={{ top: 8, right: 8, left: 0, bottom: 0 }}
-                >
-                  {chartModel.lines.some((line) => line.variant === "area") ? (
-                    <defs>
-                      {chartModel.lines
-                        .filter((line) => line.variant === "area")
-                        .map((line) => (
-                          <linearGradient
-                            key={`gradient-${line.dataKey}`}
-                            id={`gradient-${line.dataKey}`}
-                            x1="0"
-                            x2="0"
-                            y1="0"
-                            y2="1"
-                          >
-                            <stop
-                              offset="0%"
-                              stopColor={line.color}
-                              stopOpacity={0.3}
-                            />
-                            <stop
-                              offset="100%"
-                              stopColor={line.color}
-                              stopOpacity={0.02}
-                            />
-                          </linearGradient>
-                        ))}
-                    </defs>
-                  ) : null}
-
-                  <CartesianGrid
-                    stroke="rgba(20, 35, 48, 0.08)"
-                    strokeDasharray="3 10"
-                    vertical={false}
-                  />
-                  <XAxis
-                    axisLine={false}
-                    dataKey="date"
-                    minTickGap={36}
-                    tick={{ fill: "#7b8895", fontSize: 12, fontWeight: 600 }}
-                    tickFormatter={(value) => formatShortDate(String(value))}
-                    tickLine={false}
-                  />
-                  <YAxis
-                    axisLine={false}
-                    domain={chartModel.yAxisDomain}
-                    orientation="right"
-                    tick={{ fill: "#7b8895", fontSize: 12, fontWeight: 600 }}
-                    tickFormatter={(value: number) => chartModel.yAxisTickFormatter(value)}
-                    tickLine={false}
-                    width={84}
-                  />
-                  <Tooltip
-                    allowEscapeViewBox={{ x: false, y: false }}
-                    content={(props) => (
-                      <ChartTooltip
-                        {...props}
-                        lines={chartModel.lines}
-                      />
-                    )}
-                    cursor={{
-                      stroke: "rgba(20, 35, 48, 0.16)",
-                      strokeDasharray: "6 8",
-                      strokeWidth: 1.2,
-                    }}
-                    wrapperStyle={{
-                      outline: "none",
-                      pointerEvents: "none",
-                      zIndex: 20,
-                    }}
-                  />
-
-                  {typeof chartModel.referenceValue === "number" ? (
-                    <ReferenceLine
-                      stroke="rgba(180, 35, 24, 0.24)"
-                      strokeDasharray="8 8"
-                      strokeWidth={1}
-                      y={chartModel.referenceValue}
-                    />
-                  ) : null}
-
-                  {chartModel.lines.map((line) =>
-                    line.variant === "area" ? (
-                      <Area
-                        key={line.dataKey}
-                        activeDot={{
-                          r: 4.5,
-                          fill: line.color,
-                          stroke: "#ffffff",
-                          strokeWidth: 3,
-                        }}
-                        animationDuration={360}
-                        connectNulls={line.connectNulls}
-                        dataKey={line.dataKey}
-                        fill={`url(#gradient-${line.dataKey})`}
-                        fillOpacity={1}
-                        stroke={line.color}
-                        strokeWidth={line.strokeWidth ?? 2.8}
-                        type="monotone"
-                      />
-                    ) : (
-                      <Line
-                        key={line.dataKey}
-                        activeDot={{
-                          r: 4.5,
-                          fill: line.color,
-                          stroke: "#ffffff",
-                          strokeWidth: 3,
-                        }}
-                        animationDuration={360}
-                        connectNulls={line.connectNulls}
-                        dataKey={line.dataKey}
-                        dot={false}
-                        stroke={line.color}
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={line.strokeWidth ?? 2.4}
-                        type="monotone"
-                      />
-                    )
-                  )}
-                </ComposedChart>
-              </ResponsiveContainer>
-            </div>
+            {renderChartFrame()}
           </>
         ) : (
           <div className="line-chart-empty">
@@ -2114,6 +2459,35 @@ export default function PortfolioLineCharts({
           </div>
         )}
       </div>
-    </section>
+      </section>
+
+      {isChartModalOpen && hasRenderableData ? (
+        <div
+          className="line-visual-modal-backdrop"
+          role="presentation"
+          onClick={() => setIsChartModalOpen(false)}
+        >
+          <section
+            aria-label="Powiekszony wykres liniowy"
+            className="line-visual-modal-card"
+            role="dialog"
+            aria-modal="true"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="line-visual-modal-head">
+              <div>
+                <p className="eyebrow">Wykres liniowy</p>
+                <h2 className="section-title">{chartModel.title}</h2>
+                <p className="section-copy">{chartModel.copy}</p>
+              </div>
+              {renderChartActions(true)}
+            </div>
+
+            {renderLegend(true)}
+            {renderChartFrame(true)}
+          </section>
+        </div>
+      ) : null}
+    </>
   );
 }

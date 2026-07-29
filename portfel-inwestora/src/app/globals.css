@@ -1140,7 +1140,40 @@ select {
   padding: 0 12px;
   color: var(--muted);
   font-size: 0.86rem;
+  font-weight: 700;
+  font-family: inherit;
+  text-align: left;
   background: rgba(255, 255, 255, 0.82);
+  cursor: pointer;
+  outline: none;
+  transition:
+    border-color 160ms ease,
+    color 160ms ease,
+    opacity 160ms ease,
+    transform 160ms ease,
+    background 160ms ease;
+}
+
+.line-visual-legend-item:hover,
+.line-visual-legend-item:focus-visible {
+  transform: translateY(-1px);
+  color: var(--text);
+  border-color: rgba(20, 35, 48, 0.16);
+}
+
+.line-visual-legend-item.is-muted {
+  opacity: 0.44;
+  background: rgba(255, 255, 255, 0.52);
+}
+
+.line-visual-legend-modal {
+  justify-content: flex-start;
+}
+
+.line-visual-legend-modal .line-visual-legend-item {
+  min-height: 44px;
+  padding-inline: 14px;
+  font-size: 0.96rem;
 }
 
 .line-visual-legend-dot {
@@ -1151,7 +1184,104 @@ select {
 }
 
 .line-visual-chart-frame {
+  position: relative;
   min-height: 420px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  outline: none;
+  cursor: zoom-in;
+  transition:
+    border-color 180ms ease,
+    box-shadow 180ms ease,
+    transform 180ms ease;
+}
+
+.line-visual-chart-frame:hover {
+  border-color: rgba(20, 35, 48, 0.08);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.74);
+}
+
+.line-visual-chart-frame:focus-visible {
+  border-color: rgba(15, 118, 110, 0.34);
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.12);
+}
+
+.line-visual-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 3vh 3vw;
+  background: rgba(9, 18, 28, 0.62);
+  backdrop-filter: blur(6px);
+  animation: modalFadeIn 160ms ease-out;
+}
+
+.line-visual-modal-card {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  gap: 16px;
+  width: min(94vw, 1680px);
+  height: min(94vh, 980px);
+  border: 1px solid rgba(20, 35, 48, 0.14);
+  border-radius: 8px;
+  padding: 22px;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at top right, rgba(15, 118, 110, 0.1), transparent 34%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.99), rgba(246, 249, 248, 0.97));
+  box-shadow: 0 34px 90px rgba(9, 18, 28, 0.34);
+  animation: modalScaleIn 180ms ease-out;
+}
+
+.line-visual-modal-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.line-visual-modal-head .section-title {
+  font-size: clamp(1.7rem, 2vw, 2.4rem);
+}
+
+.line-visual-modal-head .section-copy {
+  max-width: 860px;
+  margin-top: 8px;
+}
+
+.line-visual-modal-chart-frame {
+  min-height: 0;
+  height: 100%;
+  cursor: default;
+}
+
+.line-visual-modal-chart-frame:hover {
+  border-color: transparent;
+  box-shadow: none;
+}
+
+@keyframes modalFadeIn {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes modalScaleIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.985);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
 .line-visual-chart-side {
@@ -1161,9 +1291,53 @@ select {
   max-width: min(620px, 100%);
 }
 
+.line-visual-chart-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.line-visual-chart-actions .ghost-button {
+  min-height: 38px;
+  padding: 9px 12px;
+  font-size: 0.84rem;
+}
+
+.line-visual-chart-actions .ghost-button:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.line-visual-expand-button {
+  border-color: rgba(15, 118, 110, 0.26);
+  background: rgba(220, 245, 239, 0.62);
+}
+
 .line-visual-tooltip {
   width: min(440px, calc(100vw - 32px));
   min-width: min(320px, calc(100vw - 32px));
+}
+
+.line-visual-tooltip.is-fullscreen {
+  width: min(520px, calc(100vw - 48px));
+  min-width: min(380px, calc(100vw - 48px));
+  padding: 16px;
+}
+
+.line-visual-tooltip.is-fullscreen .table-title {
+  font-size: 1.08rem;
+}
+
+.line-visual-tooltip.is-fullscreen .line-chart-tooltip-row {
+  grid-template-columns: minmax(180px, 1fr) minmax(132px, 220px);
+  gap: 20px;
+  font-size: 1rem;
+}
+
+.line-visual-tooltip.is-fullscreen .line-chart-tooltip-value {
+  font-size: 1.06rem;
 }
 
 .line-visual-tooltip .line-chart-tooltip-row {
@@ -2767,6 +2941,14 @@ select {
     width: 100%;
   }
 
+  .line-visual-chart-actions {
+    justify-content: stretch;
+  }
+
+  .line-visual-chart-actions .ghost-button {
+    flex: 1 1 120px;
+  }
+
   .line-visual-benchmark-head {
     align-items: stretch;
     flex-direction: column;
@@ -2795,6 +2977,25 @@ select {
     align-items: stretch;
     flex-direction: column;
     justify-content: flex-start;
+  }
+
+  .line-visual-modal-backdrop {
+    padding: 10px;
+  }
+
+  .line-visual-modal-card {
+    width: calc(100vw - 20px);
+    height: calc(100vh - 20px);
+    padding: 14px;
+  }
+
+  .line-visual-modal-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .line-visual-tooltip.is-fullscreen {
+    min-width: min(300px, calc(100vw - 36px));
   }
 }
 

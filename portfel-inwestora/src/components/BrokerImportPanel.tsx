@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import {
   parseBrokerOperationsCsv,
   parseBrokerOperationsPdf,
+  parseBrokerOperationsXlsx,
   type BrokerImportParseResult,
   type BrokerImportPreset,
   type ImportedBrokerOperation,
@@ -34,6 +35,10 @@ const formatSide = (side: ImportedBrokerOperation["side"]) =>
 const isPdfFile = (file: File) =>
   file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
 
+const isXlsxFile = (file: File) =>
+  file.name.toLowerCase().endsWith(".xlsx") ||
+  file.type === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+
 export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) {
   const [preset, setPreset] = useState<BrokerImportPreset>("auto");
   const [fileName, setFileName] = useState("");
@@ -57,9 +62,21 @@ export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) 
     }
 
     try {
-      const result = isPdfFile(file)
-        ? parseBrokerOperationsPdf(new Uint8Array(await file.arrayBuffer()), preset)
-        : parseBrokerOperationsCsv(await file.text(), preset);
+      let result: BrokerImportParseResult;
+
+      if (isXlsxFile(file)) {
+        result = await parseBrokerOperationsXlsx(
+          new Uint8Array(await file.arrayBuffer()),
+          preset
+        );
+      } else if (isPdfFile(file)) {
+        result = await parseBrokerOperationsPdf(
+          new Uint8Array(await file.arrayBuffer()),
+          preset
+        );
+      } else {
+        result = parseBrokerOperationsCsv(await file.text(), preset);
+      }
 
       setParseResult(result);
 
@@ -67,7 +84,7 @@ export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) 
         setError("Nie znalazlem poprawnych operacji w tym pliku.");
       }
     } catch {
-      setError("Nie udalo sie odczytac pliku CSV/PDF.");
+      setError("Nie udalo sie odczytac pliku CSV/XLSX/PDF.");
     }
   };
 
@@ -108,8 +125,8 @@ export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) 
         </div>
 
         <p className="section-copy">
-          Obslugiwane sa eksporty CSV oraz tekstowe raporty PDF XTB z danymi
-          transakcji.
+          Obslugiwane sa eksporty CSV, XLSX oraz tekstowe raporty PDF XTB z
+          danymi transakcji.
         </p>
       </div>
 
@@ -134,10 +151,10 @@ export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) 
         </label>
 
         <label className="field">
-          <span>Plik CSV/PDF</span>
+          <span>Plik CSV/XLSX/PDF</span>
           <input
             type="file"
-            accept=".csv,.pdf,text/csv,application/pdf"
+            accept=".csv,.xlsx,.pdf,text/csv,application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             onChange={(event) => {
               void handleFileChange(event.target.files?.[0]);
             }}

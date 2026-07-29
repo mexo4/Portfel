@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useRef, useState } from "react";
+import { useRef, useState, type FormEvent } from "react";
 import { ApiError, loginUser, registerUser } from "@/lib/api";
 import PasswordField from "@/components/PasswordField";
 
@@ -41,10 +41,18 @@ export default function AuthCard({ mode, initialNotice = null }: AuthCardProps) 
 
   const isRegister = mode === "register";
 
-  const handleSubmit = async () => {
-    const normalizedEmail = email.trim();
+  const handleSubmit = async (event?: FormEvent<HTMLFormElement>) => {
+    event?.preventDefault();
 
-    if (isRegister && displayName.trim().length < 2) {
+    if (isSubmitting) {
+      return;
+    }
+
+    const submittedDisplayName = displayNameRef.current?.value ?? displayName;
+    const normalizedEmail = (emailRef.current?.value ?? email).trim();
+    const submittedPassword = passwordRef.current?.value ?? password;
+
+    if (isRegister && submittedDisplayName.trim().length < 2) {
       setError("Podaj nazwe uzytkownika zlozona z co najmniej 2 znakow.");
       displayNameRef.current?.focus();
       return;
@@ -56,7 +64,7 @@ export default function AuthCard({ mode, initialNotice = null }: AuthCardProps) 
       return;
     }
 
-    if (password.length < 8) {
+    if (submittedPassword.length < 8) {
       setError("Haslo musi miec co najmniej 8 znakow.");
       passwordRef.current?.focus();
       return;
@@ -70,9 +78,9 @@ export default function AuthCard({ mode, initialNotice = null }: AuthCardProps) 
     try {
       if (isRegister) {
         const response = await registerUser({
-          displayName,
+          displayName: submittedDisplayName,
           email: normalizedEmail,
-          password,
+          password: submittedPassword,
         });
 
         setNotice(
@@ -85,12 +93,11 @@ export default function AuthCard({ mode, initialNotice = null }: AuthCardProps) 
       } else {
         await loginUser({
           email: normalizedEmail,
-          password,
+          password: submittedPassword,
         });
       }
 
-      router.push("/app");
-      router.refresh();
+      router.replace("/app");
     } catch (submitError) {
       const verificationPayload = getVerificationPayload(submitError);
 
@@ -125,7 +132,7 @@ export default function AuthCard({ mode, initialNotice = null }: AuthCardProps) 
               : "Po zalogowaniu zobaczysz swoj profil i dane portfela przypiete do konta."}
           </p>
 
-          <div className="auth-form mt-6">
+          <form className="auth-form mt-6" onSubmit={handleSubmit}>
             {isRegister ? (
               <label className="field">
                 <span>Nazwa uzytkownika</span>
@@ -179,8 +186,7 @@ export default function AuthCard({ mode, initialNotice = null }: AuthCardProps) 
 
             <button
               className="primary-button"
-              type="button"
-              onClick={handleSubmit}
+              type="submit"
               disabled={isSubmitting}
             >
               {isSubmitting
@@ -189,7 +195,7 @@ export default function AuthCard({ mode, initialNotice = null }: AuthCardProps) 
                   ? "Utworz konto"
                   : "Zaloguj sie"}
             </button>
-          </div>
+          </form>
 
           <div className="auth-divider" aria-hidden="true">
             <span />

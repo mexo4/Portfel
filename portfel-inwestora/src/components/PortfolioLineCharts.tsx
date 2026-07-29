@@ -830,6 +830,22 @@ function ChartTooltip({
   const payloadByKey = new Map(
     payload.map((entry) => [String(entry.dataKey ?? ""), entry] as const)
   );
+  const sortedTooltipRows = lines
+    .map((line) => {
+      const entry = payloadByKey.get(line.dataKey) as TooltipPayloadEntry | undefined;
+      const value = getFiniteNumber(entry?.value);
+
+      return value === null
+        ? null
+        : {
+            line,
+            value,
+          };
+    })
+    .filter((item): item is { line: ChartLineDefinition; value: number } =>
+      Boolean(item)
+    )
+    .sort((left, right) => right.value - left.value);
 
   return (
     <div
@@ -841,14 +857,7 @@ function ChartTooltip({
     >
       <p className="table-title">{formatDate(String(label))}</p>
       <div className="line-chart-tooltip-list">
-        {lines.map((line) => {
-          const entry = payloadByKey.get(line.dataKey) as TooltipPayloadEntry | undefined;
-          const value = getFiniteNumber(entry?.value);
-
-          if (value === null) {
-            return null;
-          }
-
+        {sortedTooltipRows.map(({ line, value }) => {
           return (
             <div key={line.dataKey} className="line-chart-tooltip-row">
               <span className="line-chart-tooltip-key">
@@ -1453,8 +1462,10 @@ export default function PortfolioLineCharts({
         Array<{
           color: string;
           currentPercent: number;
+          currentPrice: number;
           dataKey: string;
           label: string;
+          marketCurrency: string;
           percentByDate: Map<string, number | null>;
           pointByDate: Map<string, PortfolioBenchmarkHistorySeries["points"][number]>;
         }>
@@ -1496,8 +1507,10 @@ export default function PortfolioLineCharts({
         models.push({
           color: SERIES_COLORS[(index + 1) % SERIES_COLORS.length] ?? SERIES_COLORS[1],
           currentPercent: lastBenchmarkPoint.percent!,
+          currentPrice: lastBenchmarkPoint.point.price,
           dataKey: `benchmark${index}`,
           label: series.label,
+          marketCurrency: benchmark.marketCurrency,
           percentByDate,
           pointByDate: new Map(series.points.map((point) => [point.date, point] as const)),
         });
@@ -1653,7 +1666,7 @@ export default function PortfolioLineCharts({
         },
         ...visibleBenchmarkModels.map((benchmarkModel) => ({
           label: benchmarkModel.label,
-          value: formatSignedPercent(benchmarkModel.currentPercent),
+          value: `${formatNumber(benchmarkModel.currentPrice, 2)} ${benchmarkModel.marketCurrency} | ${formatSignedPercent(benchmarkModel.currentPercent)}`,
           tone: getToneClass(benchmarkModel.currentPercent),
         })),
         missingBenchmarkCount > 0
@@ -2063,6 +2076,31 @@ export default function PortfolioLineCharts({
     </div>
   );
 
+  const renderSummary = (isFullscreen = false) => (
+    <div
+      className={
+        isFullscreen
+          ? "line-visual-summary line-visual-summary-modal mt-4"
+          : "line-visual-summary mt-6"
+      }
+    >
+      <article className="line-visual-hero">
+        <span className="line-visual-hero-label">{chartModel.summaryLabel}</span>
+        <strong className="line-visual-hero-value">{chartModel.summaryValue}</strong>
+        <span className={`line-visual-hero-delta ${chartModel.deltaTone}`}>
+          {chartModel.deltaLabel}: {chartModel.deltaValue}
+        </span>
+      </article>
+
+      {chartModel.stats.map((stat) => (
+        <article key={stat.label} className="line-visual-stat-card">
+          <span className="line-visual-stat-label">{stat.label}</span>
+          <strong className={stat.tone ?? "tone-neutral"}>{stat.value}</strong>
+        </article>
+      ))}
+    </div>
+  );
+
   const renderChartFrame = (isFullscreen = false) => {
     const axisFontSize = isFullscreen ? 15 : 12;
     const axisWidth = isFullscreen ? 104 : 84;
@@ -2405,22 +2443,7 @@ export default function PortfolioLineCharts({
         </section>
       ) : null}
 
-      <div className="line-visual-summary mt-6">
-        <article className="line-visual-hero">
-          <span className="line-visual-hero-label">{chartModel.summaryLabel}</span>
-          <strong className="line-visual-hero-value">{chartModel.summaryValue}</strong>
-          <span className={`line-visual-hero-delta ${chartModel.deltaTone}`}>
-            {chartModel.deltaLabel}: {chartModel.deltaValue}
-          </span>
-        </article>
-
-        {chartModel.stats.map((stat) => (
-          <article key={stat.label} className="line-visual-stat-card">
-            <span className="line-visual-stat-label">{stat.label}</span>
-            <strong className={stat.tone ?? "tone-neutral"}>{stat.value}</strong>
-          </article>
-        ))}
-      </div>
+      {renderSummary()}
 
       {isUsingFallbackHistory || isLoading || error || displayWarnings.length > 0 ? (
         <div className="line-visual-status mt-6">
@@ -2494,6 +2517,7 @@ export default function PortfolioLineCharts({
               {renderChartActions(true)}
             </div>
 
+            {renderSummary(true)}
             {renderLegend(true)}
             {renderChartFrame(true)}
           </section>

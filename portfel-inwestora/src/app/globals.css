@@ -1220,7 +1220,7 @@ select {
 
 .line-visual-modal-card {
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto auto minmax(0, 1fr);
   gap: 16px;
   width: min(94vw, 1680px);
   height: min(94vh, 980px);

@@ -10,6 +10,9 @@ import type {
   BondSwapQuote,
   FxRates,
   PortfolioAsset,
+  PortfolioBook,
+  PortfolioEngineSnapshot,
+  PortfolioOperation,
   InvestmentPortfolio,
   PortfolioBenchmarkDefinition,
   PortfolioHistoryResponse,
@@ -267,6 +270,50 @@ export const savePortfolioState = async ({
   });
 
   return data;
+};
+
+export const fetchPortfolioCore = async () => {
+  return requestJson<{
+    schemaVersion: 2;
+    portfolios: InvestmentPortfolio[];
+    activePortfolioId: string;
+    activePortfolio: InvestmentPortfolio;
+    snapshot: PortfolioEngineSnapshot;
+  }>("/api/portfolio/v2");
+};
+
+export const savePortfolioCore = async (portfolioBook: PortfolioBook) => {
+  return requestJson<PortfolioBook>("/api/portfolio/v2", {
+    method: "PUT",
+    body: JSON.stringify(portfolioBook),
+  });
+};
+
+export const fetchPortfolioOperations = async (portfolioId?: string) => {
+  const params = new URLSearchParams();
+
+  if (portfolioId) {
+    params.set("portfolioId", portfolioId);
+  }
+
+  return requestJson<{
+    portfolioId: string;
+    operations: PortfolioOperation[];
+  }>(`/api/portfolio/v2/operations${params.size > 0 ? `?${params.toString()}` : ""}`);
+};
+
+export const appendPortfolioOperation = async (
+  operation: Partial<PortfolioOperation>,
+  portfolioId?: string
+) => {
+  return requestJson<{
+    operation: PortfolioOperation;
+    portfolios: InvestmentPortfolio[];
+    activePortfolioId: string;
+  }>("/api/portfolio/v2/operations", {
+    method: "POST",
+    body: JSON.stringify({ portfolioId, operation }),
+  });
 };
 
 export const loginUser = async (payload: { email: string; password: string }) => {

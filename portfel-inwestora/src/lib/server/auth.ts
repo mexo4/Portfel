@@ -9,6 +9,7 @@ import { createFreshUserProfile, normalizeUserProfile } from "@/lib/profile";
 import { isForcedProEmail } from "@/lib/server/access";
 import { execute, queryOne } from "@/lib/server/db";
 import { sendPasswordResetEmail, sendVerificationEmail } from "@/lib/server/email";
+import { syncPortfolioCoreTables } from "@/lib/server/portfolio-core-sync";
 import type {
   AuthenticatedUser,
   PortfolioBook,
@@ -107,11 +108,54 @@ const toAuthenticatedUser = (
   subscriptionStatus: normalizeSubscriptionStatus(user.subscription_status),
 });
 
-const parsePortfolioBook = (portfolioJson: string): PortfolioBook => {
+const hasPortfolioV2Shape = (value: unknown) => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  const rawBook = value as { schemaVersion?: unknown; portfolios?: unknown[] };
+
+  return (
+    rawBook.schemaVersion === 2 &&
+    Array.isArray(rawBook.portfolios) &&
+    rawBook.portfolios.every((portfolio) => {
+      if (!portfolio || typeof portfolio !== "object" || Array.isArray(portfolio)) {
+        return false;
+      }
+
+      const rawPortfolio = portfolio as {
+        schemaVersion?: unknown;
+        accounts?: unknown;
+        instruments?: unknown;
+        operations?: unknown;
+      };
+
+      return (
+        rawPortfolio.schemaVersion === 2 &&
+        Array.isArray(rawPortfolio.accounts) &&
+        Array.isArray(rawPortfolio.instruments) &&
+        Array.isArray(rawPortfolio.operations)
+      );
+    })
+  );
+};
+
+const parsePortfolioBook = (portfolioJson: string): {
+  portfolioBook: PortfolioBook;
+  needsMigration: boolean;
+} => {
   try {
-    return normalizePortfolioBook(JSON.parse(portfolioJson));
+    const rawPortfolio = JSON.parse(portfolioJson);
+
+    return {
+      portfolioBook: normalizePortfolioBook(rawPortfolio),
+      needsMigration: !hasPortfolioV2Shape(rawPortfolio),
+    };
   } catch {
-    return normalizePortfolioBook([]);
+    return {
+      portfolioBook: normalizePortfolioBook([]),
+      needsMigration: true,
+    };
   }
 };
 
@@ -327,6 +371,11 @@ export const registerAccount = async ({
   };
 
   const initialSubscriptionPlan = isForcedProEmail(normalizedEmail) ? "pro" : "free";
+  const initialPortfolioBook = normalizePortfolioBook({
+    assets: [],
+    sales: [],
+    realizedAdjustments: [],
+  });
 
   await execute(
     `
@@ -356,15 +405,12 @@ export const registerAccount = async ({
       "active",
       now,
       JSON.stringify(profile),
-      JSON.stringify({
-        assets: [],
-        sales: [],
-        realizedAdjustments: [],
-      }),
+      JSON.stringify(initialPortfolioBook),
       now,
       now,
     ]
   );
+  await syncPortfolioCoreTables(userId, initialPortfolioBook);
 
   return {
     id: userId,
@@ -418,6 +464,11 @@ export const upsertOAuthAccount = async ({
     updatedAt: now,
   };
   const initialSubscriptionPlan = isForcedProEmail(normalizedEmail) ? "pro" : "free";
+  const initialPortfolioBook = normalizePortfolioBook({
+    assets: [],
+    sales: [],
+    realizedAdjustments: [],
+  });
 
   await execute(
     `
@@ -447,15 +498,12 @@ export const upsertOAuthAccount = async ({
       "active",
       now,
       JSON.stringify(profile),
-      JSON.stringify({
-        assets: [],
-        sales: [],
-        realizedAdjustments: [],
-      }),
+      JSON.stringify(initialPortfolioBook),
       now,
       now,
     ]
   );
+  await syncPortfolioCoreTables(userId, initialPortfolioBook);
 
   const createdUser = await getUserById(userId);
 
@@ -509,7 +557,15 @@ export const getCurrentAccountData = async () => {
   }
 
   const user = await withForcedProSubscription(sessionUser);
-  const portfolioBook = parsePortfolioBook(user.portfolio_json);
+  const { portfolioBook, needsMigration } = parsePortfolioBook(user.portfolio_json);
+
+  if (needsMigration) {
+    await execute(
+      "UPDATE users SET portfolio_json = $1, updated_at = $2 WHERE id = $3",
+      [JSON.stringify(portfolioBook), new Date().toISOString(), user.id]
+    );
+    await syncPortfolioCoreTables(user.id, portfolioBook);
+  }
 
   return {
     user: toAuthenticatedUser(user),
@@ -626,6 +682,7 @@ export const updateCurrentUserPortfolio = async (
     `,
     [JSON.stringify(normalizedPortfolio), new Date().toISOString(), userId]
   );
+  await syncPortfolioCoreTables(userId, normalizedPortfolio);
 
   return {
     ...aggregatedPortfolio,

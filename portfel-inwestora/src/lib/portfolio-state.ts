@@ -4,6 +4,7 @@ import {
   getTreasuryBondCouponPaymentDates,
   normalizeTreasuryBondCode,
 } from "@/lib/treasury-bonds";
+import { ensurePortfolioCoreModel } from "@/lib/operation-engine";
 import {
   getDefaultProviderForKind,
   getPortfolioAssetGroupKey,
@@ -696,15 +697,25 @@ export const createInvestmentPortfolio = (
   const now = new Date().toISOString();
   const normalizedState = normalizePortfolioState(state);
 
-  return {
+  return ensurePortfolioCoreModel({
     id: createPortfolioId(),
     name: normalizePortfolioName(name, "Nowy portfel"),
     assets: normalizedState.assets,
     sales: normalizedState.sales,
     realizedAdjustments: normalizedState.realizedAdjustments,
+    schemaVersion: 2,
+    baseCurrency: "PLN",
+    subPortfolios: [],
+    accounts: [],
+    instruments: [],
+    operations: [],
+    tags: [],
+    tagAssignments: [],
+    benchmarks: [],
+    metadata: {},
     createdAt: now,
     updatedAt: now,
-  };
+  });
 };
 
 const normalizeInvestmentPortfolio = (
@@ -727,7 +738,7 @@ const normalizeInvestmentPortfolio = (
       ? rawPortfolio.updatedAt
       : createdAt;
 
-  return {
+  return ensurePortfolioCoreModel({
     id:
       typeof rawPortfolio.id === "string" && rawPortfolio.id
         ? rawPortfolio.id
@@ -736,14 +747,31 @@ const normalizeInvestmentPortfolio = (
     assets: normalizedState.assets,
     sales: normalizedState.sales,
     realizedAdjustments: normalizedState.realizedAdjustments,
+    schemaVersion: 2,
+    baseCurrency:
+      typeof rawPortfolio.baseCurrency === "string" && rawPortfolio.baseCurrency
+        ? rawPortfolio.baseCurrency
+        : "PLN",
+    subPortfolios: rawPortfolio.subPortfolios,
+    accounts: rawPortfolio.accounts,
+    instruments: rawPortfolio.instruments,
+    operations: rawPortfolio.operations,
+    tags: rawPortfolio.tags,
+    tagAssignments: rawPortfolio.tagAssignments,
+    benchmarks: rawPortfolio.benchmarks,
+    metadata: rawPortfolio.metadata,
     createdAt,
     updatedAt,
-  };
+  });
 };
 
 export const normalizePortfolioBook = (value: unknown): PortfolioBook => {
   if (isPortfolioBookLike(value)) {
-    const rawBook = value as { portfolios?: unknown[]; activePortfolioId?: unknown };
+    const rawBook = value as {
+      portfolios?: unknown[];
+      activePortfolioId?: unknown;
+      migratedAt?: unknown;
+    };
     const portfolios = (rawBook.portfolios ?? [])
       .map((portfolio, index) => normalizeInvestmentPortfolio(portfolio, index))
       .filter((portfolio): portfolio is InvestmentPortfolio => Boolean(portfolio));
@@ -755,8 +783,13 @@ export const normalizePortfolioBook = (value: unknown): PortfolioBook => {
         : fallbackPortfolio.id;
 
     return {
+      schemaVersion: 2,
       portfolios: portfolios.length > 0 ? portfolios : [fallbackPortfolio],
       activePortfolioId,
+      migratedAt:
+        typeof rawBook.migratedAt === "string" && rawBook.migratedAt
+          ? rawBook.migratedAt
+          : new Date().toISOString(),
     };
   }
 
@@ -764,8 +797,10 @@ export const normalizePortfolioBook = (value: unknown): PortfolioBook => {
   const defaultPortfolio = createInvestmentPortfolio("Portfel 1", legacyState);
 
   return {
+    schemaVersion: 2,
     portfolios: [defaultPortfolio],
     activePortfolioId: defaultPortfolio.id,
+    migratedAt: new Date().toISOString(),
   };
 };
 

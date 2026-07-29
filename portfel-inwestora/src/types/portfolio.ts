@@ -1,5 +1,54 @@
 export type AssetKind = "stock" | "etf" | "crypto" | "bond";
 
+export type InstrumentType =
+  | "STOCK"
+  | "ETF"
+  | "BOND"
+  | "CRYPTO"
+  | "FUND"
+  | "TERM_DEPOSIT"
+  | "CASH"
+  | "OTHER";
+
+export type OperationType =
+  | "BUY"
+  | "SELL"
+  | "DEPOSIT"
+  | "WITHDRAW"
+  | "TRANSFER"
+  | "DIVIDEND"
+  | "COUPON"
+  | "INTEREST"
+  | "FEE"
+  | "TAX"
+  | "CONVERSION"
+  | "SPLIT"
+  | "REVERSE_SPLIT"
+  | "BONUS"
+  | "CUSTOM";
+
+export type AccountKind = "investment" | "cash" | "currency";
+
+export type BrokerCode =
+  | "XTB"
+  | "IBKR"
+  | "DEGIRO"
+  | "TRADING212"
+  | "REVOLUT"
+  | "MBANK"
+  | "BOS"
+  | "SANTANDER"
+  | "BINANCE"
+  | "BYBIT"
+  | "KRAKEN"
+  | "CASH"
+  | "CURRENCY"
+  | "OTHER";
+
+export type TagTargetType = "portfolio" | "instrument" | "operation";
+
+export type PortfolioSchemaVersion = 2;
+
 export type AssetSearchMode =
   | "stock-global"
   | "stock-gpw"
@@ -332,13 +381,25 @@ export type PortfolioState = {
 export type InvestmentPortfolio = PortfolioState & {
   id: string;
   name: string;
+  schemaVersion?: PortfolioSchemaVersion;
+  baseCurrency?: CurrencyCode;
+  subPortfolios?: PortfolioSubPortfolio[];
+  accounts?: PortfolioAccount[];
+  instruments?: PortfolioInstrument[];
+  operations?: PortfolioOperation[];
+  tags?: PortfolioTag[];
+  tagAssignments?: PortfolioTagAssignment[];
+  benchmarks?: PortfolioBenchmarkDefinition[];
+  metadata?: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
 };
 
 export type PortfolioBook = {
+  schemaVersion?: PortfolioSchemaVersion;
   portfolios: InvestmentPortfolio[];
   activePortfolioId: string;
+  migratedAt?: string;
 };
 
 export type FxRates = Record<CurrencyCode, number>;
@@ -413,6 +474,131 @@ export type PortfolioBenchmarkDefinition = {
   provider: QuoteProvider;
   providerId?: string;
   priceScale?: number;
+};
+
+export type PortfolioAccount = {
+  id: string;
+  portfolioId: string;
+  parentAccountId?: string;
+  name: string;
+  kind: AccountKind;
+  broker?: BrokerCode;
+  currency: CurrencyCode;
+  isDefault: boolean;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type PortfolioInstrument = {
+  id: string;
+  portfolioId: string;
+  type: InstrumentType;
+  assetKind?: AssetKind;
+  symbol: string;
+  name: string;
+  marketCurrency: CurrencyCode;
+  provider?: QuoteProvider;
+  providerId?: string;
+  isin?: string;
+  priceScale?: number;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type PortfolioOperation = {
+  id: string;
+  portfolioId: string;
+  accountId: string;
+  assetId: string | null;
+  operationType: OperationType;
+  quantity: number | null;
+  price: number | null;
+  currency: CurrencyCode;
+  exchangeRate: number | null;
+  fee: number;
+  tax: number;
+  amount: number;
+  date: string;
+  notes: string;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type PortfolioTag = {
+  id: string;
+  portfolioId: string;
+  name: string;
+  color: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type PortfolioTagAssignment = {
+  id: string;
+  portfolioId: string;
+  tagId: string;
+  targetType: TagTargetType;
+  targetId: string;
+  createdAt: string;
+};
+
+export type PortfolioSubPortfolio = {
+  id: string;
+  portfolioId: string;
+  name: string;
+  currency: CurrencyCode;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CashBalance = {
+  accountId: string;
+  currency: CurrencyCode;
+  amount: number;
+};
+
+export type AccountValuation = {
+  accountId: string;
+  accountName: string;
+  kind: AccountKind;
+  currency: CurrencyCode;
+  cashBalances: CashBalance[];
+  marketValuePln: number;
+  investedPln: number;
+  realizedProfitLossPln: number;
+  unrealizedProfitLossPln: number;
+  totalValuePln: number;
+};
+
+export type PortfolioPosition = {
+  instrumentId: string;
+  key: string;
+  symbol: string;
+  name: string;
+  type: InstrumentType;
+  quantity: number;
+  averagePrice: number;
+  averagePriceCurrency: CurrencyCode;
+  costBasisPln: number;
+  marketValuePln: number;
+  realizedProfitLossPln: number;
+  unrealizedProfitLossPln: number;
+  returnPercent: number;
+};
+
+export type PortfolioEngineSnapshot = {
+  portfolioId: string;
+  generatedAt: string;
+  summary: PortfolioSummary;
+  accounts: AccountValuation[];
+  positions: PortfolioPosition[];
+  cashBalances: CashBalance[];
+  operationsCount: number;
+  cacheKey: string;
 };
 
 export type PortfolioHistoryResponse = {

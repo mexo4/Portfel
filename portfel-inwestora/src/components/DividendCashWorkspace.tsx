@@ -277,17 +277,14 @@ export default function DividendCashWorkspace({
   const instruments = portfolioInstruments.filter(
     (instrument) => instrument.type !== "CASH"
   );
-  const filteredDividendInstruments = useMemo(() => {
-    const query = dividendDraft.instrumentSearch.trim().toLowerCase();
-
-    if (!query) {
-      return instruments;
-    }
-
-    return instruments.filter((instrument) =>
-      `${instrument.symbol} ${instrument.name}`.toLowerCase().includes(query)
-    );
-  }, [dividendDraft.instrumentSearch, instruments]);
+  const dividendInstrumentQuery = dividendDraft.instrumentSearch.trim().toLowerCase();
+  const filteredDividendInstruments = dividendInstrumentQuery
+    ? instruments.filter((instrument) =>
+        `${instrument.symbol} ${instrument.name}`
+          .toLowerCase()
+          .includes(dividendInstrumentQuery)
+      )
+    : instruments;
   const dividends = useMemo(
     () => getPortfolioDividends(portfolio, fxRates),
     [fxRates, portfolio]

@@ -104,7 +104,6 @@ import type {
   FxRates,
   InvestmentPortfolio,
   PortfolioAsset,
-  PortfolioOperation,
   PortfolioRealizedAdjustment,
   PortfolioSale,
   RealizedAdjustmentDraft,

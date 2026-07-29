@@ -1786,12 +1786,23 @@ export default function PortfolioLineCharts({
   const chartLineKeySignature = chartModel.lines.map((line) => line.dataKey).join("|");
 
   useEffect(() => {
-    const chartLineKeys = new Set(chartModel.lines.map((line) => line.dataKey));
-
-    setHiddenSeriesKeys((currentKeys) =>
-      currentKeys.filter((dataKey) => chartLineKeys.has(dataKey))
+    const chartLineKeys = new Set(
+      chartLineKeySignature ? chartLineKeySignature.split("|") : []
     );
-  }, [chartLineKeySignature, chartModel.lines]);
+
+    setHiddenSeriesKeys((currentKeys) => {
+      const nextKeys = currentKeys.filter((dataKey) => chartLineKeys.has(dataKey));
+
+      if (
+        nextKeys.length === currentKeys.length &&
+        nextKeys.every((dataKey, index) => dataKey === currentKeys[index])
+      ) {
+        return currentKeys;
+      }
+
+      return nextKeys;
+    });
+  }, [chartLineKeySignature]);
 
   const hiddenSeriesKeySet = useMemo(
     () => new Set(hiddenSeriesKeys),

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   parseBrokerOperationsCsv,
   parseBrokerOperationsPdf,
@@ -39,54 +39,108 @@ const isXlsxFile = (file: File) =>
   file.name.toLowerCase().endsWith(".xlsx") ||
   file.type === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 
+const waitForPaint = () =>
+  new Promise<void>((resolve) => {
+    requestAnimationFrame(() => resolve());
+  });
+
 export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) {
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [preset, setPreset] = useState<BrokerImportPreset>("auto");
   const [fileName, setFileName] = useState("");
   const [parseResult, setParseResult] = useState<BrokerImportParseResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [parseStatus, setParseStatus] = useState<string | null>(null);
+  const [isParsing, setIsParsing] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const previewRows = useMemo(
     () => parseResult?.operations.slice(0, 6) ?? [],
     [parseResult]
   );
 
-  const handleFileChange = async (file: File | undefined) => {
+  const handleFileChange = useCallback(async (file: File | undefined) => {
     setError(null);
     setSuccess(null);
     setParseResult(null);
     setFileName(file?.name ?? "");
+    setParseStatus(null);
 
     if (!file) {
       return;
     }
 
+    setIsParsing(true);
+    setParseStatus(
+      isXlsxFile(file)
+        ? "Odczytuje arkusz XLSX..."
+        : isPdfFile(file)
+          ? "Odczytuje raport PDF..."
+          : "Odczytuje plik CSV..."
+    );
+    await waitForPaint();
+
     try {
       let result: BrokerImportParseResult;
 
       if (isXlsxFile(file)) {
+        setParseStatus("Rozpakowuje XLSX i mapuje pierwsza zakladke...");
         result = await parseBrokerOperationsXlsx(
           new Uint8Array(await file.arrayBuffer()),
           preset
         );
       } else if (isPdfFile(file)) {
+        setParseStatus("Wyszukuje tekst i operacje w PDF...");
         result = await parseBrokerOperationsPdf(
           new Uint8Array(await file.arrayBuffer()),
           preset
         );
       } else {
+        setParseStatus("Mapuje kolumny CSV...");
         result = parseBrokerOperationsCsv(await file.text(), preset);
       }
 
       setParseResult(result);
+      setParseStatus(null);
 
       if (result.operations.length === 0) {
         setError("Nie znalazlem poprawnych operacji w tym pliku.");
       }
-    } catch {
-      setError("Nie udalo sie odczytac pliku CSV/XLSX/PDF.");
+    } catch (parseError) {
+      console.error("[broker-import] Nie udalo sie odczytac pliku.", {
+        fileName: file.name,
+        fileType: file.type,
+        preset,
+        error: parseError,
+      });
+      setError(
+        parseError instanceof Error
+          ? parseError.message
+          : "Nie udalo sie odczytac pliku CSV/XLSX/PDF."
+      );
+      setParseStatus(null);
+    } finally {
+      setIsParsing(false);
     }
-  };
+  }, [preset]);
+
+  useEffect(() => {
+    const fileInput = fileInputRef.current;
+
+    if (!fileInput) {
+      return;
+    }
+
+    const handleNativeFileChange = () => {
+      void handleFileChange(fileInput.files?.[0]);
+    };
+
+    fileInput.addEventListener("change", handleNativeFileChange);
+
+    return () => {
+      fileInput.removeEventListener("change", handleNativeFileChange);
+    };
+  }, [handleFileChange]);
 
   const handleImport = async () => {
     if (!parseResult || parseResult.operations.length === 0) {
@@ -153,27 +207,26 @@ export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) 
         <label className="field">
           <span>Plik CSV/XLSX/PDF</span>
           <input
+            ref={fileInputRef}
             type="file"
             accept=".csv,.xlsx,.pdf,text/csv,application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            onChange={(event) => {
-              void handleFileChange(event.target.files?.[0]);
-            }}
           />
         </label>
 
         <button
           type="button"
           className="primary-button self-end"
-          disabled={!parseResult?.operations.length || isImporting}
+          disabled={!parseResult?.operations.length || isImporting || isParsing}
           onClick={() => {
             void handleImport();
           }}
         >
-          {isImporting ? "Importuje..." : "Importuj"}
+          {isImporting ? "Importuje..." : isParsing ? "Odczytuje..." : "Importuj"}
         </button>
       </div>
 
       {fileName ? <p className="field-note mt-4">Wybrany plik: {fileName}</p> : null}
+      {isParsing && parseStatus ? <p className="field-note mt-4">{parseStatus}</p> : null}
       {error ? <p className="field-note field-note-error mt-4">{error}</p> : null}
       {success ? <p className="field-note mt-4">{success}</p> : null}
 

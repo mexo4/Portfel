@@ -806,6 +806,9 @@ const textDecoder = new TextDecoder("utf-8", { fatal: false });
 const toArrayBuffer = (bytes: Uint8Array) =>
   bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
 
+const yieldToMainThread = () =>
+  new Promise<void>((resolve) => globalThis.setTimeout(resolve, 0));
+
 const readZipString = (bytes: Uint8Array, offset: number, length: number) =>
   textDecoder.decode(bytes.slice(offset, offset + length));
 
@@ -865,11 +868,11 @@ const inflateRawBytes = async (bytes: Uint8Array) => {
     throw new Error("Ta przegladarka nie wspiera rozpakowywania XLSX.");
   }
 
-  const stream = new DecompressionStream("deflate-raw");
-  const writer = stream.writable.getWriter();
-  await writer.write(toArrayBuffer(bytes));
-  await writer.close();
-  return new Uint8Array(await new Response(stream.readable).arrayBuffer());
+  const stream = new Blob([toArrayBuffer(bytes)])
+    .stream()
+    .pipeThrough(new DecompressionStream("deflate-raw"));
+
+  return new Uint8Array(await new Response(stream).arrayBuffer());
 };
 
 const inflatePdfBytes = async (bytes: Uint8Array) => {
@@ -879,11 +882,11 @@ const inflatePdfBytes = async (bytes: Uint8Array) => {
 
   for (const format of ["deflate", "deflate-raw"] as CompressionFormat[]) {
     try {
-      const stream = new DecompressionStream(format);
-      const writer = stream.writable.getWriter();
-      await writer.write(toArrayBuffer(bytes));
-      await writer.close();
-      return new Uint8Array(await new Response(stream.readable).arrayBuffer());
+      const stream = new Blob([toArrayBuffer(bytes)])
+        .stream()
+        .pipeThrough(new DecompressionStream(format));
+
+      return new Uint8Array(await new Response(stream).arrayBuffer());
     } catch {
       // Try the next PDF deflate framing variant.
     }
@@ -949,6 +952,55 @@ const readSharedStrings = (xmlText: string | null) => {
   return Array.from(xml.getElementsByTagName("si")).map(getNodeText);
 };
 
+const normalizeWorkbookRelationshipTarget = (target: string) => {
+  const normalizedTarget = target.replace(/\\/g, "/").replace(/^\.\//, "");
+
+  if (normalizedTarget.startsWith("/")) {
+    return normalizedTarget.slice(1);
+  }
+
+  if (normalizedTarget.startsWith("xl/")) {
+    return normalizedTarget;
+  }
+
+  return `xl/${normalizedTarget}`;
+};
+
+const getFirstWorksheetEntry = async (
+  bytes: Uint8Array,
+  entriesByName: Map<string, ZipEntry>,
+  worksheetEntries: ZipEntry[]
+) => {
+  const workbookText = await readZipTextEntry(bytes, entriesByName, "xl/workbook.xml");
+  const workbookRelsText = await readZipTextEntry(
+    bytes,
+    entriesByName,
+    "xl/_rels/workbook.xml.rels"
+  );
+
+  if (!workbookText || !workbookRelsText) {
+    return worksheetEntries[0] ?? null;
+  }
+
+  const workbookXml = parseXml(workbookText);
+  const relsXml = parseXml(workbookRelsText);
+  const firstSheet = Array.from(workbookXml.getElementsByTagName("sheet"))[0];
+  const relationshipId =
+    firstSheet?.getAttribute("r:id") ?? firstSheet?.getAttribute("id") ?? "";
+
+  if (!relationshipId) {
+    return worksheetEntries[0] ?? null;
+  }
+
+  const relationship = Array.from(relsXml.getElementsByTagName("Relationship")).find(
+    (item) => item.getAttribute("Id") === relationshipId
+  );
+  const target = relationship?.getAttribute("Target") ?? "";
+  const targetEntryName = target ? normalizeWorkbookRelationshipTarget(target) : "";
+
+  return entriesByName.get(targetEntryName) ?? worksheetEntries[0] ?? null;
+};
+
 const getColumnIndex = (cellRef: string) => {
   const letters = cellRef.match(/^[A-Z]+/i)?.[0].toUpperCase() ?? "";
 
@@ -978,10 +1030,17 @@ const getCellText = (cell: Element, sharedStrings: string[]) => {
   ).trim();
 };
 
-const parseWorksheetRows = (xmlText: string, sharedStrings: string[]) => {
+const parseWorksheetRows = async (xmlText: string, sharedStrings: string[]) => {
   const xml = parseXml(xmlText);
+  const rowNodes = Array.from(xml.getElementsByTagName("row"));
+  const rows: string[][] = [];
 
-  return Array.from(xml.getElementsByTagName("row")).map((row) => {
+  for (let rowIndex = 0; rowIndex < rowNodes.length; rowIndex += 1) {
+    if (rowIndex > 0 && rowIndex % 500 === 0) {
+      await yieldToMainThread();
+    }
+
+    const row = rowNodes[rowIndex];
     const cells: string[] = [];
 
     Array.from(row.getElementsByTagName("c")).forEach((cell) => {
@@ -995,8 +1054,10 @@ const parseWorksheetRows = (xmlText: string, sharedStrings: string[]) => {
       }
     });
 
-    return cells.map((cell) => cell ?? "");
-  });
+    rows.push(cells.map((cell) => cell ?? ""));
+  }
+
+  return rows;
 };
 
 export const parseBrokerOperationsXlsx = async (
@@ -1025,24 +1086,9 @@ export const parseBrokerOperationsXlsx = async (
     };
   }
 
-  const results: BrokerImportParseResult[] = [];
+  const firstWorksheetEntry = await getFirstWorksheetEntry(bytes, entriesByName, worksheetEntries);
 
-  for (const entry of worksheetEntries) {
-    const worksheetText = await readZipTextEntry(bytes, entriesByName, entry.name);
-
-    if (!worksheetText) {
-      continue;
-    }
-
-    const rows = parseWorksheetRows(worksheetText, sharedStrings);
-    const result = parseBrokerOperationRows(rows, warnings);
-
-    if (result.operations.length > 0 || result.skippedRows.length > 0) {
-      results.push(result);
-    }
-  }
-
-  if (results.length === 0) {
+  if (!firstWorksheetEntry) {
     return {
       operations: [],
       skippedRows: [{ rowNumber: 1, reason: "Nie znaleziono tabeli operacji w XLSX." }],
@@ -1050,14 +1096,23 @@ export const parseBrokerOperationsXlsx = async (
     };
   }
 
-  const operations = results.flatMap((result) => result.operations);
-  const skippedRows = results.flatMap((result) => result.skippedRows);
+  await yieldToMainThread();
 
-  return {
-    operations,
-    skippedRows,
-    warnings,
-  };
+  const worksheetText = await readZipTextEntry(bytes, entriesByName, firstWorksheetEntry.name);
+
+  if (!worksheetText) {
+    return {
+      operations: [],
+      skippedRows: [{ rowNumber: 1, reason: "Nie udalo sie odczytac pierwszego arkusza XLSX." }],
+      warnings,
+    };
+  }
+
+  const rows = await parseWorksheetRows(worksheetText, sharedStrings);
+
+  await yieldToMainThread();
+
+  return parseBrokerOperationRows(rows, warnings);
 };
 
 export const parseBrokerOperationsPdf = async (

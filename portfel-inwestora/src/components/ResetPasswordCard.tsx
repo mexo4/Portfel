@@ -1,8 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { resetPassword } from "@/lib/api";
+import PasswordField from "@/components/PasswordField";
 
 type ResetPasswordCardProps = {
   token: string;
@@ -14,6 +15,8 @@ export default function ResetPasswordCard({ token }: ResetPasswordCardProps) {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const passwordRef = useRef<HTMLInputElement | null>(null);
+  const confirmPasswordRef = useRef<HTMLInputElement | null>(null);
 
   const handleSubmit = async () => {
     if (!token.trim()) {
@@ -23,11 +26,13 @@ export default function ResetPasswordCard({ token }: ResetPasswordCardProps) {
 
     if (password.length < 8) {
       setError("Nowe haslo musi miec co najmniej 8 znakow.");
+      passwordRef.current?.focus();
       return;
     }
 
     if (password !== confirmPassword) {
       setError("Hasla musza byc identyczne.");
+      confirmPasswordRef.current?.focus();
       return;
     }
 
@@ -58,25 +63,23 @@ export default function ResetPasswordCard({ token }: ResetPasswordCardProps) {
           </p>
 
           <div className="auth-form mt-6">
-            <label className="field">
-              <span>Nowe haslo</span>
-              <input
-                type="password"
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-                placeholder="Minimum 8 znakow"
-              />
-            </label>
+            <PasswordField
+              label="Nowe haslo"
+              value={password}
+              inputRef={passwordRef}
+              autoComplete="new-password"
+              onChange={setPassword}
+              placeholder="Minimum 8 znakow"
+            />
 
-            <label className="field">
-              <span>Powtorz haslo</span>
-              <input
-                type="password"
-                value={confirmPassword}
-                onChange={(event) => setConfirmPassword(event.target.value)}
-                placeholder="Wpisz to samo haslo jeszcze raz"
-              />
-            </label>
+            <PasswordField
+              label="Powtorz haslo"
+              value={confirmPassword}
+              inputRef={confirmPasswordRef}
+              autoComplete="new-password"
+              onChange={setConfirmPassword}
+              placeholder="Wpisz to samo haslo jeszcze raz"
+            />
 
             {success ? <p className="field-note">{success}</p> : null}
             {error ? <p className="field-note field-note-error">{error}</p> : null}

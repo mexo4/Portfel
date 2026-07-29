@@ -9,8 +9,10 @@ import type {
   BondRedemptionQuote,
   BondSwapQuote,
   FxRates,
+  CashHistoryEntry,
   PortfolioAsset,
   PortfolioBook,
+  PortfolioDividend,
   PortfolioEngineSnapshot,
   PortfolioOperation,
   InvestmentPortfolio,
@@ -316,6 +318,83 @@ export const appendPortfolioOperation = async (
   });
 };
 
+export const fetchPortfolioDividends = async (portfolioId?: string) => {
+  const params = new URLSearchParams();
+
+  if (portfolioId) {
+    params.set("portfolioId", portfolioId);
+  }
+
+  return requestJson<{
+    portfolioId: string;
+    dividends: PortfolioDividend[];
+  }>(`/api/portfolio/v2/dividends${params.size > 0 ? `?${params.toString()}` : ""}`);
+};
+
+export const createPortfolioDividend = async (
+  dividend: Partial<PortfolioDividend>,
+  portfolioId?: string
+) => {
+  return requestJson<{
+    dividend: PortfolioDividend;
+    portfolios: InvestmentPortfolio[];
+    activePortfolioId: string;
+  }>("/api/portfolio/v2/dividends", {
+    method: "POST",
+    body: JSON.stringify({ ...dividend, portfolioId }),
+  });
+};
+
+export const updatePortfolioDividend = async (
+  dividendId: string,
+  dividend: Partial<PortfolioDividend>,
+  portfolioId?: string
+) => {
+  return requestJson<{
+    dividend: PortfolioDividend;
+    portfolios: InvestmentPortfolio[];
+    activePortfolioId: string;
+  }>(`/api/portfolio/v2/dividends/${encodeURIComponent(dividendId)}`, {
+    method: "PUT",
+    body: JSON.stringify({ ...dividend, portfolioId }),
+  });
+};
+
+export const deletePortfolioDividend = async (
+  dividendId: string,
+  portfolioId?: string
+) => {
+  const params = new URLSearchParams();
+
+  if (portfolioId) {
+    params.set("portfolioId", portfolioId);
+  }
+
+  return requestJson<{
+    success: boolean;
+    portfolios: InvestmentPortfolio[];
+    activePortfolioId: string;
+  }>(
+    `/api/portfolio/v2/dividends/${encodeURIComponent(dividendId)}${
+      params.size > 0 ? `?${params.toString()}` : ""
+    }`,
+    { method: "DELETE" }
+  );
+};
+
+export const fetchCashHistory = async (portfolioId?: string) => {
+  const params = new URLSearchParams();
+
+  if (portfolioId) {
+    params.set("portfolioId", portfolioId);
+  }
+
+  return requestJson<{
+    portfolioId: string;
+    history: CashHistoryEntry[];
+  }>(`/api/portfolio/v2/cash-history${params.size > 0 ? `?${params.toString()}` : ""}`);
+};
+
 export const loginUser = async (payload: { email: string; password: string }) => {
   return requestJson<{ user: AuthenticatedUser }>("/api/auth/login", {
     method: "POST",
@@ -374,6 +453,16 @@ export const requestPasswordReset = async (email: string) => {
 
 export const resetPassword = async (payload: { token: string; password: string }) => {
   return requestJson<{ success: boolean }>("/api/auth/reset-password", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+};
+
+export const changePassword = async (payload: {
+  currentPassword: string;
+  newPassword: string;
+}) => {
+  return requestJson<{ success: boolean }>("/api/auth/change-password", {
     method: "POST",
     body: JSON.stringify(payload),
   });

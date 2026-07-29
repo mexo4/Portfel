@@ -902,6 +902,48 @@ export const resetPasswordWithToken = async (token: string, password: string) =>
   await removeSessionsByUserId(user.id);
 };
 
+export const changeCurrentUserPassword = async ({
+  userId,
+  currentPassword,
+  newPassword,
+}: {
+  userId: string;
+  currentPassword: string;
+  newPassword: string;
+}) => {
+  const user = await getUserById(userId);
+
+  if (!user) {
+    throw new Error("Nie znaleziono konta.");
+  }
+
+  if (newPassword.length < 8) {
+    throw new Error("Nowe haslo musi miec co najmniej 8 znakow.");
+  }
+
+  const passwordMatches = await bcrypt.compare(currentPassword, user.password_hash);
+
+  if (!passwordMatches) {
+    throw new Error("Aktualne haslo jest niepoprawne.");
+  }
+
+  const passwordIsUnchanged = await bcrypt.compare(newPassword, user.password_hash);
+
+  if (passwordIsUnchanged) {
+    throw new Error("Nowe haslo musi roznic sie od aktualnego.");
+  }
+
+  const passwordHash = await bcrypt.hash(newPassword, 12);
+  const now = new Date().toISOString();
+
+  await execute(
+    "UPDATE users SET password_hash = $1, updated_at = $2 WHERE id = $3",
+    [passwordHash, now, user.id]
+  );
+
+  await purgeTokensForUser("password_reset_tokens", user.id);
+};
+
 export const logoutCurrentSession = async () => {
   const cookieStore = await cookies();
   const sessionToken = cookieStore.get(SESSION_COOKIE_NAME)?.value;

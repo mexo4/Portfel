@@ -527,6 +527,87 @@ export type PortfolioOperation = {
   updatedAt: string;
 };
 
+export type PortfolioDividend = {
+  id: string;
+  portfolioId: string;
+  accountId: string;
+  accountName: string;
+  instrumentId: string;
+  instrumentName: string;
+  symbol: string;
+  quantity: number;
+  dividendPerShare: number;
+  grossAmount: number;
+  withholdingTax: number;
+  domesticTax: number;
+  netAmount: number;
+  currency: CurrencyCode;
+  exchangeRate: number | null;
+  grossAmountPln: number;
+  netAmountPln: number;
+  exDividendDate: string;
+  recordDate: string;
+  paymentDate: string;
+  country: string;
+  notes: string;
+  operationId: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type DividendReportBucket =
+  | "monthly"
+  | "quarterly"
+  | "yearly"
+  | "company"
+  | "portfolio"
+  | "currency"
+  | "country";
+
+export type DividendReportRow = {
+  key: string;
+  label: string;
+  grossAmountPln: number;
+  netAmountPln: number;
+  taxPln: number;
+  paymentsCount: number;
+};
+
+export type DividendCalendarBucket =
+  | "today"
+  | "week"
+  | "month"
+  | "upcoming"
+  | "history";
+
+export type DividendCalendarGroup = {
+  bucket: DividendCalendarBucket;
+  label: string;
+  dividends: PortfolioDividend[];
+  grossAmountPln: number;
+  netAmountPln: number;
+};
+
+export type DividendForecast = {
+  monthlyIncomePln: number;
+  annualIncomePln: number;
+  nextPayment: PortfolioDividend | null;
+  message: string | null;
+};
+
+export type CashHistoryEntry = {
+  id: string;
+  operationId: string;
+  date: string;
+  operationType: OperationType;
+  accountId: string;
+  accountName: string;
+  amount: number;
+  currency: CurrencyCode;
+  balanceAfter: number;
+  notes: string;
+};
+
 export type PortfolioTag = {
   id: string;
   portfolioId: string;

@@ -2,8 +2,9 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { ApiError, loginUser, registerUser } from "@/lib/api";
+import PasswordField from "@/components/PasswordField";
 
 type AuthCardProps = {
   mode: "login" | "register";
@@ -34,10 +35,33 @@ export default function AuthCard({ mode, initialNotice = null }: AuthCardProps) 
   const [notice, setNotice] = useState<string | null>(initialNotice);
   const [verificationPreviewUrl, setVerificationPreviewUrl] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const displayNameRef = useRef<HTMLInputElement | null>(null);
+  const emailRef = useRef<HTMLInputElement | null>(null);
+  const passwordRef = useRef<HTMLInputElement | null>(null);
 
   const isRegister = mode === "register";
 
   const handleSubmit = async () => {
+    const normalizedEmail = email.trim();
+
+    if (isRegister && displayName.trim().length < 2) {
+      setError("Podaj nazwe uzytkownika zlozona z co najmniej 2 znakow.");
+      displayNameRef.current?.focus();
+      return;
+    }
+
+    if (!/^\S+@\S+\.\S+$/.test(normalizedEmail)) {
+      setError("Podaj poprawny adres email.");
+      emailRef.current?.focus();
+      return;
+    }
+
+    if (password.length < 8) {
+      setError("Haslo musi miec co najmniej 8 znakow.");
+      passwordRef.current?.focus();
+      return;
+    }
+
     setIsSubmitting(true);
     setError(null);
     setNotice(null);
@@ -47,7 +71,7 @@ export default function AuthCard({ mode, initialNotice = null }: AuthCardProps) 
       if (isRegister) {
         const response = await registerUser({
           displayName,
-          email,
+          email: normalizedEmail,
           password,
         });
 
@@ -60,7 +84,7 @@ export default function AuthCard({ mode, initialNotice = null }: AuthCardProps) 
         return;
       } else {
         await loginUser({
-          email,
+          email: normalizedEmail,
           password,
         });
       }
@@ -106,6 +130,7 @@ export default function AuthCard({ mode, initialNotice = null }: AuthCardProps) 
               <label className="field">
                 <span>Nazwa uzytkownika</span>
                 <input
+                  ref={displayNameRef}
                   value={displayName}
                   onChange={(event) => setDisplayName(event.target.value)}
                   placeholder="Np. Jan Kowalski"
@@ -116,6 +141,7 @@ export default function AuthCard({ mode, initialNotice = null }: AuthCardProps) 
             <label className="field">
               <span>Email</span>
               <input
+                ref={emailRef}
                 type="email"
                 value={email}
                 onChange={(event) => setEmail(event.target.value)}
@@ -123,15 +149,14 @@ export default function AuthCard({ mode, initialNotice = null }: AuthCardProps) 
               />
             </label>
 
-            <label className="field">
-              <span>Haslo</span>
-              <input
-                type="password"
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-                placeholder="Minimum 8 znakow"
-              />
-            </label>
+            <PasswordField
+              label="Haslo"
+              value={password}
+              inputRef={passwordRef}
+              autoComplete={isRegister ? "new-password" : "current-password"}
+              onChange={setPassword}
+              placeholder="Minimum 8 znakow"
+            />
 
             {!isRegister ? (
               <p className="field-note">

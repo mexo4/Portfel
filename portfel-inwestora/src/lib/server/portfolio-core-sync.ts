@@ -23,6 +23,13 @@ export const syncPortfolioCoreTables = async (
           updated_at
         )
         VALUES ($1, $2, $3, $4, $5, $6, $7)
+        ON CONFLICT (id) DO UPDATE SET
+          user_id = EXCLUDED.user_id,
+          name = EXCLUDED.name,
+          base_currency = EXCLUDED.base_currency,
+          metadata_json = EXCLUDED.metadata_json,
+          created_at = EXCLUDED.created_at,
+          updated_at = EXCLUDED.updated_at
       `,
       [
         portfolio.id,
@@ -48,6 +55,13 @@ export const syncPortfolioCoreTables = async (
             updated_at
           )
           VALUES ($1, $2, $3, $4, $5, $6, $7)
+          ON CONFLICT (id) DO UPDATE SET
+            portfolio_id = EXCLUDED.portfolio_id,
+            name = EXCLUDED.name,
+            currency = EXCLUDED.currency,
+            metadata_json = EXCLUDED.metadata_json,
+            created_at = EXCLUDED.created_at,
+            updated_at = EXCLUDED.updated_at
         `,
         [
           subPortfolio.id,
@@ -78,6 +92,17 @@ export const syncPortfolioCoreTables = async (
             updated_at
           )
           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+          ON CONFLICT (id) DO UPDATE SET
+            portfolio_id = EXCLUDED.portfolio_id,
+            parent_account_id = EXCLUDED.parent_account_id,
+            name = EXCLUDED.name,
+            kind = EXCLUDED.kind,
+            broker = EXCLUDED.broker,
+            currency = EXCLUDED.currency,
+            is_default = EXCLUDED.is_default,
+            metadata_json = EXCLUDED.metadata_json,
+            created_at = EXCLUDED.created_at,
+            updated_at = EXCLUDED.updated_at
         `,
         [
           account.id,
@@ -115,6 +140,20 @@ export const syncPortfolioCoreTables = async (
             updated_at
           )
           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+          ON CONFLICT (id) DO UPDATE SET
+            portfolio_id = EXCLUDED.portfolio_id,
+            type = EXCLUDED.type,
+            asset_kind = EXCLUDED.asset_kind,
+            symbol = EXCLUDED.symbol,
+            name = EXCLUDED.name,
+            market_currency = EXCLUDED.market_currency,
+            provider = EXCLUDED.provider,
+            provider_id = EXCLUDED.provider_id,
+            isin = EXCLUDED.isin,
+            price_scale = EXCLUDED.price_scale,
+            metadata_json = EXCLUDED.metadata_json,
+            created_at = EXCLUDED.created_at,
+            updated_at = EXCLUDED.updated_at
         `,
         [
           instrument.id,
@@ -158,6 +197,23 @@ export const syncPortfolioCoreTables = async (
             updated_at
           )
           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+          ON CONFLICT (id) DO UPDATE SET
+            portfolio_id = EXCLUDED.portfolio_id,
+            account_id = EXCLUDED.account_id,
+            asset_id = EXCLUDED.asset_id,
+            operation_type = EXCLUDED.operation_type,
+            quantity = EXCLUDED.quantity,
+            price = EXCLUDED.price,
+            currency = EXCLUDED.currency,
+            exchange_rate = EXCLUDED.exchange_rate,
+            fee = EXCLUDED.fee,
+            tax = EXCLUDED.tax,
+            amount = EXCLUDED.amount,
+            date = EXCLUDED.date,
+            notes = EXCLUDED.notes,
+            metadata_json = EXCLUDED.metadata_json,
+            created_at = EXCLUDED.created_at,
+            updated_at = EXCLUDED.updated_at
         `,
         [
           operation.id,
@@ -193,6 +249,12 @@ export const syncPortfolioCoreTables = async (
             updated_at
           )
           VALUES ($1, $2, $3, $4, $5, $6)
+          ON CONFLICT (id) DO UPDATE SET
+            portfolio_id = EXCLUDED.portfolio_id,
+            name = EXCLUDED.name,
+            color = EXCLUDED.color,
+            created_at = EXCLUDED.created_at,
+            updated_at = EXCLUDED.updated_at
         `,
         [tag.id, portfolio.id, tag.name, tag.color, tag.createdAt, tag.updatedAt]
       );
@@ -210,6 +272,12 @@ export const syncPortfolioCoreTables = async (
             created_at
           )
           VALUES ($1, $2, $3, $4, $5, $6)
+          ON CONFLICT (id) DO UPDATE SET
+            portfolio_id = EXCLUDED.portfolio_id,
+            tag_id = EXCLUDED.tag_id,
+            target_type = EXCLUDED.target_type,
+            target_id = EXCLUDED.target_id,
+            created_at = EXCLUDED.created_at
         `,
         [
           assignment.id,
@@ -242,6 +310,18 @@ export const syncPortfolioCoreTables = async (
             updated_at
           )
           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+          ON CONFLICT (id) DO UPDATE SET
+            portfolio_id = EXCLUDED.portfolio_id,
+            name = EXCLUDED.name,
+            symbol = EXCLUDED.symbol,
+            kind = EXCLUDED.kind,
+            market_currency = EXCLUDED.market_currency,
+            provider = EXCLUDED.provider,
+            provider_id = EXCLUDED.provider_id,
+            price_scale = EXCLUDED.price_scale,
+            metadata_json = EXCLUDED.metadata_json,
+            created_at = EXCLUDED.created_at,
+            updated_at = EXCLUDED.updated_at
         `,
         [
           benchmark.id,

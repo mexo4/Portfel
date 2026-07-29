@@ -8,6 +8,8 @@ import AssetModeSelector from "@/components/AssetModeSelector";
 import AppSectionTabs, { type AppSection } from "@/components/AppSectionTabs";
 import AssetTable from "@/components/AssetTable";
 import BrokerImportPanel from "@/components/BrokerImportPanel";
+import ChangePasswordPanel from "@/components/ChangePasswordPanel";
+import DividendCashWorkspace from "@/components/DividendCashWorkspace";
 import PortfolioCharts from "@/components/PortfolioCharts";
 import PortfolioLineCharts from "@/components/PortfolioLineCharts";
 import RealizedAdjustmentsPanel from "@/components/RealizedAdjustmentsPanel";
@@ -52,6 +54,14 @@ import {
   getPortfolioSummary,
 } from "@/lib/pricing";
 import {
+  calculateCashBalances,
+  ensurePortfolioCoreModel,
+} from "@/lib/operation-engine";
+import {
+  buildDividendForecast,
+  getPortfolioDividends,
+} from "@/lib/dividend-engine";
+import {
   getMinimumSearchLength,
   getModeConfig,
   pickBestSearchResult,
@@ -92,6 +102,7 @@ import type {
   FxRates,
   InvestmentPortfolio,
   PortfolioAsset,
+  PortfolioOperation,
   PortfolioRealizedAdjustment,
   PortfolioSale,
   RealizedAdjustmentDraft,
@@ -403,6 +414,73 @@ export default function PortfolioApp({
       : null;
   const activePortfolio =
     portfolios.find((portfolio) => portfolio.id === activePortfolioId) ?? portfolios[0];
+  const activePortfolioForEngine = useMemo(
+    () =>
+      activePortfolio
+        ? ensurePortfolioCoreModel({
+            ...activePortfolio,
+            assets,
+            sales,
+            realizedAdjustments,
+          })
+        : null,
+    [activePortfolio, assets, realizedAdjustments, sales]
+  );
+  const activePortfolioDividends = useMemo(
+    () =>
+      activePortfolioForEngine
+        ? getPortfolioDividends(activePortfolioForEngine, fxRates)
+        : [],
+    [activePortfolioForEngine, fxRates]
+  );
+  const activeDividendForecast = useMemo(
+    () => buildDividendForecast(activePortfolioDividends),
+    [activePortfolioDividends]
+  );
+  const activeCashBalancePln = useMemo(
+    () =>
+      activePortfolioForEngine
+        ? calculateCashBalances(activePortfolioForEngine.operations ?? []).reduce(
+            (total, balance) =>
+              total + balance.amount * (fxRates[balance.currency] ?? 1),
+            0
+          )
+        : 0,
+    [activePortfolioForEngine, fxRates]
+  );
+  const activeDividendYtdPln = useMemo(() => {
+    const year = getTodayDateInputValue().slice(0, 4);
+
+    return activePortfolioDividends
+      .filter((dividend) => dividend.paymentDate.slice(0, 4) === year)
+      .reduce((total, dividend) => total + dividend.netAmountPln, 0);
+  }, [activePortfolioDividends]);
+  const activeDividendMonthPln = useMemo(() => {
+    const month = getTodayDateInputValue().slice(0, 7);
+
+    return activePortfolioDividends
+      .filter((dividend) => dividend.paymentDate.slice(0, 7) === month)
+      .reduce((total, dividend) => total + dividend.netAmountPln, 0);
+  }, [activePortfolioDividends]);
+
+  const handleActivePortfolioOperationsChange = useCallback(
+    (operations: PortfolioOperation[]) => {
+      const now = new Date().toISOString();
+      setSyncError(null);
+      setPortfolios((currentPortfolios) =>
+        currentPortfolios.map((portfolio) =>
+          portfolio.id === activePortfolioId
+            ? {
+                ...portfolio,
+                operations,
+                updatedAt: now,
+              }
+            : portfolio
+        )
+      );
+    },
+    [activePortfolioId]
+  );
 
   const commitActivePortfolioSnapshot = useCallback(
     (portfolioList: InvestmentPortfolio[]) => {
@@ -2267,6 +2345,33 @@ export default function PortfolioApp({
             </article>
           </div>
 
+          <div className="portfolio-hub-total portfolio-hub-total-income mt-3">
+            <article>
+              <span>Saldo gotowki</span>
+              <strong>{formatCurrency(activeCashBalancePln)}</strong>
+            </article>
+            <article>
+              <span>Dywidendy YTD</span>
+              <strong>{formatCurrency(activeDividendYtdPln)}</strong>
+            </article>
+            <article>
+              <span>Dywidendy w tym miesiacu</span>
+              <strong>{formatCurrency(activeDividendMonthPln)}</strong>
+            </article>
+            <article>
+              <span>Roczny dochod z dywidend</span>
+              <strong>{formatCurrency(activeDividendForecast.annualIncomePln)}</strong>
+            </article>
+            <article>
+              <span>Najblizsza wyplata</span>
+              <strong>
+                {activeDividendForecast.nextPayment
+                  ? activeDividendForecast.nextPayment.symbol
+                  : "Brak"}
+              </strong>
+            </article>
+          </div>
+
           <div className="portfolio-card-grid mt-5">
             {portfolioSummaries.map(({ portfolio, summary: portfolioSummary }) => {
               const isActive = portfolio.id === activePortfolioId;
@@ -2471,7 +2576,18 @@ export default function PortfolioApp({
               canUndoSale={(saleId) => canUndoPortfolioSale(sales, saleId)}
               onUndoSale={handleUndoSale}
             />
+
+            <ChangePasswordPanel />
           </>
+        ) : activeSection === "dividends" || activeSection === "cash" ? (
+          activePortfolioForEngine ? (
+            <DividendCashWorkspace
+              activeView={activeSection}
+              portfolio={activePortfolioForEngine}
+              fxRates={fxRates}
+              onOperationsChange={handleActivePortfolioOperationsChange}
+            />
+          ) : null
         ) : activeSection === "charts" ? (
           <>
             {summaryPanel}

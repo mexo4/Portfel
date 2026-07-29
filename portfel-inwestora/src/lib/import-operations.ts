@@ -801,6 +801,12 @@ type ZipEntry = {
   localHeaderOffset: number;
 };
 
+type WorkbookWorksheetEntry = {
+  entry: ZipEntry;
+  order: number;
+  sheetName: string;
+};
+
 const textDecoder = new TextDecoder("utf-8", { fatal: false });
 
 const toArrayBuffer = (bytes: Uint8Array) =>
@@ -966,11 +972,16 @@ const normalizeWorkbookRelationshipTarget = (target: string) => {
   return `xl/${normalizedTarget}`;
 };
 
-const getFirstWorksheetEntry = async (
+const getWorkbookWorksheetEntries = async (
   bytes: Uint8Array,
   entriesByName: Map<string, ZipEntry>,
   worksheetEntries: ZipEntry[]
 ) => {
+  const fallbackEntries = worksheetEntries.map((entry, index) => ({
+    entry,
+    order: index,
+    sheetName: entry.name,
+  }));
   const workbookText = await readZipTextEntry(bytes, entriesByName, "xl/workbook.xml");
   const workbookRelsText = await readZipTextEntry(
     bytes,
@@ -979,26 +990,53 @@ const getFirstWorksheetEntry = async (
   );
 
   if (!workbookText || !workbookRelsText) {
-    return worksheetEntries[0] ?? null;
+    return fallbackEntries;
   }
 
   const workbookXml = parseXml(workbookText);
   const relsXml = parseXml(workbookRelsText);
-  const firstSheet = Array.from(workbookXml.getElementsByTagName("sheet"))[0];
-  const relationshipId =
-    firstSheet?.getAttribute("r:id") ?? firstSheet?.getAttribute("id") ?? "";
+  const relationships = Array.from(relsXml.getElementsByTagName("Relationship"));
+  const seenEntryNames = new Set<string>();
+  const workbookEntries = Array.from(workbookXml.getElementsByTagName("sheet"))
+    .map((sheet, order) => {
+      const relationshipId = sheet.getAttribute("r:id") ?? sheet.getAttribute("id") ?? "";
 
-  if (!relationshipId) {
-    return worksheetEntries[0] ?? null;
-  }
+      if (!relationshipId) {
+        return null;
+      }
 
-  const relationship = Array.from(relsXml.getElementsByTagName("Relationship")).find(
-    (item) => item.getAttribute("Id") === relationshipId
-  );
-  const target = relationship?.getAttribute("Target") ?? "";
-  const targetEntryName = target ? normalizeWorkbookRelationshipTarget(target) : "";
+      const relationship = relationships.find(
+        (item) => item.getAttribute("Id") === relationshipId
+      );
+      const target = relationship?.getAttribute("Target") ?? "";
+      const targetEntryName = target ? normalizeWorkbookRelationshipTarget(target) : "";
+      const entry = entriesByName.get(targetEntryName);
 
-  return entriesByName.get(targetEntryName) ?? worksheetEntries[0] ?? null;
+      if (!entry) {
+        return null;
+      }
+
+      seenEntryNames.add(entry.name);
+
+      return {
+        entry,
+        order,
+        sheetName: sheet.getAttribute("name") ?? entry.name,
+      } satisfies WorkbookWorksheetEntry;
+    })
+    .filter((item): item is WorkbookWorksheetEntry => Boolean(item));
+
+  worksheetEntries.forEach((entry, index) => {
+    if (!seenEntryNames.has(entry.name)) {
+      workbookEntries.push({
+        entry,
+        order: workbookEntries.length + index,
+        sheetName: entry.name,
+      });
+    }
+  });
+
+  return workbookEntries.length > 0 ? workbookEntries : fallbackEntries;
 };
 
 const getColumnIndex = (cellRef: string) => {
@@ -1060,6 +1098,176 @@ const parseWorksheetRows = async (xmlText: string, sharedStrings: string[]) => {
   return rows;
 };
 
+const getHeaderIndexes = (row: string[], requiredHeaders: string[]) => {
+  const normalizedRow = row.map(normalizeHeader);
+  const indexes = new Map<string, number>();
+
+  for (const header of requiredHeaders) {
+    const normalizedHeader = normalizeHeader(header);
+    const index = normalizedRow.indexOf(normalizedHeader);
+
+    if (index < 0) {
+      return null;
+    }
+
+    indexes.set(normalizedHeader, index);
+  }
+
+  return indexes;
+};
+
+const findExactHeaderRow = (rows: string[][], requiredHeaders: string[]) => {
+  for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
+    const indexes = getHeaderIndexes(rows[rowIndex], requiredHeaders);
+
+    if (indexes) {
+      return {
+        indexes,
+        rowIndex,
+      };
+    }
+  }
+
+  return null;
+};
+
+const getIndexedCell = (
+  row: string[],
+  indexes: Map<string, number>,
+  header: string
+) => {
+  const index = indexes.get(normalizeHeader(header)) ?? -1;
+  return index >= 0 ? (row[index] ?? "").trim() : "";
+};
+
+const parseXtbTradeComment = (comment: string) => {
+  const match = comment.match(
+    /^(?:OPEN|CLOSE)\s+(?:BUY|SELL)\s+(.+?)\s*@\s*([-+]?\d[\d.,]*)/i
+  );
+
+  if (!match) {
+    return null;
+  }
+
+  const quantity = parseNumber(match[1].split("/")[0] ?? "");
+  const price = parseNumber(match[2]);
+
+  if (!quantity || quantity <= 0 || !price || price <= 0) {
+    return null;
+  }
+
+  return {
+    price,
+    quantity,
+  };
+};
+
+const parseXtbCashOperationRows = (
+  rows: string[][],
+  sheetName: string
+): BrokerImportParseResult | null => {
+  const header = findExactHeaderRow(rows, [
+    "ID",
+    "Type",
+    "Time",
+    "Comment",
+    "Symbol",
+    "Amount",
+  ]);
+
+  if (!header) {
+    return null;
+  }
+
+  const operations: ImportedBrokerOperation[] = [];
+  const skippedRows: BrokerImportParseResult["skippedRows"] = [];
+  let cashRows = 0;
+  let tradeRows = 0;
+
+  rows.slice(header.rowIndex + 1).forEach((row, index) => {
+    const rowNumber = header.rowIndex + index + 2;
+    const id = getIndexedCell(row, header.indexes, "ID");
+    const rawType = getIndexedCell(row, header.indexes, "Type");
+    const normalizedType = normalizeHeader(rawType);
+
+    if (!id || !rawType) {
+      return;
+    }
+
+    cashRows += 1;
+
+    if (normalizedType !== "stock purchase" && normalizedType !== "stock sale") {
+      return;
+    }
+
+    tradeRows += 1;
+
+    const rawTime = getIndexedCell(row, header.indexes, "Time");
+    const rawSymbol = getIndexedCell(row, header.indexes, "Symbol");
+    const comment = getIndexedCell(row, header.indexes, "Comment");
+    const amount = parseNumber(getIndexedCell(row, header.indexes, "Amount"));
+    const trade = parseXtbTradeComment(comment);
+    const date = parseDate(rawTime);
+
+    if (!date || !rawSymbol || !trade) {
+      skippedRows.push({
+        rowNumber,
+        reason: "Nie udalo sie odczytac daty, symbolu, ilosci albo ceny z wiersza XTB.",
+      });
+      return;
+    }
+
+    const side: BrokerOperationSide = normalizedType === "stock purchase" ? "buy" : "sell";
+    const kind = inferKind("", rawSymbol, rawSymbol);
+    const currency = inferCurrencyFromSymbol(rawSymbol, "USD");
+    const symbol = normalizeImportedSymbol(rawSymbol, kind, currency);
+    const provider = getProvider(kind, symbol, currency);
+    const serialTime = parseNumber(rawTime);
+    const sortRowNumber =
+      typeof serialTime === "number" && Number.isFinite(serialTime)
+        ? Math.round(serialTime * 1_000_000)
+        : rowNumber;
+
+    operations.push({
+      rowNumber: sortRowNumber,
+      side,
+      date,
+      symbol,
+      name: symbol,
+      kind,
+      quantity: round(trade.quantity, 6),
+      price: round(trade.price, 6),
+      currency,
+      feePln: 0,
+      transactionValue:
+        typeof amount === "number" && Number.isFinite(amount)
+          ? round(Math.abs(amount), 6)
+          : undefined,
+      provider,
+      providerId: provider === "yahoo" || provider === "eodhd" ? symbol : undefined,
+      warnings: [],
+    });
+  });
+
+  if (tradeRows === 0) {
+    return null;
+  }
+
+  const ignoredRows = Math.max(0, cashRows - tradeRows);
+
+  return {
+    operations,
+    skippedRows,
+    warnings: [
+      `XTB XLSX: odczytano arkusz "${sheetName}" jako historie operacji gotowkowych.`,
+      `XTB XLSX: rozpoznano ${tradeRows} rekordow Stock purchase/Stock sale.`,
+      ignoredRows > 0
+        ? `XTB XLSX: pominieto ${ignoredRows} rekordow gotowkowych, podatkowych, odsetkowych albo dywidendowych, bo ten importer dodaje tylko transakcje BUY/SELL.`
+        : "",
+    ].filter(Boolean),
+  };
+};
+
 export const parseBrokerOperationsXlsx = async (
   bytes: Uint8Array,
   _preset: BrokerImportPreset = "xtb"
@@ -1086,7 +1294,40 @@ export const parseBrokerOperationsXlsx = async (
     };
   }
 
-  const firstWorksheetEntry = await getFirstWorksheetEntry(bytes, entriesByName, worksheetEntries);
+  const workbookWorksheetEntries = await getWorkbookWorksheetEntries(
+    bytes,
+    entriesByName,
+    worksheetEntries
+  );
+  const xtbWorksheetEntries = [...workbookWorksheetEntries].sort((left, right) => {
+    const leftIsCash = normalizeHeader(left.sheetName).includes("cash operation");
+    const rightIsCash = normalizeHeader(right.sheetName).includes("cash operation");
+
+    if (leftIsCash !== rightIsCash) {
+      return leftIsCash ? -1 : 1;
+    }
+
+    return left.order - right.order;
+  });
+
+  for (const worksheet of xtbWorksheetEntries) {
+    const worksheetText = await readZipTextEntry(bytes, entriesByName, worksheet.entry.name);
+
+    if (!worksheetText) {
+      continue;
+    }
+
+    const rows = await parseWorksheetRows(worksheetText, sharedStrings);
+    const xtbResult = parseXtbCashOperationRows(rows, worksheet.sheetName);
+
+    if (xtbResult) {
+      return xtbResult;
+    }
+
+    await yieldToMainThread();
+  }
+
+  const firstWorksheetEntry = workbookWorksheetEntries[0]?.entry ?? worksheetEntries[0];
 
   if (!firstWorksheetEntry) {
     return {

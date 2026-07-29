@@ -1,0 +1,8 @@
+⨯ Unable to acquire lock at C:\Users\2029n\Downloads\ps3dprint\views\templates\hook\Portfel\portfel-inwestora\.next\dev\lock, is another instance of next dev running?
+npm error Lifecycle script `dev` failed with error:
+npm error code 1
+npm error path C:\Users\2029n\Downloads\ps3dprint\views\templates\hook\Portfel\portfel-inwestora
+npm error workspace portfel-inwestora@0.1.0
+npm error location C:\Users\2029n\Downloads\ps3dprint\views\templates\hook\Portfel\portfel-inwestora
+npm error command failed
+npm error command C:\WINDOWS\system32\cmd.exe /d /s /c next dev --webpack --port 3001

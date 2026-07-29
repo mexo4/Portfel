@@ -1663,6 +1663,42 @@ select {
   align-items: start;
 }
 
+.dividend-workspace-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.dividend-entry-panel .sprint-form-grid {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+.dividend-entry-panel .dividend-form-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.dividend-entry-panel .dividend-preview,
+.dividend-summary-panel .dividend-forecast {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.dividend-summary-panel .metric-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.dividend-summary-panel .report-row {
+  grid-template-columns: minmax(180px, 1fr) minmax(140px, auto) minmax(280px, 1.15fr);
+  border: 1px solid rgba(20, 35, 48, 0.08);
+  border-radius: 8px;
+  padding: 11px 12px;
+  background: rgba(255, 255, 255, 0.62);
+}
+
+.dividend-summary-panel .report-row em {
+  justify-self: end;
+  color: var(--muted);
+  font-style: normal;
+  text-align: right;
+}
+
 .sprint-wide-panel {
   grid-column: 1 / -1;
 }
@@ -1687,6 +1723,70 @@ select {
 
 .cash-note-field {
   grid-column: span 2;
+}
+
+.wealth-workspace {
+  display: grid;
+  gap: 20px;
+}
+
+.wealth-summary-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.wealth-form-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.wealth-list {
+  display: grid;
+  gap: 12px;
+}
+
+.wealth-item-card {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: minmax(0, 1.2fr) minmax(280px, 1fr) auto;
+  align-items: start;
+  border: 1px solid rgba(20, 35, 48, 0.08);
+  border-radius: 8px;
+  padding: 16px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.wealth-item-card h3 {
+  margin-top: 10px;
+  color: var(--text);
+  font-size: 1rem;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.wealth-item-values {
+  display: grid;
+  gap: 8px 14px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.wealth-item-values strong {
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.wealth-description {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.wealth-item-card .sprint-inline-actions {
+  justify-content: flex-end;
 }
 
 .sprint-action-row,
@@ -2708,12 +2808,22 @@ select {
   }
 
   .sprint-form-grid,
-  .cash-form-grid {
+  .cash-form-grid,
+  .wealth-form-grid,
+  .wealth-summary-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .cash-note-field {
     grid-column: 1 / -1;
+  }
+
+  .wealth-item-card {
+    grid-template-columns: 1fr;
+  }
+
+  .wealth-item-card .sprint-inline-actions {
+    justify-content: flex-start;
   }
 
   .lot-grid {
@@ -2727,7 +2837,10 @@ select {
   }
 
   .sprint-form-grid,
-  .cash-form-grid {
+  .cash-form-grid,
+  .wealth-form-grid,
+  .wealth-summary-grid,
+  .wealth-item-values {
     grid-template-columns: 1fr;
   }
 
@@ -2742,11 +2855,50 @@ select {
 
 @media (max-width: 767px) {
   .sprint-form-grid,
-  .cash-form-grid {
+  .cash-form-grid,
+  .wealth-form-grid,
+  .wealth-summary-grid,
+  .wealth-item-values {
     grid-template-columns: 1fr;
   }
 
   .cash-note-field {
     grid-column: auto;
+  }
+}
+
+@media (max-width: 1024px) {
+  .dividend-entry-panel .sprint-form-grid,
+  .dividend-entry-panel .dividend-form-grid,
+  .dividend-summary-panel .metric-grid,
+  .dividend-summary-panel .dividend-forecast {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .dividend-summary-panel .report-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .dividend-summary-panel .report-row em {
+    grid-column: 1 / -1;
+    justify-self: start;
+    text-align: left;
+  }
+}
+
+@media (max-width: 639px) {
+  .dividend-entry-panel .sprint-form-grid,
+  .dividend-entry-panel .dividend-form-grid,
+  .dividend-entry-panel .dividend-preview,
+  .dividend-summary-panel .metric-grid,
+  .dividend-summary-panel .dividend-forecast,
+  .dividend-summary-panel .report-row {
+    grid-template-columns: 1fr;
+  }
+
+  .dividend-summary-panel .report-row strong,
+  .dividend-summary-panel .report-row em {
+    justify-self: start;
+    text-align: left;
   }
 }

@@ -16,6 +16,7 @@ import RealizedAdjustmentsPanel from "@/components/RealizedAdjustmentsPanel";
 import PortfolioSummary from "@/components/PortfolioSummary";
 import SalesHistoryPanel from "@/components/SalesHistoryPanel";
 import TreasuryBondForm from "@/components/TreasuryBondForm";
+import WealthWorkspace from "@/components/WealthWorkspace";
 import {
   AUTO_REFRESH_INTERVAL_MS,
   FALLBACK_FX_RATES,
@@ -32,6 +33,7 @@ import {
   refreshPortfolioQuotes,
   requestEmailVerification,
   savePortfolioState,
+  saveUserProfile,
   searchAssets,
 } from "@/lib/api";
 import {
@@ -109,6 +111,8 @@ import type {
   TreasuryBondDraft,
   TreasuryBondQuote,
   TreasuryBondSeries,
+  UserProfile,
+  WealthItem,
 } from "@/types/portfolio";
 import type { ImportedBrokerOperation } from "@/lib/import-operations";
 
@@ -120,6 +124,7 @@ type PortfolioAppProps = {
   initialRealizedAdjustments: PortfolioRealizedAdjustment[];
   initialPortfolios?: InvestmentPortfolio[];
   initialActivePortfolioId?: string;
+  initialProfile: UserProfile;
 };
 
 type PortfolioWorkspaceState = {
@@ -232,7 +237,8 @@ const getTrackedCurrencies = (
   assets: PortfolioAsset[],
   portfolios: InvestmentPortfolio[],
   draft: AssetDraft,
-  realizedAdjustmentDraft: RealizedAdjustmentDraft
+  realizedAdjustmentDraft: RealizedAdjustmentDraft,
+  wealthItems: WealthItem[]
 ) =>
   Array.from(
     new Set(
@@ -248,6 +254,7 @@ const getTrackedCurrencies = (
         ...portfolios.flatMap((portfolio) =>
           portfolio.realizedAdjustments.map((adjustment) => adjustment.currency)
         ),
+        ...wealthItems.map((item) => item.currency),
       ]
         .map((code) => toCurrencyCode(code))
         .filter(Boolean)
@@ -293,6 +300,7 @@ export default function PortfolioApp({
   initialRealizedAdjustments,
   initialPortfolios,
   initialActivePortfolioId,
+  initialProfile,
 }: PortfolioAppProps) {
   const router = useRouter();
   const initialPortfolioBook = useMemo(
@@ -327,6 +335,7 @@ export default function PortfolioApp({
   });
   const isSwitchingPortfolioRef = useRef(false);
   const hasSavedAssetsRef = useRef(false);
+  const hasSavedProfileRef = useRef(false);
   const quoteRefreshSeqRef = useRef(0);
   const quoteRequestSeqRef = useRef(0);
   const lastPreviewRequestKeyRef = useRef("");
@@ -335,6 +344,7 @@ export default function PortfolioApp({
   const [portfolios, setPortfolios] = useState<InvestmentPortfolio[]>(
     () => initialPortfolioBook.portfolios
   );
+  const [profile, setProfile] = useState<UserProfile>(() => initialProfile);
   const [activePortfolioId, setActivePortfolioId] = useState(
     initialPortfolioBook.activePortfolioId
   );
@@ -387,8 +397,15 @@ export default function PortfolioApp({
     useState<RealizedAdjustmentDraft>(() => createEmptyRealizedAdjustmentDraft());
   const [realizedAdjustmentError, setRealizedAdjustmentError] = useState<string | null>(null);
   const trackedCurrencies = useMemo(
-    () => getTrackedCurrencies(assets, portfolios, draft, realizedAdjustmentDraft),
-    [assets, draft, portfolios, realizedAdjustmentDraft]
+    () =>
+      getTrackedCurrencies(
+        assets,
+        portfolios,
+        draft,
+        realizedAdjustmentDraft,
+        profile.wealthItems
+      ),
+    [assets, draft, portfolios, profile.wealthItems, realizedAdjustmentDraft]
   );
   const trackedCurrenciesKey = trackedCurrencies.join("|");
   const draftQuotePreviewRequest = useMemo(
@@ -886,6 +903,34 @@ export default function PortfolioApp({
       window.clearTimeout(timeoutId);
     };
   }, [activePortfolioId, portfolios]);
+
+  useEffect(() => {
+    if (!hasSavedProfileRef.current) {
+      hasSavedProfileRef.current = true;
+      return;
+    }
+
+    let isCancelled = false;
+
+    const timeoutId = window.setTimeout(async () => {
+      try {
+        await saveUserProfile(profile);
+
+        if (!isCancelled) {
+          setSyncError(null);
+        }
+      } catch (error) {
+        if (!isCancelled) {
+          setSyncError(toErrorMessage(error, "Nie udalo sie zapisac profilu."));
+        }
+      }
+    }, SAVE_DEBOUNCE_MS);
+
+    return () => {
+      isCancelled = true;
+      window.clearTimeout(timeoutId);
+    };
+  }, [profile]);
 
   const syncFxRates = async (codes: string[]) => {
     try {
@@ -2588,6 +2633,15 @@ export default function PortfolioApp({
               onOperationsChange={handleActivePortfolioOperationsChange}
             />
           ) : null
+        ) : activeSection === "wealth" ? (
+          <>
+            {syncError ? <p className="field-note field-note-error">{syncError}</p> : null}
+            <WealthWorkspace
+              profile={profile}
+              fxRates={fxRates}
+              onChange={setProfile}
+            />
+          </>
         ) : activeSection === "charts" ? (
           <>
             {summaryPanel}

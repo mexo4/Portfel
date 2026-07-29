@@ -895,8 +895,20 @@ const getMetadataNumber = (
   key: string
 ) => (hasFiniteNumber(metadata[key]) ? metadata[key] : undefined);
 
+const hasExplicitCashImpact = (operation: PortfolioOperation) =>
+  operation.metadata.cashImpact === true ||
+  operation.metadata.kind === "cash" ||
+  operation.metadata.kind === "dividend";
+
+const isMigratedLegacyOperation = (operation: PortfolioOperation) =>
+  typeof operation.metadata.legacySource === "string";
+
 export const getOperationCashDeltas = (operation: PortfolioOperation): CashBalance[] => {
   if (operation.operationType === "SPLIT" || operation.operationType === "REVERSE_SPLIT") {
+    return [];
+  }
+
+  if (isMigratedLegacyOperation(operation) && !hasExplicitCashImpact(operation)) {
     return [];
   }
 

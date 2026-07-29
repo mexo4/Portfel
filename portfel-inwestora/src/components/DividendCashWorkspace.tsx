@@ -502,8 +502,8 @@ export default function DividendCashWorkspace({
       </section>
 
       {activeView === "dividends" ? (
-        <section className="sprint-two-grid">
-          <article className="panel">
+        <section className="sprint-two-grid dividend-workspace-grid">
+          <article className="panel sprint-wide-panel dividend-entry-panel">
             <div className="sprint-panel-head">
               <div>
                 <p className="eyebrow">Dywidendy</p>
@@ -514,7 +514,7 @@ export default function DividendCashWorkspace({
               <span className="tag">{dividends.length} wyplat</span>
             </div>
 
-            <div className="sprint-form-grid mt-6">
+            <div className="sprint-form-grid dividend-form-grid mt-6">
               <label className="field">
                 <span>Instrument</span>
                 <select
@@ -738,7 +738,7 @@ export default function DividendCashWorkspace({
             </div>
           </article>
 
-          <article className="panel">
+          <article className="panel sprint-wide-panel dividend-summary-panel">
             <div className="sprint-panel-head">
               <div>
                 <p className="eyebrow">Raporty dywidend</p>

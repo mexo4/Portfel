@@ -699,6 +699,41 @@ export type AuthenticatedUser = {
   subscriptionStatus: SubscriptionStatus;
 };
 
+export type WealthItemKind = "asset" | "liability";
+
+export type WealthAssetCategory =
+  | "house"
+  | "apartment"
+  | "land"
+  | "car"
+  | "motorcycle"
+  | "gold"
+  | "art"
+  | "collection"
+  | "other";
+
+export type WealthLiabilityCategory =
+  | "mortgage"
+  | "car-loan"
+  | "loan"
+  | "other-liability";
+
+export type WealthCategory = WealthAssetCategory | WealthLiabilityCategory;
+
+export type WealthItem = {
+  id: string;
+  kind: WealthItemKind;
+  name: string;
+  category: WealthCategory;
+  value: number;
+  currency: CurrencyCode;
+  addedAt: string;
+  description: string;
+  annualChangePercent: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type UserProfile = {
   displayName: string;
   email: string;
@@ -707,6 +742,7 @@ export type UserProfile = {
   experienceLevel: InvestorExperience;
   monthlyContributionPln: number;
   investmentGoal: string;
+  wealthItems: WealthItem[];
   createdAt: string;
   updatedAt: string;
 };

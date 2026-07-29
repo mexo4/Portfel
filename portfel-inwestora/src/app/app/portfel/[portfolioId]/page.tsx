@@ -29,6 +29,7 @@ export default async function PortfolioPage({ params }: PortfolioPageProps) {
       initialRealizedAdjustments={accountData.realizedAdjustments}
       initialPortfolios={accountData.portfolios}
       initialActivePortfolioId={activePortfolioId}
+      initialProfile={accountData.profile}
       account={accountData.user}
       isAdmin={isAdminEmail(accountData.user.email)}
     />

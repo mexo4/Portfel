@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import {
   parseBrokerOperationsCsv,
+  parseBrokerOperationsPdf,
   type BrokerImportParseResult,
   type BrokerImportPreset,
   type ImportedBrokerOperation,
@@ -30,6 +31,9 @@ const BROKER_PRESETS: Array<{ value: BrokerImportPreset; label: string }> = [
 const formatSide = (side: ImportedBrokerOperation["side"]) =>
   side === "buy" ? "Kupno" : "Sprzedaz";
 
+const isPdfFile = (file: File) =>
+  file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+
 export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) {
   const [preset, setPreset] = useState<BrokerImportPreset>("auto");
   const [fileName, setFileName] = useState("");
@@ -53,8 +57,9 @@ export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) 
     }
 
     try {
-      const text = await file.text();
-      const result = parseBrokerOperationsCsv(text, preset);
+      const result = isPdfFile(file)
+        ? parseBrokerOperationsPdf(new Uint8Array(await file.arrayBuffer()), preset)
+        : parseBrokerOperationsCsv(await file.text(), preset);
 
       setParseResult(result);
 
@@ -62,7 +67,7 @@ export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) 
         setError("Nie znalazlem poprawnych operacji w tym pliku.");
       }
     } catch {
-      setError("Nie udalo sie odczytac pliku CSV.");
+      setError("Nie udalo sie odczytac pliku CSV/PDF.");
     }
   };
 
@@ -103,8 +108,8 @@ export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) 
         </div>
 
         <p className="section-copy">
-          Obslugiwane sa eksporty CSV z kolumnami typu data, operacja, ticker,
-          ilosc, cena, waluta i prowizja.
+          Obslugiwane sa eksporty CSV oraz tekstowe raporty PDF XTB z danymi
+          transakcji.
         </p>
       </div>
 
@@ -129,10 +134,10 @@ export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) 
         </label>
 
         <label className="field">
-          <span>Plik CSV</span>
+          <span>Plik CSV/PDF</span>
           <input
             type="file"
-            accept=".csv,text/csv"
+            accept=".csv,.pdf,text/csv,application/pdf"
             onChange={(event) => {
               void handleFileChange(event.target.files?.[0]);
             }}
@@ -155,6 +160,16 @@ export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) 
       {error ? <p className="field-note field-note-error mt-4">{error}</p> : null}
       {success ? <p className="field-note mt-4">{success}</p> : null}
 
+      {parseResult?.warnings?.length ? (
+        <div className="import-warning-list mt-4">
+          {parseResult.warnings.map((warning) => (
+            <p key={warning} className="field-note">
+              {warning}
+            </p>
+          ))}
+        </div>
+      ) : null}
+
       {parseResult ? (
         <div className="import-summary mt-5">
           <span>Rozpoznane operacje: {parseResult.operations.length}</span>
@@ -172,6 +187,7 @@ export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) 
                 <th>Ticker</th>
                 <th>Ilosc</th>
                 <th>Cena</th>
+                <th>Wartosc</th>
                 <th>Waluta</th>
               </tr>
             </thead>
@@ -183,6 +199,7 @@ export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) 
                   <td>{operation.symbol}</td>
                   <td>{operation.quantity}</td>
                   <td>{operation.price}</td>
+                  <td>{operation.transactionValue ?? "-"}</td>
                   <td>{operation.currency}</td>
                 </tr>
               ))}

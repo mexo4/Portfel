@@ -6,9 +6,13 @@ import {
   parseBrokerOperationsPdf,
   parseBrokerOperationsXlsx,
   type BrokerImportParseResult,
-  type BrokerImportPreset,
   type ImportedBrokerOperation,
 } from "@/lib/import-operations";
+import ImportPlatformPicker, {
+  DEFAULT_IMPORT_PLATFORM_ID,
+  getImportPlatformById,
+  type ImportPlatformDefinition,
+} from "@/components/ImportPlatformPicker";
 
 type BrokerImportPanelProps = {
   onImport: (operations: ImportedBrokerOperation[]) => Promise<{
@@ -17,17 +21,6 @@ type BrokerImportPanelProps = {
     skippedSells: number;
   }>;
 };
-
-const BROKER_PRESETS: Array<{ value: BrokerImportPreset; label: string }> = [
-  { value: "auto", label: "Auto" },
-  { value: "xtb", label: "XTB" },
-  { value: "degiro", label: "DEGIRO" },
-  { value: "ibkr", label: "IBKR" },
-  { value: "mbank", label: "mBank" },
-  { value: "etoro", label: "eToro" },
-  { value: "trading212", label: "Trading 212" },
-  { value: "generic", label: "CSV uniwersalny" },
-];
 
 const formatSide = (side: ImportedBrokerOperation["side"]) =>
   side === "buy" ? "Kupno" : "Sprzedaz";
@@ -46,7 +39,9 @@ const waitForPaint = () =>
 
 export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const [preset, setPreset] = useState<BrokerImportPreset>("auto");
+  const [selectedPlatformId, setSelectedPlatformId] = useState(
+    DEFAULT_IMPORT_PLATFORM_ID
+  );
   const [fileName, setFileName] = useState("");
   const [parseResult, setParseResult] = useState<BrokerImportParseResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -58,6 +53,14 @@ export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) 
     () => parseResult?.operations.slice(0, 6) ?? [],
     [parseResult]
   );
+  const preset = getImportPlatformById(selectedPlatformId).preset;
+
+  const handlePlatformSelect = (platform: ImportPlatformDefinition) => {
+    setSelectedPlatformId(platform.id);
+    setParseResult(null);
+    setSuccess(null);
+    setError(null);
+  };
 
   const handleFileChange = useCallback(async (file: File | undefined) => {
     setError(null);
@@ -185,24 +188,10 @@ export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) 
       </div>
 
       <div className="import-grid mt-6">
-        <label className="field">
-          <span>Platforma</span>
-          <select
-            value={preset}
-            onChange={(event) => {
-              setPreset(event.target.value as BrokerImportPreset);
-              setParseResult(null);
-              setSuccess(null);
-              setError(null);
-            }}
-          >
-            {BROKER_PRESETS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </label>
+        <ImportPlatformPicker
+          selectedPlatformId={selectedPlatformId}
+          onSelect={handlePlatformSelect}
+        />
 
         <label className="field">
           <span>Plik CSV/XLSX/PDF</span>

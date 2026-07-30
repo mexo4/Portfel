@@ -926,6 +926,10 @@ export const getOperationCashDeltas = (operation: PortfolioOperation): CashBalan
   if (operation.operationType === "TRANSFER") {
     const targetAccountId = getMetadataString(operation.metadata, "targetAccountId");
     const targetAmount = getMetadataNumber(operation.metadata, "targetAmount") ?? operation.amount;
+    const targetCurrency = toCurrencyCode(
+      getMetadataString(operation.metadata, "targetCurrency"),
+      operation.currency
+    );
 
     return [
       {
@@ -937,7 +941,7 @@ export const getOperationCashDeltas = (operation: PortfolioOperation): CashBalan
         ? [
             {
               accountId: targetAccountId,
-              currency: operation.currency,
+              currency: targetCurrency,
               amount: round(Math.abs(targetAmount), 8),
             },
           ]

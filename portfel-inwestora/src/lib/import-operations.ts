@@ -23,6 +23,11 @@ export type ImportedBrokerOperation = {
   quantity: number;
   price: number;
   currency: CurrencyCode;
+  marketCurrency?: CurrencyCode;
+  cashCurrency?: CurrencyCode;
+  cashAmount?: number;
+  marketAmount?: number;
+  declaredCurrency?: CurrencyCode;
   feePln: number;
   fee?: number;
   tax?: number;
@@ -179,7 +184,7 @@ const parseCsvLine = (line: string, delimiter: string) => {
 };
 
 const parseNumber = (value: string) => {
-  const trimmed = value.trim();
+  const trimmed = value.trim().replace(/\u2212/g, "-");
 
   if (!trimmed) return null;
 
@@ -1359,7 +1364,7 @@ const XTB_CLOSED_HEADER_ALIASES: Record<string, string[]> = {
   openTime: ["open time (utc)", "open time"],
   closePrice: ["close price"],
   closeTime: ["close time (utc)", "close time"],
-  profitLoss: ["profit/loss", "profit loss"],
+  profitLoss: ["profit/loss", "profit loss", "gross p/l", "gross pl", "p/l"],
   purchaseValue: ["purchase value"],
   saleValue: ["sale value"],
 };
@@ -1400,12 +1405,19 @@ const getMappedCell = (row: string[], header: XtbHeader, key: string) => {
 };
 
 const detectXtbAccountNumber = (rows: string[][]) => {
-  for (const row of rows.slice(0, 12)) {
-    const label = normalizeHeader(row[0] ?? "");
+  for (let rowIndex = 0; rowIndex < Math.min(rows.length, 20); rowIndex += 1) {
+    const row = rows[rowIndex];
 
-    if (label === "account number" || label === "account") {
-      const value = (row[1] ?? "").trim();
-      if (value) return value;
+    for (let cellIndex = 0; cellIndex < row.length; cellIndex += 1) {
+      const label = normalizeHeader(row[cellIndex] ?? "");
+
+      if (label === "account number" || label === "account") {
+        const rightValue = (row[cellIndex + 1] ?? "").trim();
+        const belowValue = (rows[rowIndex + 1]?.[cellIndex] ?? "").trim();
+        const value = [rightValue, belowValue].find((candidate) => /^\d{6,}$/.test(candidate));
+
+        if (value) return value;
+      }
     }
   }
 
@@ -1442,9 +1454,14 @@ const detectXtbAccountCurrency = (
     currencyVotes.set(currency, (currencyVotes.get(currency) ?? 0) + weight);
   };
 
-  rows.slice(0, 20).forEach((row) => {
+  rows.slice(0, 20).forEach((row, rowIndex) => {
     const currencyIndex = row.findIndex((cell) => normalizeHeader(cell) === "currency");
-    const currency = currencyIndex >= 0 ? row[currencyIndex + 1] : "";
+    const currency =
+      currencyIndex >= 0
+        ? [row[currencyIndex + 1], rows[rowIndex + 1]?.[currencyIndex]].find((candidate) =>
+            /\b[A-Z]{3}\b/.test(candidate ?? "")
+          ) ?? ""
+        : "";
 
     if (currency) {
       vote(toCurrencyCode(currency, fallback), 10);
@@ -1610,6 +1627,11 @@ const buildBaseXtbOperation = ({
   fee = 0,
   tax = 0,
   exchangeRate,
+  marketCurrency,
+  cashCurrency,
+  cashAmount,
+  marketAmount,
+  declaredCurrency,
   side,
 }: {
   row: XtbCashRow;
@@ -1625,12 +1647,18 @@ const buildBaseXtbOperation = ({
   fee?: number;
   tax?: number;
   exchangeRate?: number;
+  marketCurrency?: CurrencyCode;
+  cashCurrency?: CurrencyCode;
+  cashAmount?: number;
+  marketAmount?: number;
+  declaredCurrency?: CurrencyCode;
   side?: BrokerOperationSide;
 }): ImportedBrokerOperation => {
+  const identityCurrency = marketCurrency ?? currency;
   const alias = symbol ? resolveTickerAlias(symbol, kind) : null;
-  const resolvedSymbol = alias?.symbol ?? (symbol ? normalizeImportedSymbol(symbol, kind, currency) : "");
+  const resolvedSymbol = alias?.symbol ?? (symbol ? normalizeImportedSymbol(symbol, kind, identityCurrency) : "");
   const resolvedKind = alias?.kind ?? kind;
-  const resolvedCurrency = alias?.marketCurrency ?? currency;
+  const resolvedCurrency = alias?.marketCurrency ?? identityCurrency;
   const provider = alias?.provider ?? getProvider(resolvedKind, resolvedSymbol, resolvedCurrency);
   const operation: ImportedBrokerOperation = {
     rowNumber: row.rowNumber,
@@ -1643,6 +1671,11 @@ const buildBaseXtbOperation = ({
     quantity: round(Math.abs(quantity), 6),
     price: round(Math.abs(price), 6),
     currency: resolvedCurrency,
+    marketCurrency: marketCurrency ? alias?.marketCurrency ?? marketCurrency : undefined,
+    cashCurrency,
+    cashAmount: typeof cashAmount === "number" ? round(Math.abs(cashAmount), 6) : undefined,
+    marketAmount: typeof marketAmount === "number" ? round(Math.abs(marketAmount), 6) : undefined,
+    declaredCurrency,
     feePln: 0,
     fee: round(Math.abs(fee), 6),
     tax: round(Math.abs(tax), 6),
@@ -1960,6 +1993,10 @@ const parseXtbCashOperationRows = (
           currency: marketCurrency,
           amount: absoluteAmount,
           exchangeRate,
+          marketCurrency,
+          marketAmount: grossMarketValue,
+          cashCurrency: accountCurrency,
+          cashAmount: absoluteAmount,
           side,
         }),
         accountNumber,
@@ -1970,14 +2007,14 @@ const parseXtbCashOperationRows = (
 
     if (isXtbDividendType(row.normalizedType)) {
       const kind = inferKind(row.rawType, row.rawSymbol, row.instrumentName || row.rawSymbol);
-      const dividendCurrency = getXtbCommentCurrency(row.comment, accountCurrency);
+      const declaredCurrency = getXtbCommentCurrency(row.comment, accountCurrency);
       const dividendPerShare = getXtbDividendPerShare(row.comment);
       const matchingTaxRow = dividendTaxRowsByDividendId.get(row.id);
       const withholdingTax = Math.abs(matchingTaxRow?.amount ?? 0);
       const grossAmount = absoluteAmount;
       const netAmount = Math.max(0, round(grossAmount - withholdingTax, 6));
       const quantity =
-        dividendPerShare && dividendPerShare > 0
+        declaredCurrency === accountCurrency && dividendPerShare && dividendPerShare > 0
           ? round(grossAmount / dividendPerShare, 6)
           : 0;
 
@@ -1991,10 +2028,14 @@ const parseXtbCashOperationRows = (
           kind,
           quantity,
           price: dividendPerShare ?? 0,
-          currency: dividendCurrency,
-          amount: netAmount,
+          currency: accountCurrency,
+          amount: grossAmount,
           tax: withholdingTax,
-          exchangeRate: dividendCurrency === accountCurrency ? 1 : undefined,
+          exchangeRate: declaredCurrency === accountCurrency ? 1 : undefined,
+          marketCurrency: declaredCurrency,
+          cashCurrency: accountCurrency,
+          cashAmount: netAmount,
+          declaredCurrency,
         }),
         accountNumber,
         grossAmount,
@@ -2020,9 +2061,12 @@ const parseXtbCashOperationRows = (
           symbol: row.rawSymbol,
           name: row.instrumentName || row.rawSymbol || "Podatek",
           kind: inferKind(row.rawType, row.rawSymbol, row.instrumentName || row.rawSymbol),
-          currency: getXtbCommentCurrency(row.comment, accountCurrency),
+          currency: accountCurrency,
           amount: absoluteAmount,
           tax: absoluteAmount,
+          cashCurrency: accountCurrency,
+          cashAmount: absoluteAmount,
+          declaredCurrency: getXtbCommentCurrency(row.comment, accountCurrency),
         }),
         accountNumber,
       });
@@ -2216,11 +2260,28 @@ const normalizeXtbReportText = (text: string) =>
     .trim();
 
 const extractXtbTextAccountMeta = (text: string) => {
-  const match = text.match(/\bAccount\s+Currency\b[\s\S]{0,260}?\b(\d{6,})\s+(PLN|USD|EUR|GBP|CHF|DKK)\b/i);
+  const accountCurrencyPattern = "(PLN|USD|EUR|GBP|CHF|DKK|CZK|CAD|JPY|NOK|SEK)";
+  const accountWithCurrencyMatch = text.match(
+    new RegExp(
+      `\\b(?:Account\\s+number|Account)\\b[\\s\\S]{0,220}?\\b(\\d{6,})\\s+${accountCurrencyPattern}\\b`,
+      "i"
+    )
+  );
+  const accountNumber =
+    accountWithCurrencyMatch?.[1] ??
+    text.match(/\bName\s+and\s+surname\s+Account\s+Currency\b[\s\S]{0,260}?\b(\d{6,})\b/i)?.[1] ??
+    text.match(/\b(?:Account\s+number|Account|Login)\b\D{0,80}(\d{6,})\b/i)?.[1] ??
+    "";
+  const accountCurrency =
+    accountWithCurrencyMatch?.[2] ??
+    (accountNumber
+      ? text.match(new RegExp(`\\b${accountNumber}\\s+${accountCurrencyPattern}\\b`, "i"))?.[1]
+      : "") ??
+    "";
 
   return {
-    accountNumber: match?.[1] ?? "",
-    accountCurrency: match?.[2] ?? "",
+    accountNumber,
+    accountCurrency,
   };
 };
 
@@ -2277,13 +2338,148 @@ const buildXtbRowsFromTextTable = (text: string) => {
   return rows.length > 3 ? rows : null;
 };
 
+const buildXtbClosedPositionRowsFromTextTable = (text: string) => {
+  const normalizedText = normalizeXtbReportText(text);
+  const tableStart = normalizedText.search(/CLOSED\s+POSITION\s+HISTORY/i);
+
+  if (tableStart < 0) {
+    return null;
+  }
+
+  const cashStart = normalizedText.search(/CASH\s+OPERATION\s+HISTORY/i);
+  const tableText =
+    cashStart > tableStart
+      ? normalizedText.slice(tableStart, cashStart)
+      : normalizedText.slice(tableStart);
+  const rowRegex = new RegExp(
+    "\\b(\\d{6,})\\s+([A-Z0-9]{1,14}(?:\\.[A-Z0-9]{1,5})?|BITCOIN)\\s+(BUY|SELL)\\s+([-+]?\\d[\\d.,]*)\\s+" +
+      "(\\d{2}\\/\\d{2}\\/\\d{4}\\s+\\d{2}:\\d{2}:\\d{2})\\s+([-+]?\\d[\\d.,]*)\\s+" +
+      "(\\d{2}\\/\\d{2}\\/\\d{4}\\s+\\d{2}:\\d{2}:\\d{2})\\s+([-+]?\\d[\\d.,]*)\\s+([\\s\\S]*?)" +
+      "(?=\\s+\\d{6,}\\s+[A-Z0-9]{1,14}(?:\\.[A-Z0-9]{1,5})?\\s+(?:BUY|SELL)\\s+[-+]?\\d|\\s+Total\\b|$)",
+    "gi"
+  );
+  const rows: string[][] = [
+    ["Ticker", "Volume", "Close Price", "Close Time", "Profit/Loss", "Purchase Value", "Sale Value"],
+  ];
+
+  Array.from(tableText.matchAll(rowRegex)).forEach((match) => {
+    const tailNumbers = Array.from((match[9] ?? "").matchAll(PDF_NUMBER_PATTERN))
+      .map((numberMatch) => parseNumber(numberMatch[0]))
+      .filter((value): value is number => value !== null && Number.isFinite(value));
+    const purchaseValue = tailNumbers[0];
+    const saleValue = tailNumbers[1];
+
+    if (typeof purchaseValue !== "number" || typeof saleValue !== "number") {
+      return;
+    }
+
+    const maxReasonableResult = Math.max(1_000, Math.abs(purchaseValue) + Math.abs(saleValue));
+    const realizedProfitLoss =
+      tailNumbers
+        .slice(2)
+        .reverse()
+        .find((value) => Math.abs(value) <= maxReasonableResult) ??
+      round(saleValue - purchaseValue, 6);
+
+    rows.push([
+      match[2] ?? "",
+      match[4] ?? "",
+      match[8] ?? "",
+      match[7] ?? "",
+      String(realizedProfitLoss),
+      String(purchaseValue),
+      String(saleValue),
+    ]);
+  });
+
+  return rows.length > 1 ? rows : null;
+};
+
+const normalizeHtmlCellText = (value: string) =>
+  value.replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
+
+const htmlToTableRows = (html: string) => {
+  const document = new DOMParser().parseFromString(html, "text/html");
+
+  return Array.from(document.querySelectorAll("tr"))
+    .map((row) => {
+      const cells: string[] = [];
+
+      Array.from(row.querySelectorAll("th,td")).forEach((cell) => {
+        const text = normalizeHtmlCellText(cell.textContent ?? "");
+        const colSpan = Math.max(1, Number(cell.getAttribute("colspan") ?? "1") || 1);
+
+        cells.push(text);
+
+        for (let spanIndex = 1; spanIndex < colSpan; spanIndex += 1) {
+          cells.push("");
+        }
+      });
+
+      return cells;
+    })
+    .filter((row) => row.some(Boolean));
+};
+
+const parseXtbReportRows = (
+  rows: string[][],
+  sourceLabel: string
+): BrokerImportParseResult | null => {
+  const xtbResult = parseXtbCashOperationRows(rows, sourceLabel);
+
+  if (!xtbResult) {
+    return null;
+  }
+
+  const closedPositions = parseXtbClosedPositionRows(rows);
+
+  return {
+    ...xtbResult,
+    operations:
+      closedPositions.length > 0
+        ? enrichXtbSalesWithClosedPositions(xtbResult.operations, closedPositions)
+        : xtbResult.operations,
+    warnings: [
+      ...(xtbResult.warnings ?? []),
+      closedPositions.length > 0
+        ? `${sourceLabel}: odczytano ${closedPositions.length} zamknietych pozycji do weryfikacji wyniku zrealizowanego.`
+        : "",
+    ].filter(Boolean),
+  };
+};
+
 const parseXtbCashOperationText = (
   text: string,
   sourceLabel: string
 ): BrokerImportParseResult | null => {
   const rows = buildXtbRowsFromTextTable(text);
+  const closedRows = buildXtbClosedPositionRowsFromTextTable(text);
 
-  return rows ? parseXtbCashOperationRows(rows, sourceLabel) : null;
+  if (!rows) {
+    return null;
+  }
+
+  const xtbResult = parseXtbCashOperationRows(rows, sourceLabel);
+
+  if (!xtbResult) {
+    return null;
+  }
+
+  const closedPositions = closedRows ? parseXtbClosedPositionRows(closedRows) : [];
+
+  return {
+    ...xtbResult,
+    operations:
+      closedPositions.length > 0
+        ? enrichXtbSalesWithClosedPositions(xtbResult.operations, closedPositions)
+        : xtbResult.operations,
+    warnings: [
+      ...(xtbResult.warnings ?? []),
+      closedPositions.length > 0
+        ? `${sourceLabel}: odczytano ${closedPositions.length} zamknietych pozycji do weryfikacji wyniku zrealizowanego.`
+        : "",
+    ].filter(Boolean),
+  };
 };
 
 const decodeHtmlEntities = (value: string) =>
@@ -2318,10 +2514,54 @@ const decodeBase64Utf8 = (value: string) => {
   return textDecoder.decode(bytes);
 };
 
-const extractMhtmlText = (content: string) => {
+const decodeQuotedPrintableUtf8 = (value: string) => {
+  const normalized = value.replace(/=\r?\n/g, "");
+  const bytes: number[] = [];
+
+  for (let index = 0; index < normalized.length; index += 1) {
+    const char = normalized[index];
+    const hex = normalized.slice(index + 1, index + 3);
+
+    if (char === "=" && /^[0-9a-f]{2}$/i.test(hex)) {
+      bytes.push(parseInt(hex, 16));
+      index += 2;
+      continue;
+    }
+
+    bytes.push(normalized.charCodeAt(index) & 0xff);
+  }
+
+  return textDecoder.decode(new Uint8Array(bytes));
+};
+
+const decodeMimeBody = (body: string, encoding: string) => {
+  if (encoding === "base64") {
+    try {
+      return decodeBase64Utf8(body.replace(/\s+/g, ""));
+    } catch {
+      return "";
+    }
+  }
+
+  if (encoding === "quoted-printable") {
+    return decodeQuotedPrintableUtf8(body);
+  }
+
+  return body;
+};
+
+const extractMhtmlParts = (content: string) => {
   const boundary = content.match(/boundary="?([^"\r\n;]+)"?/i)?.[1];
   const parts = boundary ? content.split(`--${boundary}`) : [content];
+  const htmlParts: string[] = [];
   const textParts: string[] = [];
+
+  if (!boundary && /<html[\s>]/i.test(content)) {
+    return {
+      htmlParts: [content],
+      textParts: [htmlToPlainText(content)],
+    };
+  }
 
   parts.forEach((part) => {
     const splitIndex = part.search(/\r?\n\r?\n/);
@@ -2342,17 +2582,26 @@ const extractMhtmlText = (content: string) => {
       return;
     }
 
-    if (encoding === "base64") {
-      try {
-        textParts.push(decodeBase64Utf8(body.replace(/\s+/g, "")));
-      } catch {
-        // Ignore malformed non-report parts.
-      }
+    const decoded = decodeMimeBody(body, encoding ?? "");
+
+    if (!decoded) {
       return;
     }
 
-    textParts.push(body);
+    if (contentType === "text/html") {
+      htmlParts.push(decoded);
+      textParts.push(htmlToPlainText(decoded));
+      return;
+    }
+
+    textParts.push(decoded);
   });
+
+  return { htmlParts, textParts };
+};
+
+const extractMhtmlText = (content: string) => {
+  const { textParts } = extractMhtmlParts(content);
 
   return textParts
     .map((part) => (/<[a-z][\s\S]*>/i.test(part) ? htmlToPlainText(part) : part))
@@ -2547,7 +2796,21 @@ export const parseBrokerOperationsMhtml = (
 ): BrokerImportParseResult => {
   void _preset;
 
-  const extractedText = extractMhtmlText(content);
+  const { htmlParts, textParts } = extractMhtmlParts(content);
+  const htmlRows = htmlParts.flatMap(htmlToTableRows);
+  const htmlResult = htmlRows.length > 0 ? parseXtbReportRows(htmlRows, "MHTML/HTML XTB") : null;
+
+  if (htmlResult) {
+    return {
+      ...htmlResult,
+      warnings: [
+        ...(htmlResult.warnings ?? []),
+        "XTB MHTML/HTML: raport zostal odczytany z tabel HTML.",
+      ],
+    };
+  }
+
+  const extractedText = textParts.join("\n") || extractMhtmlText(content);
   const xtbTableResult = parseXtbCashOperationText(extractedText, "MHTML/HTML XTB");
 
   if (xtbTableResult) {

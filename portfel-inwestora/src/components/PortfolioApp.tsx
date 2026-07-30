@@ -389,6 +389,8 @@ const upsertImportedInstrument = (
   operation: ImportedBrokerOperation,
   now: string
 ) => {
+  const marketCurrency = toCurrencyCode(operation.marketCurrency ?? operation.currency, "PLN");
+
   if (!operation.symbol) {
     return {
       instruments,
@@ -418,7 +420,7 @@ const upsertImportedInstrument = (
         assetKind: operation.kind,
         symbol: operation.symbol,
         name: operation.name || operation.symbol,
-        marketCurrency: toCurrencyCode(operation.currency, "PLN"),
+        marketCurrency,
         provider: operation.provider,
         providerId: operation.providerId,
         isin: operation.isin,
@@ -452,6 +454,11 @@ const getImportedOperationMetadata = (
     brokerOperationType: operation.rawType,
     brokerRawTime: operation.rawTime,
     brokerSymbol: operation.rawSymbol,
+    marketCurrency: operation.marketCurrency,
+    cashCurrency: operation.cashCurrency,
+    cashAmount: operation.cashAmount,
+    marketAmount: operation.marketAmount,
+    declaredCurrency: operation.declaredCurrency,
     accountNumber: operation.accountNumber,
     sourceAccountNumber: operation.sourceAccountNumber,
     targetAccountNumber: operation.targetAccountNumber,
@@ -467,7 +474,7 @@ const getImportedOperationMetadata = (
     exDividendDate: isDividend ? operation.date : undefined,
     recordDate: isDividend ? operation.date : undefined,
     paymentDate: isDividend ? operation.date : undefined,
-    country: isDividend ? (operation.currency === "PLN" ? "PL" : "Nie ustawiono") : undefined,
+    country: isDividend ? (operation.cashCurrency === "PLN" ? "PL" : "Nie ustawiono") : undefined,
     legacyImportKeys: operation.legacyImportKeys,
   };
 };
@@ -488,9 +495,18 @@ const buildImportedPortfolioOperation = ({
   now: string;
 }): PortfolioOperation => {
   const operationType = getImportedOperationType(operation);
+  const isTrade = operationType === "BUY" || operationType === "SELL";
+  const operationCurrency = toCurrencyCode(
+    isTrade || operationType === "DIVIDEND"
+      ? operation.cashCurrency ?? operation.accountCurrency ?? operation.currency
+      : operation.currency,
+    "PLN"
+  );
   const amount =
     operationType === "DIVIDEND"
       ? operation.grossAmount ?? operation.amount ?? 0
+      : isTrade
+        ? operation.cashAmount ?? operation.amount ?? operation.transactionValue ?? 0
       : operation.amount ?? operation.transactionValue ?? 0;
 
   return {
@@ -501,7 +517,7 @@ const buildImportedPortfolioOperation = ({
     operationType,
     quantity: operation.quantity > 0 ? operation.quantity : null,
     price: operation.price > 0 ? operation.price : null,
-    currency: toCurrencyCode(operation.currency, "PLN"),
+    currency: operationCurrency,
     exchangeRate:
       typeof operation.exchangeRate === "number" && Number.isFinite(operation.exchangeRate)
         ? operation.exchangeRate
@@ -2391,6 +2407,10 @@ export default function PortfolioApp({
         kind: operation.kind,
         symbol: operation.symbol,
       });
+      const importedMarketCurrency = toCurrencyCode(
+        operation.marketCurrency ?? operation.currency,
+        "PLN"
+      );
 
       if (operationType === "BUY") {
         const planLimitError = getFreePlanAssetLimitError(nextAssets.length + 1);
@@ -2410,9 +2430,9 @@ export default function PortfolioApp({
           purchaseDate: operation.date,
           quantity: operation.quantity,
           purchasePrice: operation.price,
-          purchaseCurrency: operation.currency,
+          purchaseCurrency: importedMarketCurrency,
           feePln: operation.feePln,
-          marketCurrency: operation.currency,
+          marketCurrency: importedMarketCurrency,
           provider: operation.provider,
           providerId: operation.providerId,
           groupOrder: existingGroupOrder ?? getNextGroupOrder(nextAssets),
@@ -2445,8 +2465,8 @@ export default function PortfolioApp({
             name: operation.name || targetGroup.name,
             symbol: operation.symbol,
             kind: operation.kind,
-            purchaseCurrency: operation.currency,
-            marketCurrency: operation.currency,
+            purchaseCurrency: importedMarketCurrency,
+            marketCurrency: importedMarketCurrency,
             provider: representativeLot?.provider ?? operation.provider,
             providerId: representativeLot?.providerId ?? operation.providerId,
             priceScale: representativeLot?.priceScale,

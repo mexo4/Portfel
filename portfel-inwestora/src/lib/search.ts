@@ -10,6 +10,7 @@ import {
   normalizeGpwSymbol,
   normalizeSymbol,
 } from "@/lib/ticker";
+import { resolveTickerIdentity } from "@/lib/ticker-aliases";
 import { normalizeText, uniqueBy } from "@/lib/utils";
 import type {
   AssetCatalogItem,
@@ -196,44 +197,64 @@ export const buildTickerFallbackResults = (
   const candidates: AssetSearchResult[] = [];
 
   if (mode === "stock-gpw") {
-    const canonicalSymbol = normalizeGpwSymbol(normalized);
+    const identity = resolveTickerIdentity({
+      symbol: normalized,
+      kind: "stock",
+      marketCurrency: "PLN",
+    });
+    const canonicalSymbol = identity.symbol || normalizeGpwSymbol(normalized);
 
     candidates.push({
       symbol: canonicalSymbol,
-      name: getGpwTickerCore(canonicalSymbol),
+      name: identity.name ?? getGpwTickerCore(canonicalSymbol),
       kind: "stock",
-      marketCurrency: "PLN",
-      provider: "stooq",
+      marketCurrency: identity.marketCurrency ?? "PLN",
+      provider: identity.provider ?? "stooq",
+      providerId: identity.providerId,
       subtitle: "Ticker GPW / Stooq",
       source: "fallback",
     });
   }
 
   if (mode === "stock-international") {
-    const canonicalSymbol = normalizeSymbol(normalized);
+    const identity = resolveTickerIdentity({
+      symbol: normalized,
+      kind: "stock",
+      marketCurrency: inferCurrencyFromSymbol(normalized, "USD"),
+    });
+    const canonicalSymbol = identity.symbol || normalizeSymbol(normalized);
+    const provider = identity.provider ?? "yahoo";
 
     candidates.push({
       symbol: canonicalSymbol,
-      name: canonicalSymbol,
+      name: identity.name ?? canonicalSymbol,
       kind: "stock",
-      marketCurrency: inferCurrencyFromSymbol(canonicalSymbol, "USD"),
-      provider: "yahoo",
-      providerId: canonicalSymbol,
+      marketCurrency: identity.marketCurrency ?? inferCurrencyFromSymbol(canonicalSymbol, "USD"),
+      provider,
+      providerId:
+        identity.providerId ?? (provider === "yahoo" || provider === "eodhd" ? canonicalSymbol : undefined),
       subtitle: "Ticker akcji / Yahoo",
       source: "fallback",
     });
   }
 
   if (kind === "etf" || mode === "etf") {
-    const canonicalSymbol = normalizeSymbol(normalized);
+    const identity = resolveTickerIdentity({
+      symbol: normalized,
+      kind: "etf",
+      marketCurrency: inferCurrencyFromSymbol(normalized, "USD"),
+    });
+    const canonicalSymbol = identity.symbol || normalizeSymbol(normalized);
+    const provider = identity.provider ?? "eodhd";
 
     candidates.push({
       symbol: canonicalSymbol,
-      name: canonicalSymbol,
+      name: identity.name ?? canonicalSymbol,
       kind: "etf",
-      marketCurrency: inferCurrencyFromSymbol(canonicalSymbol, "USD"),
-      provider: "eodhd",
-      providerId: canonicalSymbol,
+      marketCurrency: identity.marketCurrency ?? inferCurrencyFromSymbol(canonicalSymbol, "USD"),
+      provider,
+      providerId:
+        identity.providerId ?? (provider === "yahoo" || provider === "eodhd" ? canonicalSymbol : undefined),
       subtitle: "Ticker ETF",
       source: "fallback",
     });
@@ -255,7 +276,13 @@ const getSearchResultDeduplicationKey = (item: AssetSearchResult) => {
     return `stock:gpw:${getGpwTickerCore(item.symbol)}`;
   }
 
-  return `${item.symbol}|${item.providerId ?? ""}|${item.kind}|${item.provider}`;
+  const identity = resolveTickerIdentity({
+    symbol: item.symbol,
+    kind: item.kind,
+    marketCurrency: item.marketCurrency,
+  });
+
+  return `${identity.symbol}|${item.providerId ?? identity.providerId ?? ""}|${item.kind}|${item.provider}`;
 };
 
 export const mergeSearchResults = (items: AssetSearchResult[]) =>

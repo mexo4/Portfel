@@ -5,10 +5,10 @@ import {
   normalizeTreasuryBondCode,
 } from "@/lib/treasury-bonds";
 import { ensurePortfolioCoreModel } from "@/lib/operation-engine";
+import { resolveTickerIdentity } from "@/lib/ticker-aliases";
 import {
   getDefaultProviderForKind,
   getPortfolioAssetGroupKey,
-  normalizeSymbol,
 } from "@/lib/ticker";
 import { getTodayDateInputValue, round, toCurrencyCode, toDateInputValue } from "@/lib/utils";
 import type {
@@ -76,7 +76,10 @@ const isBondTransactionKind = (value: unknown): value is BondTransactionKind =>
   value === "sale" || value === "bond-redemption" || value === "bond-swap";
 
 const normalizePortfolioSymbol = (value: string, kind?: AssetKind) => {
-  const normalized = normalizeSymbol(value);
+  const normalized = resolveTickerIdentity({
+    symbol: value,
+    kind,
+  }).symbol;
 
   if (kind === "etf" && normalized.endsWith(".WAR")) {
     return `${normalized.slice(0, -4)}.PL`;

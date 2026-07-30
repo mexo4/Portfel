@@ -81,7 +81,9 @@ const MARKET_SUFFIX_CURRENCY: Record<string, CurrencyCode> = {
   BO: "INR",
   BE: "EUR",
   BD: "BDT",
+  CO: "DKK",
   DE: "EUR",
+  DK: "DKK",
   DU: "EUR",
   F: "EUR",
   HE: "EUR",
@@ -101,6 +103,8 @@ const MARKET_SUFFIX_CURRENCY: Record<string, CurrencyCode> = {
   TO: "CAD",
   V: "CAD",
   T: "JPY",
+  UK: "GBP",
+  US: "USD",
 };
 
 export const inferCurrencyFromSymbol = (

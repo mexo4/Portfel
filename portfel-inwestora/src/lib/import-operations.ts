@@ -1,7 +1,11 @@
 import { inflateSync as inflateDeflateRawSync, unzlibSync } from "fflate";
-import { getDefaultProviderForKind, inferCurrencyFromSymbol, isGpwSymbol, normalizeGpwSymbol, normalizeSymbol } from "@/lib/ticker";
-import { resolveTickerAlias } from "@/lib/ticker-aliases";
-import { normalizeText, round, toCurrencyCode, toDateInputValue } from "@/lib/utils";
+import { getDefaultProviderForKind, inferCurrencyFromSymbol, isGpwSymbol, normalizeSymbol } from "@/lib/ticker";
+import {
+  normalizeBrokerTicker,
+  resolveTickerAlias,
+  resolveTickerIdentity,
+} from "@/lib/ticker-aliases";
+import { normalizeText, round, toCurrencyCode, toDateInputValue, uniqueBy } from "@/lib/utils";
 import type { AssetKind, CurrencyCode, OperationType, QuoteProvider } from "@/types/portfolio";
 
 export type BrokerImportPreset = "auto" | "xtb" | "degiro" | "ibkr" | "mbank" | "etoro" | "trading212" | "generic";
@@ -40,6 +44,7 @@ export type ImportedBrokerOperation = {
   rawType?: string;
   rawTime?: string;
   rawSymbol?: string;
+  legacyImportKeys?: string[];
   isin?: string;
   realizedProfitLoss?: number;
   purchaseValue?: number;
@@ -178,12 +183,12 @@ const parseNumber = (value: string) => {
 
   if (!trimmed) return null;
 
-  const isNegative = /^\(.+\)$/.test(trimmed) || /-$/.test(trimmed);
+  const isNegative = /^\(.+\)$/.test(trimmed) || /^[-−]/.test(trimmed) || /[-−]$/.test(trimmed);
   const numeric = trimmed
     .replace(/\s/g, "")
     .replace(/[^0-9,.-]/g, "")
-    .replace(/^-/, "")
-    .replace(/-$/, "");
+    .replace(/^[-−]/, "")
+    .replace(/[-−]$/, "");
   const lastComma = numeric.lastIndexOf(",");
   const lastDot = numeric.lastIndexOf(".");
   let normalized = numeric;
@@ -273,13 +278,11 @@ const getProvider = (kind: AssetKind, symbol: string, currency: CurrencyCode): Q
 };
 
 const normalizeImportedSymbol = (symbol: string, kind: AssetKind, currency: CurrencyCode) => {
-  const normalized = normalizeSymbol(symbol).replace(/[-/](USD|EUR|PLN|GBP|CHF)$/i, "");
-
-  if (kind === "stock" && currency === "PLN" && normalized && !normalized.includes(".")) {
-    return normalizeGpwSymbol(normalized);
-  }
-
-  return normalized;
+  return resolveTickerIdentity({
+    symbol,
+    kind,
+    marketCurrency: currency,
+  }).symbol;
 };
 
 const countHeaderMatches = (cells: string[]) => {
@@ -350,6 +353,8 @@ const parseBrokerOperationRows = (
     const kind = inferKind(getCell(row, HEADER_ALIASES.kind), rawSymbol, rawName);
     const alias = resolveTickerAlias(rawSymbol, kind);
     const symbol = alias?.symbol ?? normalizeImportedSymbol(rawSymbol, kind, currency);
+    const resolvedKind = alias?.kind ?? kind;
+    const resolvedCurrency = alias?.marketCurrency ?? currency;
 
     if (!side || !rawDate || !symbol || !quantity || quantity <= 0 || !price || price <= 0) {
       skippedRows.push({
@@ -359,7 +364,7 @@ const parseBrokerOperationRows = (
       return;
     }
 
-    const provider = alias?.provider ?? getProvider(kind, symbol, alias?.marketCurrency ?? currency);
+    const provider = alias?.provider ?? getProvider(resolvedKind, symbol, resolvedCurrency);
 
     operations.push({
       rowNumber,
@@ -369,10 +374,10 @@ const parseBrokerOperationRows = (
       symbol,
       rawSymbol,
       name: alias?.name ?? (rawName || symbol),
-      kind: alias?.kind ?? kind,
+      kind: resolvedKind,
       quantity: round(Math.abs(quantity), 6),
       price: round(Math.abs(price), 6),
-      currency: alias?.marketCurrency ?? currency,
+      currency: resolvedCurrency,
       feePln: round(Math.abs(fee), 6),
       fee: round(Math.abs(fee), 6),
       amount:
@@ -877,6 +882,8 @@ const parseXtbPdfChunk = (
   const kind = inferKind(chunk, rawSymbol, rawSymbol);
   const alias = resolveTickerAlias(rawSymbol, kind);
   const symbol = alias?.symbol ?? normalizeImportedSymbol(rawSymbol, kind, currency);
+  const resolvedKind = alias?.kind ?? kind;
+  const resolvedCurrency = alias?.marketCurrency ?? currency;
   const numbers = extractPdfNumbers(chunk, dateText).map(Math.abs);
   const quantity =
     extractLabeledNumber(chunk, ["ilosc", "liczba", "wolumen", "quantity", "shares", "units"]) ??
@@ -906,7 +913,7 @@ const parseXtbPdfChunk = (
     return null;
   }
 
-  const provider = alias?.provider ?? getProvider(kind, symbol, alias?.marketCurrency ?? currency);
+  const provider = alias?.provider ?? getProvider(resolvedKind, symbol, resolvedCurrency);
   const name = extractPdfName(chunk, dateText, rawSymbol);
 
   return {
@@ -917,10 +924,10 @@ const parseXtbPdfChunk = (
     symbol,
     rawSymbol,
     name: alias?.name ?? name,
-    kind: alias?.kind ?? kind,
+    kind: resolvedKind,
     quantity: round(Math.abs(quantity), 6),
     price: round(Math.abs(price), 6),
-    currency: alias?.marketCurrency ?? currency,
+    currency: resolvedCurrency,
     feePln: round(Math.abs(fee), 6),
     fee: round(Math.abs(fee), 6),
     amount:
@@ -1470,8 +1477,9 @@ const detectXtbAccountCurrency = (
   );
 };
 
-const getXtbOperationImportKey = (
-  operation: Pick<ImportedBrokerOperation, "brokerOperationId" | "rawTime" | "rawType" | "symbol" | "amount" | "accountNumber">
+const buildXtbOperationImportKey = (
+  operation: Pick<ImportedBrokerOperation, "brokerOperationId" | "rawTime" | "rawType" | "amount" | "accountNumber">,
+  symbol: string
 ) =>
   [
     "xtb",
@@ -1479,11 +1487,34 @@ const getXtbOperationImportKey = (
     operation.rawTime,
     operation.rawType,
     operation.accountNumber,
-    operation.symbol,
+    symbol,
     operation.amount,
   ]
     .filter((item) => item !== undefined && item !== null && String(item).trim())
     .join(":");
+
+const getXtbOperationImportKeys = (
+  operation: Pick<
+    ImportedBrokerOperation,
+    | "brokerOperationId"
+    | "rawTime"
+    | "rawType"
+    | "symbol"
+    | "rawSymbol"
+    | "amount"
+    | "accountNumber"
+  >
+) => {
+  const symbols = uniqueBy(
+    [operation.symbol, operation.rawSymbol]
+      .filter((symbol): symbol is string => Boolean(symbol?.trim()))
+      .map((symbol) => normalizeSymbol(symbol)),
+    (symbol) => symbol
+  );
+  const importKeySymbols = symbols.length > 0 ? symbols : [""];
+
+  return importKeySymbols.map((symbol) => buildXtbOperationImportKey(operation, symbol));
+};
 
 const getXtbTransferImportKey = (
   row: XtbCashRow,
@@ -1632,10 +1663,12 @@ const buildBaseXtbOperation = ({
     isin: alias?.isin,
     warnings: [],
   };
+  const importKeys = getXtbOperationImportKeys(operation);
 
   return {
     ...operation,
-    importKey: getXtbOperationImportKey(operation),
+    importKey: importKeys[0],
+    legacyImportKeys: importKeys.slice(1),
   };
 };
 
@@ -1723,6 +1756,35 @@ const parseXtbClosedPositionRows = (rows: string[][]): XtbClosedPosition[] => {
     .filter((position): position is XtbClosedPosition => Boolean(position));
 };
 
+const getXtbTickerMatchKeys = (
+  symbol: string | undefined,
+  kind: AssetKind,
+  currency: CurrencyCode
+) => {
+  if (!symbol) {
+    return new Set<string>();
+  }
+
+  const identity = resolveTickerIdentity({
+    symbol,
+    kind,
+    marketCurrency: currency,
+  });
+
+  return new Set(
+    uniqueBy(
+      [
+        normalizeSymbol(symbol),
+        normalizeBrokerTicker(symbol, { kind, marketCurrency: currency }),
+        identity.symbol,
+        identity.providerId,
+        identity.isin,
+      ].filter((candidate): candidate is string => Boolean(candidate?.trim())),
+      (candidate) => normalizeSymbol(candidate)
+    ).map(normalizeSymbol)
+  );
+};
+
 const enrichXtbSalesWithClosedPositions = (
   operations: ImportedBrokerOperation[],
   closedPositions: XtbClosedPosition[]
@@ -1738,16 +1800,19 @@ const enrichXtbSalesWithClosedPositions = (
       operation.rawTime && parseNumber(operation.rawTime)
         ? parseNumber(operation.rawTime)
         : null;
-    const matchingPosition = closedPositions
+    const operationMatchKeys = new Set([
+      ...getXtbTickerMatchKeys(operation.rawSymbol, operation.kind, operation.currency),
+      ...getXtbTickerMatchKeys(operation.symbol, operation.kind, operation.currency),
+    ]);
+    const matchingPositions = closedPositions
       .map((position, index) => ({ position, index }))
       .filter(({ index }) => !usedIndexes.has(index))
-      .filter(
-        ({ position }) =>
-          normalizeSymbol(position.ticker) === normalizeSymbol(operation.rawSymbol ?? operation.symbol) ||
-          normalizeSymbol(position.ticker) === normalizeSymbol(operation.symbol)
+      .filter(({ position }) =>
+        Array.from(getXtbTickerMatchKeys(position.ticker, operation.kind, operation.currency)).some(
+          (key) => operationMatchKeys.has(key)
+        )
       )
       .filter(({ position }) => position.closeDate === operation.date)
-      .filter(({ position }) => Math.abs(position.volume - operation.quantity) < 0.0001)
       .filter(({ position }) => Math.abs(position.closePrice - operation.price) < 0.01)
       .sort((left, right) => {
         if (operationTime && left.position.closeSerial && right.position.closeSerial) {
@@ -1758,19 +1823,46 @@ const enrichXtbSalesWithClosedPositions = (
         }
 
         return 0;
-      })[0];
+      });
 
-    if (!matchingPosition) {
+    const selectedPositions: typeof matchingPositions = [];
+    let matchedVolume = 0;
+
+    for (const candidate of matchingPositions) {
+      const nextVolume = round(matchedVolume + candidate.position.volume, 6);
+
+      if (nextVolume - operation.quantity > 0.0001) {
+        continue;
+      }
+
+      selectedPositions.push(candidate);
+      matchedVolume = nextVolume;
+
+      if (Math.abs(matchedVolume - operation.quantity) < 0.0001) {
+        break;
+      }
+    }
+
+    if (Math.abs(matchedVolume - operation.quantity) >= 0.0001) {
       return operation;
     }
 
-    usedIndexes.add(matchingPosition.index);
+    selectedPositions.forEach(({ index }) => usedIndexes.add(index));
 
     return {
       ...operation,
-      realizedProfitLoss: matchingPosition.position.realizedProfitLoss,
-      purchaseValue: matchingPosition.position.purchaseValue,
-      saleValue: matchingPosition.position.saleValue,
+      realizedProfitLoss: round(
+        selectedPositions.reduce((total, { position }) => total + position.realizedProfitLoss, 0),
+        6
+      ),
+      purchaseValue: round(
+        selectedPositions.reduce((total, { position }) => total + position.purchaseValue, 0),
+        6
+      ),
+      saleValue: round(
+        selectedPositions.reduce((total, { position }) => total + position.saleValue, 0),
+        6
+      ),
     };
   });
 };

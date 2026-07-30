@@ -270,7 +270,6 @@ export const getPortfolioSummary = (
     );
     return totals;
   }, realizedProfitLossByCurrency);
-  const realizedProfitLossPln = round(realizedProfitLossByCurrencyWithAdjustments.PLN ?? 0);
   const realizedProfitLossBasePln = round(
     sales.reduce((total, sale) => {
       const isBondSettlement =
@@ -284,12 +283,17 @@ export const getPortfolioSummary = (
     }, 0) +
       realizedAdjustments.reduce((total, adjustment) => total + adjustment.amountPlnSnapshot, 0)
   );
+  const realizedProfitLossPln = realizedProfitLossBasePln;
   const openProfitLossPln = round(openTotals.totalProfitLossPln);
   const combinedProfitLossPln = round(openProfitLossPln + realizedProfitLossBasePln);
+  const marketValuePln = round(openTotals.totalValuePln);
+  const totalInvestedPln = round(openTotals.totalInvestedPln);
+  const portfolioValuePln = round(totalInvestedPln + realizedProfitLossPln);
 
   return {
-    totalValuePln: round(openTotals.totalValuePln),
-    totalInvestedPln: round(openTotals.totalInvestedPln),
+    totalValuePln: portfolioValuePln,
+    marketValuePln,
+    totalInvestedPln,
     totalProfitLossPln: openProfitLossPln,
     openProfitLossPln,
     realizedProfitLossPln,
@@ -339,7 +343,7 @@ const buildAccountValuations = (
       kind: account.kind,
       currency: account.currency,
       cashBalances: accountBalances,
-      marketValuePln: summary.totalValuePln,
+      marketValuePln: summary.marketValuePln,
       investedPln: summary.totalInvestedPln,
       realizedProfitLossPln: summary.realizedProfitLossPln,
       unrealizedProfitLossPln: summary.openProfitLossPln,

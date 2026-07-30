@@ -10,8 +10,12 @@ import {
   isGpwSymbol,
   normalizeSymbol,
 } from "@/lib/ticker";
-import { resolveTickerAlias } from "@/lib/ticker-aliases";
-import { round, toCurrencyCode, toDateInputValue, uniqueBy } from "@/lib/utils";
+import {
+  getTickerLookupCandidates,
+  resolveTickerAlias,
+  resolveTickerIdentity,
+} from "@/lib/ticker-aliases";
+import { round, toCurrencyCode, toDateInputValue } from "@/lib/utils";
 import type {
   AssetKind,
   CurrencyCode,
@@ -652,21 +656,21 @@ const fetchCoinGeckoHistory = async (
 
 const getHistoryLookupSymbols = ({
   symbol,
-  provider,
+  kind,
+  marketCurrency,
   providerId,
 }: {
   symbol: string;
-  provider: QuoteProvider;
+  kind: AssetKind;
+  marketCurrency: CurrencyCode;
   providerId?: string;
 }) =>
-  uniqueBy(
-    [
-      provider === "yahoo" ? providerId : undefined,
-      providerId,
-      symbol,
-    ].filter((candidate): candidate is string => Boolean(candidate)),
-    (candidate) => normalizeSymbol(candidate)
-  );
+  getTickerLookupCandidates({
+    symbol,
+    kind,
+    marketCurrency,
+    providerId,
+  }).map((candidate) => normalizeSymbol(candidate.value));
 
 const fetchInstrumentHistory = async ({
   kind,
@@ -682,19 +686,25 @@ const fetchInstrumentHistory = async ({
 ): Promise<InstrumentHistoryResult> => {
   try {
     const normalizedSymbol = normalizeSymbol(symbol);
-    const alias = resolveTickerAlias(normalizedSymbol, kind);
-    const resolvedKind = alias?.kind ?? kind;
-    const resolvedSymbol = normalizeSymbol(alias?.symbol ?? normalizedSymbol);
+    const identity = resolveTickerIdentity({
+      symbol: normalizedSymbol,
+      kind,
+      marketCurrency,
+    });
+    const alias = identity.alias ?? resolveTickerAlias(normalizedSymbol, kind);
+    const resolvedKind = identity.kind ?? alias?.kind ?? kind;
+    const resolvedSymbol = normalizeSymbol(identity.symbol);
     const resolvedMarketCurrency = toCurrencyCode(
-      alias?.marketCurrency ?? marketCurrency,
+      identity.marketCurrency ?? alias?.marketCurrency ?? marketCurrency,
       marketCurrency
     );
-    const resolvedProvider = providerId ? provider : alias?.provider ?? provider;
-    const resolvedProviderId = providerId ?? alias?.providerId;
-    const resolvedPriceScale = alias?.priceScale ?? priceScale;
+    const resolvedProvider = alias?.provider ?? provider;
+    const resolvedProviderId = identity.providerId ?? alias?.providerId ?? providerId;
+    const resolvedPriceScale = identity.priceScale ?? alias?.priceScale ?? priceScale;
     const lookupSymbols = getHistoryLookupSymbols({
       symbol: resolvedSymbol,
-      provider: resolvedProvider,
+      kind: resolvedKind,
+      marketCurrency: resolvedMarketCurrency,
       providerId: resolvedProviderId,
     });
 

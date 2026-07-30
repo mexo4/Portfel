@@ -20,7 +20,11 @@ import {
   normalizeSymbol,
   toStooqGpwSymbol,
 } from "@/lib/ticker";
-import { resolveTickerAlias } from "@/lib/ticker-aliases";
+import {
+  getTickerLookupCandidates,
+  resolveTickerAlias,
+  resolveTickerIdentity,
+} from "@/lib/ticker-aliases";
 import { normalizeText, round, toCurrencyCode, uniqueBy } from "@/lib/utils";
 import type {
   AssetKind,
@@ -188,6 +192,24 @@ const safeFetch = async (
   } finally {
     clearTimeout(timeoutId);
   }
+};
+
+const firstNonNull = async <T>(promises: Array<Promise<T | null>>) => {
+  for (const promise of promises) {
+    let result: T | null = null;
+
+    try {
+      result = await promise;
+    } catch {
+      result = null;
+    }
+
+    if (result) {
+      return result;
+    }
+  }
+
+  return null;
 };
 
 const fetchJsonWithNodeHttps = <T>(
@@ -1219,52 +1241,76 @@ export const searchMarketAssets = async (
 ): Promise<AssetSearchResult[]> => {
   if (!query.trim()) return [];
 
+  const queryCandidates = uniqueBy(
+    getTickerLookupCandidates({
+      symbol: query,
+      kind,
+      includeName: false,
+    }).map((candidate) => candidate.value),
+    (candidate) => normalizeSymbol(candidate)
+  );
+  const searchFirst = async (
+    searcher: (candidate: string) => Promise<AssetSearchResult[]>
+  ) => {
+    for (const candidate of queryCandidates) {
+      const results = await searcher(candidate);
+
+      if (results.length > 0) {
+        return results;
+      }
+    }
+
+    return [];
+  };
+
   if (kind === "crypto") {
-    return searchCoinGecko(query);
+    return searchFirst(searchCoinGecko);
   }
 
   if (kind === "stock" && mode === "stock-gpw") {
     await warmGpwCatalog();
-    const catalogResults = await searchGpwCatalog(query);
+    const catalogResults = await searchFirst(searchGpwCatalog);
 
     if (catalogResults.length > 0) {
       return catalogResults;
     }
 
-    return searchGpwStooqTickerFallback(query);
+    return searchFirst(searchGpwStooqTickerFallback);
   }
 
   if (kind === "stock" && mode === "stock-international") {
-    const yahooResults = await searchYahooStocks(query);
+    const yahooResults = await searchFirst(searchYahooStocks);
 
     if (yahooResults.length > 0) {
       return yahooResults;
     }
 
-    const eodhdResults = await searchEodhdStocks(query);
+    const eodhdResults = await searchFirst(searchEodhdStocks);
 
-    return eodhdResults.length > 0 ? eodhdResults : searchFinnhub(query, kind, mode);
+    return eodhdResults.length > 0
+      ? eodhdResults
+      : searchFirst((candidate) => searchFinnhub(candidate, kind, mode));
   }
 
   if (kind === "stock" && mode === "stock-global") {
-    const finnhubResults = await searchFinnhub(query, kind, mode);
+    const finnhubResults = await searchFirst((candidate) => searchFinnhub(candidate, kind, mode));
 
     if (finnhubResults.length > 0) {
       return finnhubResults;
     }
 
-    const yahooResults = await searchYahooStocks(query);
+    const yahooResults = await searchFirst(searchYahooStocks);
     const usYahooResults = yahooResults.filter(isUsYahooSearchResult);
 
     return usYahooResults.length > 0 ? usYahooResults : yahooResults;
   }
 
   if (kind === "etf" || mode === "etf") {
-    return searchEodhdEtfs(query);
+    return searchFirst(searchEodhdEtfs);
   }
 
   if (kind === "stock") {
-    return searchFinnhub(query, kind, mode);
+    return searchFirst((candidate) => searchFinnhub(candidate, kind, mode));
   }
 
   return [];
@@ -1286,16 +1332,42 @@ export const fetchAssetQuoteServer = async ({
   priceScale?: number;
 }) => {
   const requestedSymbol = normalizeSymbol(symbol);
-  const alias = resolveTickerAlias(requestedSymbol, kind);
-  const normalizedSymbol = normalizeSymbol(alias?.symbol ?? requestedSymbol);
-  const resolvedKind = alias?.kind ?? kind;
+  const identity = resolveTickerIdentity({
+    symbol: requestedSymbol,
+    kind,
+    marketCurrency,
+  });
+  const alias = identity.alias ?? resolveTickerAlias(requestedSymbol, kind);
+  const normalizedSymbol = normalizeSymbol(identity.symbol);
+  const resolvedKind = identity.kind ?? kind;
   const resolvedMarketCurrency = toCurrencyCode(
-    alias?.marketCurrency ?? marketCurrency,
+    identity.marketCurrency ?? alias?.marketCurrency ?? marketCurrency,
     marketCurrency
   );
-  const resolvedProvider = providerId ? provider : alias?.provider ?? provider;
-  const resolvedProviderId = providerId ?? alias?.providerId;
-  const resolvedPriceScale = alias?.priceScale ?? priceScale;
+  const resolvedProvider = alias?.provider ?? provider;
+  const resolvedProviderId = identity.providerId ?? alias?.providerId ?? providerId;
+  const resolvedPriceScale = identity.priceScale ?? alias?.priceScale ?? priceScale;
+  const lookupSymbols = getTickerLookupCandidates({
+    symbol: requestedSymbol,
+    kind,
+    marketCurrency,
+    providerId,
+    isin: identity.isin,
+    name: identity.name,
+  }).map((candidate) => normalizeSymbol(candidate.value));
+  const providerIdCandidates = uniqueBy(
+    [
+      identity.providerId,
+      alias?.providerId,
+      providerId,
+      ...lookupSymbols,
+    ].filter((candidate): candidate is string => Boolean(candidate?.trim())),
+    (candidate) => normalizeSymbol(candidate)
+  );
+  const fetchFinnhubQuoteFromLookup = () =>
+    firstNonNull(
+      lookupSymbols.map((candidate) => fetchFinnhubQuote(candidate, resolvedMarketCurrency))
+    );
   const isGpwStockRequest = shouldUseGpwStooqQuote({
     symbol: normalizedSymbol,
     kind: resolvedKind,
@@ -1307,28 +1379,46 @@ export const fetchAssetQuoteServer = async ({
   }
 
   if (resolvedProvider === "eodhd" && (resolvedKind === "stock" || resolvedKind === "etf")) {
-    const eodhdQuote = await fetchEodhdQuote({
-      symbol: normalizedSymbol,
-      providerId: resolvedProviderId,
-      marketCurrency: resolvedMarketCurrency,
-      priceScale: resolvedPriceScale,
-    });
+    let eodhdQuote: AssetQuote | null = null;
+
+    for (const candidateProviderId of providerIdCandidates) {
+      eodhdQuote = await fetchEodhdQuote({
+        symbol: normalizedSymbol,
+        providerId: candidateProviderId,
+        marketCurrency: resolvedMarketCurrency,
+        priceScale: resolvedPriceScale,
+      });
+
+      if (eodhdQuote) {
+        break;
+      }
+    }
 
     if (eodhdQuote) {
       return eodhdQuote;
     }
 
-    const yahooQuote = await fetchYahooQuote({
-      symbol: normalizedSymbol,
-      providerId: resolvedProviderId,
-      fallbackCurrency: resolvedMarketCurrency,
-    });
+    let yahooQuote: AssetQuote | null = null;
+
+    for (const candidateProviderId of providerIdCandidates) {
+      yahooQuote = await fetchYahooQuote({
+        symbol: normalizedSymbol,
+        providerId: candidateProviderId,
+        fallbackCurrency: resolvedMarketCurrency,
+      });
+
+      if (yahooQuote) {
+        break;
+      }
+    }
 
     if (yahooQuote) {
       return yahooQuote;
     }
 
-    const stooqQuote = await fetchStooqQuote(normalizedSymbol, resolvedMarketCurrency);
+    const stooqQuote = await firstNonNull(
+      lookupSymbols.map((candidate) => fetchStooqQuote(candidate, resolvedMarketCurrency))
+    );
 
     if (stooqQuote) {
       return stooqQuote;
@@ -1340,46 +1430,68 @@ export const fetchAssetQuoteServer = async ({
   }
 
   if (resolvedProvider === "yahoo" && (resolvedKind === "stock" || resolvedKind === "etf")) {
-    return fetchYahooQuote({
-      symbol: normalizedSymbol,
-      providerId: resolvedProviderId,
-      fallbackCurrency: resolvedMarketCurrency,
-    });
+    return firstNonNull(
+      providerIdCandidates.map((candidateProviderId) =>
+        fetchYahooQuote({
+          symbol: normalizedSymbol,
+          providerId: candidateProviderId,
+          fallbackCurrency: resolvedMarketCurrency,
+        })
+      )
+    );
   }
 
   if (resolvedProvider === "finnhub") {
     return (
-      (await fetchFinnhubQuote(normalizedSymbol, resolvedMarketCurrency)) ??
-      (await fetchYahooQuote({
-        symbol: normalizedSymbol,
-        providerId: resolvedProviderId,
-        fallbackCurrency: resolvedMarketCurrency,
-      })) ??
-      (await fetchStooqQuote(normalizedSymbol, resolvedMarketCurrency)) ??
+      (await fetchFinnhubQuoteFromLookup()) ??
+      (await firstNonNull(
+        providerIdCandidates.map((candidateProviderId) =>
+          fetchYahooQuote({
+            symbol: normalizedSymbol,
+            providerId: candidateProviderId,
+            fallbackCurrency: resolvedMarketCurrency,
+          })
+        )
+      )) ??
+      (await firstNonNull(
+        lookupSymbols.map((candidate) => fetchStooqQuote(candidate, resolvedMarketCurrency))
+      )) ??
       (await fetchStooqQuote(`${normalizedSymbol}.US`, resolvedMarketCurrency))
     );
   }
 
   if (resolvedProvider === "stooq") {
     return (
-      (await fetchStooqQuote(normalizedSymbol, resolvedMarketCurrency)) ??
-      (await fetchYahooQuote({
-        symbol: normalizedSymbol,
-        providerId: resolvedProviderId,
-        fallbackCurrency: resolvedMarketCurrency,
-      })) ??
-      (await fetchFinnhubQuote(normalizedSymbol, resolvedMarketCurrency))
+      (await firstNonNull(
+        lookupSymbols.map((candidate) => fetchStooqQuote(candidate, resolvedMarketCurrency))
+      )) ??
+      (await firstNonNull(
+        providerIdCandidates.map((candidateProviderId) =>
+          fetchYahooQuote({
+            symbol: normalizedSymbol,
+            providerId: candidateProviderId,
+            fallbackCurrency: resolvedMarketCurrency,
+          })
+        )
+      )) ??
+      (await fetchFinnhubQuoteFromLookup())
     );
   }
 
   const autoQuote =
-    (await fetchFinnhubQuote(normalizedSymbol, resolvedMarketCurrency)) ??
-    (await fetchYahooQuote({
-      symbol: normalizedSymbol,
-      providerId: resolvedProviderId,
-      fallbackCurrency: resolvedMarketCurrency,
-    })) ??
-    (await fetchStooqQuote(normalizedSymbol, resolvedMarketCurrency));
+    (await fetchFinnhubQuoteFromLookup()) ??
+    (await firstNonNull(
+      providerIdCandidates.map((candidateProviderId) =>
+        fetchYahooQuote({
+          symbol: normalizedSymbol,
+          providerId: candidateProviderId,
+          fallbackCurrency: resolvedMarketCurrency,
+        })
+      )
+    )) ??
+    (await firstNonNull(
+      lookupSymbols.map((candidate) => fetchStooqQuote(candidate, resolvedMarketCurrency))
+    ));
 
   return autoQuote;
 };

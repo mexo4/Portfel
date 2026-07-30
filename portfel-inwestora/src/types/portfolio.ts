@@ -406,6 +406,7 @@ export type FxRates = Record<CurrencyCode, number>;
 
 export type PortfolioSummary = {
   totalValuePln: number;
+  marketValuePln: number;
   totalInvestedPln: number;
   totalProfitLossPln: number;
   openProfitLossPln: number;

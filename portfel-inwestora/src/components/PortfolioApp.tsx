@@ -378,7 +378,9 @@ const isImportedOperationDuplicate = (
     return true;
   }
 
-  return Boolean(operation.importKey && existingImportKeys.has(operation.importKey));
+  return [operation.importKey, ...(operation.legacyImportKeys ?? [])]
+    .filter((key): key is string => Boolean(key?.trim()))
+    .some((key) => existingImportKeys.has(key));
 };
 
 const upsertImportedInstrument = (
@@ -466,6 +468,7 @@ const getImportedOperationMetadata = (
     recordDate: isDividend ? operation.date : undefined,
     paymentDate: isDividend ? operation.date : undefined,
     country: isDividend ? (operation.currency === "PLN" ? "PL" : "Nie ustawiono") : undefined,
+    legacyImportKeys: operation.legacyImportKeys,
   };
 };
 
@@ -2240,9 +2243,17 @@ export default function PortfolioApp({
     const existingOperationIds = new Set(nextOperations.map((operation) => operation.id));
     const existingImportKeys = new Set(
       nextOperations
-        .map((operation) =>
-          typeof operation.metadata.importKey === "string" ? operation.metadata.importKey : ""
-        )
+        .flatMap((operation) => {
+          const primaryKey =
+            typeof operation.metadata.importKey === "string" ? operation.metadata.importKey : "";
+          const legacyKeys = Array.isArray(operation.metadata.legacyImportKeys)
+            ? operation.metadata.legacyImportKeys.filter(
+                (key): key is string => typeof key === "string"
+              )
+            : [];
+
+          return [primaryKey, ...legacyKeys];
+        })
         .filter(Boolean)
     );
     let importedBuys = 0;
@@ -2325,6 +2336,12 @@ export default function PortfolioApp({
       if (operation.importKey) {
         existingImportKeys.add(operation.importKey);
       }
+
+      (operation.legacyImportKeys ?? []).forEach((key) => {
+        if (key.trim()) {
+          existingImportKeys.add(key);
+        }
+      });
 
       return true;
     };

@@ -1,5 +1,6 @@
 import { BASE_CURRENCY } from "@/lib/constants";
 import { getPortfolioAssetGroupKey, normalizeSymbol } from "@/lib/ticker";
+import { resolveTickerIdentity } from "@/lib/ticker-aliases";
 import { getTodayDateInputValue, round, toCurrencyCode, toDateInputValue } from "@/lib/utils";
 import type {
   AccountKind,
@@ -123,7 +124,10 @@ export const getPortfolioInstrumentId = (
   target: { kind?: AssetKind; symbol?: string }
 ) => {
   const kind = target.kind ?? "stock";
-  const symbol = normalizeSymbol(target.symbol ?? "");
+  const symbol = resolveTickerIdentity({
+    symbol: target.symbol ?? "",
+    kind,
+  }).symbol;
   const key = getPortfolioAssetGroupKey({ kind, symbol });
 
   return `${portfolioId}:instrument:${key}`;
@@ -301,7 +305,11 @@ const buildLegacyInstruments = (
       portfolioId,
       type: getInstrumentTypeForAssetKind(source.kind),
       assetKind: source.kind,
-      symbol: normalizeSymbol(source.symbol),
+      symbol: resolveTickerIdentity({
+        symbol: source.symbol,
+        kind: source.kind,
+        marketCurrency: source.marketCurrency,
+      }).symbol,
       name: source.name?.trim() || normalizeSymbol(source.symbol),
       marketCurrency: toCurrencyCode(source.marketCurrency, BASE_CURRENCY),
       provider: source.provider,

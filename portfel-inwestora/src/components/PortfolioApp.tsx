@@ -58,6 +58,8 @@ import {
 import {
   calculateCashBalances,
   ensurePortfolioCoreModel,
+  getInstrumentTypeForAssetKind,
+  getPortfolioInstrumentId,
 } from "@/lib/operation-engine";
 import {
   buildDividendForecast,
@@ -104,6 +106,9 @@ import type {
   FxRates,
   InvestmentPortfolio,
   PortfolioAsset,
+  PortfolioAccount,
+  PortfolioInstrument,
+  PortfolioOperation,
   PortfolioRealizedAdjustment,
   PortfolioSale,
   RealizedAdjustmentDraft,
@@ -263,6 +268,290 @@ const getTrackedCurrencies = (
 const canUseProFeatures = (account: AuthenticatedUser) =>
   account.subscriptionPlan === "pro" &&
   (account.subscriptionStatus === "active" || account.subscriptionStatus === "trialing");
+
+const getImportedOperationType = (
+  operation: ImportedBrokerOperation
+): PortfolioOperation["operationType"] =>
+  operation.operationType ?? (operation.side === "buy" ? "BUY" : operation.side === "sell" ? "SELL" : "CUSTOM");
+
+const sanitizeImportIdPart = (value: string) =>
+  normalizeSymbol(value).replace(/[^A-Z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 96);
+
+const getImportedOperationId = (
+  portfolioId: string,
+  operation: ImportedBrokerOperation
+) => {
+  const key =
+    operation.importKey ||
+    operation.brokerOperationId ||
+    [
+      operation.rawTime,
+      operation.rawType,
+      operation.accountNumber,
+      operation.symbol,
+      operation.amount,
+      operation.rowNumber,
+    ]
+      .filter(Boolean)
+      .join(":");
+
+  return `${portfolioId}:operation:import:${sanitizeImportIdPart(key || String(operation.rowNumber))}`;
+};
+
+const getXtbAccountId = (
+  portfolioId: string,
+  accountNumber: string | undefined,
+  currency: string | undefined
+) => {
+  const normalizedCurrency = toCurrencyCode(currency, "PLN");
+  const normalizedAccountNumber = accountNumber?.trim() || normalizedCurrency;
+
+  return `${portfolioId}:account:xtb:${sanitizeImportIdPart(normalizedAccountNumber)}:${normalizedCurrency}`;
+};
+
+const createXtbAccount = ({
+  portfolioId,
+  accountNumber,
+  currency,
+  now,
+}: {
+  portfolioId: string;
+  accountNumber?: string;
+  currency: string;
+  now: string;
+}): PortfolioAccount => {
+  const normalizedCurrency = toCurrencyCode(currency, "PLN");
+  const normalizedAccountNumber = accountNumber?.trim();
+
+  return {
+    id: getXtbAccountId(portfolioId, normalizedAccountNumber, normalizedCurrency),
+    portfolioId,
+    name: normalizedAccountNumber
+      ? `XTB ${normalizedCurrency} ${normalizedAccountNumber}`
+      : `XTB ${normalizedCurrency}`,
+    kind: normalizedCurrency === "PLN" ? "cash" : "currency",
+    broker: "XTB",
+    currency: normalizedCurrency,
+    isDefault: false,
+    metadata: {
+      broker: "XTB",
+      accountNumber: normalizedAccountNumber,
+      imported: true,
+    },
+    createdAt: now,
+    updatedAt: now,
+  };
+};
+
+const upsertXtbAccount = (
+  accounts: PortfolioAccount[],
+  portfolioId: string,
+  accountNumber: string | undefined,
+  currency: string | undefined,
+  now: string
+) => {
+  const normalizedCurrency = toCurrencyCode(currency, "PLN");
+  const id = getXtbAccountId(portfolioId, accountNumber, normalizedCurrency);
+
+  if (accounts.some((account) => account.id === id)) {
+    return accounts;
+  }
+
+  return [
+    ...accounts,
+    createXtbAccount({
+      portfolioId,
+      accountNumber,
+      currency: normalizedCurrency,
+      now,
+    }),
+  ];
+};
+
+const isImportedOperationDuplicate = (
+  operation: ImportedBrokerOperation,
+  operationId: string,
+  existingOperationIds: Set<string>,
+  existingImportKeys: Set<string>
+) => {
+  if (existingOperationIds.has(operationId)) {
+    return true;
+  }
+
+  return Boolean(operation.importKey && existingImportKeys.has(operation.importKey));
+};
+
+const upsertImportedInstrument = (
+  instruments: PortfolioInstrument[],
+  portfolioId: string,
+  operation: ImportedBrokerOperation,
+  now: string
+) => {
+  if (!operation.symbol) {
+    return {
+      instruments,
+      instrumentId: null,
+    };
+  }
+
+  const instrumentId = getPortfolioInstrumentId(portfolioId, {
+    kind: operation.kind,
+    symbol: operation.symbol,
+  });
+
+  if (instruments.some((instrument) => instrument.id === instrumentId)) {
+    return {
+      instruments,
+      instrumentId,
+    };
+  }
+
+  return {
+    instruments: [
+      ...instruments,
+      {
+        id: instrumentId,
+        portfolioId,
+        type: getInstrumentTypeForAssetKind(operation.kind),
+        assetKind: operation.kind,
+        symbol: operation.symbol,
+        name: operation.name || operation.symbol,
+        marketCurrency: toCurrencyCode(operation.currency, "PLN"),
+        provider: operation.provider,
+        providerId: operation.providerId,
+        isin: operation.isin,
+        priceScale: operation.priceScale,
+        metadata: {
+          imported: true,
+          importSource: operation.broker ?? "broker",
+          brokerSymbol: operation.rawSymbol,
+        },
+        createdAt: now,
+        updatedAt: now,
+      } satisfies PortfolioInstrument,
+    ],
+    instrumentId,
+  };
+};
+
+const getImportedOperationMetadata = (
+  operation: ImportedBrokerOperation,
+  targetAccountId?: string
+) => {
+  const operationType = getImportedOperationType(operation);
+  const isDividend = operationType === "DIVIDEND";
+
+  return {
+    kind: isDividend ? "dividend" : "cash",
+    cashImpact: true,
+    importSource: operation.broker ?? "broker",
+    importKey: operation.importKey,
+    brokerOperationId: operation.brokerOperationId,
+    brokerOperationType: operation.rawType,
+    brokerRawTime: operation.rawTime,
+    brokerSymbol: operation.rawSymbol,
+    accountNumber: operation.accountNumber,
+    sourceAccountNumber: operation.sourceAccountNumber,
+    targetAccountNumber: operation.targetAccountNumber,
+    sourceCurrency: operation.sourceCurrency,
+    targetCurrency: operation.targetCurrency,
+    targetAmount: operation.targetAmount,
+    targetAccountId,
+    grossAmount: operation.grossAmount,
+    netAmount: operation.netAmount ?? operation.amount,
+    dividendPerShare: operation.dividendPerShare,
+    withholdingTax: isDividend ? operation.tax ?? 0 : undefined,
+    domesticTax: 0,
+    exDividendDate: isDividend ? operation.date : undefined,
+    recordDate: isDividend ? operation.date : undefined,
+    paymentDate: isDividend ? operation.date : undefined,
+    country: isDividend ? (operation.currency === "PLN" ? "PL" : "Nie ustawiono") : undefined,
+  };
+};
+
+const buildImportedPortfolioOperation = ({
+  portfolioId,
+  accountId,
+  targetAccountId,
+  instrumentId,
+  operation,
+  now,
+}: {
+  portfolioId: string;
+  accountId: string;
+  targetAccountId?: string;
+  instrumentId: string | null;
+  operation: ImportedBrokerOperation;
+  now: string;
+}): PortfolioOperation => {
+  const operationType = getImportedOperationType(operation);
+  const amount =
+    operationType === "DIVIDEND"
+      ? operation.grossAmount ?? operation.amount ?? 0
+      : operation.amount ?? operation.transactionValue ?? 0;
+
+  return {
+    id: getImportedOperationId(portfolioId, operation),
+    portfolioId,
+    accountId,
+    assetId: instrumentId,
+    operationType,
+    quantity: operation.quantity > 0 ? operation.quantity : null,
+    price: operation.price > 0 ? operation.price : null,
+    currency: toCurrencyCode(operation.currency, "PLN"),
+    exchangeRate:
+      typeof operation.exchangeRate === "number" && Number.isFinite(operation.exchangeRate)
+        ? operation.exchangeRate
+        : null,
+    fee: operation.fee ?? 0,
+    tax: operation.tax ?? 0,
+    amount: round(amount, 6),
+    date: toDateInputValue(operation.date),
+    notes: operation.rawType ? `Import XTB: ${operation.rawType}` : "Import brokera",
+    metadata: getImportedOperationMetadata(operation, targetAccountId),
+    createdAt: now,
+    updatedAt: now,
+  };
+};
+
+const applyBrokerRealizedResult = (
+  sale: PortfolioSale,
+  operation: ImportedBrokerOperation
+): PortfolioSale => {
+  if (typeof operation.realizedProfitLoss !== "number" || !Number.isFinite(operation.realizedProfitLoss)) {
+    return sale;
+  }
+
+  const resultCurrency = toCurrencyCode(operation.accountCurrency ?? operation.currency, sale.realizedValueCurrency ?? "PLN");
+
+  return {
+    ...sale,
+    realizedInvestedValue:
+      typeof operation.purchaseValue === "number" && Number.isFinite(operation.purchaseValue)
+        ? round(operation.purchaseValue, 6)
+        : sale.realizedInvestedValue,
+    realizedProceedsValue:
+      typeof operation.saleValue === "number" && Number.isFinite(operation.saleValue)
+        ? round(operation.saleValue, 6)
+        : sale.realizedProceedsValue,
+    realizedProfitLossValue: round(operation.realizedProfitLoss, 6),
+    realizedValueCurrency: resultCurrency,
+    realizedInvestedPln:
+      resultCurrency === "PLN" &&
+      typeof operation.purchaseValue === "number" &&
+      Number.isFinite(operation.purchaseValue)
+        ? round(operation.purchaseValue)
+        : sale.realizedInvestedPln,
+    realizedProceedsPln:
+      resultCurrency === "PLN" &&
+      typeof operation.saleValue === "number" &&
+      Number.isFinite(operation.saleValue)
+        ? round(operation.saleValue)
+        : sale.realizedProceedsPln,
+    realizedProfitLossPln:
+      resultCurrency === "PLN" ? round(operation.realizedProfitLoss) : sale.realizedProfitLossPln,
+  };
+};
 
 const buildInitialPortfolioBook = ({
   initialAssets,
@@ -1927,11 +2216,118 @@ export default function PortfolioApp({
   };
 
   const handleImportBrokerOperations = async (operations: ImportedBrokerOperation[]) => {
+    if (!activePortfolio) {
+      throw new Error("Brakuje aktywnego portfela do importu.");
+    }
+
+    const now = new Date().toISOString();
+    const portfolioForImport =
+      activePortfolioForEngine ??
+      ensurePortfolioCoreModel({
+        ...activePortfolio,
+        assets,
+        sales,
+        realizedAdjustments,
+      });
+    const portfolioId = portfolioForImport.id;
     let nextAssets = normalizeStoredPortfolioAssets(assets);
     let nextSales = getSortedPortfolioSales(sales);
+    let nextAccounts = portfolioForImport.accounts ?? [];
+    let nextInstruments = portfolioForImport.instruments ?? [];
+    let nextOperations = (portfolioForImport.operations ?? []).filter(
+      (operation) => typeof operation.metadata.legacySource !== "string"
+    );
+    const existingOperationIds = new Set(nextOperations.map((operation) => operation.id));
+    const existingImportKeys = new Set(
+      nextOperations
+        .map((operation) =>
+          typeof operation.metadata.importKey === "string" ? operation.metadata.importKey : ""
+        )
+        .filter(Boolean)
+    );
     let importedBuys = 0;
     let importedSells = 0;
+    let importedDividends = 0;
+    let importedCashOperations = 0;
     let skippedSells = 0;
+    let skippedDuplicates = 0;
+
+    const appendCoreOperation = (operation: ImportedBrokerOperation, targetAccountId?: string) => {
+      const sourceCurrency = toCurrencyCode(
+        operation.sourceCurrency ?? operation.accountCurrency ?? operation.currency,
+        "PLN"
+      );
+      const sourceAccountNumber = operation.sourceAccountNumber ?? operation.accountNumber;
+
+      nextAccounts = upsertXtbAccount(
+        nextAccounts,
+        portfolioId,
+        sourceAccountNumber,
+        sourceCurrency,
+        now
+      );
+
+      const accountId = getXtbAccountId(portfolioId, sourceAccountNumber, sourceCurrency);
+      let resolvedTargetAccountId = targetAccountId;
+
+      if (!resolvedTargetAccountId && (operation.targetAccountNumber || operation.targetCurrency)) {
+        const targetCurrency = toCurrencyCode(
+          operation.targetCurrency ?? operation.currency,
+          sourceCurrency
+        );
+
+        nextAccounts = upsertXtbAccount(
+          nextAccounts,
+          portfolioId,
+          operation.targetAccountNumber,
+          targetCurrency,
+          now
+        );
+        resolvedTargetAccountId = getXtbAccountId(
+          portfolioId,
+          operation.targetAccountNumber,
+          targetCurrency
+        );
+      }
+
+      const instrumentResult = upsertImportedInstrument(
+        nextInstruments,
+        portfolioId,
+        operation,
+        now
+      );
+      nextInstruments = instrumentResult.instruments;
+
+      const nextOperation = buildImportedPortfolioOperation({
+        portfolioId,
+        accountId,
+        targetAccountId: resolvedTargetAccountId,
+        instrumentId: instrumentResult.instrumentId,
+        operation,
+        now,
+      });
+
+      if (
+        isImportedOperationDuplicate(
+          operation,
+          nextOperation.id,
+          existingOperationIds,
+          existingImportKeys
+        )
+      ) {
+        skippedDuplicates += 1;
+        return false;
+      }
+
+      nextOperations = [...nextOperations, nextOperation];
+      existingOperationIds.add(nextOperation.id);
+
+      if (operation.importKey) {
+        existingImportKeys.add(operation.importKey);
+      }
+
+      return true;
+    };
 
     const orderedOperations = [...operations].sort(
       (left, right) =>
@@ -1939,12 +2335,47 @@ export default function PortfolioApp({
     );
 
     for (const operation of orderedOperations) {
+      const operationType = getImportedOperationType(operation);
+      const operationId = getImportedOperationId(portfolioId, operation);
+
+      if (
+        isImportedOperationDuplicate(
+          operation,
+          operationId,
+          existingOperationIds,
+          existingImportKeys
+        )
+      ) {
+        skippedDuplicates += 1;
+        continue;
+      }
+
+      if (operationType !== "BUY" && operationType !== "SELL") {
+        if (appendCoreOperation(operation)) {
+          if (operationType === "DIVIDEND") {
+            importedDividends += 1;
+          } else {
+            importedCashOperations += 1;
+          }
+        }
+
+        continue;
+      }
+
+      if (!operation.symbol || operation.quantity <= 0 || operation.price <= 0) {
+        if (operationType === "SELL") {
+          skippedSells += 1;
+        }
+
+        continue;
+      }
+
       const groupKey = getPortfolioAssetGroupKey({
         kind: operation.kind,
         symbol: operation.symbol,
       });
 
-      if (operation.side === "buy") {
+      if (operationType === "BUY") {
         const planLimitError = getFreePlanAssetLimitError(nextAssets.length + 1);
 
         if (planLimitError) {
@@ -1972,7 +2403,9 @@ export default function PortfolioApp({
         };
 
         nextAssets = normalizeStoredPortfolioAssets([nextAsset, ...nextAssets]);
-        importedBuys += 1;
+        if (appendCoreOperation(operation)) {
+          importedBuys += 1;
+        }
         continue;
       }
 
@@ -2012,25 +2445,59 @@ export default function PortfolioApp({
         });
 
         nextAssets = result.assets;
-        nextSales = getSortedPortfolioSales([result.sale, ...nextSales]);
-        importedSells += 1;
+        nextSales = getSortedPortfolioSales([
+          applyBrokerRealizedResult(result.sale, operation),
+          ...nextSales,
+        ]);
+
+        if (appendCoreOperation(operation)) {
+          importedSells += 1;
+        }
       } catch {
         skippedSells += 1;
       }
     }
 
-    if (importedBuys + importedSells === 0) {
+    if (importedBuys + importedSells + importedDividends + importedCashOperations === 0) {
       throw new Error("Nie udalo sie dodac zadnej operacji z pliku.");
     }
 
+    const nextPortfolio = ensurePortfolioCoreModel({
+      ...portfolioForImport,
+      assets: nextAssets,
+      sales: nextSales,
+      realizedAdjustments,
+      accounts: nextAccounts,
+      instruments: nextInstruments,
+      operations: nextOperations,
+      updatedAt: now,
+    });
+
     setAssets(nextAssets);
     setSales(nextSales);
+    setPortfolios((currentPortfolios) =>
+      currentPortfolios.map((portfolio) =>
+        portfolio.id === portfolioId
+          ? {
+              ...portfolio,
+              ...nextPortfolio,
+              assets: nextAssets,
+              sales: nextSales,
+              realizedAdjustments,
+              updatedAt: now,
+            }
+          : portfolio
+      )
+    );
     setSyncError(null);
 
     return {
       importedBuys,
       importedSells,
+      importedDividends,
+      importedCashOperations,
       skippedSells,
+      skippedDuplicates,
     };
   };
 

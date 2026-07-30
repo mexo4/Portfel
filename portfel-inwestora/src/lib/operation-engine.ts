@@ -869,11 +869,14 @@ const getCashEffectAmount = (operation: PortfolioOperation) => {
       return -(amount + feeAndTax);
     case "SELL":
     case "DEPOSIT":
-    case "DIVIDEND":
     case "COUPON":
     case "INTEREST":
     case "BONUS":
       return amount - feeAndTax;
+    case "DIVIDEND":
+      return hasFiniteNumber(operation.metadata.netAmount)
+        ? operation.metadata.netAmount
+        : amount - feeAndTax;
     case "FEE":
       return -Math.max(amount, Math.abs(operation.fee));
     case "TAX":

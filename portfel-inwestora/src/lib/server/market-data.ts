@@ -20,6 +20,7 @@ import {
   normalizeSymbol,
   toStooqGpwSymbol,
 } from "@/lib/ticker";
+import { resolveTickerAlias } from "@/lib/ticker-aliases";
 import { normalizeText, round, toCurrencyCode, uniqueBy } from "@/lib/utils";
 import type {
   AssetKind,
@@ -1284,42 +1285,53 @@ export const fetchAssetQuoteServer = async ({
   providerId?: string;
   priceScale?: number;
 }) => {
-  const normalizedSymbol = normalizeSymbol(symbol);
+  const requestedSymbol = normalizeSymbol(symbol);
+  const alias = resolveTickerAlias(requestedSymbol, kind);
+  const normalizedSymbol = normalizeSymbol(alias?.symbol ?? requestedSymbol);
+  const resolvedKind = alias?.kind ?? kind;
+  const resolvedMarketCurrency = toCurrencyCode(
+    alias?.marketCurrency ?? marketCurrency,
+    marketCurrency
+  );
+  const resolvedProvider = providerId ? provider : alias?.provider ?? provider;
+  const resolvedProviderId = providerId ?? alias?.providerId;
+  const resolvedPriceScale = alias?.priceScale ?? priceScale;
   const isGpwStockRequest = shouldUseGpwStooqQuote({
     symbol: normalizedSymbol,
-    kind,
-    marketCurrency,
+    kind: resolvedKind,
+    marketCurrency: resolvedMarketCurrency,
   });
 
-  if (kind === "crypto") {
-    return fetchCoinGeckoQuote(normalizedSymbol, providerId);
+  if (resolvedKind === "crypto") {
+    return fetchCoinGeckoQuote(normalizedSymbol, resolvedProviderId);
   }
 
-  if (provider === "eodhd" && (kind === "stock" || kind === "etf")) {
+  if (resolvedProvider === "eodhd" && (resolvedKind === "stock" || resolvedKind === "etf")) {
     const eodhdQuote = await fetchEodhdQuote({
       symbol: normalizedSymbol,
-      providerId,
-      marketCurrency,
-      priceScale,
+      providerId: resolvedProviderId,
+      marketCurrency: resolvedMarketCurrency,
+      priceScale: resolvedPriceScale,
     });
 
     if (eodhdQuote) {
       return eodhdQuote;
     }
 
-    if (kind === "stock") {
-      const yahooQuote = await fetchYahooQuote({
-        symbol: normalizedSymbol,
-        fallbackCurrency: marketCurrency,
-      });
+    const yahooQuote = await fetchYahooQuote({
+      symbol: normalizedSymbol,
+      providerId: resolvedProviderId,
+      fallbackCurrency: resolvedMarketCurrency,
+    });
 
-      if (yahooQuote) {
-        return yahooQuote;
-      }
+    if (yahooQuote) {
+      return yahooQuote;
     }
 
-    if (kind === "etf") {
-      return eodhdQuote;
+    const stooqQuote = await fetchStooqQuote(normalizedSymbol, resolvedMarketCurrency);
+
+    if (stooqQuote) {
+      return stooqQuote;
     }
   }
 
@@ -1327,44 +1339,47 @@ export const fetchAssetQuoteServer = async ({
     return fetchGpwStooqQuote(normalizedSymbol);
   }
 
-  if (provider === "yahoo" && kind === "stock") {
+  if (resolvedProvider === "yahoo" && (resolvedKind === "stock" || resolvedKind === "etf")) {
     return fetchYahooQuote({
       symbol: normalizedSymbol,
-      providerId,
-      fallbackCurrency: marketCurrency,
+      providerId: resolvedProviderId,
+      fallbackCurrency: resolvedMarketCurrency,
     });
   }
 
-  if (provider === "finnhub") {
+  if (resolvedProvider === "finnhub") {
     return (
-      (await fetchFinnhubQuote(normalizedSymbol, marketCurrency)) ??
+      (await fetchFinnhubQuote(normalizedSymbol, resolvedMarketCurrency)) ??
       (await fetchYahooQuote({
         symbol: normalizedSymbol,
-        fallbackCurrency: marketCurrency,
+        providerId: resolvedProviderId,
+        fallbackCurrency: resolvedMarketCurrency,
       })) ??
-      (await fetchStooqQuote(normalizedSymbol, marketCurrency)) ??
-      (await fetchStooqQuote(`${normalizedSymbol}.US`, marketCurrency))
+      (await fetchStooqQuote(normalizedSymbol, resolvedMarketCurrency)) ??
+      (await fetchStooqQuote(`${normalizedSymbol}.US`, resolvedMarketCurrency))
     );
   }
 
-  if (provider === "stooq") {
+  if (resolvedProvider === "stooq") {
     return (
-      (await fetchStooqQuote(normalizedSymbol, marketCurrency)) ??
+      (await fetchStooqQuote(normalizedSymbol, resolvedMarketCurrency)) ??
       (await fetchYahooQuote({
         symbol: normalizedSymbol,
-        fallbackCurrency: marketCurrency,
+        providerId: resolvedProviderId,
+        fallbackCurrency: resolvedMarketCurrency,
       })) ??
-      (await fetchFinnhubQuote(normalizedSymbol, marketCurrency))
+      (await fetchFinnhubQuote(normalizedSymbol, resolvedMarketCurrency))
     );
   }
 
   const autoQuote =
-    (await fetchFinnhubQuote(normalizedSymbol, marketCurrency)) ??
+    (await fetchFinnhubQuote(normalizedSymbol, resolvedMarketCurrency)) ??
     (await fetchYahooQuote({
       symbol: normalizedSymbol,
-      fallbackCurrency: marketCurrency,
+      providerId: resolvedProviderId,
+      fallbackCurrency: resolvedMarketCurrency,
     })) ??
-    (await fetchStooqQuote(normalizedSymbol, marketCurrency));
+    (await fetchStooqQuote(normalizedSymbol, resolvedMarketCurrency));
 
   return autoQuote;
 };

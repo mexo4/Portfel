@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   parseBrokerOperationsCsv,
+  parseBrokerOperationsMhtml,
   parseBrokerOperationsPdf,
   parseBrokerOperationsXlsx,
   type BrokerImportParseResult,
@@ -18,12 +19,30 @@ type BrokerImportPanelProps = {
   onImport: (operations: ImportedBrokerOperation[]) => Promise<{
     importedBuys: number;
     importedSells: number;
+    importedDividends?: number;
+    importedCashOperations?: number;
     skippedSells: number;
+    skippedDuplicates?: number;
   }>;
 };
 
-const formatSide = (side: ImportedBrokerOperation["side"]) =>
-  side === "buy" ? "Kupno" : "Sprzedaz";
+const formatOperationType = (operation: ImportedBrokerOperation) => {
+  if (operation.side === "buy") return "Kupno";
+  if (operation.side === "sell") return "Sprzedaz";
+
+  const labels: Record<string, string> = {
+    DEPOSIT: "Wplata",
+    WITHDRAW: "Wyplata",
+    TRANSFER: "Transfer",
+    CONVERSION: "Przewalutowanie",
+    DIVIDEND: "Dywidenda",
+    INTEREST: "Odsetki",
+    FEE: "Oplata",
+    TAX: "Podatek",
+  };
+
+  return labels[operation.operationType ?? ""] ?? operation.operationType ?? "Operacja";
+};
 
 const isPdfFile = (file: File) =>
   file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
@@ -31,6 +50,18 @@ const isPdfFile = (file: File) =>
 const isXlsxFile = (file: File) =>
   file.name.toLowerCase().endsWith(".xlsx") ||
   file.type === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+
+const isMhtmlFile = (file: File) => {
+  const lowerName = file.name.toLowerCase();
+  return (
+    lowerName.endsWith(".mhtml") ||
+    lowerName.endsWith(".mht") ||
+    lowerName.endsWith(".html") ||
+    lowerName.endsWith(".htm") ||
+    file.type === "message/rfc822" ||
+    file.type === "text/html"
+  );
+};
 
 const waitForPaint = () =>
   new Promise<void>((resolve) => {
@@ -79,7 +110,9 @@ export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) 
         ? "Odczytuje arkusz XLSX..."
         : isPdfFile(file)
           ? "Odczytuje raport PDF..."
-          : "Odczytuje plik CSV..."
+          : isMhtmlFile(file)
+            ? "Odczytuje raport HTML/MHTML..."
+            : "Odczytuje plik CSV..."
     );
     await waitForPaint();
 
@@ -98,6 +131,9 @@ export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) 
           new Uint8Array(await file.arrayBuffer()),
           preset
         );
+      } else if (isMhtmlFile(file)) {
+        setParseStatus("Dekoduje HTML/MHTML i mapuje tabele XTB...");
+        result = parseBrokerOperationsMhtml(await file.text(), preset);
       } else {
         setParseStatus("Mapuje kolumny CSV...");
         result = parseBrokerOperationsCsv(await file.text(), preset);
@@ -157,10 +193,17 @@ export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) 
 
     try {
       const result = await onImport(parseResult.operations);
-      const importedTotal = result.importedBuys + result.importedSells;
+      const importedDividends = result.importedDividends ?? 0;
+      const importedCashOperations = result.importedCashOperations ?? 0;
+      const skippedDuplicates = result.skippedDuplicates ?? 0;
+      const importedTotal =
+        result.importedBuys +
+        result.importedSells +
+        importedDividends +
+        importedCashOperations;
 
       setSuccess(
-        `Zaimportowano ${importedTotal} operacji: ${result.importedBuys} kupna i ${result.importedSells} sprzedazy. Pominiete sprzedaze bez pozycji: ${result.skippedSells}.`
+        `Zaimportowano ${importedTotal} operacji: ${result.importedBuys} kupna, ${result.importedSells} sprzedazy, ${importedDividends} dywidend i ${importedCashOperations} operacji gotowkowych. Pominiete sprzedaze bez pozycji: ${result.skippedSells}. Duplikaty: ${skippedDuplicates}.`
       );
     } catch (importError) {
       setError(
@@ -182,7 +225,7 @@ export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) 
         </div>
 
         <p className="section-copy">
-          Obslugiwane sa eksporty CSV, XLSX oraz tekstowe raporty PDF XTB z
+          Obslugiwane sa eksporty CSV, XLSX, HTML/MHTML oraz tekstowe raporty PDF XTB z
           danymi transakcji.
         </p>
       </div>
@@ -194,11 +237,11 @@ export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) 
         />
 
         <label className="field">
-          <span>Plik CSV/XLSX/PDF</span>
+          <span>Plik CSV/XLSX/PDF/HTML</span>
           <input
             ref={fileInputRef}
             type="file"
-            accept=".csv,.xlsx,.pdf,text/csv,application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            accept=".csv,.xlsx,.pdf,.mhtml,.mht,.html,.htm,text/csv,text/html,message/rfc822,application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
           />
         </label>
 
@@ -253,13 +296,13 @@ export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) 
             <tbody>
               {previewRows.map((operation) => (
                 <tr key={`${operation.rowNumber}-${operation.symbol}`}>
-                  <td>{formatSide(operation.side)}</td>
+                  <td>{formatOperationType(operation)}</td>
                   <td>{operation.date}</td>
-                  <td>{operation.symbol}</td>
-                  <td>{operation.quantity}</td>
-                  <td>{operation.price}</td>
-                  <td>{operation.transactionValue ?? "-"}</td>
-                  <td>{operation.currency}</td>
+                  <td>{operation.symbol || "-"}</td>
+                  <td>{operation.quantity || "-"}</td>
+                  <td>{operation.price || "-"}</td>
+                  <td>{operation.transactionValue ?? operation.amount ?? "-"}</td>
+                  <td>{operation.accountCurrency ?? operation.currency}</td>
                 </tr>
               ))}
             </tbody>

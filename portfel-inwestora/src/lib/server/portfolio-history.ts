@@ -10,7 +10,8 @@ import {
   isGpwSymbol,
   normalizeSymbol,
 } from "@/lib/ticker";
-import { round, toCurrencyCode, toDateInputValue } from "@/lib/utils";
+import { resolveTickerAlias } from "@/lib/ticker-aliases";
+import { round, toCurrencyCode, toDateInputValue, uniqueBy } from "@/lib/utils";
 import type {
   AssetKind,
   CurrencyCode,
@@ -649,6 +650,24 @@ const fetchCoinGeckoHistory = async (
   );
 };
 
+const getHistoryLookupSymbols = ({
+  symbol,
+  provider,
+  providerId,
+}: {
+  symbol: string;
+  provider: QuoteProvider;
+  providerId?: string;
+}) =>
+  uniqueBy(
+    [
+      provider === "yahoo" ? providerId : undefined,
+      providerId,
+      symbol,
+    ].filter((candidate): candidate is string => Boolean(candidate)),
+    (candidate) => normalizeSymbol(candidate)
+  );
+
 const fetchInstrumentHistory = async ({
   kind,
   symbol,
@@ -662,9 +681,26 @@ const fetchInstrumentHistory = async ({
   endDate: string
 ): Promise<InstrumentHistoryResult> => {
   try {
-    if (kind === "bond") {
+    const normalizedSymbol = normalizeSymbol(symbol);
+    const alias = resolveTickerAlias(normalizedSymbol, kind);
+    const resolvedKind = alias?.kind ?? kind;
+    const resolvedSymbol = normalizeSymbol(alias?.symbol ?? normalizedSymbol);
+    const resolvedMarketCurrency = toCurrencyCode(
+      alias?.marketCurrency ?? marketCurrency,
+      marketCurrency
+    );
+    const resolvedProvider = providerId ? provider : alias?.provider ?? provider;
+    const resolvedProviderId = providerId ?? alias?.providerId;
+    const resolvedPriceScale = alias?.priceScale ?? priceScale;
+    const lookupSymbols = getHistoryLookupSymbols({
+      symbol: resolvedSymbol,
+      provider: resolvedProvider,
+      providerId: resolvedProviderId,
+    });
+
+    if (resolvedKind === "bond") {
       const points = await fetchTreasuryBondQuoteSeriesServer({
-        code: symbol,
+        code: resolvedSymbol,
         purchaseDate,
         startDate,
         endDate,
@@ -680,13 +716,13 @@ const fetchInstrumentHistory = async ({
       };
     }
 
-    if (kind === "stock") {
-      if (provider === "eodhd" && providerId) {
+    if (resolvedKind === "stock") {
+      if (resolvedProvider === "eodhd" && resolvedProviderId) {
         const eodhdPoints = await fetchEodhdHistory(
-          providerId,
+          resolvedProviderId,
           startDate,
           endDate,
-          priceScale
+          resolvedPriceScale
         );
 
         if (eodhdPoints.length > 0) {
@@ -694,43 +730,58 @@ const fetchInstrumentHistory = async ({
         }
       }
 
-      const stockHistorySymbol = provider === "yahoo" && providerId ? providerId : symbol;
-      const points = await fetchStockHistory(
-        stockHistorySymbol,
-        startDate,
-        endDate,
-        priceScale
-      );
+      for (const stockHistorySymbol of lookupSymbols) {
+        const points = await fetchStockHistory(
+          stockHistorySymbol,
+          startDate,
+          endDate,
+          resolvedPriceScale
+        );
 
-      return points.length > 0
-        ? { points }
-        : {
-            points: [],
-            warning: `Nie udalo sie pobrac pelnej historii cen dla ${symbol}; uzyto fallbacku z danych zakupu.`,
-          };
+        if (points.length > 0) {
+          return { points };
+        }
+      }
+
+      return {
+        points: [],
+        warning: `Nie udalo sie pobrac pelnej historii cen dla ${symbol}; uzyto fallbacku z danych zakupu.`,
+      };
     }
 
-    if (kind === "etf") {
-      const eodhdPoints = providerId
-        ? await fetchEodhdHistory(providerId, startDate, endDate, priceScale)
+    if (resolvedKind === "etf") {
+      const eodhdPoints = resolvedProvider === "eodhd" && resolvedProviderId
+        ? await fetchEodhdHistory(resolvedProviderId, startDate, endDate, resolvedPriceScale)
         : [];
 
       if (eodhdPoints.length > 0) {
         return { points: eodhdPoints };
       }
 
-      const fallbackPoints = await fetchStockHistory(symbol, startDate, endDate, priceScale);
+      for (const etfHistorySymbol of lookupSymbols) {
+        const points = await fetchStockHistory(
+          etfHistorySymbol,
+          startDate,
+          endDate,
+          resolvedPriceScale
+        );
 
-      return fallbackPoints.length > 0
-        ? { points: fallbackPoints }
-        : {
-            points: [],
-            warning: `Nie udalo sie pobrac pelnej historii cen dla ETF ${symbol}; uzyto fallbacku z danych zakupu.`,
-          };
+        if (points.length > 0) {
+          return { points };
+        }
+      }
+
+      return {
+        points: [],
+        warning: `Nie udalo sie pobrac pelnej historii cen dla ETF ${symbol}; uzyto fallbacku z danych zakupu.`,
+      };
     }
 
-    if (kind === "crypto") {
-      const coinGeckoProviderId = normalizeCoinGeckoHistoryProviderId(symbol, providerId);
+    if (resolvedKind === "crypto") {
+      const coinGeckoProviderId = normalizeCoinGeckoHistoryProviderId(
+        resolvedSymbol,
+        resolvedProviderId
+      );
 
       if (!coinGeckoProviderId) {
         return {
@@ -758,7 +809,7 @@ const fetchInstrumentHistory = async ({
 
     return {
       points: [],
-      warning: `Brakuje historii cen dla ${symbol} (${marketCurrency}); uzyto fallbacku z danych zakupu.`,
+      warning: `Brakuje historii cen dla ${symbol} (${resolvedMarketCurrency}); uzyto fallbacku z danych zakupu.`,
     };
   } catch {
     return {

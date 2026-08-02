@@ -329,7 +329,7 @@ const createXtbAccount = ({
     name: normalizedAccountNumber
       ? `XTB ${normalizedCurrency} ${normalizedAccountNumber}`
       : `XTB ${normalizedCurrency}`,
-    kind: normalizedCurrency === "PLN" ? "cash" : "currency",
+    kind: "cash",
     broker: "XTB",
     currency: normalizedCurrency,
     isDefault: false,
@@ -459,6 +459,8 @@ const getImportedOperationMetadata = (
     cashAmount: operation.cashAmount,
     marketAmount: operation.marketAmount,
     declaredCurrency: operation.declaredCurrency,
+    autoFxConversion: operation.autoFxConversion,
+    brokerFxSpreadRate: operation.brokerFxSpreadRate,
     accountNumber: operation.accountNumber,
     sourceAccountNumber: operation.sourceAccountNumber,
     targetAccountNumber: operation.targetAccountNumber,
@@ -2411,6 +2413,14 @@ export default function PortfolioApp({
         operation.marketCurrency ?? operation.currency,
         "PLN"
       );
+      const importedCashCurrency = toCurrencyCode(
+        operation.cashCurrency ?? operation.accountCurrency ?? operation.currency,
+        "PLN"
+      );
+      const importedSettlementUnitPrice =
+        operation.cashAmount && operation.quantity > 0
+          ? round(operation.cashAmount / operation.quantity, 6)
+          : operation.price;
 
       if (operationType === "BUY") {
         const planLimitError = getFreePlanAssetLimitError(nextAssets.length + 1);
@@ -2429,8 +2439,8 @@ export default function PortfolioApp({
           kind: operation.kind,
           purchaseDate: operation.date,
           quantity: operation.quantity,
-          purchasePrice: operation.price,
-          purchaseCurrency: importedMarketCurrency,
+          purchasePrice: importedSettlementUnitPrice,
+          purchaseCurrency: importedCashCurrency,
           feePln: operation.feePln,
           marketCurrency: importedMarketCurrency,
           provider: operation.provider,
@@ -2465,16 +2475,16 @@ export default function PortfolioApp({
             name: operation.name || targetGroup.name,
             symbol: operation.symbol,
             kind: operation.kind,
-            purchaseCurrency: importedMarketCurrency,
-            marketCurrency: importedMarketCurrency,
+            purchaseCurrency: importedCashCurrency,
+            marketCurrency: importedCashCurrency,
             provider: representativeLot?.provider ?? operation.provider,
             providerId: representativeLot?.providerId ?? operation.providerId,
             priceScale: representativeLot?.priceScale,
             maxQuantity: targetGroup.quantity,
             quantity: operation.quantity,
             quantityInput: String(operation.quantity),
-            salePrice: operation.price,
-            salePriceInput: String(operation.price),
+            salePrice: importedSettlementUnitPrice,
+            salePriceInput: String(importedSettlementUnitPrice),
             saleDate: operation.date,
             feePln: operation.feePln,
           },

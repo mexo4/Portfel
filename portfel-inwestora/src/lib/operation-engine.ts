@@ -788,11 +788,24 @@ export const collectPortfolioCurrencies = (
     new Set(
       [
         BASE_CURRENCY,
-        ...state.assets.flatMap((asset) => [asset.purchaseCurrency, asset.marketCurrency]),
-        ...state.sales.map((sale) => sale.marketCurrency),
+        ...state.assets.map((asset) => asset.purchaseCurrency),
+        ...state.sales.flatMap((sale) => [
+          sale.realizedValueCurrency,
+          ...sale.allocations.map((allocation) => allocation.purchaseCurrency),
+        ]),
         ...state.realizedAdjustments.map((adjustment) => adjustment.currency),
         ...(Array.isArray(operations)
-          ? operations.map((operation) => normalizeCurrency(asRecord(operation).currency))
+          ? operations.flatMap((operation) => {
+              const rawOperation = asRecord(operation);
+              const metadata = asRecord(rawOperation.metadata);
+
+              return [
+                rawOperation.currency,
+                metadata.cashCurrency,
+                metadata.sourceCurrency,
+                metadata.targetCurrency,
+              ].map((currency) => normalizeCurrency(currency));
+            })
           : []),
       ].map((currency) => toCurrencyCode(currency, BASE_CURRENCY))
     )

@@ -33,6 +33,8 @@ export type ImportedBrokerOperation = {
   tax?: number;
   amount?: number;
   exchangeRate?: number;
+  autoFxConversion?: boolean;
+  brokerFxSpreadRate?: number;
   grossAmount?: number;
   netAmount?: number;
   dividendPerShare?: number;
@@ -706,7 +708,13 @@ const extractPdfFlateStreams = (rawText: string) =>
     return streamBytes;
   });
 
-const extractTextFromPdfBytes = async (bytes: Uint8Array) => {
+type PdfTextExtraction = {
+  text: string;
+  warnings: string[];
+  passwordProtected?: boolean;
+};
+
+const extractTextFromPdfStreams = async (bytes: Uint8Array) => {
   const rawText = new TextDecoder("latin1").decode(bytes);
   const flateStreams = extractPdfFlateStreams(rawText);
   const decodedStreams: string[] = [];
@@ -728,6 +736,196 @@ const extractTextFromPdfBytes = async (bytes: Uint8Array) => {
   ];
 
   return textParts.join("\n");
+};
+
+const getPdfExtractionScore = (text: string) =>
+  (PDF_TEXT_HINT_PATTERN.test(text) ? 10_000 : 0) + text.replace(/\s+/g, "").length;
+
+const isPdfPasswordError = (error: unknown) => {
+  const record = error && typeof error === "object" ? (error as Record<string, unknown>) : {};
+  const name = typeof record.name === "string" ? record.name : "";
+  const message = typeof record.message === "string" ? record.message : "";
+
+  return name === "PasswordException" || /password/i.test(message);
+};
+
+const extractTextFromPdfJs = async (
+  bytes: Uint8Array,
+  password?: string
+): Promise<PdfTextExtraction> => {
+  try {
+    const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+    const pdfDocumentParameters = {
+      data: new Uint8Array(bytes),
+      disableWorker: true,
+      password,
+    } as unknown as Parameters<typeof pdfjs.getDocument>[0];
+    const pdf = await pdfjs.getDocument(pdfDocumentParameters).promise;
+    const pages: string[] = [];
+
+    for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+      const page = await pdf.getPage(pageNumber);
+      const textContent = await page.getTextContent();
+      const pageText = textContent.items
+        .map((item) => {
+          const record = item as { str?: unknown };
+          return typeof record.str === "string" ? record.str : "";
+        })
+        .join(" ")
+        .replace(/\s+/g, " ")
+        .trim();
+
+      if (pageText) {
+        pages.push(pageText);
+      }
+
+      await yieldToMainThread();
+    }
+
+    return {
+      text: pages.join("\n"),
+      warnings: pages.length > 0 ? ["PDF: tekst odczytano przez PDF.js."] : [],
+    };
+  } catch (error) {
+    if (isPdfPasswordError(error)) {
+      return {
+        text: "",
+        warnings: [
+          "PDF jest zabezpieczony haslem. Import Daily Statement XTB wymaga pliku bez hasla albo dodania hasla do importu.",
+        ],
+        passwordProtected: true,
+      };
+    }
+
+    return {
+      text: "",
+      warnings: [
+        `PDF.js nie odczytal tekstu z dokumentu: ${
+          error instanceof Error ? error.message : "nieznany blad"
+        }.`,
+      ],
+    };
+  }
+};
+
+type PdfRenderablePage = {
+  getViewport: (options: { scale: number }) => { width: number; height: number };
+  render: (options: {
+    canvas: HTMLCanvasElement;
+    canvasContext: CanvasRenderingContext2D;
+    viewport: { width: number; height: number };
+  }) => { promise: Promise<void> };
+};
+
+type PdfRenderableDocument = {
+  getPage: (pageNumber: number) => Promise<PdfRenderablePage>;
+};
+
+const renderPdfPageToCanvas = async (pdf: PdfRenderableDocument, pageNumber: number) => {
+  const page = await pdf.getPage(pageNumber);
+  const viewport = page.getViewport({ scale: 2 });
+  const canvas = document.createElement("canvas");
+  const context = canvas.getContext("2d");
+
+  if (!context) {
+    return null;
+  }
+
+  canvas.width = Math.ceil(viewport.width);
+  canvas.height = Math.ceil(viewport.height);
+  await page.render({ canvas, canvasContext: context, viewport }).promise;
+
+  return canvas;
+};
+
+const extractOcrTextFromPdfBytes = async (bytes: Uint8Array): Promise<PdfTextExtraction> => {
+  if (typeof document === "undefined") {
+    return {
+      text: "",
+      warnings: ["OCR PDF wymaga srodowiska przegladarki z obsluga canvas."],
+    };
+  }
+
+  try {
+    const [pdfjs, tesseract] = await Promise.all([
+      import("pdfjs-dist/legacy/build/pdf.mjs"),
+      import("tesseract.js"),
+    ]);
+    const recognize =
+      tesseract.recognize ?? (tesseract.default as { recognize?: typeof tesseract.recognize })?.recognize;
+
+    if (!recognize) {
+      return {
+        text: "",
+        warnings: ["OCR PDF nie jest dostepny: brak funkcji recognize w tesseract.js."],
+      };
+    }
+
+    const pdfDocumentParameters = {
+      data: new Uint8Array(bytes),
+      disableWorker: true,
+    } as unknown as Parameters<typeof pdfjs.getDocument>[0];
+    const pdf = await pdfjs.getDocument(pdfDocumentParameters).promise;
+    const pages: string[] = [];
+
+    for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+      const canvas = await renderPdfPageToCanvas(
+        pdf as unknown as PdfRenderableDocument,
+        pageNumber
+      );
+
+      if (!canvas) {
+        continue;
+      }
+
+      const image = canvas.toDataURL("image/png");
+      const result = await recognize(image, "eng+pol");
+      const text = result.data.text.replace(/\s+/g, " ").trim();
+
+      if (text) {
+        pages.push(text);
+      }
+
+      await yieldToMainThread();
+    }
+
+    return {
+      text: pages.join("\n"),
+      warnings: pages.length > 0 ? ["PDF: tekst odczytano przez OCR."] : [],
+    };
+  } catch (error) {
+    if (isPdfPasswordError(error)) {
+      return {
+        text: "",
+        warnings: [
+          "PDF jest zabezpieczony haslem. OCR nie moze odczytac zaszyfrowanego dokumentu bez hasla.",
+        ],
+        passwordProtected: true,
+      };
+    }
+
+    return {
+      text: "",
+      warnings: [
+        `OCR PDF nie powiodl sie: ${error instanceof Error ? error.message : "nieznany blad"}.`,
+      ],
+    };
+  }
+};
+
+const extractTextFromPdfBytes = async (bytes: Uint8Array): Promise<PdfTextExtraction> => {
+  const streamText = await extractTextFromPdfStreams(bytes);
+  const pdfJsExtraction = await extractTextFromPdfJs(bytes);
+  const bestText =
+    getPdfExtractionScore(pdfJsExtraction.text) > getPdfExtractionScore(streamText)
+      ? pdfJsExtraction.text
+      : streamText;
+
+  return {
+    text: bestText,
+    warnings: pdfJsExtraction.warnings,
+    passwordProtected: pdfJsExtraction.passwordProtected,
+  };
 };
 
 const extractLabeledNumber = (text: string, labels: string[]) => {
@@ -1136,11 +1334,58 @@ const readZipTextEntry = async (
   return textDecoder.decode(await readZipEntryBytes(bytes, entry));
 };
 
-const parseXml = (text: string) => new DOMParser().parseFromString(text, "application/xml");
+const XML_ENTITY_MAP: Record<string, string> = {
+  amp: "&",
+  apos: "'",
+  gt: ">",
+  lt: "<",
+  quot: "\"",
+};
 
-const getNodeText = (node: Element) =>
-  Array.from(node.getElementsByTagName("t"))
-    .map((item) => item.textContent ?? "")
+const decodeXmlText = (value: string) =>
+  value.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (match, entity: string) => {
+    const normalizedEntity = entity.toLowerCase();
+
+    if (normalizedEntity.startsWith("#x")) {
+      return String.fromCharCode(parseInt(normalizedEntity.slice(2), 16));
+    }
+
+    if (normalizedEntity.startsWith("#")) {
+      return String.fromCharCode(Number(normalizedEntity.slice(1)));
+    }
+
+    return XML_ENTITY_MAP[normalizedEntity] ?? match;
+  });
+
+const getXmlAttribute = (tag: string, attributeName: string) => {
+  const escapedName = attributeName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = tag.match(new RegExp(`\\s${escapedName}="([^"]*)"`, "i"));
+
+  return match?.[1] ? decodeXmlText(match[1]) : "";
+};
+
+const getXmlBlocks = (xmlText: string, tagName: string) =>
+  Array.from(
+    xmlText.matchAll(
+      new RegExp(
+        `<(?:[A-Za-z_][\\w.-]*:)?${tagName}\\b[\\s\\S]*?(?:</(?:[A-Za-z_][\\w.-]*:)?${tagName}>|/>)`,
+        "gi"
+      )
+    )
+  ).map((match) => match[0]);
+
+const getXmlStartTags = (xmlText: string, tagName: string) =>
+  Array.from(
+    xmlText.matchAll(new RegExp(`<(?:[A-Za-z_][\\w.-]*:)?${tagName}\\b[^>]*>`, "gi"))
+  ).map((match) => match[0]);
+
+const getXmlTextNodes = (xmlText: string, tagName = "t") =>
+  Array.from(
+    xmlText.matchAll(
+      new RegExp(`<(?:[A-Za-z_][\\w.-]*:)?${tagName}\\b[^>]*>([\\s\\S]*?)</(?:[A-Za-z_][\\w.-]*:)?${tagName}>`, "gi")
+    )
+  )
+    .map((match) => decodeXmlText(match[1] ?? ""))
     .join("");
 
 const readSharedStrings = (xmlText: string | null) => {
@@ -1148,8 +1393,7 @@ const readSharedStrings = (xmlText: string | null) => {
     return [];
   }
 
-  const xml = parseXml(xmlText);
-  return Array.from(xml.getElementsByTagName("si")).map(getNodeText);
+  return getXmlBlocks(xmlText, "si").map((block) => getXmlTextNodes(block));
 };
 
 const normalizeWorkbookRelationshipTarget = (target: string) => {
@@ -1187,22 +1431,20 @@ const getWorkbookWorksheetEntries = async (
     return fallbackEntries;
   }
 
-  const workbookXml = parseXml(workbookText);
-  const relsXml = parseXml(workbookRelsText);
-  const relationships = Array.from(relsXml.getElementsByTagName("Relationship"));
+  const relationships = getXmlStartTags(workbookRelsText, "Relationship");
   const seenEntryNames = new Set<string>();
-  const workbookEntries = Array.from(workbookXml.getElementsByTagName("sheet"))
+  const workbookEntries = getXmlStartTags(workbookText, "sheet")
     .map((sheet, order) => {
-      const relationshipId = sheet.getAttribute("r:id") ?? sheet.getAttribute("id") ?? "";
+      const relationshipId = getXmlAttribute(sheet, "r:id") || getXmlAttribute(sheet, "id");
 
       if (!relationshipId) {
         return null;
       }
 
       const relationship = relationships.find(
-        (item) => item.getAttribute("Id") === relationshipId
+        (item) => getXmlAttribute(item, "Id") === relationshipId
       );
-      const target = relationship?.getAttribute("Target") ?? "";
+      const target = relationship ? getXmlAttribute(relationship, "Target") : "";
       const targetEntryName = target ? normalizeWorkbookRelationshipTarget(target) : "";
       const entry = entriesByName.get(targetEntryName);
 
@@ -1215,7 +1457,7 @@ const getWorkbookWorksheetEntries = async (
       return {
         entry,
         order,
-        sheetName: sheet.getAttribute("name") ?? entry.name,
+        sheetName: getXmlAttribute(sheet, "name") || entry.name,
       } satisfies WorkbookWorksheetEntry;
     })
     .filter((item): item is WorkbookWorksheetEntry => Boolean(item));
@@ -1242,29 +1484,28 @@ const getColumnIndex = (cellRef: string) => {
   ) - 1;
 };
 
-const getCellText = (cell: Element, sharedStrings: string[]) => {
-  const type = cell.getAttribute("t");
+const getCellText = (cell: string, sharedStrings: string[]) => {
+  const startTag = cell.match(/^<[^>]+>/)?.[0] ?? "";
+  const type = getXmlAttribute(startTag, "t");
 
   if (type === "s") {
-    const sharedStringIndex = Number(cell.getElementsByTagName("v")[0]?.textContent ?? "");
+    const sharedStringIndex = Number(getXmlTextNodes(cell, "v"));
     return sharedStrings[sharedStringIndex] ?? "";
   }
 
   if (type === "inlineStr") {
-    const inlineString = cell.getElementsByTagName("is")[0];
-    return inlineString ? getNodeText(inlineString) : "";
+    return getXmlTextNodes(cell);
   }
 
   return (
-    cell.getElementsByTagName("v")[0]?.textContent ??
-    cell.getElementsByTagName("t")[0]?.textContent ??
+    getXmlTextNodes(cell, "v") ||
+    getXmlTextNodes(cell, "t") ||
     ""
   ).trim();
 };
 
 const parseWorksheetRows = async (xmlText: string, sharedStrings: string[]) => {
-  const xml = parseXml(xmlText);
-  const rowNodes = Array.from(xml.getElementsByTagName("row"));
+  const rowNodes = getXmlBlocks(xmlText, "row");
   const rows: string[][] = [];
 
   for (let rowIndex = 0; rowIndex < rowNodes.length; rowIndex += 1) {
@@ -1275,8 +1516,8 @@ const parseWorksheetRows = async (xmlText: string, sharedStrings: string[]) => {
     const row = rowNodes[rowIndex];
     const cells: string[] = [];
 
-    Array.from(row.getElementsByTagName("c")).forEach((cell) => {
-      const ref = cell.getAttribute("r") ?? "";
+    getXmlBlocks(row, "c").forEach((cell) => {
+      const ref = getXmlAttribute(cell.match(/^<[^>]+>/)?.[0] ?? "", "r");
       const index = getColumnIndex(ref);
 
       if (index >= 0) {
@@ -1426,7 +1667,7 @@ const detectXtbAccountNumber = (rows: string[][]) => {
 
 const parseXtbTransferComment = (comment: string) => {
   const match = comment.match(
-    /currency\s+conversion,\s*([A-Z]{3})\s+to\s+([A-Z]{3}).*?from\s+TA:\s*(\d+)\s+to:\s*(\d+).*?exchange\s+rate\s*:\s*([-+]?\d[\d.,]*)/i
+    /currency\s+conversion\s*,?\s*([A-Z]{3})\s+to\s+([A-Z]{3})[\s\S]*?from\s+TA\s*:?\s*(\d+)[\s\S]*?\bto\s*:?\s*(\d+)[\s\S]*?exchange\s+rate\s*:?\s*([-+]?\d[\d.,]*)/i
   );
 
   if (!match) {
@@ -1561,6 +1802,18 @@ const getXtbDividendPerShare = (comment: string) => {
 const getXtbCommentCurrency = (comment: string, fallback: CurrencyCode) =>
   toCurrencyCode(comment.match(/\b(PLN|USD|EUR|GBP|CHF|DKK|CZK|CAD|JPY|NOK|SEK)\b/i)?.[1], fallback);
 
+const XTB_AUTO_FX_SPREAD_RATE = 0.005;
+
+const isLikelyXtbSymbolToken = (value: string) => {
+  const normalized = value.trim().toUpperCase();
+
+  return (
+    normalized === "BITCOIN" ||
+    (/^(?=.*[A-Z])[A-Z0-9]{1,14}(?:\.[A-Z0-9]{1,5})?$/.test(normalized) &&
+      !["PAYU", "BLIK", "ADYEN"].includes(normalized))
+  );
+};
+
 const isXtbBuyType = (normalizedType: string) => normalizedType === "stock purchase";
 const isXtbSellType = (normalizedType: string) =>
   normalizedType === "stock sell" || normalizedType === "stock sale";
@@ -1582,6 +1835,7 @@ const isXtbFeeType = (normalizedType: string) =>
   normalizedType === "fees" ||
   normalizedType === "commission" ||
   normalizedType === "swap";
+const isXtbCloseTradeType = (normalizedType: string) => normalizedType === "close trade";
 
 const parseXtbCashRows = (rows: string[][], header: XtbHeader): XtbCashRow[] =>
   rows
@@ -1632,6 +1886,8 @@ const buildBaseXtbOperation = ({
   cashAmount,
   marketAmount,
   declaredCurrency,
+  autoFxConversion,
+  brokerFxSpreadRate,
   side,
 }: {
   row: XtbCashRow;
@@ -1652,6 +1908,8 @@ const buildBaseXtbOperation = ({
   cashAmount?: number;
   marketAmount?: number;
   declaredCurrency?: CurrencyCode;
+  autoFxConversion?: boolean;
+  brokerFxSpreadRate?: number;
   side?: BrokerOperationSide;
 }): ImportedBrokerOperation => {
   const identityCurrency = marketCurrency ?? currency;
@@ -1681,6 +1939,8 @@ const buildBaseXtbOperation = ({
     tax: round(Math.abs(tax), 6),
     amount: round(Math.abs(amount), 6),
     exchangeRate,
+    autoFxConversion,
+    brokerFxSpreadRate,
     transactionValue: amount ? round(Math.abs(amount), 6) : undefined,
     accountCurrency,
     broker: "XTB",
@@ -1729,6 +1989,32 @@ const findMatchingXtbDividendTax = (
         Math.abs(left.taxRow.rowNumber - dividend.rowNumber) -
           Math.abs(right.taxRow.rowNumber - dividend.rowNumber)
     )[0]?.taxRow;
+};
+
+const findMatchingXtbCloseTrade = (
+  saleRow: XtbCashRow,
+  closeTradeRows: XtbCashRow[],
+  usedCloseTradeRowIds: Set<string>
+) => {
+  const saleTime = saleRow.serialTime ?? 0;
+
+  return closeTradeRows
+    .filter((closeTradeRow) => !usedCloseTradeRowIds.has(closeTradeRow.id))
+    .filter((closeTradeRow) => normalizeSymbol(closeTradeRow.rawSymbol) === normalizeSymbol(saleRow.rawSymbol))
+    .filter((closeTradeRow) => closeTradeRow.date === saleRow.date)
+    .map((closeTradeRow) => ({
+      closeTradeRow,
+      distance:
+        saleRow.serialTime && closeTradeRow.serialTime
+          ? Math.abs(saleTime - closeTradeRow.serialTime)
+          : Math.abs(closeTradeRow.rowNumber - saleRow.rowNumber),
+    }))
+    .sort(
+      (left, right) =>
+        left.distance - right.distance ||
+        Math.abs(left.closeTradeRow.rowNumber - saleRow.rowNumber) -
+          Math.abs(right.closeTradeRow.rowNumber - saleRow.rowNumber)
+    )[0]?.closeTradeRow;
 };
 
 const parseXtbClosedPositionRows = (rows: string[][]): XtbClosedPosition[] => {
@@ -1925,8 +2211,13 @@ const parseXtbCashOperationRows = (
   const taxRows = cashRowsForProcessing.filter((row) =>
     isXtbWithholdingTaxType(row.normalizedType)
   );
+  const closeTradeRows = cashRowsForProcessing.filter((row) =>
+    isXtbCloseTradeType(row.normalizedType)
+  );
   const usedDividendTaxRowIds = new Set<string>();
+  const usedCloseTradeRowIds = new Set<string>();
   const dividendTaxRowsByDividendId = new Map<string, XtbCashRow>();
+  const closeTradeRowsBySaleId = new Map<string, XtbCashRow>();
   let tradeRows = 0;
   let dividendRows = 0;
   let cashRows = 0;
@@ -1943,6 +2234,21 @@ const parseXtbCashOperationRows = (
       if (matchingTaxRow) {
         usedDividendTaxRowIds.add(matchingTaxRow.id);
         dividendTaxRowsByDividendId.set(dividendRow.id, matchingTaxRow);
+      }
+    });
+
+  cashRowsForProcessing
+    .filter((row) => isXtbSellType(row.normalizedType))
+    .forEach((saleRow) => {
+      const matchingCloseTradeRow = findMatchingXtbCloseTrade(
+        saleRow,
+        closeTradeRows,
+        usedCloseTradeRowIds
+      );
+
+      if (matchingCloseTradeRow) {
+        usedCloseTradeRowIds.add(matchingCloseTradeRow.id);
+        closeTradeRowsBySaleId.set(saleRow.id, matchingCloseTradeRow);
       }
     });
 
@@ -1973,12 +2279,20 @@ const parseXtbCashOperationRows = (
       const kind = inferKind(row.rawType, row.rawSymbol, row.instrumentName || row.rawSymbol);
       const marketCurrency = inferCurrencyFromSymbol(row.rawSymbol, accountCurrency);
       const grossMarketValue = trade.quantity * trade.price;
+      const matchingCloseTradeRow =
+        side === "sell" ? closeTradeRowsBySaleId.get(row.id) : undefined;
+      const brokerRealizedProfitLoss = matchingCloseTradeRow?.amount;
+      const brokerSaleValue =
+        side === "sell" && typeof brokerRealizedProfitLoss === "number"
+          ? round(absoluteAmount + brokerRealizedProfitLoss, 6)
+          : undefined;
       const exchangeRate =
         grossMarketValue > 0 && accountCurrency !== marketCurrency && absoluteAmount > 0
           ? round(absoluteAmount / grossMarketValue, 8)
           : accountCurrency === marketCurrency
             ? 1
             : undefined;
+      const hasAutoFxConversion = accountCurrency !== marketCurrency;
 
       operations.push({
         ...buildBaseXtbOperation({
@@ -1997,9 +2311,18 @@ const parseXtbCashOperationRows = (
           marketAmount: grossMarketValue,
           cashCurrency: accountCurrency,
           cashAmount: absoluteAmount,
+          autoFxConversion: hasAutoFxConversion,
+          brokerFxSpreadRate: hasAutoFxConversion ? XTB_AUTO_FX_SPREAD_RATE : undefined,
           side,
         }),
         accountNumber,
+        realizedProfitLoss:
+          typeof brokerRealizedProfitLoss === "number"
+            ? round(brokerRealizedProfitLoss, 6)
+            : undefined,
+        purchaseValue:
+          typeof brokerRealizedProfitLoss === "number" ? round(absoluteAmount, 6) : undefined,
+        saleValue: brokerSaleValue,
       });
       tradeRows += 1;
       return;
@@ -2190,12 +2513,32 @@ const parseXtbCashOperationRows = (
       return;
     }
 
-    if (row.normalizedType !== "close trade") {
-      skippedRows.push({
-        rowNumber: row.rowNumber,
-        reason: `Nieobslugiwany typ operacji XTB: ${row.rawType}.`,
+    if (isXtbCloseTradeType(row.normalizedType)) {
+      operations.push({
+        ...buildBaseXtbOperation({
+          row,
+          accountCurrency,
+          operationType: "CUSTOM",
+          symbol: row.rawSymbol,
+          name: row.instrumentName || row.rawSymbol || "Wynik zamkniecia pozycji",
+          kind: inferKind(row.rawType, row.rawSymbol, row.instrumentName || row.rawSymbol),
+          currency: accountCurrency,
+          amount: absoluteAmount,
+          cashCurrency: accountCurrency,
+          cashAmount: absoluteAmount,
+        }),
+        accountNumber,
+        amount: round(signedAmount, 6),
+        cashAmount: round(signedAmount, 6),
       });
+      cashRows += 1;
+      return;
     }
+
+    skippedRows.push({
+      rowNumber: row.rowNumber,
+      reason: `Nieobslugiwany typ operacji XTB: ${row.rawType}.`,
+    });
   });
 
   if (operations.length === 0) {
@@ -2315,11 +2658,8 @@ const buildXtbRowsFromTextTable = (text: string) => {
 
     const amount = amountMatch[1];
     const beforeAmount = payload.slice(0, amountMatch.index).trim();
-    const symbolMatch = beforeAmount.match(/\b([A-Z0-9]{1,14}(?:\.[A-Z0-9]{1,5})?|BITCOIN)\s*$/);
-    const symbol =
-      symbolMatch && !["PAYU", "BLIK", "ADYEN"].includes(symbolMatch[1].toUpperCase())
-        ? symbolMatch[1]
-        : "";
+    const symbolMatch = beforeAmount.match(/\b(BITCOIN|(?=[A-Z0-9.]*[A-Z])[A-Z0-9]{1,14}(?:\.[A-Z0-9]{1,5})?)\s*$/i);
+    const symbol = symbolMatch && isLikelyXtbSymbolToken(symbolMatch[1]) ? symbolMatch[1] : "";
     const comment =
       symbol && typeof symbolMatch?.index === "number"
         ? beforeAmount.slice(0, symbolMatch.index).trim()
@@ -2723,15 +3063,37 @@ export const parseBrokerOperationsPdf = async (
 ): Promise<BrokerImportParseResult> => {
   void _preset;
 
-  const extractedText = await extractTextFromPdfBytes(bytes);
+  const extraction = await extractTextFromPdfBytes(bytes);
+  const extractedText = extraction.text;
   const xtbTableResult = parseXtbCashOperationText(extractedText, "PDF XTB");
 
   if (xtbTableResult) {
     return {
       ...xtbTableResult,
       warnings: [
+        ...extraction.warnings,
         ...(xtbTableResult.warnings ?? []),
-        "XTB PDF: raport zostal odczytany z tabeli CASH OPERATION HISTORY po dekompresji strumieni PDF.",
+        "XTB PDF: raport zostal odczytany z tabeli CASH OPERATION HISTORY.",
+      ],
+    };
+  }
+
+  const ocrExtraction =
+    extraction.passwordProtected || PDF_TEXT_HINT_PATTERN.test(extractedText)
+      ? { text: "", warnings: [] as string[] }
+      : await extractOcrTextFromPdfBytes(bytes);
+  const ocrTableResult = ocrExtraction.text
+    ? parseXtbCashOperationText(ocrExtraction.text, "PDF OCR XTB")
+    : null;
+
+  if (ocrTableResult) {
+    return {
+      ...ocrTableResult,
+      warnings: [
+        ...extraction.warnings,
+        ...ocrExtraction.warnings,
+        ...(ocrTableResult.warnings ?? []),
+        "XTB PDF: raport zostal odczytany przez OCR z obrazu/skanu.",
       ],
     };
   }
@@ -2740,8 +3102,12 @@ export const parseBrokerOperationsPdf = async (
   const operations: ImportedBrokerOperation[] = [];
   const skippedRows: BrokerImportParseResult["skippedRows"] = [];
   const warnings = [
-    "Import PDF XTB dziala dla raportow z warstwa tekstowa. Skan lub mocno zmieniony uklad PDF moze wymagac eksportu CSV/Excel z platformy XTB.",
-  ];
+    ...extraction.warnings,
+    ...ocrExtraction.warnings,
+    extraction.passwordProtected
+      ? ""
+      : "Import PDF XTB dziala dla raportow z warstwa tekstowa oraz dla skanow obslugiwanych przez OCR. Mocno zmieniony uklad PDF moze wymagac eksportu CSV/Excel z platformy XTB.",
+  ].filter(Boolean);
 
   if (chunks.length === 0) {
     return {
@@ -2750,7 +3116,9 @@ export const parseBrokerOperationsPdf = async (
         {
           rowNumber: 1,
           reason:
-            extractedText.trim().length === 0
+            extraction.passwordProtected
+              ? "PDF jest zabezpieczony haslem i nie mozna odczytac Daily Statement bez hasla."
+              : extractedText.trim().length === 0
               ? "PDF wyglada jak skan albo obraz bez warstwy tekstowej."
               : "Nie znaleziono dat transakcji w odczytanej warstwie tekstowej PDF.",
         },

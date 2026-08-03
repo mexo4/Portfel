@@ -86,9 +86,12 @@ export const buildCashOperation = ({
 export const buildCashHistory = (
   portfolio: InvestmentPortfolio
 ): CashHistoryEntry[] => {
+  const accounts = portfolio.accounts ?? [];
   const accountsById = new Map(
-    (portfolio.accounts ?? []).map((account) => [account.id, account.name] as const)
+    accounts.map((account) => [account.id, account.name] as const)
   );
+  const activeAccountIds =
+    accounts.length > 0 ? new Set(accountsById.keys()) : null;
   const balancesByKey = new Map<string, number>();
   const entries: CashHistoryEntry[] = [];
 
@@ -102,6 +105,10 @@ export const buildCashHistory = (
     )
     .forEach((operation) => {
       getOperationCashDeltas(operation).forEach((delta, index) => {
+        if (activeAccountIds && !activeAccountIds.has(delta.accountId)) {
+          return;
+        }
+
         const key = `${delta.accountId}:${delta.currency}`;
         const nextBalance = round((balancesByKey.get(key) ?? 0) + delta.amount, 6);
         balancesByKey.set(key, nextBalance);

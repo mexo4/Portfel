@@ -92,7 +92,7 @@ export default function PortfolioSummary({
             onClick={onRefresh}
             disabled={isRefreshing}
           >
-            {isRefreshing ? "Odswiezam..." : "Odswiez ceny"}
+            {isRefreshing ? "Odswiezam dane..." : "Odswiez dane"}
           </button>
         </div>
       </div>

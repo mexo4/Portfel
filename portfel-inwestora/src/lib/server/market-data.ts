@@ -120,36 +120,33 @@ const isStockLikeFinnhubType = (type?: string) => {
   );
 };
 
-const GPW_STOOQ_SYMBOL_ALIASES: Record<string, string> = {
-  ORLEN: "PKN",
-};
-
-const getStooqTickerCore = (symbol: string) => {
-  const tickerCore = getGpwTickerCore(symbol);
-  return GPW_STOOQ_SYMBOL_ALIASES[tickerCore] ?? tickerCore;
-};
+const getStooqTickerCore = (symbol: string) => getGpwTickerCore(symbol);
 
 const getStooqSymbolCandidates = (symbol: string) => {
   const normalized = normalizeSymbol(symbol);
-
-  if (isGpwSymbol(normalized)) {
-    const tickerCore = getStooqTickerCore(normalized);
-
-    return uniqueBy(
-      [`${tickerCore}.wa`, tickerCore.toLowerCase(), `${tickerCore}.WA`, tickerCore],
-      (item) => item
-    );
-  }
-
-  const normalizedLower = normalized.toLowerCase();
+  const lookupCandidates = getTickerLookupCandidates({
+    symbol: normalized,
+    kind: "stock",
+    marketCurrency: isGpwSymbol(normalized) ? "PLN" : inferCurrencyFromSymbol(normalized, "USD"),
+  }).map((candidate) => normalizeSymbol(candidate.value));
 
   return uniqueBy(
-    [
-      `${normalizedLower}.wa`,
-      normalizedLower,
-      `${normalizedLower}.wa`.toUpperCase(),
-      normalized,
-    ],
+    lookupCandidates.flatMap((candidate) => {
+      const tickerCore = getStooqTickerCore(candidate);
+      const normalizedCandidate = normalizeSymbol(candidate);
+      const candidateLower = normalizedCandidate.toLowerCase();
+
+      if (!tickerCore) {
+        return [candidateLower];
+      }
+
+      return [
+        `${tickerCore.toLowerCase()}.wa`,
+        tickerCore.toLowerCase(),
+        `${tickerCore}.WA`,
+        tickerCore,
+      ];
+    }),
     (item) => item
   );
 };
@@ -292,14 +289,19 @@ const parseStooqPageNumber = (value: string) => {
 };
 
 const getStooqPageSymbolCandidates = (symbol: string) => {
-  const normalized = normalizeSymbol(symbol);
+  const requestSymbols = getStooqSymbolCandidates(symbol);
 
-  if (isGpwSymbol(normalized)) {
-    const tickerCore = getStooqTickerCore(normalized);
-    return uniqueBy([tickerCore.toLowerCase(), `${tickerCore.toLowerCase()}.wa`, tickerCore], (item) => item);
-  }
+  return uniqueBy(
+    requestSymbols.flatMap((candidate) => {
+      const normalizedCandidate = normalizeSymbol(candidate);
+      const tickerCore = getStooqTickerCore(normalizedCandidate);
 
-  return uniqueBy([normalized.toLowerCase()], (item) => item);
+      return tickerCore
+        ? [tickerCore.toLowerCase(), `${tickerCore.toLowerCase()}.wa`, tickerCore]
+        : [normalizedCandidate.toLowerCase()];
+    }),
+    (item) => item
+  );
 };
 
 const normalizeGpwTickerQuery = (query: string) => {
@@ -559,7 +561,7 @@ const fetchStooqLiveCsvQuote = async (
   fallbackCurrency: CurrencyCode,
   timeoutMs = 1_000
 ): Promise<AssetQuote | null> => {
-  const requestSymbols = [getStooqTickerCore(symbol).toLowerCase()];
+  const requestSymbols = getStooqSymbolCandidates(symbol);
 
   for (const requestSymbol of requestSymbols) {
     const response = await safeFetch(
@@ -1021,9 +1023,31 @@ const fetchStooqQuote = async (
   return fetchStooqPageQuote(symbol, fallbackCurrency);
 };
 
-const fetchGpwStooqQuote = async (symbol: string): Promise<AssetQuote | null> => {
+const getGpwQuoteSymbolCandidates = async (symbol: string) => {
   await warmGpwCatalog();
   const normalizedGpwSymbol = normalizeGpwSymbol(symbol);
+  const tickerCore = getGpwTickerCore(normalizedGpwSymbol);
+  const catalogEntry = await findGpwCatalogEntry(normalizedGpwSymbol);
+  const catalogMatches = tickerCore ? await searchGpwCatalog(tickerCore) : [];
+
+  return uniqueBy(
+    [
+      catalogEntry?.symbol ?? "",
+      normalizedGpwSymbol,
+      tickerCore ? `${tickerCore}.WA` : "",
+      tickerCore ? `${tickerCore}.PL` : "",
+      ...catalogMatches.map((match) => match.symbol),
+    ]
+      .filter(Boolean)
+      .map((candidate) => normalizeGpwSymbol(candidate)),
+    (candidate) => getGpwTickerCore(candidate)
+  );
+};
+
+const fetchGpwStooqQuoteForCandidate = async (
+  candidateSymbol: string
+): Promise<AssetQuote | null> => {
+  const normalizedGpwSymbol = normalizeGpwSymbol(candidateSymbol);
   const requestTickerCore = getStooqTickerCore(normalizedGpwSymbol);
   const requestGpwSymbol = requestTickerCore
     ? `${requestTickerCore}.WA`
@@ -1111,6 +1135,20 @@ const fetchGpwStooqQuote = async (symbol: string): Promise<AssetQuote | null> =>
   gpwQuoteInFlight.set(cacheKey, quotePromise);
 
   return quotePromise;
+};
+
+const fetchGpwStooqQuote = async (symbol: string): Promise<AssetQuote | null> => {
+  const candidateSymbols = await getGpwQuoteSymbolCandidates(symbol);
+
+  for (const candidateSymbol of candidateSymbols) {
+    const quote = await fetchGpwStooqQuoteForCandidate(candidateSymbol);
+
+    if (quote) {
+      return quote;
+    }
+  }
+
+  return null;
 };
 
 const fetchBinanceSpotQuote = async (
@@ -1364,6 +1402,57 @@ export const fetchAssetQuoteServer = async ({
     ].filter((candidate): candidate is string => Boolean(candidate?.trim())),
     (candidate) => normalizeSymbol(candidate)
   );
+  const fetchEodhdQuoteFromProviderIds = (candidateProviderIds: string[]) =>
+    firstNonNull(
+      candidateProviderIds.map((candidateProviderId) =>
+        fetchEodhdQuote({
+          symbol: normalizedSymbol,
+          providerId: candidateProviderId,
+          marketCurrency: resolvedMarketCurrency,
+          priceScale: resolvedPriceScale,
+        })
+      )
+    );
+  const discoverEodhdProviderIdsFromLookup = async () => {
+    if (resolvedKind !== "stock" && resolvedKind !== "etf") {
+      return [];
+    }
+
+    const searchEodhd = resolvedKind === "etf" ? searchEodhdEtfs : searchEodhdStocks;
+    const searchResults = (
+      await Promise.all(
+        lookupSymbols.map(async (candidate) => {
+          try {
+            return await searchEodhd(candidate);
+          } catch {
+            return [];
+          }
+        })
+      )
+    ).flat();
+
+    return uniqueBy(
+      searchResults
+        .map((result) => result.providerId)
+        .filter((candidate): candidate is string => Boolean(candidate?.trim())),
+      (candidate) => normalizeSymbol(candidate)
+    );
+  };
+  const fetchEodhdQuoteFromLookup = async () => {
+    const directQuote = await fetchEodhdQuoteFromProviderIds(providerIdCandidates);
+
+    if (directQuote) {
+      return directQuote;
+    }
+
+    const discoveredProviderIds = await discoverEodhdProviderIdsFromLookup();
+
+    if (discoveredProviderIds.length === 0) {
+      return null;
+    }
+
+    return fetchEodhdQuoteFromProviderIds(discoveredProviderIds);
+  };
   const fetchFinnhubQuoteFromLookup = () =>
     firstNonNull(
       lookupSymbols.map((candidate) => fetchFinnhubQuote(candidate, resolvedMarketCurrency))
@@ -1379,20 +1468,7 @@ export const fetchAssetQuoteServer = async ({
   }
 
   if (resolvedProvider === "eodhd" && (resolvedKind === "stock" || resolvedKind === "etf")) {
-    let eodhdQuote: AssetQuote | null = null;
-
-    for (const candidateProviderId of providerIdCandidates) {
-      eodhdQuote = await fetchEodhdQuote({
-        symbol: normalizedSymbol,
-        providerId: candidateProviderId,
-        marketCurrency: resolvedMarketCurrency,
-        priceScale: resolvedPriceScale,
-      });
-
-      if (eodhdQuote) {
-        break;
-      }
-    }
+    const eodhdQuote = await fetchEodhdQuoteFromLookup();
 
     if (eodhdQuote) {
       return eodhdQuote;
@@ -1426,7 +1502,37 @@ export const fetchAssetQuoteServer = async ({
   }
 
   if (isGpwStockRequest) {
-    return fetchGpwStooqQuote(normalizedSymbol);
+    const gpwQuote = await firstNonNull(
+      uniqueBy([normalizedSymbol, ...lookupSymbols], (candidate) =>
+        normalizeSymbol(candidate)
+      ).map((candidate) => fetchGpwStooqQuote(candidate))
+    );
+
+    if (gpwQuote) {
+      return gpwQuote;
+    }
+
+    const eodhdQuote = await fetchEodhdQuoteFromLookup();
+
+    if (eodhdQuote) {
+      return eodhdQuote;
+    }
+
+    const yahooQuote = await firstNonNull(
+      providerIdCandidates.map((candidateProviderId) =>
+        fetchYahooQuote({
+          symbol: normalizedSymbol,
+          providerId: candidateProviderId,
+          fallbackCurrency: resolvedMarketCurrency,
+        })
+      )
+    );
+
+    if (yahooQuote) {
+      return yahooQuote;
+    }
+
+    return fetchFinnhubQuoteFromLookup();
   }
 
   if (resolvedProvider === "yahoo" && (resolvedKind === "stock" || resolvedKind === "etf")) {

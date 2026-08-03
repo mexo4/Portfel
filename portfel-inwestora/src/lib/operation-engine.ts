@@ -592,7 +592,7 @@ const normalizeOperationType = (value: unknown): OperationType =>
 export const normalizePortfolioOperation = (
   portfolioId: string,
   operation: unknown,
-  accounts: PortfolioAccount[],
+  _accounts: PortfolioAccount[],
   instruments: PortfolioInstrument[],
   now = new Date().toISOString()
 ) => {
@@ -603,9 +603,9 @@ export const normalizePortfolioOperation = (
     return null;
   }
 
-  const accountIds = new Set(accounts.map((account) => account.id));
   const instrumentIds = new Set(instruments.map((instrument) => instrument.id));
-  const accountId = getString(rawOperation.accountId, getDefaultInvestmentAccountId(portfolioId));
+  const fallbackAccountId = getDefaultInvestmentAccountId(portfolioId);
+  const accountId = getString(rawOperation.accountId, fallbackAccountId);
   const assetId = getString(rawOperation.assetId) || null;
   const operationType = normalizeOperationType(rawOperation.operationType);
   const quantity = hasFiniteNumber(rawOperation.quantity) ? rawOperation.quantity : null;
@@ -620,7 +620,7 @@ export const normalizePortfolioOperation = (
   return createOperation({
     id,
     portfolioId,
-    accountId: accountIds.has(accountId) ? accountId : getDefaultInvestmentAccountId(portfolioId),
+    accountId: accountId || fallbackAccountId,
     assetId: assetId && instrumentIds.has(assetId) ? assetId : null,
     operationType,
     quantity,
@@ -1022,11 +1022,21 @@ export const getOperationCashDeltas = (operation: PortfolioOperation): CashBalan
   ];
 };
 
-export const calculateCashBalances = (operations: PortfolioOperation[]) => {
+export const calculateCashBalances = (
+  operations: PortfolioOperation[],
+  accounts?: PortfolioAccount[]
+) => {
   const balancesByKey = new Map<string, CashBalance>();
+  const activeAccountIds = accounts && accounts.length > 0
+    ? new Set(accounts.map((account) => account.id))
+    : null;
 
   operations.forEach((operation) => {
     getOperationCashDeltas(operation).forEach((delta) => {
+      if (activeAccountIds && !activeAccountIds.has(delta.accountId)) {
+        return;
+      }
+
       const key = `${delta.accountId}:${delta.currency}`;
       const current = balancesByKey.get(key);
 

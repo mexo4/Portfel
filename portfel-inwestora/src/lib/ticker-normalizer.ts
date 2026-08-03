@@ -1,4 +1,5 @@
 import {
+  getGpwTickerCore,
   isGpwSymbol,
   normalizeGpwSymbol,
   normalizeSymbol,
@@ -106,6 +107,7 @@ export const TICKER_ALIAS_MAP: readonly TickerAliasResolution[] = [
 
 const TRADING_CURRENCY_SUFFIX_PATTERN =
   /[-/](USD|USDT|EUR|PLN|GBP|CHF|DKK|CZK|CAD|JPY|NOK|SEK)$/i;
+const ISIN_PATTERN = /^[A-Z]{2}[A-Z0-9]{9}[0-9]$/;
 
 const BROKER_SUFFIX_RULES: Array<{
   suffix: string;
@@ -136,6 +138,8 @@ TICKER_ALIAS_MAP.forEach((alias) => {
   });
 });
 
+const isIsinCandidate = (value: string) => ISIN_PATTERN.test(normalizeSymbol(value));
+
 const isRuleApplicable = (
   rule: (typeof BROKER_SUFFIX_RULES)[number],
   options: NormalizeTickerOptions
@@ -158,6 +162,10 @@ export const normalizeBrokerTicker = (
   }
 
   if (options.kind === "crypto") {
+    return normalized;
+  }
+
+  if (isIsinCandidate(normalized)) {
     return normalized;
   }
 
@@ -233,6 +241,51 @@ export const resolveTickerIdentity = ({
   };
 };
 
+const shouldUseGpwTickerVariants = (
+  symbol: string,
+  options: NormalizeTickerOptions
+) => {
+  const normalized = normalizeSymbol(symbol);
+  const suffix = normalized.split(".").at(-1);
+
+  return (
+    !isIsinCandidate(normalized) &&
+    options.kind !== "crypto" &&
+    (options.marketCurrency === "PLN" ||
+      isGpwSymbol(normalized) ||
+      suffix === "PL" ||
+      suffix === "WA")
+  );
+};
+
+const getLookupVariantsForSymbol = (
+  symbol: string,
+  options: NormalizeTickerOptions
+) => {
+  const normalized = normalizeSymbol(symbol);
+
+  if (!normalized) {
+    return [];
+  }
+
+  const baseTicker = normalized.split(".")[0] ?? normalized;
+  const variants = [normalized];
+
+  if (baseTicker && baseTicker !== normalized) {
+    variants.push(baseTicker);
+  }
+
+  if (shouldUseGpwTickerVariants(normalized, options)) {
+    const tickerCore = getGpwTickerCore(normalized);
+
+    if (tickerCore) {
+      variants.push(tickerCore, `${tickerCore}.WA`, `${tickerCore}.PL`);
+    }
+  }
+
+  return uniqueBy(variants.filter(Boolean), (candidate) => normalizeSymbol(candidate));
+};
+
 export const getTickerLookupCandidates = ({
   symbol,
   kind,
@@ -244,16 +297,51 @@ export const getTickerLookupCandidates = ({
 }: TickerLookupOptions): TickerLookupCandidate[] => {
   const identity = resolveTickerIdentity({ symbol, kind, marketCurrency });
   const alias = identity.alias;
+  const lookupOptions = {
+    kind: identity.kind ?? kind,
+    marketCurrency: identity.marketCurrency ?? marketCurrency,
+  };
+  const symbolVariants = uniqueBy(
+    [
+      identity.symbol,
+      identity.normalizedSymbol,
+      identity.originalSymbol,
+      alias?.symbol ?? "",
+    ].flatMap((candidate) =>
+      getLookupVariantsForSymbol(candidate, lookupOptions)
+    ),
+    (candidate) => normalizeSymbol(candidate)
+  );
+  const baseTickerVariants = symbolVariants.filter(
+    (candidate) => !candidate.includes(".") && !isIsinCandidate(candidate)
+  );
+  const exchangeTickerVariants = symbolVariants.filter((candidate) =>
+    candidate.includes(".")
+  );
+  const providerVariants = uniqueBy(
+    [identity.providerId, alias?.providerId, providerId].flatMap((candidate) =>
+      getLookupVariantsForSymbol(candidate ?? "", lookupOptions)
+    ),
+    (candidate) => normalizeSymbol(candidate)
+  );
 
   return uniqueBy(
     [
-      { value: identity.originalSymbol, source: "broker" as const },
-      { value: identity.normalizedSymbol, source: "normalized" as const },
-      { value: alias?.symbol ?? "", source: "alias" as const },
-      { value: alias?.providerId ?? "", source: "alias" as const },
-      { value: providerId ?? "", source: "provider" as const },
       { value: alias?.isin ?? "", source: "isin" as const },
       { value: isin ?? "", source: "isin" as const },
+      ...baseTickerVariants.map((value) => ({
+        value,
+        source: "normalized" as const,
+      })),
+      ...exchangeTickerVariants.map((value) => ({
+        value,
+        source: "normalized" as const,
+      })),
+      { value: identity.originalSymbol, source: "broker" as const },
+      ...providerVariants.map((value) => ({
+        value,
+        source: "provider" as const,
+      })),
       { value: includeName ? alias?.name ?? "" : "", source: "name" as const },
       { value: includeName ? name ?? "" : "", source: "name" as const },
     ].filter((candidate) => candidate.value.trim()),

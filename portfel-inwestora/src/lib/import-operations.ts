@@ -1,6 +1,7 @@
 import { inflateSync as inflateDeflateRawSync, unzlibSync } from "fflate";
 import { getDefaultProviderForKind, inferCurrencyFromSymbol, isGpwSymbol, normalizeSymbol } from "@/lib/ticker";
 import {
+  getTickerLookupCandidates,
   normalizeBrokerTicker,
   resolveTickerAlias,
   resolveTickerIdentity,
@@ -2095,6 +2096,13 @@ const getXtbTickerMatchKeys = (
       [
         normalizeSymbol(symbol),
         normalizeBrokerTicker(symbol, { kind, marketCurrency: currency }),
+        ...getTickerLookupCandidates({
+          symbol,
+          kind,
+          marketCurrency: currency,
+          providerId: identity.providerId,
+          isin: identity.isin,
+        }).map((candidate) => candidate.value),
         identity.symbol,
         identity.providerId,
         identity.isin,

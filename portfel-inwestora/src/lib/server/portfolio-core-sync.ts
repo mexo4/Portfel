@@ -174,7 +174,18 @@ export const syncPortfolioCoreTables = async (
       );
     }
 
+    const activeAccountIds = new Set(
+      (portfolio.accounts ?? []).map((account) => account.id)
+    );
+    const activeInstrumentIds = new Set(
+      (portfolio.instruments ?? []).map((instrument) => instrument.id)
+    );
+
     for (const operation of portfolio.operations ?? []) {
+      if (!activeAccountIds.has(operation.accountId)) {
+        continue;
+      }
+
       await execute(
         `
           INSERT INTO core_operations (
@@ -219,7 +230,9 @@ export const syncPortfolioCoreTables = async (
           operation.id,
           portfolio.id,
           operation.accountId,
-          operation.assetId,
+          operation.assetId && activeInstrumentIds.has(operation.assetId)
+            ? operation.assetId
+            : null,
           operation.operationType,
           operation.quantity,
           operation.price,

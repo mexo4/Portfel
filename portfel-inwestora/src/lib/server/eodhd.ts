@@ -126,6 +126,7 @@ const DISPLAY_SUFFIX_TO_EODHD_EXCHANGES: Record<string, string[]> = {
   TO: ["TO"],
   US: ["US"],
   V: ["V"],
+  WA: ["WAR"],
   PL: ["WAR"],
 };
 
@@ -214,10 +215,18 @@ const getQueryCandidates = (query: string) => {
   }
 
   const parts = normalizedQuery.split(".");
+  const baseTicker = parts[0] ?? "";
+  const displaySuffix = parts.at(-1) ?? "";
+  const exchangeVariant =
+    baseTicker && displaySuffix === "WA"
+      ? `${baseTicker}.PL`
+      : baseTicker && displaySuffix === "PL"
+        ? `${baseTicker}.WA`
+        : "";
 
   return uniqueBy(
-    [trimmedQuery, normalizedQuery, parts[0] ?? ""].filter(Boolean),
-    (item) => item
+    [trimmedQuery, normalizedQuery, exchangeVariant, baseTicker].filter(Boolean),
+    (item) => normalizeSymbol(item)
   );
 };
 

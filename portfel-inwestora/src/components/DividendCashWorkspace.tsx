@@ -298,8 +298,8 @@ export default function DividendCashWorkspace({
   const dividendCalendar = useMemo(() => buildDividendCalendar(dividends), [dividends]);
   const dividendForecast = useMemo(() => buildDividendForecast(dividends), [dividends]);
   const cashBalances = useMemo(
-    () => calculateCashBalances(portfolio.operations ?? []),
-    [portfolio.operations]
+    () => calculateCashBalances(portfolio.operations ?? [], portfolio.accounts ?? []),
+    [portfolio.accounts, portfolio.operations]
   );
   const cashHistory = useMemo(() => buildCashHistory(portfolio), [portfolio]);
   const selectedDividendInstrument =

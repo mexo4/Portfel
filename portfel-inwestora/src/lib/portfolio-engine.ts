@@ -467,7 +467,10 @@ export const calculatePortfolioSnapshot = ({
     corePortfolio.realizedAdjustments,
     fxRates
   );
-  const cashBalances = calculateCashBalances(corePortfolio.operations ?? []);
+  const cashBalances = calculateCashBalances(
+    corePortfolio.operations ?? [],
+    corePortfolio.accounts ?? []
+  );
   const snapshot = {
     portfolioId: corePortfolio.id,
     generatedAt: new Date().toISOString(),

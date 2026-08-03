@@ -7,20 +7,12 @@ import {
 } from "@/lib/search";
 import type { AssetKind, AssetSearchMode, AssetSearchResult } from "@/types/portfolio";
 
-const shouldReturnQuickResults = (
-  quickResults: AssetSearchResult[],
-  kind: AssetKind,
-  mode?: AssetSearchMode
-) => {
+const shouldReturnQuickResults = (quickResults: AssetSearchResult[]) => {
   if (quickResults.length === 0) {
     return false;
   }
 
-  if (quickResults.some((result) => result.source === "catalog")) {
-    return true;
-  }
-
-  return kind !== "etf" && mode !== "etf";
+  return quickResults.some((result) => result.source === "catalog");
 };
 
 const getRemoteSearchTimeoutMs = (mode?: AssetSearchMode) => {
@@ -62,7 +54,7 @@ export async function GET(request: Request) {
   const quickResults = mergeSearchResults([...catalogResults, ...fallbackResults]);
   let remoteResults: AssetSearchResult[] = [];
 
-  if (shouldReturnQuickResults(quickResults, kind, mode)) {
+  if (shouldReturnQuickResults(quickResults)) {
     return NextResponse.json({ results: quickResults });
   }
 

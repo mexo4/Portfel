@@ -814,7 +814,10 @@ export default function PortfolioApp({
   const activeCashBalancePln = useMemo(
     () =>
       activePortfolioForEngine
-        ? calculateCashBalances(activePortfolioForEngine.operations ?? []).reduce(
+        ? calculateCashBalances(
+            activePortfolioForEngine.operations ?? [],
+            activePortfolioForEngine.accounts ?? []
+          ).reduce(
             (total, balance) =>
               total + balance.amount * (fxRates[balance.currency] ?? 1),
             0
@@ -1454,6 +1457,12 @@ export default function PortfolioApp({
     setBondSwapError(null);
   };
 
+  const clearBondDraftSelection = () => {
+    setBondDraft(createEmptyTreasuryBondDraft());
+    setBondSeries(null);
+    setBondQuote(null);
+  };
+
   const handleEntryModeChange = (mode: AssetEntryMode) => {
     resetBondInteractionState();
     setEntryMode(mode);
@@ -1950,6 +1959,7 @@ export default function PortfolioApp({
       setSales((currentSales) => getSortedPortfolioSales([result.sale, ...currentSales]));
       setBondRedemptionPreview(null);
       setBondSwapPreview(null);
+      clearBondDraftSelection();
       setBondError(null);
     } catch (error) {
       setBondError(toErrorMessage(error, "Nie udalo sie zapisac sprzedazy obligacji."));
@@ -2023,6 +2033,7 @@ export default function PortfolioApp({
       );
       setBondRedemptionPreview(preview);
       setBondSwapPreview(null);
+      clearBondDraftSelection();
     } catch (error) {
       setBondRedemptionError(toErrorMessage(error, "Nie udalo sie zapisac wykupu."));
     } finally {
@@ -2146,6 +2157,7 @@ export default function PortfolioApp({
       );
       setBondSwapPreview(preview);
       setBondRedemptionPreview(null);
+      clearBondDraftSelection();
     } catch (error) {
       setBondSwapError(toErrorMessage(error, "Nie udalo sie zapisac zamiany."));
     } finally {
@@ -2199,7 +2211,7 @@ export default function PortfolioApp({
       return;
     }
 
-    const storedSymbol = symbol;
+    const storedSymbol = normalizeSymbolForMode(quote.symbol ?? symbol, searchMode);
     const storedName = quote.name?.trim() || name;
     const purchaseCurrency = toCurrencyCode(draft.purchaseCurrency, "PLN");
     const purchasePriceCurrency = toCurrencyCode(quote.marketCurrency, draft.marketCurrency);
@@ -2981,8 +2993,10 @@ export default function PortfolioApp({
       verificationPreviewUrl={verificationPreviewUrl}
       subscriptionPlan={account.subscriptionPlan}
       onRefresh={() => {
-        void syncFxRates(trackedCurrencies);
-        void syncQuotes();
+        void (async () => {
+          await syncFxRates(trackedCurrencies);
+          await syncQuotes();
+        })();
       }}
       onRequestVerification={() => {
         void handleVerificationRequest();

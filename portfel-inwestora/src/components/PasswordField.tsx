@@ -8,6 +8,7 @@ type PasswordFieldProps = {
   value: string;
   placeholder?: string;
   autoComplete?: string;
+  disabled?: boolean;
   inputRef?: RefObject<HTMLInputElement | null>;
   onChange: (value: string) => void;
 };
@@ -17,6 +18,7 @@ export default function PasswordField({
   value,
   placeholder,
   autoComplete,
+  disabled = false,
   inputRef,
   onChange,
 }: PasswordFieldProps) {
@@ -31,12 +33,14 @@ export default function PasswordField({
           type={isVisible ? "text" : "password"}
           value={value}
           autoComplete={autoComplete}
+          disabled={disabled}
           onChange={(event) => onChange(event.target.value)}
           placeholder={placeholder}
         />
         <button
           type="button"
           className="password-toggle"
+          disabled={disabled}
           onClick={() => setIsVisible((current) => !current)}
           aria-label={isVisible ? "Ukryj haslo" : "Pokaz haslo"}
           title={isVisible ? "Ukryj haslo" : "Pokaz haslo"}

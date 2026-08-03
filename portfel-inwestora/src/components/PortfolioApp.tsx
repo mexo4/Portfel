@@ -90,7 +90,6 @@ import {
   createEmptyTreasuryBondDraft,
   getTreasuryBondDisplayName,
   getTreasuryBondMaturityDate,
-  isTreasuryBondPurchaseDateInIssueWindow,
   normalizeTreasuryBondCode,
 } from "@/lib/treasury-bonds";
 import type {
@@ -103,6 +102,7 @@ import type {
   AuthenticatedUser,
   BondRedemptionQuote,
   BondSwapQuote,
+  CurrencyCode,
   FxRates,
   InvestmentPortfolio,
   PortfolioAsset,
@@ -197,7 +197,6 @@ const getResolvedResultSymbolForMode = (
   return normalizedResultSymbol;
 };
 const shouldRetryQuoteRequest = (mode: AssetSearchMode) => !isGpwMode(mode);
-const shouldSyncPurchaseCurrencyWithResult = (mode: AssetSearchMode) => mode === "etf";
 const doesQuoteProviderRequireProviderId = (kind: AssetDraft["kind"]) => kind === "etf";
 const getDraftQuotePreviewRequest = (draft: AssetDraft, mode: AssetSearchMode) => {
   const normalizedSymbol = normalizeSymbolForMode(draft.symbol, mode);
@@ -251,9 +250,17 @@ const getTrackedCurrencies = (
         draft.purchaseCurrency,
         draft.marketCurrency,
         realizedAdjustmentDraft.currency,
-        ...assets.flatMap((asset) => [asset.purchaseCurrency, asset.marketCurrency]),
+        ...assets.flatMap((asset) => [
+          asset.purchaseCurrency,
+          asset.purchasePriceCurrency,
+          asset.marketCurrency,
+        ]),
         ...portfolios.flatMap((portfolio) =>
-          portfolio.assets.flatMap((asset) => [asset.purchaseCurrency, asset.marketCurrency])
+          portfolio.assets.flatMap((asset) => [
+            asset.purchaseCurrency,
+            asset.purchasePriceCurrency,
+            asset.marketCurrency,
+          ])
         ),
         ...portfolios.flatMap((portfolio) =>
           portfolio.realizedAdjustments.map((adjustment) => adjustment.currency)
@@ -264,6 +271,46 @@ const getTrackedCurrencies = (
         .filter(Boolean)
     )
   ).sort();
+
+const getFxRateToPlnSnapshot = (
+  currency: CurrencyCode,
+  rates: FxRates
+) => {
+  const normalizedCurrency = toCurrencyCode(currency, "PLN");
+
+  if (normalizedCurrency === "PLN") {
+    return 1;
+  }
+
+  const fallbackRates: FxRates = FALLBACK_FX_RATES;
+
+  return rates[normalizedCurrency] ?? fallbackRates[normalizedCurrency] ?? 1;
+};
+
+const fetchHistoricalFxRates = async (
+  codes: Array<string | undefined>,
+  date: string,
+  currentRates: FxRates
+) => {
+  const normalizedCodes = Array.from(
+    new Set(codes.map((code) => toCurrencyCode(code, "PLN")).filter(Boolean))
+  );
+
+  try {
+    const response = await fetchFxRates(normalizedCodes, date);
+
+    return {
+      ...FALLBACK_FX_RATES,
+      ...currentRates,
+      ...response.rates,
+    };
+  } catch {
+    return {
+      ...FALLBACK_FX_RATES,
+      ...currentRates,
+    };
+  }
+};
 
 const canUseProFeatures = (account: AuthenticatedUser) =>
   account.subscriptionPlan === "pro" &&
@@ -649,6 +696,7 @@ export default function PortfolioApp({
   const quoteRequestSeqRef = useRef(0);
   const lastPreviewRequestKeyRef = useRef("");
   const isManualSymbolRef = useRef(false);
+  const lastAutoBondPriceRef = useRef(100);
   const [activeSection, setActiveSection] = useState<AppSection>("portfolio");
   const [portfolios, setPortfolios] = useState<InvestmentPortfolio[]>(
     () => initialPortfolioBook.portfolios
@@ -972,6 +1020,15 @@ export default function PortfolioApp({
     const nextPurchasePriceInput = formatBondUnitPriceInput(nextPurchasePrice);
 
     setBondDraft((currentDraft) => {
+      const shouldAutofillPrice =
+        !currentDraft.purchasePriceInput.trim() ||
+        currentDraft.purchasePrice <= 0 ||
+        currentDraft.purchasePrice === lastAutoBondPriceRef.current;
+
+      if (!shouldAutofillPrice) {
+        return currentDraft;
+      }
+
       if (
         currentDraft.purchasePrice === nextPurchasePrice &&
         currentDraft.purchasePriceInput === nextPurchasePriceInput
@@ -985,6 +1042,7 @@ export default function PortfolioApp({
         purchasePriceInput: nextPurchasePriceInput,
       };
     });
+    lastAutoBondPriceRef.current = nextPurchasePrice;
   }, [bondSeries?.code, bondSeries?.salePrice]);
 
   useEffect(() => {
@@ -1053,9 +1111,6 @@ export default function PortfolioApp({
                     autoResult.symbol,
                     searchMode
                   ),
-                  purchaseCurrency: shouldSyncPurchaseCurrencyWithResult(searchMode)
-                    ? autoResult.marketCurrency
-                    : currentDraft.purchaseCurrency,
                   marketCurrency: autoResult.marketCurrency,
                   provider: autoResult.provider,
                   providerId: autoResult.providerId,
@@ -1159,9 +1214,6 @@ export default function PortfolioApp({
             ),
             query: autoResult.name,
             name: autoResult.name,
-            purchaseCurrency: shouldSyncPurchaseCurrencyWithResult(searchMode)
-              ? autoResult.marketCurrency
-              : currentDraft.purchaseCurrency,
             marketCurrency: autoResult.marketCurrency,
             provider: autoResult.provider,
             providerId: autoResult.providerId,
@@ -1682,9 +1734,6 @@ export default function PortfolioApp({
       query: result.name,
       name: result.name,
       symbol: normalizedResultSymbol,
-      purchaseCurrency: shouldSyncPurchaseCurrencyWithResult(searchMode)
-        ? result.marketCurrency
-        : currentDraft.purchaseCurrency,
       marketCurrency: result.marketCurrency,
       provider: result.provider,
       providerId: result.providerId,
@@ -1791,11 +1840,6 @@ export default function PortfolioApp({
       return;
     }
 
-    if (!isTreasuryBondPurchaseDateInIssueWindow(normalizedCode, purchaseDate)) {
-      setBondError("Data zakupu musi miescic sie w miesiacu emisji zakodowanym w serii.");
-      return;
-    }
-
     const planLimitError = getFreePlanAssetLimitError();
 
     if (planLimitError) {
@@ -1829,8 +1873,10 @@ export default function PortfolioApp({
         kind: "bond",
         purchaseDate,
         quantity: bondDraft.quantity,
-        purchasePrice: round(response.series.salePrice, 2),
+        purchasePrice: round(bondDraft.purchasePrice, 2),
         purchaseCurrency: "PLN",
+        purchasePriceCurrency: "PLN",
+        purchaseFxRateToPln: 1,
         feePln: 0,
         marketCurrency: "PLN",
         provider: "obligacjeskarbowe",
@@ -1851,6 +1897,62 @@ export default function PortfolioApp({
       setBondError(null);
     } catch (error) {
       setBondError(toErrorMessage(error, "Nie udalo sie dodac obligacji."));
+    }
+  };
+
+  const handleSellBondAsset = async () => {
+    const normalizedCode = normalizeTreasuryBondCode(bondDraft.code);
+    const saleDate = toDateInputValue(bondDraft.purchaseDate);
+
+    setBondRedemptionError(null);
+    setBondSwapError(null);
+    setBondError(null);
+    setSyncError(null);
+
+    if (!normalizedCode || bondDraft.quantity <= 0 || bondDraft.purchasePrice <= 0) {
+      setBondError("Podaj kod obligacji, ilosc, date sprzedazy i cene sprzedazy.");
+      return;
+    }
+
+    try {
+      const targetGroup = getBondGroup(normalizedCode);
+
+      if (!targetGroup) {
+        throw new Error("Nie znaleziono pozycji do sprzedazy.");
+      }
+
+      const representativeLot = targetGroup.lots[0];
+      const result = applySaleToPortfolio({
+        assets,
+        group: targetGroup,
+        draft: {
+          groupKey: targetGroup.key,
+          name: targetGroup.name,
+          symbol: normalizedCode,
+          kind: "bond",
+          purchaseCurrency: "PLN",
+          marketCurrency: "PLN",
+          provider: representativeLot?.provider ?? "obligacjeskarbowe",
+          providerId: representativeLot?.providerId,
+          priceScale: representativeLot?.priceScale,
+          maxQuantity: targetGroup.quantity,
+          quantity: bondDraft.quantity,
+          quantityInput: bondDraft.quantityInput,
+          salePrice: bondDraft.purchasePrice,
+          salePriceInput: bondDraft.purchasePriceInput,
+          saleDate,
+          feePln: 0,
+        },
+        fxRates,
+      });
+
+      setAssets(result.assets);
+      setSales((currentSales) => getSortedPortfolioSales([result.sale, ...currentSales]));
+      setBondRedemptionPreview(null);
+      setBondSwapPreview(null);
+      setBondError(null);
+    } catch (error) {
+      setBondError(toErrorMessage(error, "Nie udalo sie zapisac sprzedazy obligacji."));
     }
   };
 
@@ -2008,6 +2110,8 @@ export default function PortfolioApp({
         quantity: preview.targetQuantity,
         purchasePrice: round(preview.swapPricePerUnit, 2),
         purchaseCurrency: "PLN",
+        purchasePriceCurrency: "PLN",
+        purchaseFxRateToPln: 1,
         feePln: 0,
         marketCurrency: "PLN",
         provider: "obligacjeskarbowe",
@@ -2097,6 +2201,17 @@ export default function PortfolioApp({
 
     const storedSymbol = symbol;
     const storedName = quote.name?.trim() || name;
+    const purchaseCurrency = toCurrencyCode(draft.purchaseCurrency, "PLN");
+    const purchasePriceCurrency = toCurrencyCode(quote.marketCurrency, draft.marketCurrency);
+    const purchaseFxRates = await fetchHistoricalFxRates(
+      [purchaseCurrency, purchasePriceCurrency],
+      purchaseDate,
+      fxRates
+    );
+    const purchaseFxRateToPln = getFxRateToPlnSnapshot(
+      purchasePriceCurrency,
+      purchaseFxRates
+    );
     const nextAssetGroupKey = getPortfolioAssetGroupKey({
       kind: draft.kind,
       symbol: storedSymbol,
@@ -2113,7 +2228,9 @@ export default function PortfolioApp({
       purchaseDate,
       quantity: draft.quantity,
       purchasePrice: draft.purchasePrice,
-      purchaseCurrency: draft.purchaseCurrency,
+      purchaseCurrency,
+      purchasePriceCurrency,
+      purchaseFxRateToPln,
       feePln: draft.feePln,
       marketCurrency: quote.marketCurrency,
       provider: quote.provider,
@@ -2172,12 +2289,21 @@ export default function PortfolioApp({
 
     try {
       const representativeLot = targetGroup.lots[0];
+      const saleCurrency = toCurrencyCode(draft.marketCurrency, targetGroup.marketCurrency);
+      const settlementCurrency = toCurrencyCode(
+        draft.purchaseCurrency,
+        representativeLot?.purchaseCurrency ?? "PLN"
+      );
       const historicalFxCodes = Array.from(
         new Set(
           [
-            draft.purchaseCurrency,
-            draft.marketCurrency,
-            ...targetGroup.lots.map((lot) => lot.purchaseCurrency),
+            settlementCurrency,
+            saleCurrency,
+            ...targetGroup.lots.flatMap((lot) => [
+              lot.purchaseCurrency,
+              lot.purchasePriceCurrency,
+              lot.marketCurrency,
+            ]),
           ]
             .map((code) => toCurrencyCode(code))
             .filter(Boolean)
@@ -2207,8 +2333,8 @@ export default function PortfolioApp({
           name: name || targetGroup.name,
           symbol,
           kind: draft.kind,
-          purchaseCurrency: draft.purchaseCurrency,
-          marketCurrency: draft.marketCurrency,
+          purchaseCurrency: settlementCurrency,
+          marketCurrency: saleCurrency,
           provider: representativeLot?.provider ?? draft.provider,
           providerId: representativeLot?.providerId ?? draft.providerId,
           priceScale: representativeLot?.priceScale ?? draft.priceScale,
@@ -2421,6 +2547,25 @@ export default function PortfolioApp({
         operation.cashAmount && operation.quantity > 0
           ? round(operation.cashAmount / operation.quantity, 6)
           : operation.price;
+      const hasImportedMarketUnitPrice =
+        typeof operation.price === "number" &&
+        Number.isFinite(operation.price) &&
+        operation.price > 0;
+      const importedUnitPrice = hasImportedMarketUnitPrice
+        ? operation.price
+        : importedSettlementUnitPrice;
+      const importedPriceCurrency = hasImportedMarketUnitPrice
+        ? importedMarketCurrency
+        : importedCashCurrency;
+      const importedPurchaseFxRateToPln =
+        importedPriceCurrency === "PLN"
+          ? 1
+          : importedCashCurrency === "PLN" &&
+              typeof operation.exchangeRate === "number" &&
+              Number.isFinite(operation.exchangeRate) &&
+              operation.exchangeRate > 0
+            ? operation.exchangeRate
+            : getFxRateToPlnSnapshot(importedPriceCurrency, fxRates);
 
       if (operationType === "BUY") {
         const planLimitError = getFreePlanAssetLimitError(nextAssets.length + 1);
@@ -2439,8 +2584,10 @@ export default function PortfolioApp({
           kind: operation.kind,
           purchaseDate: operation.date,
           quantity: operation.quantity,
-          purchasePrice: importedSettlementUnitPrice,
+          purchasePrice: importedUnitPrice,
           purchaseCurrency: importedCashCurrency,
+          purchasePriceCurrency: importedPriceCurrency,
+          purchaseFxRateToPln: importedPurchaseFxRateToPln,
           feePln: operation.feePln,
           marketCurrency: importedMarketCurrency,
           provider: operation.provider,
@@ -2467,6 +2614,18 @@ export default function PortfolioApp({
 
       try {
         const representativeLot = targetGroup.lots[0];
+        const importedSaleCurrency = hasImportedMarketUnitPrice
+          ? importedMarketCurrency
+          : importedCashCurrency;
+        const importedSaleFxRateToPln =
+          importedSaleCurrency === "PLN"
+            ? 1
+            : importedCashCurrency === "PLN" &&
+                typeof operation.exchangeRate === "number" &&
+                Number.isFinite(operation.exchangeRate) &&
+                operation.exchangeRate > 0
+              ? operation.exchangeRate
+              : getFxRateToPlnSnapshot(importedSaleCurrency, fxRates);
         const result = applySaleToPortfolio({
           assets: nextAssets,
           group: targetGroup,
@@ -2476,19 +2635,22 @@ export default function PortfolioApp({
             symbol: operation.symbol,
             kind: operation.kind,
             purchaseCurrency: importedCashCurrency,
-            marketCurrency: importedCashCurrency,
+            marketCurrency: importedSaleCurrency,
             provider: representativeLot?.provider ?? operation.provider,
             providerId: representativeLot?.providerId ?? operation.providerId,
             priceScale: representativeLot?.priceScale,
             maxQuantity: targetGroup.quantity,
             quantity: operation.quantity,
             quantityInput: String(operation.quantity),
-            salePrice: importedSettlementUnitPrice,
-            salePriceInput: String(importedSettlementUnitPrice),
+            salePrice: importedUnitPrice,
+            salePriceInput: String(importedUnitPrice),
             saleDate: operation.date,
             feePln: operation.feePln,
           },
-          fxRates,
+          fxRates: {
+            ...fxRates,
+            [importedSaleCurrency]: importedSaleFxRateToPln,
+          },
         });
 
         nextAssets = result.assets;
@@ -3018,6 +3180,9 @@ export default function PortfolioApp({
                 }}
                 onBuySubmit={() => {
                   void handleAddBondAsset();
+                }}
+                onSellSubmit={() => {
+                  void handleSellBondAsset();
                 }}
                 onRedeemSubmit={() => {
                   void handleRedeemBondAsset();

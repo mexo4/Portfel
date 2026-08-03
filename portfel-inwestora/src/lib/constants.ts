@@ -27,6 +27,7 @@ export const SUPPORTED_CURRENCIES: CurrencyCode[] = [
   "CHF",
   "CAD",
   "JPY",
+  "DKK",
 ];
 
 export const INVESTOR_EXPERIENCE_OPTIONS: Array<{
@@ -488,6 +489,7 @@ export const FALLBACK_FX_RATES = {
   PLN: 1,
   USD: 4.0,
   EUR: 4.3,
+  DKK: 0.58,
 } satisfies Record<CurrencyCode, number>;
 
 export const DEFAULT_DRAFT_BY_KIND: Record<AssetKind, AssetDraft> = {

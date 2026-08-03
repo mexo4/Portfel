@@ -14,8 +14,13 @@ import {
   type TooltipContentProps,
   type TooltipPayloadEntry,
 } from "recharts";
+import TruncatedText from "@/components/TruncatedText";
 import { SEARCH_DEBOUNCE_MS, SEARCH_MODE_OPTIONS } from "@/lib/constants";
 import { fetchPortfolioHistory, searchAssets } from "@/lib/api";
+import {
+  getAssetPurchaseUnitValuePln,
+  getAssetPurchaseValuePln,
+} from "@/lib/pricing";
 import { getMinimumSearchLength, getSearchPlaceholder } from "@/lib/search";
 import {
   getPortfolioAssetGroupKey,
@@ -489,8 +494,7 @@ const buildFallbackHistory = ({
     addAmountToDateMap(
       netInvestedEvents,
       asset.purchaseDate,
-      convertToPln(asset.purchasePrice * asset.quantity, asset.purchaseCurrency, fxRates) +
-        asset.feePln
+      getAssetPurchaseValuePln(asset, fxRates) + asset.feePln
     );
 
     segments.push({
@@ -502,7 +506,7 @@ const buildFallbackHistory = ({
       startDate: asset.purchaseDate,
       endDate: today,
       quantity: asset.quantity,
-      startValuePlnPerUnit: convertToPln(asset.purchasePrice, asset.purchaseCurrency, fxRates),
+      startValuePlnPerUnit: getAssetPurchaseUnitValuePln(asset, fxRates),
       endValuePlnPerUnit: convertToPln(
         asset.latestPrice ?? asset.purchasePrice,
         asset.marketCurrency,
@@ -534,11 +538,7 @@ const buildFallbackHistory = ({
       addAmountToDateMap(
         netInvestedEvents,
         allocation.purchaseDate,
-        convertToPln(
-          allocation.purchasePrice * allocation.quantity,
-          allocation.purchaseCurrency,
-          fxRates
-        ) + allocation.allocatedBuyFeePln
+        getAssetPurchaseValuePln(allocation, fxRates) + allocation.allocatedBuyFeePln
       );
 
       const segmentEndDate = shiftDate(sale.saleDate, -1);
@@ -556,11 +556,7 @@ const buildFallbackHistory = ({
         startDate: allocation.purchaseDate,
         endDate: segmentEndDate,
         quantity: allocation.quantity,
-        startValuePlnPerUnit: convertToPln(
-          allocation.purchasePrice,
-          allocation.purchaseCurrency,
-          fxRates
-        ),
+        startValuePlnPerUnit: getAssetPurchaseUnitValuePln(allocation, fxRates),
         endValuePlnPerUnit: convertToPln(sale.salePrice, sale.marketCurrency, fxRates),
       });
     }
@@ -2428,7 +2424,7 @@ export default function PortfolioLineCharts({
                         className="search-result-card text-left"
                         onClick={() => handleAddBenchmark(result)}
                       >
-                        <p className="search-result-title">{result.name}</p>
+                        <TruncatedText as="p" className="search-result-title" text={result.name} />
                         <p className="search-result-meta">
                           {result.symbol}
                           {isSelected ? " | dodany" : ""}

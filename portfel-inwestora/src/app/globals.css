@@ -587,6 +587,13 @@ textarea {
   gap: 16px;
 }
 
+.chart-row-copy > div,
+.ranking-row > div,
+.portfolio-row-main > div,
+.lot-card-header > div {
+  min-width: 0;
+}
+
 .chart-row-copy strong,
 .ranking-row strong {
   font-size: 1rem;
@@ -2561,6 +2568,11 @@ textarea {
   color: var(--text);
 }
 
+.admin-transaction-title {
+  color: var(--text);
+  font-weight: 700;
+}
+
 .admin-profile-main span,
 .admin-transaction-row > span,
 .admin-transaction-row div span {
@@ -2900,6 +2912,41 @@ textarea {
   overflow-wrap: anywhere;
 }
 
+.truncate-text {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
+.truncate-text:focus-visible {
+  outline: 2px solid rgba(15, 118, 110, 0.38);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+.truncate-tooltip {
+  position: fixed;
+  z-index: 10000;
+  display: block;
+  padding: 8px 10px;
+  border: 1px solid rgba(20, 35, 48, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 14px 34px rgba(20, 35, 48, 0.18);
+  color: var(--text);
+  font-size: 0.82rem;
+  font-weight: 700;
+  line-height: 1.25;
+  pointer-events: none;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 @media (min-width: 640px) {
   .search-result-list {
     grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -2933,8 +2980,23 @@ textarea {
 .portfolio-table {
   width: 100%;
   min-width: 760px;
+  table-layout: fixed;
   border-collapse: separate;
   border-spacing: 0;
+}
+
+.portfolio-table th:first-child,
+.portfolio-table td:first-child {
+  width: 30%;
+}
+
+.portfolio-table.import-preview-table {
+  table-layout: auto;
+}
+
+.portfolio-table.import-preview-table th:first-child,
+.portfolio-table.import-preview-table td:first-child {
+  width: auto;
 }
 
 .portfolio-table thead th {

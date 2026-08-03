@@ -30,7 +30,7 @@ type ImportPlatformPickerProps = {
 
 const RECENT_IMPORT_PLATFORMS_STORAGE_KEY = "mexo.recentImportPlatforms";
 const RECENT_IMPORT_PLATFORMS_LIMIT = 5;
-export const DEFAULT_IMPORT_PLATFORM_ID = "auto";
+export const DEFAULT_IMPORT_PLATFORM_ID = "xtb";
 
 const platform = (
   definition: Omit<ImportPlatformDefinition, "searchTerms"> & {
@@ -49,23 +49,14 @@ const platform = (
 
 const IMPORT_PLATFORMS: ImportPlatformDefinition[] = [
   platform({
-    id: "auto",
-    name: "Automatyczne rozpoznanie",
-    preset: "auto",
-    formats: ["CSV", "XLSX", "PDF"],
-    status: "full",
-    logoText: "AUTO",
-    description: "Zachowuje dotychczasowe wykrywanie importera.",
-    searchTerms: ["auto", "automatyczny", "wykrywanie"],
-  }),
-  platform({
     id: "xtb",
-    name: "XTB",
+    name: "XTB (XLSX)",
     preset: "xtb",
-    formats: ["CSV", "XLSX", "PDF"],
+    formats: ["XLSX"],
     status: "full",
     logoText: "XTB",
-    description: "Najpelniej obslugiwany preset importu.",
+    description: "Aktualny raport XTB w formacie XLSX.",
+    searchTerms: ["xstation", "excel", "arkusz"],
   }),
   platform({
     id: "trading212",
@@ -517,33 +508,13 @@ const IMPORT_PLATFORMS: ImportPlatformDefinition[] = [
   }),
   platform({
     id: "custom-csv",
-    name: "CSV",
+    name: "Uniwersalny CSV",
     preset: "generic",
     formats: ["CSV"],
     status: "full",
     logoText: "CSV",
-    description: "Uniwersalny import pliku CSV.",
+    description: "Uniwersalny import CSV dla innych brokerow.",
     searchTerms: ["plik csv", "wlasny plik"],
-  }),
-  platform({
-    id: "custom-xlsx",
-    name: "XLSX",
-    preset: "auto",
-    formats: ["XLSX"],
-    status: "full",
-    logoText: "XLSX",
-    description: "Import arkusza XLSX przez istniejacy parser.",
-    searchTerms: ["excel", "arkusz"],
-  }),
-  platform({
-    id: "custom-pdf",
-    name: "PDF",
-    preset: "xtb",
-    formats: ["PDF"],
-    status: "partial",
-    logoText: "PDF",
-    description: "Tekstowe raporty PDF XTB.",
-    searchTerms: ["raport pdf"],
   }),
   ...["OFX", "QIF", "MT940", "XML", "JSON"].map((format) =>
     platform({
@@ -663,8 +634,6 @@ const IMPORT_PLATFORM_SECTIONS: ImportPlatformSection[] = [
     marker: "FILE",
     platformIds: [
       "custom-csv",
-      "custom-xlsx",
-      "custom-pdf",
       "custom-ofx",
       "custom-qif",
       "custom-mt940",

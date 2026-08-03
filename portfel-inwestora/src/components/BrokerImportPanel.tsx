@@ -3,8 +3,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   parseBrokerOperationsCsv,
-  parseBrokerOperationsMhtml,
-  parseBrokerOperationsPdf,
   parseBrokerOperationsXlsx,
   type BrokerImportParseResult,
   type ImportedBrokerOperation,
@@ -44,24 +42,12 @@ const formatOperationType = (operation: ImportedBrokerOperation) => {
   return labels[operation.operationType ?? ""] ?? operation.operationType ?? "Operacja";
 };
 
-const isPdfFile = (file: File) =>
-  file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
-
 const isXlsxFile = (file: File) =>
   file.name.toLowerCase().endsWith(".xlsx") ||
   file.type === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 
-const isMhtmlFile = (file: File) => {
-  const lowerName = file.name.toLowerCase();
-  return (
-    lowerName.endsWith(".mhtml") ||
-    lowerName.endsWith(".mht") ||
-    lowerName.endsWith(".html") ||
-    lowerName.endsWith(".htm") ||
-    file.type === "message/rfc822" ||
-    file.type === "text/html"
-  );
-};
+const isCsvFile = (file: File) =>
+  file.name.toLowerCase().endsWith(".csv") || file.type === "text/csv";
 
 const waitForPaint = () =>
   new Promise<void>((resolve) => {
@@ -84,7 +70,16 @@ export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) 
     () => parseResult?.operations.slice(0, 6) ?? [],
     [parseResult]
   );
-  const preset = getImportPlatformById(selectedPlatformId).preset;
+  const selectedPlatform = getImportPlatformById(selectedPlatformId);
+  const preset = selectedPlatform.preset;
+  const isXtbImport = selectedPlatform.id === "xtb";
+  const acceptedFileTypes = isXtbImport
+    ? ".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    : ".csv,text/csv";
+  const fileLabel = isXtbImport ? "Plik XTB (XLSX)" : "Plik CSV";
+  const importDescription = isXtbImport
+    ? "Dla XTB obslugiwany jest aktualny eksport XLSX. Starsze raporty PDF, HTML i CSV nie sa juz pokazywane w wyborze XTB."
+    : "Dla pozostalych platform uzyj uniwersalnego importera CSV. Dedykowane parsery pozostaja rozdzielone modulowo.";
 
   const handlePlatformSelect = (platform: ImportPlatformDefinition) => {
     setSelectedPlatformId(platform.id);
@@ -104,36 +99,30 @@ export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) 
       return;
     }
 
+    const isAcceptedFile = isXtbImport ? isXlsxFile(file) : isCsvFile(file);
+
+    if (!isAcceptedFile) {
+      setError(
+        isXtbImport
+          ? "Import XTB obsluguje teraz wylacznie pliki XLSX."
+          : "Ten importer obsluguje wylacznie pliki CSV."
+      );
+      return;
+    }
+
     setIsParsing(true);
-    setParseStatus(
-      isXlsxFile(file)
-        ? "Odczytuje arkusz XLSX..."
-        : isPdfFile(file)
-          ? "Odczytuje raport PDF..."
-          : isMhtmlFile(file)
-            ? "Odczytuje raport HTML/MHTML..."
-            : "Odczytuje plik CSV..."
-    );
+    setParseStatus(isXtbImport ? "Odczytuje arkusz XLSX..." : "Odczytuje plik CSV...");
     await waitForPaint();
 
     try {
       let result: BrokerImportParseResult;
 
-      if (isXlsxFile(file)) {
+      if (isXtbImport) {
         setParseStatus("Rozpakowuje XLSX i mapuje pierwsza zakladke...");
         result = await parseBrokerOperationsXlsx(
           new Uint8Array(await file.arrayBuffer()),
           preset
         );
-      } else if (isPdfFile(file)) {
-        setParseStatus("Wyszukuje tekst i operacje w PDF...");
-        result = await parseBrokerOperationsPdf(
-          new Uint8Array(await file.arrayBuffer()),
-          preset
-        );
-      } else if (isMhtmlFile(file)) {
-        setParseStatus("Dekoduje HTML/MHTML i mapuje tabele XTB...");
-        result = parseBrokerOperationsMhtml(await file.text(), preset);
       } else {
         setParseStatus("Mapuje kolumny CSV...");
         result = parseBrokerOperationsCsv(await file.text(), preset);
@@ -155,13 +144,13 @@ export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) 
       setError(
         parseError instanceof Error
           ? parseError.message
-          : "Nie udalo sie odczytac pliku CSV/XLSX/PDF."
+          : "Nie udalo sie odczytac pliku importu."
       );
       setParseStatus(null);
     } finally {
       setIsParsing(false);
     }
-  }, [preset]);
+  }, [isXtbImport, preset]);
 
   useEffect(() => {
     const fileInput = fileInputRef.current;
@@ -225,8 +214,7 @@ export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) 
         </div>
 
         <p className="section-copy">
-          Obslugiwane sa eksporty CSV, XLSX, HTML/MHTML oraz tekstowe raporty PDF XTB z
-          danymi transakcji.
+          {importDescription}
         </p>
       </div>
 
@@ -237,11 +225,11 @@ export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) 
         />
 
         <label className="field">
-          <span>Plik CSV/XLSX/PDF/HTML</span>
+          <span>{fileLabel}</span>
           <input
             ref={fileInputRef}
             type="file"
-            accept=".csv,.xlsx,.pdf,.mhtml,.mht,.html,.htm,text/csv,text/html,message/rfc822,application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            accept={acceptedFileTypes}
           />
         </label>
 

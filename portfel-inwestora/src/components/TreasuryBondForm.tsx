@@ -24,6 +24,7 @@ type TreasuryBondFormProps = {
   onChange: (draft: TreasuryBondDraft) => void;
   onCodeChange: (code: string) => void;
   onBuySubmit: () => void;
+  onSellSubmit: () => void;
   onRedeemSubmit: () => void;
   onSwapSubmit: () => void;
 };
@@ -35,6 +36,15 @@ const parseIntegerInput = (value: string) => {
 
   const parsed = Number(value.replace(",", "."));
   return Number.isFinite(parsed) ? Math.max(0, Math.floor(parsed)) : 0;
+};
+
+const parseNumericInput = (value: string) => {
+  if (!value.trim()) {
+    return 0;
+  }
+
+  const parsed = Number(value.replace(",", "."));
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
 };
 
 export default function TreasuryBondForm({
@@ -52,10 +62,10 @@ export default function TreasuryBondForm({
   onChange,
   onCodeChange,
   onBuySubmit,
+  onSellSubmit,
   onRedeemSubmit,
   onSwapSubmit,
 }: TreasuryBondFormProps) {
-  const purchasePriceValue = series ? String(series.salePrice) : draft.purchasePriceInput;
   const swapPriceValue = series?.swapPrice ?? Math.max((series?.salePrice ?? 100) - 0.1, 0);
 
   return (
@@ -71,7 +81,7 @@ export default function TreasuryBondForm({
         </p>
       </div>
 
-      <div className="mt-5 grid gap-4 xl:grid-cols-[1.3fr_0.7fr_1fr_1fr_auto_auto]">
+      <div className="mt-5 grid gap-4 xl:grid-cols-[1.3fr_0.7fr_1fr_1fr_auto_auto_auto]">
         <label className="field">
           <span>Kod obligacji</span>
           <input
@@ -116,9 +126,21 @@ export default function TreasuryBondForm({
         </label>
 
         <label className="field">
-          <span>Cena zakupu (1 szt, PLN)</span>
-          <input type="number" value={purchasePriceValue} readOnly aria-readonly="true" />
-          <small className="field-note">Z ceny sprzedazy serii.</small>
+          <span>Cena transakcji (1 szt, PLN)</span>
+          <input
+            type="number"
+            min="0"
+            step="0.01"
+            value={draft.purchasePriceInput}
+            onChange={(event) =>
+              onChange({
+                ...draft,
+                purchasePriceInput: event.target.value,
+                purchasePrice: parseNumericInput(event.target.value),
+              })
+            }
+          />
+          <small className="field-note">Domyslnie cena emisji, mozesz wpisac wlasna.</small>
         </label>
 
         <button
@@ -127,6 +149,14 @@ export default function TreasuryBondForm({
           onClick={onBuySubmit}
         >
           Kup
+        </button>
+
+        <button
+          className="transaction-button transaction-button-compact bond-transaction-button transaction-button-sell self-end"
+          type="button"
+          onClick={onSellSubmit}
+        >
+          Sprzedaj
         </button>
 
         <button

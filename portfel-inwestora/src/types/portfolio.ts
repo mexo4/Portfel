@@ -186,6 +186,8 @@ export type PortfolioAsset = {
   quantity: number;
   purchasePrice: number;
   purchaseCurrency: CurrencyCode;
+  purchasePriceCurrency?: CurrencyCode;
+  purchaseFxRateToPln?: number;
   feePln: number;
   marketCurrency: CurrencyCode;
   provider: QuoteProvider;
@@ -237,6 +239,8 @@ export type PortfolioSaleAllocation = {
   purchaseDate: string;
   purchasePrice: number;
   purchaseCurrency: CurrencyCode;
+  purchasePriceCurrency?: CurrencyCode;
+  purchaseFxRateToPln?: number;
   allocatedBuyFeePln: number;
   investedPln: number;
   name?: string;

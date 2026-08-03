@@ -61,6 +61,7 @@ const requestJson = async <T,>(url: string, init?: RequestInit): Promise<T> => {
 
   const response = await fetch(url, {
     cache: "no-store",
+    credentials: "same-origin",
     ...init,
     headers,
   });

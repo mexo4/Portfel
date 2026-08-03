@@ -52,6 +52,8 @@ type PortfolioHistorySegment = {
   endDate: string;
   marketCurrency: CurrencyCode;
   purchaseCurrency: CurrencyCode;
+  purchasePriceCurrency?: CurrencyCode;
+  purchaseFxRateToPln?: number;
   purchasePrice: number;
   provider: QuoteProvider;
   providerId?: string;
@@ -1011,6 +1013,16 @@ const buildOpenAssetSegment = (asset: PortfolioAsset, today: string): PortfolioH
   endDate: today,
   marketCurrency: toCurrencyCode(asset.marketCurrency),
   purchaseCurrency: toCurrencyCode(asset.purchaseCurrency),
+  purchasePriceCurrency:
+    typeof asset.purchasePriceCurrency === "string" && asset.purchasePriceCurrency
+      ? toCurrencyCode(asset.purchasePriceCurrency)
+      : undefined,
+  purchaseFxRateToPln:
+    typeof asset.purchaseFxRateToPln === "number" &&
+    Number.isFinite(asset.purchaseFxRateToPln) &&
+    asset.purchaseFxRateToPln > 0
+      ? round(asset.purchaseFxRateToPln, 8)
+      : undefined,
   purchasePrice: round(asset.purchasePrice, 8),
   provider: asset.provider,
   providerId: asset.providerId,
@@ -1048,6 +1060,16 @@ const buildSoldAllocationSegment = (
     endDate,
     marketCurrency: toCurrencyCode(allocation.marketCurrency ?? sale.marketCurrency),
     purchaseCurrency: toCurrencyCode(allocation.purchaseCurrency),
+    purchasePriceCurrency:
+      typeof allocation.purchasePriceCurrency === "string" && allocation.purchasePriceCurrency
+        ? toCurrencyCode(allocation.purchasePriceCurrency)
+        : undefined,
+    purchaseFxRateToPln:
+      typeof allocation.purchaseFxRateToPln === "number" &&
+      Number.isFinite(allocation.purchaseFxRateToPln) &&
+      allocation.purchaseFxRateToPln > 0
+        ? round(allocation.purchaseFxRateToPln, 8)
+        : undefined,
     purchasePrice: round(allocation.purchasePrice, 8),
     provider: allocation.provider ?? sale.provider,
     providerId: allocation.providerId ?? sale.providerId,
@@ -1065,11 +1087,13 @@ const getNeededFxCodes = (
   for (const asset of assets) {
     codes.add(toCurrencyCode(asset.marketCurrency));
     codes.add(toCurrencyCode(asset.purchaseCurrency));
+    codes.add(toCurrencyCode(asset.purchasePriceCurrency, asset.purchaseCurrency));
   }
 
   for (const sale of sales) {
     for (const allocation of sale.allocations) {
       codes.add(toCurrencyCode(allocation.purchaseCurrency));
+      codes.add(toCurrencyCode(allocation.purchasePriceCurrency, allocation.purchaseCurrency));
       codes.add(toCurrencyCode(allocation.marketCurrency ?? sale.marketCurrency));
     }
   }
@@ -1123,6 +1147,37 @@ const convertToPlnOnDate = (
   fxSeriesByCode: Map<CurrencyCode, Map<string, number>>
 ) => round(amount * getFxRateForDate(fxSeriesByCode, currency, date));
 
+type PurchaseValueSource = {
+  purchaseCurrency: CurrencyCode;
+  purchasePriceCurrency?: CurrencyCode;
+  purchaseFxRateToPln?: number;
+  purchaseDate: string;
+};
+
+const getPurchasePriceCurrency = (source: PurchaseValueSource) =>
+  toCurrencyCode(source.purchasePriceCurrency, source.purchaseCurrency);
+
+const convertPurchaseValueToPlnOnDate = (
+  amount: number,
+  source: PurchaseValueSource,
+  fxSeriesByCode: Map<CurrencyCode, Map<string, number>>
+) => {
+  if (
+    typeof source.purchaseFxRateToPln === "number" &&
+    Number.isFinite(source.purchaseFxRateToPln) &&
+    source.purchaseFxRateToPln > 0
+  ) {
+    return round(amount * source.purchaseFxRateToPln);
+  }
+
+  return convertToPlnOnDate(
+    amount,
+    getPurchasePriceCurrency(source),
+    source.purchaseDate,
+    fxSeriesByCode
+  );
+};
+
 const buildBuyCashflowEvents = (
   assets: PortfolioAsset[],
   sales: PortfolioSale[],
@@ -1132,10 +1187,9 @@ const buildBuyCashflowEvents = (
 
   for (const asset of assets) {
     const investedPln = round(
-      convertToPlnOnDate(
+      convertPurchaseValueToPlnOnDate(
         asset.purchasePrice * asset.quantity,
-        asset.purchaseCurrency,
-        asset.purchaseDate,
+        asset,
         fxSeriesByCode
       ) + asset.feePln
     );
@@ -1146,10 +1200,9 @@ const buildBuyCashflowEvents = (
   for (const sale of sales) {
     for (const allocation of sale.allocations) {
       const investedPln = round(
-        convertToPlnOnDate(
+        convertPurchaseValueToPlnOnDate(
           allocation.purchasePrice * allocation.quantity,
-          allocation.purchaseCurrency,
-          allocation.purchaseDate,
+          allocation,
           fxSeriesByCode
         ) + allocation.allocatedBuyFeePln
       );
@@ -1476,7 +1529,9 @@ export const buildPortfolioHistory = async ({
 
       const hasProviderPrice = typeof lastKnownClose === "number" && lastKnownClose > 0;
       const unitPrice = hasProviderPrice ? lastKnownClose! : segment.purchasePrice;
-      const currency = hasProviderPrice ? segment.marketCurrency : segment.purchaseCurrency;
+      const currency = hasProviderPrice
+        ? segment.marketCurrency
+        : getPurchasePriceCurrency(segment);
       const convertedValue = convertToPlnOnDate(
         unitPrice * segment.quantity,
         currency,

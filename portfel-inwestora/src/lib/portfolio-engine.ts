@@ -71,6 +71,45 @@ export const convertToPln = (
   fxRates: FxRates
 ) => round(amount * (fxRates[currency] ?? 1));
 
+const hasPositiveNumber = (value: unknown): value is number =>
+  typeof value === "number" && Number.isFinite(value) && value > 0;
+
+type PurchasePriceSource = {
+  purchaseCurrency: CurrencyCode;
+  purchasePriceCurrency?: CurrencyCode;
+  marketCurrency?: CurrencyCode;
+  purchaseFxRateToPln?: number;
+};
+
+export const getAssetPurchasePriceCurrency = (asset: PurchasePriceSource) =>
+  asset.purchasePriceCurrency ?? asset.purchaseCurrency ?? asset.marketCurrency ?? BASE_CURRENCY;
+
+export const getAssetPurchaseFxRateToPln = (
+  asset: PurchasePriceSource,
+  fxRates: FxRates
+) => {
+  if (hasPositiveNumber(asset.purchaseFxRateToPln)) {
+    return asset.purchaseFxRateToPln;
+  }
+
+  return fxRates[getAssetPurchasePriceCurrency(asset)] ?? 1;
+};
+
+export const getAssetPurchaseValuePln = (
+  asset: PurchasePriceSource & {
+    purchasePrice: number;
+    quantity: number;
+  },
+  fxRates: FxRates
+) => round(asset.purchasePrice * asset.quantity * getAssetPurchaseFxRateToPln(asset, fxRates));
+
+export const getAssetPurchaseUnitValuePln = (
+  asset: PurchasePriceSource & {
+    purchasePrice: number;
+  },
+  fxRates: FxRates
+) => round(asset.purchasePrice * getAssetPurchaseFxRateToPln(asset, fxRates), 6);
+
 export const hasAssetLivePrice = (asset: PortfolioAsset) =>
   typeof asset.latestPrice === "number" && asset.latestPrice > 0;
 
@@ -96,10 +135,7 @@ export const getAssetDailyChangePercent = (asset: PortfolioAsset) => {
 };
 
 export const getAssetInvestedPln = (asset: PortfolioAsset, fxRates: FxRates) =>
-  round(
-    convertToPln(asset.purchasePrice * asset.quantity, asset.purchaseCurrency, fxRates) +
-      asset.feePln
-  );
+  round(getAssetPurchaseValuePln(asset, fxRates) + asset.feePln);
 
 export const getAssetMarketValuePln = (asset: PortfolioAsset, fxRates: FxRates) =>
   hasAssetLivePrice(asset)
@@ -164,16 +200,17 @@ export const getGroupedPortfolioAssets = (
       weightedLatestUnitPrice !== undefined && previousClose !== undefined && previousClose > 0
         ? round(((weightedLatestUnitPrice - previousClose) / previousClose) * 100, 2)
         : undefined;
-    const purchaseCurrencies = new Set(sortedLots.map((lot) => lot.purchaseCurrency));
+    const purchaseCurrencies = new Set(sortedLots.map(getAssetPurchasePriceCurrency));
     const averagePurchasePriceCurrency =
-      purchaseCurrencies.size === 1 ? sortedLots[0].purchaseCurrency : BASE_CURRENCY;
+      purchaseCurrencies.size === 1
+        ? getAssetPurchasePriceCurrency(sortedLots[0])
+        : BASE_CURRENCY;
     const purchaseValue = sortedLots.reduce(
       (total, lot) => total + lot.purchasePrice * lot.quantity,
       0
     );
     const purchaseValuePln = sortedLots.reduce(
-      (total, lot) =>
-        total + convertToPln(lot.purchasePrice * lot.quantity, lot.purchaseCurrency, fxRates),
+      (total, lot) => total + getAssetPurchaseValuePln(lot, fxRates),
       0
     );
     const totalInvestedPln = round(

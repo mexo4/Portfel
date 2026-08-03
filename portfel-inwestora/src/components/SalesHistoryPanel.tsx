@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import TruncatedText from "@/components/TruncatedText";
 import { formatCurrency, formatDate, formatNumber, normalizeText } from "@/lib/utils";
 import type { CurrencyCode, PortfolioSale } from "@/types/portfolio";
 
@@ -319,9 +320,11 @@ export default function SalesHistoryPanel({
                   <article key={sale.id} className="lot-card">
                     <div className="lot-card-header">
                       <div>
-                        <p className="table-title">
-                          {sale.name} ({sale.symbol})
-                        </p>
+                        <TruncatedText
+                          as="p"
+                          className="table-title"
+                          text={`${sale.name} (${sale.symbol})`}
+                        />
                         <p className="table-note">
                           {transactionLabel} / {formatDate(sale.saleDate)} / {getSaleAccountLabel(sale)}
                         </p>

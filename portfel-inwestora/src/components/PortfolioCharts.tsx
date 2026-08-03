@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import TruncatedText from "@/components/TruncatedText";
 import { fetchBenchmarkComparisons } from "@/lib/api";
 import { buildPortfolioBenchmarkInvestments } from "@/lib/portfolio-state";
 import { getGroupedPortfolioAssets } from "@/lib/pricing";
@@ -322,9 +323,13 @@ export default function PortfolioCharts({
             <article key={asset.key} className="chart-row">
               <div className="chart-row-copy">
                 <div>
-                  <p className="table-title">
+                  <TruncatedText
+                    as="p"
+                    className="table-title"
+                    text={`${asset.name} (${asset.symbol})`}
+                  >
                     {asset.name} <span className="table-note">({asset.symbol})</span>
-                  </p>
+                  </TruncatedText>
                   <p className="table-note">
                     {asset.share.toFixed(1)}% portfela · {formatCurrency(asset.totalValuePln)}
                   </p>
@@ -399,9 +404,13 @@ export default function PortfolioCharts({
                 topWinners.map((asset) => (
                   <div key={asset.key} className="ranking-row">
                     <div>
-                      <p className="table-title">
+                      <TruncatedText
+                        as="p"
+                        className="table-title"
+                        text={`${asset.name} (${asset.symbol})`}
+                      >
                         {asset.name} <span className="table-note">({asset.symbol})</span>
-                      </p>
+                      </TruncatedText>
                       <p className="table-note">{formatCurrency(asset.totalValuePln)}</p>
                     </div>
                     <strong className="tone-positive">
@@ -424,9 +433,13 @@ export default function PortfolioCharts({
                 topLosers.map((asset) => (
                   <div key={asset.key} className="ranking-row">
                     <div>
-                      <p className="table-title">
+                      <TruncatedText
+                        as="p"
+                        className="table-title"
+                        text={`${asset.name} (${asset.symbol})`}
+                      >
                         {asset.name} <span className="table-note">({asset.symbol})</span>
-                      </p>
+                      </TruncatedText>
                       <p className="table-note">{formatCurrency(asset.totalValuePln)}</p>
                     </div>
                     <strong className="tone-negative">

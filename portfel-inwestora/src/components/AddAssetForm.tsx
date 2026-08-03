@@ -4,6 +4,8 @@ import {
   SEARCH_MODE_OPTIONS,
   SUPPORTED_CURRENCIES,
 } from "@/lib/constants";
+import CurrencyPicker from "@/components/CurrencyPicker";
+import TruncatedText from "@/components/TruncatedText";
 import { getMinimumSearchLength, getSearchPlaceholder } from "@/lib/search";
 import type {
   AssetDraft,
@@ -231,7 +233,7 @@ export default function AddAssetForm({
                     className="search-result-card search-result-card-prominent text-left"
                     onClick={() => onPickResult(result)}
                   >
-                    <p className="search-result-title">{result.name}</p>
+                    <TruncatedText as="p" className="search-result-title" text={result.name} />
                     <p className="search-result-meta">{result.symbol}</p>
                   </button>
                 ))}
@@ -249,50 +251,36 @@ export default function AddAssetForm({
             className="result-card mt-3 w-full text-left"
             onClick={() => onReuseLastAddedResult(lastAddedResult)}
           >
-            <p className="result-title">{lastAddedResult.name}</p>
+            <TruncatedText as="p" className="result-title" text={lastAddedResult.name} />
             <p className="result-meta">{lastAddedResult.symbol}</p>
           </button>
         </div>
       ) : null}
 
       <div className="mt-4 grid gap-4 xl:grid-cols-[1fr_1fr_1fr_auto_auto]">
-        <label className="field">
-          <span>Waluta zakupu</span>
-          <select
-            value={draft.purchaseCurrency}
-            onChange={(event) =>
-              onDraftChange({
-                ...draft,
-                purchaseCurrency: event.target.value as AssetDraft["purchaseCurrency"],
-              })
-            }
-          >
-            {currencyOptions.map((currency) => (
-              <option key={currency} value={currency}>
-                {currency}
-              </option>
-            ))}
-          </select>
-        </label>
+        <CurrencyPicker
+          label="Waluta zakupu / konta"
+          value={draft.purchaseCurrency}
+          currencies={currencyOptions}
+          onChange={(currency) =>
+            onDraftChange({
+              ...draft,
+              purchaseCurrency: currency,
+            })
+          }
+        />
 
-        <label className="field">
-          <span>Waluta rynku / kursu</span>
-          <select
-            value={draft.marketCurrency}
-            onChange={(event) =>
-              onDraftChange({
-                ...draft,
-                marketCurrency: event.target.value as AssetDraft["marketCurrency"],
-              })
-            }
-          >
-            {currencyOptions.map((currency) => (
-              <option key={currency} value={currency}>
-                {currency}
-              </option>
-            ))}
-          </select>
-        </label>
+        <CurrencyPicker
+          label="Waluta instrumentu / ceny"
+          value={draft.marketCurrency}
+          currencies={currencyOptions}
+          onChange={(currency) =>
+            onDraftChange({
+              ...draft,
+              marketCurrency: currency,
+            })
+          }
+        />
 
         <label className="field">
           <span>Prowizja w PLN</span>

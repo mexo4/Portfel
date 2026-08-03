@@ -2,7 +2,9 @@
 
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
+import TruncatedText from "@/components/TruncatedText";
 import { deleteAdminUser } from "@/lib/api";
+import { getAssetPurchasePriceCurrency } from "@/lib/pricing";
 import { formatDate, formatDateTime, formatNumber } from "@/lib/utils";
 import type { AdminDashboardData, AdminUserOverview } from "@/lib/server/admin";
 
@@ -43,7 +45,7 @@ const buildTransactions = (user: AdminUserOverview) => {
     date: asset.purchaseDate,
     type: "Zakup",
     title: `${asset.symbol} - ${asset.name}`,
-    details: `${formatNumber(asset.quantity)} szt. po ${formatNumber(asset.purchasePrice, 4)} ${asset.purchaseCurrency}`,
+    details: `${formatNumber(asset.quantity)} szt. po ${formatNumber(asset.purchasePrice, 4)} ${getAssetPurchasePriceCurrency(asset)}`,
     value: `Prowizja: ${formatNumber(asset.feePln, 2)} PLN`,
   }));
 
@@ -56,7 +58,7 @@ const buildTransactions = (user: AdminUserOverview) => {
       details: `${formatNumber(allocation.quantity)} szt. po ${formatNumber(
         allocation.purchasePrice,
         4
-      )} ${allocation.purchaseCurrency}`,
+      )} ${getAssetPurchasePriceCurrency(allocation)}`,
       value: `Sprzedany lot: ${formatNumber(allocation.investedPln, 2)} PLN kosztu`,
     }))
   );
@@ -199,7 +201,11 @@ export default function AdminUsersPanel({ users }: AdminUsersPanelProps) {
                           <span>{formatDate(transaction.date)}</span>
                           <strong>{transaction.type}</strong>
                           <div>
-                            <strong>{transaction.title}</strong>
+                            <TruncatedText
+                              as="div"
+                              className="admin-transaction-title"
+                              text={transaction.title}
+                            />
                             <span>{transaction.details}</span>
                           </div>
                           <span>{transaction.value}</span>

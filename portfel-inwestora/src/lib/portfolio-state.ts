@@ -1,4 +1,9 @@
-import { getAssetInvestedPln, type PortfolioAssetGroup, convertToPln } from "@/lib/pricing";
+import {
+  getAssetInvestedPln,
+  getAssetPurchaseValuePln,
+  type PortfolioAssetGroup,
+  convertToPln,
+} from "@/lib/pricing";
 import {
   createFallbackTreasuryBondSeries,
   getTreasuryBondCouponPaymentDates,
@@ -336,6 +341,14 @@ const normalizePortfolioSaleAllocation = (
       ? round(allocation.purchasePrice, 6)
       : 0,
     purchaseCurrency: toCurrencyCode(allocation.purchaseCurrency, "PLN"),
+    purchasePriceCurrency:
+      typeof allocation.purchasePriceCurrency === "string" && allocation.purchasePriceCurrency
+        ? toCurrencyCode(allocation.purchasePriceCurrency)
+        : undefined,
+    purchaseFxRateToPln:
+      hasFiniteNumber(allocation.purchaseFxRateToPln) && allocation.purchaseFxRateToPln > 0
+        ? round(allocation.purchaseFxRateToPln, 8)
+        : undefined,
     allocatedBuyFeePln: hasFiniteNumber(allocation.allocatedBuyFeePln)
       ? round(allocation.allocatedBuyFeePln, 6)
       : 0,
@@ -539,6 +552,14 @@ const normalizePortfolioAsset = (
       asset.purchaseCurrency,
       kind === "stock" || kind === "bond" ? "PLN" : "USD"
     ),
+    purchasePriceCurrency:
+      typeof asset.purchasePriceCurrency === "string" && asset.purchasePriceCurrency
+        ? toCurrencyCode(asset.purchasePriceCurrency)
+        : undefined,
+    purchaseFxRateToPln:
+      hasFiniteNumber(asset.purchaseFxRateToPln) && asset.purchaseFxRateToPln > 0
+        ? round(asset.purchaseFxRateToPln, 8)
+        : undefined,
     feePln: hasFiniteNumber(asset.feePln) ? round(asset.feePln, 6) : 0,
     marketCurrency: toCurrencyCode(
       asset.marketCurrency,
@@ -1033,9 +1054,11 @@ export const applySaleToPortfolio = ({
     const allocatedQuantity = round(Math.min(remainingQuantity, availableQuantity), 6);
     const allocatedBuyFeePln = round(lot.feePln * (allocatedQuantity / availableQuantity), 6);
     const investedPln = round(
-      convertToPln(
-        allocatedQuantity * lot.purchasePrice,
-        lot.purchaseCurrency,
+      getAssetPurchaseValuePln(
+        {
+          ...lot,
+          quantity: allocatedQuantity,
+        },
         fxRates
       ) + allocatedBuyFeePln
     );
@@ -1048,6 +1071,8 @@ export const applySaleToPortfolio = ({
       purchaseDate: lot.purchaseDate,
       purchasePrice: lot.purchasePrice,
       purchaseCurrency: lot.purchaseCurrency,
+      purchasePriceCurrency: lot.purchasePriceCurrency,
+      purchaseFxRateToPln: lot.purchaseFxRateToPln,
       allocatedBuyFeePln,
       investedPln,
       name: lot.name,
@@ -1218,6 +1243,8 @@ const createRestoredAssetFromAllocation = ({
   quantity: round(allocation.quantity, 6),
   purchasePrice: round(allocation.purchasePrice, 6),
   purchaseCurrency: allocation.purchaseCurrency,
+  purchasePriceCurrency: allocation.purchasePriceCurrency,
+  purchaseFxRateToPln: allocation.purchaseFxRateToPln,
   feePln: round(allocation.allocatedBuyFeePln, 6),
   marketCurrency: toCurrencyCode(allocation.marketCurrency, sale.marketCurrency),
   provider:

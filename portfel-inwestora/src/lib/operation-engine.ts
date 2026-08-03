@@ -461,8 +461,16 @@ const getLegacyOperationMetadata = (
 const buildBuyOperation = (
   portfolioId: string,
   asset: PortfolioState["assets"][number]
-) =>
-  createOperation({
+) => {
+  const priceCurrency = toCurrencyCode(asset.purchasePriceCurrency, asset.purchaseCurrency);
+  const exchangeRate =
+    typeof asset.purchaseFxRateToPln === "number" && Number.isFinite(asset.purchaseFxRateToPln)
+      ? asset.purchaseFxRateToPln
+      : priceCurrency === BASE_CURRENCY
+        ? 1
+        : null;
+
+  return createOperation({
     id: `op-buy-${asset.id}`,
     portfolioId,
     accountId: getDefaultInvestmentAccountId(portfolioId),
@@ -470,8 +478,8 @@ const buildBuyOperation = (
     operationType: "BUY",
     quantity: asset.quantity,
     price: asset.purchasePrice,
-    currency: asset.purchaseCurrency,
-    exchangeRate: asset.purchaseCurrency === BASE_CURRENCY ? 1 : null,
+    currency: priceCurrency,
+    exchangeRate,
     fee: asset.feePln,
     tax: 0,
     amount: round(asset.quantity * asset.purchasePrice, 8),
@@ -481,6 +489,8 @@ const buildBuyOperation = (
       lotId: asset.id,
       feeCurrency: BASE_CURRENCY,
       marketCurrency: asset.marketCurrency,
+      settlementCurrency: asset.purchaseCurrency,
+      purchasePriceCurrency: priceCurrency,
       provider: asset.provider,
       providerId: asset.providerId,
       groupOrder: asset.groupOrder,
@@ -488,6 +498,7 @@ const buildBuyOperation = (
     createdAt: asset.createdAt,
     updatedAt: asset.createdAt,
   });
+};
 
 const buildSellOperation = (portfolioId: string, sale: PortfolioSale) =>
   createOperation({
@@ -788,10 +799,19 @@ export const collectPortfolioCurrencies = (
     new Set(
       [
         BASE_CURRENCY,
-        ...state.assets.map((asset) => asset.purchaseCurrency),
+        ...state.assets.flatMap((asset) => [
+          asset.purchaseCurrency,
+          asset.purchasePriceCurrency,
+          asset.marketCurrency,
+        ]),
         ...state.sales.flatMap((sale) => [
           sale.realizedValueCurrency,
-          ...sale.allocations.map((allocation) => allocation.purchaseCurrency),
+          sale.marketCurrency,
+          ...sale.allocations.flatMap((allocation) => [
+            allocation.purchaseCurrency,
+            allocation.purchasePriceCurrency,
+            allocation.marketCurrency,
+          ]),
         ]),
         ...state.realizedAdjustments.map((adjustment) => adjustment.currency),
         ...(Array.isArray(operations)

@@ -1,8 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { ApiError, loginUser, registerUser } from "@/lib/api";
 import PasswordField from "@/components/PasswordField";
 
@@ -27,19 +26,23 @@ const getVerificationPayload = (error: unknown) => {
 };
 
 export default function AuthCard({ mode, initialNotice = null }: AuthCardProps) {
-  const router = useRouter();
   const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(initialNotice);
   const [verificationPreviewUrl, setVerificationPreviewUrl] = useState<string | null>(null);
+  const [isHydrated, setIsHydrated] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const displayNameRef = useRef<HTMLInputElement | null>(null);
   const emailRef = useRef<HTMLInputElement | null>(null);
   const passwordRef = useRef<HTMLInputElement | null>(null);
 
   const isRegister = mode === "register";
+
+  useEffect(() => {
+    setIsHydrated(true);
+  }, []);
 
   const handleSubmit = async (event?: FormEvent<HTMLFormElement>) => {
     event?.preventDefault();
@@ -75,6 +78,8 @@ export default function AuthCard({ mode, initialNotice = null }: AuthCardProps) 
     setNotice(null);
     setVerificationPreviewUrl(null);
 
+    let shouldKeepSubmitting = false;
+
     try {
       if (isRegister) {
         const response = await registerUser({
@@ -97,7 +102,8 @@ export default function AuthCard({ mode, initialNotice = null }: AuthCardProps) 
         });
       }
 
-      router.replace("/app");
+      shouldKeepSubmitting = true;
+      window.location.replace("/app");
     } catch (submitError) {
       const verificationPayload = getVerificationPayload(submitError);
 
@@ -114,7 +120,9 @@ export default function AuthCard({ mode, initialNotice = null }: AuthCardProps) 
         submitError instanceof Error ? submitError.message : "Nie udalo sie zapisac formularza."
       );
     } finally {
-      setIsSubmitting(false);
+      if (!shouldKeepSubmitting) {
+        setIsSubmitting(false);
+      }
     }
   };
 
@@ -139,6 +147,7 @@ export default function AuthCard({ mode, initialNotice = null }: AuthCardProps) 
                 <input
                   ref={displayNameRef}
                   value={displayName}
+                  disabled={!isHydrated || isSubmitting}
                   onChange={(event) => setDisplayName(event.target.value)}
                   placeholder="Np. Jan Kowalski"
                 />
@@ -151,6 +160,7 @@ export default function AuthCard({ mode, initialNotice = null }: AuthCardProps) 
                 ref={emailRef}
                 type="email"
                 value={email}
+                disabled={!isHydrated || isSubmitting}
                 onChange={(event) => setEmail(event.target.value)}
                 placeholder="twoj@email.com"
               />
@@ -161,6 +171,7 @@ export default function AuthCard({ mode, initialNotice = null }: AuthCardProps) 
               value={password}
               inputRef={passwordRef}
               autoComplete={isRegister ? "new-password" : "current-password"}
+              disabled={!isHydrated || isSubmitting}
               onChange={setPassword}
               placeholder="Minimum 8 znakow"
             />
@@ -187,10 +198,13 @@ export default function AuthCard({ mode, initialNotice = null }: AuthCardProps) 
             <button
               className="primary-button"
               type="submit"
-              disabled={isSubmitting}
+              disabled={!isHydrated || isSubmitting}
+              aria-busy={isSubmitting}
             >
               {isSubmitting
-                ? "Przetwarzam..."
+                ? isRegister
+                  ? "Tworzenie konta..."
+                  : "Logowanie..."
                 : isRegister
                   ? "Utworz konto"
                   : "Zaloguj sie"}

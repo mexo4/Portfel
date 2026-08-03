@@ -20,10 +20,12 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useMemo, useState, type CSSProperties } from "react";
+import TruncatedText from "@/components/TruncatedText";
 import { KIND_LABELS } from "@/lib/constants";
 import {
   getAssetLatestUnitPrice,
   getAssetProfitLossPln,
+  getAssetPurchasePriceCurrency,
   getGroupedPortfolioAssets,
   hasAssetLivePrice,
   type PortfolioAssetGroup,
@@ -178,7 +180,7 @@ const GroupDragOverlayCard = ({ group }: { group: PortfolioAssetGroup }) => {
       </div>
 
       <div className="drag-overlay-copy">
-        <p className="table-title">{group.name}</p>
+        <TruncatedText as="p" className="table-title" text={group.name} />
         <p className="drag-overlay-meta">{group.symbol}</p>
       </div>
 
@@ -279,7 +281,7 @@ const SortableGroupSection = ({
             ) : null}
 
             <div>
-              <div className="table-title">{group.name}</div>
+              <TruncatedText as="div" className="table-title" text={group.name} />
               <div className="table-note">
                 {group.symbol} - {group.lotsCount}{" "}
                 {group.lotsCount === 1 ? "zakup" : "zakupy"}
@@ -392,7 +394,10 @@ const SortableGroupSection = ({
                       <div>
                         <p className="table-note">Cena zakupu</p>
                         <strong>
-                          {formatCurrency(lot.purchasePrice, lot.purchaseCurrency)}
+                          {formatCurrency(
+                            lot.purchasePrice,
+                            getAssetPurchasePriceCurrency(lot)
+                          )}
                         </strong>
                       </div>
                       <div>

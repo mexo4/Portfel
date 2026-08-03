@@ -2,6 +2,7 @@
 
 import { useMemo, useRef, useState } from "react";
 import FormattedNumberInput from "@/components/FormattedNumberInput";
+import TruncatedText from "@/components/TruncatedText";
 import {
   buildDividendCalendar,
   buildDividendForecast,
@@ -1202,7 +1203,11 @@ export default function DividendCashWorkspace({
                     <tr key={dividend.id}>
                       <td>
                         <strong>{dividend.symbol}</strong>
-                        <p className="table-note">{dividend.instrumentName}</p>
+                        <TruncatedText
+                          as="p"
+                          className="table-note"
+                          text={dividend.instrumentName}
+                        />
                       </td>
                       <td>{dividend.accountName}</td>
                       <td>

@@ -1,5 +1,6 @@
 "use client";
 
+import TruncatedText from "@/components/TruncatedText";
 import type { SellAssetDraft } from "@/types/portfolio";
 
 type SellAssetPanelProps = {
@@ -31,9 +32,11 @@ export default function SellAssetPanel({
       <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
         <div>
           <p className="eyebrow">Sprzedaz aktywa</p>
-          <h2 className="section-title">
-            {draft.name} ({draft.symbol})
-          </h2>
+          <TruncatedText
+            as="div"
+            className="section-title"
+            text={`${draft.name} (${draft.symbol})`}
+          />
         </div>
 
         <p className="section-copy">

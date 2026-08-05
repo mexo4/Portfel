@@ -188,6 +188,7 @@ export type PortfolioAsset = {
   purchaseCurrency: CurrencyCode;
   purchasePriceCurrency?: CurrencyCode;
   purchaseFxRateToPln?: number;
+  purchaseSettlementFxRateToPln?: number;
   feePln: number;
   marketCurrency: CurrencyCode;
   provider: QuoteProvider;

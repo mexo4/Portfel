@@ -55,6 +55,7 @@ const schemaStatements = [
       subscription_updated_at TEXT,
       profile_json TEXT NOT NULL,
       portfolio_json TEXT NOT NULL,
+      portfolio_revision INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     )
@@ -255,6 +256,7 @@ const schemaStatements = [
   "ALTER TABLE users ADD COLUMN IF NOT EXISTS subscription_plan TEXT NOT NULL DEFAULT 'free'",
   "ALTER TABLE users ADD COLUMN IF NOT EXISTS subscription_status TEXT NOT NULL DEFAULT 'active'",
   "ALTER TABLE users ADD COLUMN IF NOT EXISTS subscription_updated_at TEXT",
+  "ALTER TABLE users ADD COLUMN IF NOT EXISTS portfolio_revision INTEGER NOT NULL DEFAULT 0",
 ] as const;
 
 export const initializeDatabase = async () => {

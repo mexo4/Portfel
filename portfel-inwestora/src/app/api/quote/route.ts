@@ -1,10 +1,17 @@
 import { NextResponse } from "next/server";
 import { fetchAssetQuoteServer } from "@/lib/server/market-data";
 import { fetchTreasuryBondQuoteServer } from "@/lib/server/treasury-bonds";
+import { getCurrentAccountData } from "@/lib/server/auth";
 import { toCurrencyCode } from "@/lib/utils";
 import type { AssetKind, QuoteProvider } from "@/types/portfolio";
 
+export const runtime = "nodejs";
+
 export async function GET(request: Request) {
+  if (!(await getCurrentAccountData())) {
+    return NextResponse.json({ error: "Brak autoryzacji." }, { status: 401 });
+  }
+
   const { searchParams } = new URL(request.url);
   const symbol = searchParams.get("symbol")?.trim();
   const kind = (searchParams.get("kind") as AssetKind | null) ?? "stock";

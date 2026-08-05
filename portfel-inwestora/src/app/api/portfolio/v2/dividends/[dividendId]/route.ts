@@ -145,7 +145,12 @@ export async function PUT(request: Request, { params }: DividendRouteProps) {
           : item
       ),
     };
-    const updatedBook = await updateCurrentUserPortfolio(accountData.user.id, nextBook);
+    const updatedPortfolioResult = await updateCurrentUserPortfolio(
+      accountData.user.id,
+      nextBook,
+      accountData.portfolioRevision
+    );
+    const updatedBook = updatedPortfolioResult.portfolioBook;
     const updatedPortfolio = getPortfolioById(
       updatedBook.portfolios,
       portfolio.id,
@@ -158,6 +163,7 @@ export async function PUT(request: Request, { params }: DividendRouteProps) {
       ),
       portfolios: updatedBook.portfolios,
       activePortfolioId: updatedBook.activePortfolioId,
+      portfolioRevision: updatedPortfolioResult.portfolioRevision,
     });
   } catch (error) {
     const message =
@@ -209,12 +215,18 @@ export async function DELETE(request: Request, { params }: DividendRouteProps) {
           : item
       ),
     };
-    const updatedBook = await updateCurrentUserPortfolio(accountData.user.id, nextBook);
+    const updatedPortfolioResult = await updateCurrentUserPortfolio(
+      accountData.user.id,
+      nextBook,
+      accountData.portfolioRevision
+    );
+    const updatedBook = updatedPortfolioResult.portfolioBook;
 
     return NextResponse.json({
       success: true,
       portfolios: updatedBook.portfolios,
       activePortfolioId: updatedBook.activePortfolioId,
+      portfolioRevision: updatedPortfolioResult.portfolioRevision,
     });
   } catch (error) {
     const message =

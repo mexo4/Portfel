@@ -6,7 +6,41 @@ const stringifyMetadata = (value: Record<string, unknown> | undefined) =>
 
 const serializeRows = (rows: Record<string, unknown>[]) => JSON.stringify(rows);
 
-const syncPortfolioRows = async (
+const assertRowsBelongToUser = async (
+  transaction: DatabaseTransaction,
+  userId: string,
+  tableName: string,
+  rowIds: string[],
+  directUserOwnership = false
+) => {
+  if (rowIds.length === 0) {
+    return;
+  }
+
+  const rows = await transaction.query<{ id: string }>(
+    directUserOwnership
+      ? `
+          SELECT id
+          FROM core_portfolios
+          WHERE id = ANY($1::text[]) AND user_id <> $2
+          LIMIT 1
+        `
+      : `
+          SELECT source.id
+          FROM ${tableName} AS source
+          INNER JOIN core_portfolios AS portfolio ON portfolio.id = source.portfolio_id
+          WHERE source.id = ANY($1::text[]) AND portfolio.user_id <> $2
+          LIMIT 1
+        `,
+    [rowIds, userId]
+  );
+
+  if (rows.length > 0) {
+    throw new Error("Identyfikator danych portfela należy do innego użytkownika.");
+  }
+};
+
+export const syncPortfolioCoreTablesInTransaction = async (
   transaction: DatabaseTransaction,
   userId: string,
   portfolioBook: PortfolioBook
@@ -143,6 +177,50 @@ const syncPortfolioRows = async (
     }))
   );
 
+  await assertRowsBelongToUser(transaction, userId, "core_portfolios", portfolioIds, true);
+  await assertRowsBelongToUser(
+    transaction,
+    userId,
+    "core_sub_portfolios",
+    subPortfolioRows.map((row) => String(row.id))
+  );
+  await assertRowsBelongToUser(
+    transaction,
+    userId,
+    "core_accounts",
+    accountRows.map((row) => String(row.id))
+  );
+  await assertRowsBelongToUser(
+    transaction,
+    userId,
+    "core_instruments",
+    instrumentRows.map((row) => String(row.id))
+  );
+  await assertRowsBelongToUser(
+    transaction,
+    userId,
+    "core_operations",
+    operationRows.map((row) => String(row.id))
+  );
+  await assertRowsBelongToUser(
+    transaction,
+    userId,
+    "core_tags",
+    tagRows.map((row) => String(row.id))
+  );
+  await assertRowsBelongToUser(
+    transaction,
+    userId,
+    "core_tag_assignments",
+    tagAssignmentRows.map((row) => String(row.id))
+  );
+  await assertRowsBelongToUser(
+    transaction,
+    userId,
+    "core_benchmarks",
+    benchmarkRows.map((row) => String(row.id))
+  );
+
   await transaction.execute(
     `
       INSERT INTO core_portfolios (
@@ -159,7 +237,6 @@ const syncPortfolioRows = async (
         updated_at TEXT
       )
       ON CONFLICT (id) DO UPDATE SET
-        user_id = EXCLUDED.user_id,
         name = EXCLUDED.name,
         base_currency = EXCLUDED.base_currency,
         metadata_json = EXCLUDED.metadata_json,
@@ -455,5 +532,7 @@ export const syncPortfolioCoreTables = async (
   userId: string,
   portfolioBook: PortfolioBook
 ) => {
-  await withTransaction((transaction) => syncPortfolioRows(transaction, userId, portfolioBook));
+  await withTransaction((transaction) =>
+    syncPortfolioCoreTablesInTransaction(transaction, userId, portfolioBook)
+  );
 };

@@ -5,7 +5,6 @@ import {
   searchEodhdStocks,
 } from "@/lib/server/eodhd";
 import { fetchYahooQuote, searchYahooStocks } from "@/lib/server/yahoo";
-import https from "node:https";
 import {
   findGpwCatalogEntry,
   findGpwCatalogEntryWithPrice,
@@ -209,53 +208,6 @@ const firstNonNull = async <T>(promises: Array<Promise<T | null>>) => {
   return null;
 };
 
-const fetchJsonWithNodeHttps = <T>(
-  url: string,
-  headers: Record<string, string>,
-  timeoutMs: number
-) =>
-  new Promise<T | null>((resolve) => {
-    const request = https.get(
-      url,
-      {
-        headers: {
-          ...headers,
-          "Accept-Encoding": "identity",
-        },
-        rejectUnauthorized: false,
-        timeout: timeoutMs,
-      },
-      (response) => {
-        if (!response.statusCode || response.statusCode < 200 || response.statusCode >= 300) {
-          response.resume();
-          resolve(null);
-          return;
-        }
-
-        let body = "";
-        response.setEncoding("utf8");
-        response.on("data", (chunk) => {
-          body += chunk;
-        });
-        response.on("end", () => {
-          try {
-            resolve(JSON.parse(body) as T);
-          } catch {
-            resolve(null);
-          }
-        });
-      }
-    );
-
-    request.on("timeout", () => {
-      request.destroy();
-      resolve(null);
-    });
-    request.on("error", () => {
-      resolve(null);
-    });
-  });
-
 const safeFetchJson = async <T>(
   url: string,
   headers: Record<string, string>,
@@ -278,7 +230,7 @@ const safeFetchJson = async <T>(
     }
   }
 
-  return fetchJsonWithNodeHttps<T>(url, headers, timeoutMs);
+  return null;
 };
 
 const parseStooqPageNumber = (value: string) => {

@@ -1,10 +1,15 @@
 import { NextResponse } from "next/server";
 import { fetchTreasuryBondSwapQuoteServer } from "@/lib/server/treasury-bonds";
+import { getCurrentAccountData } from "@/lib/server/auth";
 import type { BondRedemptionQuote } from "@/types/portfolio";
 
 export const runtime = "nodejs";
 
 export async function POST(request: Request) {
+  if (!(await getCurrentAccountData())) {
+    return NextResponse.json({ error: "Brak autoryzacji." }, { status: 401 });
+  }
+
   const body = (await request.json().catch(() => null)) as
     | {
         sourceRedemption?: BondRedemptionQuote;

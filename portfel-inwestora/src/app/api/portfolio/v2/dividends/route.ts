@@ -124,7 +124,12 @@ export async function POST(request: Request) {
           : item
       ),
     };
-    const updatedBook = await updateCurrentUserPortfolio(accountData.user.id, nextBook);
+    const updatedPortfolioResult = await updateCurrentUserPortfolio(
+      accountData.user.id,
+      nextBook,
+      accountData.portfolioRevision
+    );
+    const updatedBook = updatedPortfolioResult.portfolioBook;
     const updatedPortfolio = getPortfolioById(
       updatedBook.portfolios,
       portfolio.id,
@@ -137,6 +142,7 @@ export async function POST(request: Request) {
       ),
       portfolios: updatedBook.portfolios,
       activePortfolioId: updatedBook.activePortfolioId,
+      portfolioRevision: updatedPortfolioResult.portfolioRevision,
     });
   } catch (error) {
     const message =

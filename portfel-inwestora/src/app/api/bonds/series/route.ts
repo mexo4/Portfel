@@ -1,10 +1,15 @@
 import { NextResponse } from "next/server";
 import { resolveTreasuryBondSeries, fetchTreasuryBondQuoteServer } from "@/lib/server/treasury-bonds";
+import { getCurrentAccountData } from "@/lib/server/auth";
 import { toDateInputValue } from "@/lib/utils";
 
 export const runtime = "nodejs";
 
 export async function GET(request: Request) {
+  if (!(await getCurrentAccountData())) {
+    return NextResponse.json({ error: "Brak autoryzacji." }, { status: 401 });
+  }
+
   const { searchParams } = new URL(request.url);
   const code = searchParams.get("code")?.trim() ?? "";
   const purchaseDate = toDateInputValue(searchParams.get("purchaseDate") ?? undefined);

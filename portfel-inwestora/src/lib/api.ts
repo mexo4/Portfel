@@ -285,19 +285,31 @@ export const savePortfolioState = async ({
   realizedAdjustments,
   portfolios,
   activePortfolioId,
+  portfolioRevision,
 }: {
   assets?: PortfolioAsset[];
   sales?: PortfolioSale[];
   realizedAdjustments?: PortfolioRealizedAdjustment[];
   portfolios?: InvestmentPortfolio[];
   activePortfolioId?: string;
+  portfolioRevision?: number;
 }) => {
-  const data = await requestJson<{ saved: true }>("/api/portfolio", {
+  const data = await requestJson<{
+    saved: true;
+    portfolios: InvestmentPortfolio[];
+    activePortfolioId: string;
+    portfolioRevision: number;
+  }>("/api/portfolio", {
     method: "PUT",
     body: JSON.stringify(
       portfolios
-        ? { portfolios, activePortfolioId }
-        : { assets: assets ?? [], sales: sales ?? [], realizedAdjustments: realizedAdjustments ?? [] }
+        ? { portfolios, activePortfolioId, portfolioRevision }
+        : {
+            assets: assets ?? [],
+            sales: sales ?? [],
+            realizedAdjustments: realizedAdjustments ?? [],
+            portfolioRevision,
+          }
     ),
   });
 

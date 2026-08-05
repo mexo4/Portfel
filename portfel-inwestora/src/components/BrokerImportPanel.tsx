@@ -192,6 +192,9 @@ export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) 
         result.importedSells +
         importedDividends +
         importedCashOperations;
+      const allRecordsAreDuplicates =
+        parseResult.operations.length > 0 &&
+        skippedDuplicates === parseResult.operations.length;
 
       const resultDetails = [
         `Pominiete sprzedaze bez pozycji: ${result.skippedSells}.`,
@@ -204,7 +207,9 @@ export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) 
       setSuccess(
         importedTotal > 0
           ? `Zaimportowano ${importedTotal} operacji: ${result.importedBuys} kupna, ${result.importedSells} sprzedazy, ${importedDividends} dywidend i ${importedCashOperations} operacji gotowkowych. ${resultDetails}`
-          : `Nie dodano nowych operacji, bo wszystkie rekordy zostaly pominiete. ${resultDetails}`
+          : allRecordsAreDuplicates
+            ? `Ten raport zostal juz zaimportowany do aktywnego portfela. ${resultDetails}`
+            : `Nie dodano nowych operacji, bo wszystkie rekordy zostaly odrzucone. ${resultDetails}`
       );
     } catch (importError) {
       setError(

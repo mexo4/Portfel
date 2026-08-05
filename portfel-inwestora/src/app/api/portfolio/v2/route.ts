@@ -30,6 +30,7 @@ export async function GET() {
     schemaVersion: 2,
     portfolios: portfolioBook.portfolios,
     activePortfolioId: portfolioBook.activePortfolioId,
+    portfolioRevision: accountData.portfolioRevision,
     activePortfolio,
     snapshot: calculatePortfolioSnapshot({
       portfolio: activePortfolio,
@@ -46,16 +47,21 @@ export async function PUT(request: Request) {
   }
 
   try {
-    const payload = (await request.json()) as Partial<PortfolioBook>;
-    const portfolioBook = normalizePortfolioBook(payload);
+    const payload = (await request.json()) as Partial<PortfolioBook> & {
+      portfolioRevision?: number;
+    };
+    const { portfolioRevision, ...portfolioPayload } = payload;
+    const portfolioBook = normalizePortfolioBook(portfolioPayload);
     const updatedPortfolio = await updateCurrentUserPortfolio(
       accountData.user.id,
-      portfolioBook
+      portfolioBook,
+      portfolioRevision ?? accountData.portfolioRevision
     );
 
     return NextResponse.json({
       schemaVersion: 2,
-      ...updatedPortfolio,
+      ...updatedPortfolio.portfolioBook,
+      portfolioRevision: updatedPortfolio.portfolioRevision,
     });
   } catch (error) {
     const message =

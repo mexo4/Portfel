@@ -560,6 +560,11 @@ const normalizePortfolioAsset = (
       hasFiniteNumber(asset.purchaseFxRateToPln) && asset.purchaseFxRateToPln > 0
         ? round(asset.purchaseFxRateToPln, 8)
         : undefined,
+    purchaseSettlementFxRateToPln:
+      hasFiniteNumber(asset.purchaseSettlementFxRateToPln) &&
+      asset.purchaseSettlementFxRateToPln > 0
+        ? round(asset.purchaseSettlementFxRateToPln, 8)
+        : undefined,
     feePln: hasFiniteNumber(asset.feePln) ? round(asset.feePln, 6) : 0,
     marketCurrency: toCurrencyCode(
       asset.marketCurrency,

@@ -22,7 +22,6 @@
     "next": "16.1.6",
     "pdfjs-dist": "^6.2.108",
     "pg": "^8.22.0",
-    "portfel-inwestora": "file:",
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "recharts": "^3.8.1",

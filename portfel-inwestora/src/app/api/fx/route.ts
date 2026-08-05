@@ -1,8 +1,14 @@
 import { NextResponse } from "next/server";
-import { FALLBACK_FX_RATES } from "@/lib/constants";
+import { getCurrentAccountData } from "@/lib/server/auth";
 import { fetchFxRatesServer } from "@/lib/server/market-data";
 
+export const runtime = "nodejs";
+
 export async function GET(request: Request) {
+  if (!(await getCurrentAccountData())) {
+    return NextResponse.json({ error: "Brak autoryzacji." }, { status: 401 });
+  }
+
   try {
     const requestUrl = new URL(request.url);
     const codes = (requestUrl.searchParams.get("codes") ?? "")
@@ -19,10 +25,9 @@ export async function GET(request: Request) {
     console.error("GET /api/fx failed", error);
     return NextResponse.json(
       {
-        rates: FALLBACK_FX_RATES,
-        fetchedAt: new Date().toISOString(),
+        error: "Nie udalo sie pobrac kursow walut.",
       },
-      { status: 200 }
+      { status: 502 }
     );
   }
 }

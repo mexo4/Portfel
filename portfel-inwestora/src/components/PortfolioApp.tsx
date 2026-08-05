@@ -25,6 +25,7 @@ import {
   SUPPORTED_CURRENCIES,
 } from "@/lib/constants";
 import {
+  ApiError,
   fetchFxRates,
   fetchQuotePreview,
   fetchTreasuryBondRedemption,
@@ -105,6 +106,7 @@ import type {
   AuthenticatedUser,
   BondRedemptionQuote,
   BondSwapQuote,
+  BrokerCode,
   CurrencyCode,
   FxRates,
   InvestmentPortfolio,
@@ -132,6 +134,7 @@ type PortfolioAppProps = {
   initialRealizedAdjustments: PortfolioRealizedAdjustment[];
   initialPortfolios?: InvestmentPortfolio[];
   initialActivePortfolioId?: string;
+  initialPortfolioRevision: number;
   initialProfile: UserProfile;
 };
 
@@ -146,7 +149,7 @@ type PendingPortfolioSave = {
   fingerprint: string;
 };
 
-const SAVE_DEBOUNCE_MS = 700;
+const SAVE_DEBOUNCE_MS = 250;
 const ASSET_SORT_MODE_STORAGE_KEY = "portfolio.assetTableSortMode";
 const getPortfolioSaveFingerprint = (book: PortfolioBook) =>
   JSON.stringify(book, (key, value) => (key === "updatedAt" ? undefined : value));
@@ -366,24 +369,48 @@ const getImportedOperationId = (
   return `${portfolioId}:operation:import:${sanitizeImportIdPart(key || String(operation.rowNumber))}`;
 };
 
-const getXtbAccountId = (
+const normalizeImportedBroker = (broker: string | undefined): BrokerCode => {
+  const normalizedBroker = normalizeSymbol(broker ?? "").replace(/[^A-Z0-9]/g, "");
+
+  if (normalizedBroker === "XTB") return "XTB";
+  if (normalizedBroker === "IBKR" || normalizedBroker === "INTERACTIVEBROKERS") return "IBKR";
+  if (normalizedBroker === "DEGIRO") return "DEGIRO";
+  if (normalizedBroker === "TRADING212") return "TRADING212";
+  if (normalizedBroker === "REVOLUT") return "REVOLUT";
+  if (normalizedBroker === "MBANK") return "MBANK";
+  if (normalizedBroker === "BOS" || normalizedBroker === "BOSSA") return "BOS";
+  if (normalizedBroker === "SANTANDER") return "SANTANDER";
+  if (normalizedBroker === "BINANCE") return "BINANCE";
+  if (normalizedBroker === "BYBIT") return "BYBIT";
+  if (normalizedBroker === "KRAKEN") return "KRAKEN";
+
+  return "OTHER";
+};
+
+const getImportedBrokerLabel = (broker: BrokerCode) =>
+  broker === "OTHER" ? "Broker" : broker;
+
+const getImportedAccountId = (
   portfolioId: string,
+  broker: BrokerCode,
   accountNumber: string | undefined,
   currency: string | undefined
 ) => {
   const normalizedCurrency = toCurrencyCode(currency, "PLN");
   const normalizedAccountNumber = accountNumber?.trim() || normalizedCurrency;
 
-  return `${portfolioId}:account:xtb:${sanitizeImportIdPart(normalizedAccountNumber)}:${normalizedCurrency}`;
+  return `${portfolioId}:account:${broker.toLowerCase()}:${sanitizeImportIdPart(normalizedAccountNumber)}:${normalizedCurrency}`;
 };
 
-const createXtbAccount = ({
+const createImportedAccount = ({
   portfolioId,
+  broker,
   accountNumber,
   currency,
   now,
 }: {
   portfolioId: string;
+  broker: BrokerCode;
   accountNumber?: string;
   currency: string;
   now: string;
@@ -392,17 +419,22 @@ const createXtbAccount = ({
   const normalizedAccountNumber = accountNumber?.trim();
 
   return {
-    id: getXtbAccountId(portfolioId, normalizedAccountNumber, normalizedCurrency),
+    id: getImportedAccountId(
+      portfolioId,
+      broker,
+      normalizedAccountNumber,
+      normalizedCurrency
+    ),
     portfolioId,
     name: normalizedAccountNumber
-      ? `XTB ${normalizedCurrency} ${normalizedAccountNumber}`
-      : `XTB ${normalizedCurrency}`,
+      ? `${getImportedBrokerLabel(broker)} ${normalizedCurrency} ${normalizedAccountNumber}`
+      : `${getImportedBrokerLabel(broker)} ${normalizedCurrency}`,
     kind: "cash",
-    broker: "XTB",
+    broker,
     currency: normalizedCurrency,
     isDefault: false,
     metadata: {
-      broker: "XTB",
+      broker,
       accountNumber: normalizedAccountNumber,
       imported: true,
     },
@@ -411,15 +443,16 @@ const createXtbAccount = ({
   };
 };
 
-const upsertXtbAccount = (
+const upsertImportedAccount = (
   accounts: PortfolioAccount[],
   portfolioId: string,
+  broker: BrokerCode,
   accountNumber: string | undefined,
   currency: string | undefined,
   now: string
 ) => {
   const normalizedCurrency = toCurrencyCode(currency, "PLN");
-  const id = getXtbAccountId(portfolioId, accountNumber, normalizedCurrency);
+  const id = getImportedAccountId(portfolioId, broker, accountNumber, normalizedCurrency);
 
   if (accounts.some((account) => account.id === id)) {
     return accounts;
@@ -427,8 +460,9 @@ const upsertXtbAccount = (
 
   return [
     ...accounts,
-    createXtbAccount({
+    createImportedAccount({
       portfolioId,
+      broker,
       accountNumber,
       currency: normalizedCurrency,
       now,
@@ -566,18 +600,40 @@ const buildImportedPortfolioOperation = ({
 }): PortfolioOperation => {
   const operationType = getImportedOperationType(operation);
   const isTrade = operationType === "BUY" || operationType === "SELL";
+  const marketCurrency = toCurrencyCode(operation.marketCurrency ?? operation.currency, "PLN");
+  const cashCurrency = toCurrencyCode(
+    operation.cashCurrency ?? operation.accountCurrency ?? operation.currency,
+    "PLN"
+  );
+  const marketAmount =
+    operation.marketAmount ??
+    (operation.quantity > 0 && operation.price > 0 ? operation.quantity * operation.price : 0);
+  const cashAmount = operation.cashAmount ?? operation.amount ?? operation.transactionValue ?? 0;
+  const hasAutomaticBrokerConversion =
+    isTrade &&
+    operation.autoFxConversion === true &&
+    marketCurrency !== cashCurrency &&
+    marketAmount > 0 &&
+    cashAmount > 0;
   const operationCurrency = toCurrencyCode(
-    isTrade || operationType === "DIVIDEND"
-      ? operation.cashCurrency ?? operation.accountCurrency ?? operation.currency
+    hasAutomaticBrokerConversion
+      ? marketCurrency
+      : isTrade || operationType === "DIVIDEND"
+        ? operation.cashCurrency ?? operation.accountCurrency ?? operation.currency
       : operation.currency,
     "PLN"
   );
   const amount =
     operationType === "DIVIDEND"
       ? operation.grossAmount ?? operation.amount ?? 0
-      : isTrade
-        ? operation.cashAmount ?? operation.amount ?? operation.transactionValue ?? 0
+      : hasAutomaticBrokerConversion
+        ? marketAmount
+        : isTrade
+          ? cashAmount
       : operation.amount ?? operation.transactionValue ?? 0;
+  const createdAt = new Date(
+    Date.parse(now) + Math.max(0, operation.rowNumber) * 10
+  ).toISOString();
 
   return {
     id: getImportedOperationId(portfolioId, operation),
@@ -596,10 +652,87 @@ const buildImportedPortfolioOperation = ({
     tax: operation.tax ?? 0,
     amount: round(amount, 6),
     date: toDateInputValue(operation.date),
-    notes: operation.rawType ? `Import XTB: ${operation.rawType}` : "Import brokera",
-    metadata: getImportedOperationMetadata(operation, targetAccountId),
-    createdAt: now,
-    updatedAt: now,
+    notes: operation.rawType
+      ? `Import ${getImportedBrokerLabel(normalizeImportedBroker(operation.broker))}: ${operation.rawType}`
+      : "Import brokera",
+    metadata: {
+      ...getImportedOperationMetadata(operation, targetAccountId),
+      autoFxTradeNormalized: hasAutomaticBrokerConversion,
+    },
+    createdAt,
+    updatedAt: createdAt,
+  };
+};
+
+const buildAutomaticBrokerConversionOperation = (
+  tradeOperation: PortfolioOperation,
+  sourceOperation: ImportedBrokerOperation
+): PortfolioOperation | null => {
+  if (
+    (tradeOperation.operationType !== "BUY" && tradeOperation.operationType !== "SELL") ||
+    sourceOperation.autoFxConversion !== true
+  ) {
+    return null;
+  }
+
+  const marketCurrency = toCurrencyCode(
+    sourceOperation.marketCurrency ?? sourceOperation.currency,
+    "PLN"
+  );
+  const cashCurrency = toCurrencyCode(
+    sourceOperation.cashCurrency ?? sourceOperation.accountCurrency ?? sourceOperation.currency,
+    "PLN"
+  );
+  const marketAmount =
+    sourceOperation.marketAmount ??
+    (sourceOperation.quantity > 0 && sourceOperation.price > 0
+      ? sourceOperation.quantity * sourceOperation.price
+      : 0);
+  const cashAmount =
+    sourceOperation.cashAmount ?? sourceOperation.amount ?? sourceOperation.transactionValue ?? 0;
+
+  if (marketCurrency === cashCurrency || marketAmount <= 0 || cashAmount <= 0) {
+    return null;
+  }
+
+  const isBuy = tradeOperation.operationType === "BUY";
+  const sourceCurrency = isBuy ? cashCurrency : marketCurrency;
+  const sourceAmount = isBuy ? cashAmount : marketAmount;
+  const targetCurrency = isBuy ? marketCurrency : cashCurrency;
+  const targetAmount = isBuy ? marketAmount : cashAmount;
+  const createdAt = new Date(
+    Date.parse(tradeOperation.createdAt) + (isBuy ? -1 : 1)
+  ).toISOString();
+
+  return {
+    id: `${tradeOperation.id}:auto-fx`,
+    portfolioId: tradeOperation.portfolioId,
+    accountId: tradeOperation.accountId,
+    assetId: null,
+    operationType: "CONVERSION",
+    quantity: null,
+    price: null,
+    currency: sourceCurrency,
+    exchangeRate: null,
+    fee: 0,
+    tax: 0,
+    amount: round(sourceAmount, 6),
+    date: tradeOperation.date,
+    notes: "Automatyczne przewalutowanie brokera",
+    metadata: {
+      kind: "cash",
+      cashImpact: true,
+      importSource: sourceOperation.broker ?? "broker",
+      autoFxConversion: true,
+      autoFxForOperationId: tradeOperation.id,
+      brokerFxSpreadRate: sourceOperation.brokerFxSpreadRate,
+      targetAccountId: tradeOperation.accountId,
+      targetCurrency,
+      targetAmount: round(targetAmount, 6),
+      accountNumber: sourceOperation.accountNumber,
+    },
+    createdAt,
+    updatedAt: createdAt,
   };
 };
 
@@ -677,6 +810,7 @@ export default function PortfolioApp({
   initialRealizedAdjustments,
   initialPortfolios,
   initialActivePortfolioId,
+  initialPortfolioRevision,
   initialProfile,
 }: PortfolioAppProps) {
   const router = useRouter();
@@ -703,6 +837,7 @@ export default function PortfolioApp({
     ) ?? initialPortfolioBook.portfolios[0];
   const portfoliosRef = useRef<InvestmentPortfolio[]>(initialPortfolioBook.portfolios);
   const activePortfolioIdRef = useRef(initialPortfolioBook.activePortfolioId);
+  const portfolioRevisionRef = useRef(initialPortfolioRevision);
   const workspaceRef = useRef<PortfolioWorkspaceState>({
     assets: normalizeStoredPortfolioAssets(initialActivePortfolio.assets),
     sales: getSortedPortfolioSales(initialActivePortfolio.sales),
@@ -917,22 +1052,60 @@ export default function PortfolioApp({
     []
   );
 
+  const applyPortfolioBook = useCallback(
+    (nextPortfolios: InvestmentPortfolio[], nextActivePortfolioId: string) => {
+      portfoliosRef.current = nextPortfolios;
+      activePortfolioIdRef.current = nextActivePortfolioId;
+      setPortfolios(nextPortfolios);
+      setActivePortfolioId(nextActivePortfolioId);
+    },
+    []
+  );
+
+  const applyPersistedPortfolioBook = useCallback(
+    (portfolioBook: PortfolioBook, portfolioRevision: number) => {
+      const normalizedBook = normalizePortfolioBook(portfolioBook);
+      const nextActivePortfolio =
+        normalizedBook.portfolios.find(
+          (portfolio) => portfolio.id === normalizedBook.activePortfolioId
+        ) ?? normalizedBook.portfolios[0];
+      const nextWorkspace = {
+        assets: normalizeStoredPortfolioAssets(nextActivePortfolio.assets),
+        sales: getSortedPortfolioSales(nextActivePortfolio.sales),
+        realizedAdjustments: getSortedPortfolioRealizedAdjustments(
+          nextActivePortfolio.realizedAdjustments
+        ),
+      };
+
+      portfolioRevisionRef.current = portfolioRevision;
+      workspaceRef.current = nextWorkspace;
+      applyPortfolioBook(normalizedBook.portfolios, normalizedBook.activePortfolioId);
+      setAssets(nextWorkspace.assets);
+      setSales(nextWorkspace.sales);
+      setRealizedAdjustments(nextWorkspace.realizedAdjustments);
+    },
+    [applyPortfolioBook]
+  );
+
   const commitActivePortfolioSnapshot = useCallback(
     (portfolioList: InvestmentPortfolio[]) => {
       const now = new Date().toISOString();
+      const workspace = workspaceRef.current;
       return portfolioList.map((portfolio) =>
-        portfolio.id === activePortfolioId
+        portfolio.id === activePortfolioIdRef.current
           ? {
               ...portfolio,
-              assets: normalizeStoredPortfolioAssets(assets),
-              sales: getSortedPortfolioSales(sales),
-              realizedAdjustments: getSortedPortfolioRealizedAdjustments(realizedAdjustments),
+              assets: normalizeStoredPortfolioAssets(workspace.assets),
+              sales: getSortedPortfolioSales(workspace.sales),
+              realizedAdjustments: getSortedPortfolioRealizedAdjustments(
+                workspace.realizedAdjustments
+              ),
               updatedAt: now,
             }
           : portfolio
       );
     },
-    [activePortfolioId, assets, realizedAdjustments, sales]
+    []
   );
 
   const portfolioSummaries = useMemo(
@@ -989,13 +1162,47 @@ export default function PortfolioApp({
           inFlightPortfolioSaveFingerprintRef.current = nextSave.fingerprint;
 
           try {
-            await savePortfolioState({
+            const savedPortfolio = await savePortfolioState({
               portfolios: nextSave.book.portfolios,
               activePortfolioId: nextSave.book.activePortfolioId,
+              portfolioRevision: portfolioRevisionRef.current,
             });
+            portfolioRevisionRef.current = savedPortfolio.portfolioRevision;
             lastSavedPortfolioFingerprintRef.current = nextSave.fingerprint;
           } catch (error) {
-            if (!pendingPortfolioSaveRef.current) {
+            let restoredFromConflict = false;
+
+            if (error instanceof ApiError && error.status === 409) {
+              const payload = error.payload;
+
+              if (
+                payload &&
+                typeof payload === "object" &&
+                Array.isArray((payload as { portfolios?: unknown }).portfolios) &&
+                typeof (payload as { activePortfolioId?: unknown }).activePortfolioId === "string" &&
+                typeof (payload as { portfolioRevision?: unknown }).portfolioRevision === "number"
+              ) {
+                const conflictPayload = payload as {
+                  portfolios: InvestmentPortfolio[];
+                  activePortfolioId: string;
+                  portfolioRevision: number;
+                };
+                const serverBook: PortfolioBook = {
+                  schemaVersion: 2,
+                  portfolios: conflictPayload.portfolios,
+                  activePortfolioId: conflictPayload.activePortfolioId,
+                };
+
+                pendingPortfolioSaveRef.current = null;
+                ignoredPortfolioSaveFingerprintRef.current = getPortfolioSaveFingerprint(serverBook);
+                lastSavedPortfolioFingerprintRef.current =
+                  ignoredPortfolioSaveFingerprintRef.current;
+                applyPersistedPortfolioBook(serverBook, conflictPayload.portfolioRevision);
+                restoredFromConflict = true;
+              }
+            }
+
+            if (!restoredFromConflict && !pendingPortfolioSaveRef.current) {
               pendingPortfolioSaveRef.current = nextSave;
             }
             throw error;
@@ -1016,7 +1223,7 @@ export default function PortfolioApp({
 
     portfolioSavePromiseRef.current = savePromise;
     return savePromise;
-  }, []);
+  }, [applyPersistedPortfolioBook]);
 
   const queuePortfolioSave = useCallback(
     (nextBook: PortfolioBook, immediate = false) => {
@@ -1068,16 +1275,6 @@ export default function PortfolioApp({
       return Promise.resolve();
     },
     [flushPortfolioSave]
-  );
-
-  const applyPortfolioBook = useCallback(
-    (nextPortfolios: InvestmentPortfolio[], nextActivePortfolioId: string) => {
-      portfoliosRef.current = nextPortfolios;
-      activePortfolioIdRef.current = nextActivePortfolioId;
-      setPortfolios(nextPortfolios);
-      setActivePortfolioId(nextActivePortfolioId);
-    },
-    []
   );
 
   const handleBaseCurrencyChange = async (value: string) => {
@@ -2126,6 +2323,7 @@ export default function PortfolioApp({
         purchaseCurrency: "PLN",
         purchasePriceCurrency: "PLN",
         purchaseFxRateToPln: 1,
+        purchaseSettlementFxRateToPln: 1,
         feePln: 0,
         marketCurrency: "PLN",
         provider: "obligacjeskarbowe",
@@ -2363,6 +2561,7 @@ export default function PortfolioApp({
         purchaseCurrency: "PLN",
         purchasePriceCurrency: "PLN",
         purchaseFxRateToPln: 1,
+        purchaseSettlementFxRateToPln: 1,
         feePln: 0,
         marketCurrency: "PLN",
         provider: "obligacjeskarbowe",
@@ -2464,6 +2663,10 @@ export default function PortfolioApp({
       purchasePriceCurrency,
       purchaseFxRates
     );
+    const purchaseSettlementFxRateToPln = getFxRateToPlnSnapshot(
+      purchaseCurrency,
+      purchaseFxRates
+    );
     const nextAssetGroupKey = getPortfolioAssetGroupKey({
       kind: draft.kind,
       symbol: storedSymbol,
@@ -2483,6 +2686,7 @@ export default function PortfolioApp({
       purchaseCurrency,
       purchasePriceCurrency,
       purchaseFxRateToPln,
+      purchaseSettlementFxRateToPln,
       feePln: draft.feePln,
       marketCurrency: quote.marketCurrency,
       provider: quote.provider,
@@ -2661,21 +2865,28 @@ export default function PortfolioApp({
     let skippedPlanLimit = 0;
 
     const appendCoreOperation = (operation: ImportedBrokerOperation, targetAccountId?: string) => {
+      const broker = normalizeImportedBroker(operation.broker);
       const sourceCurrency = toCurrencyCode(
         operation.sourceCurrency ?? operation.accountCurrency ?? operation.currency,
         "PLN"
       );
       const sourceAccountNumber = operation.sourceAccountNumber ?? operation.accountNumber;
 
-      nextAccounts = upsertXtbAccount(
+      nextAccounts = upsertImportedAccount(
         nextAccounts,
         portfolioId,
+        broker,
         sourceAccountNumber,
         sourceCurrency,
         now
       );
 
-      const accountId = getXtbAccountId(portfolioId, sourceAccountNumber, sourceCurrency);
+      const accountId = getImportedAccountId(
+        portfolioId,
+        broker,
+        sourceAccountNumber,
+        sourceCurrency
+      );
       let resolvedTargetAccountId = targetAccountId;
 
       if (!resolvedTargetAccountId && (operation.targetAccountNumber || operation.targetCurrency)) {
@@ -2684,15 +2895,17 @@ export default function PortfolioApp({
           sourceCurrency
         );
 
-        nextAccounts = upsertXtbAccount(
+        nextAccounts = upsertImportedAccount(
           nextAccounts,
           portfolioId,
+          broker,
           operation.targetAccountNumber,
           targetCurrency,
           now
         );
-        resolvedTargetAccountId = getXtbAccountId(
+        resolvedTargetAccountId = getImportedAccountId(
           portfolioId,
+          broker,
           operation.targetAccountNumber,
           targetCurrency
         );
@@ -2725,6 +2938,16 @@ export default function PortfolioApp({
       ) {
         skippedDuplicates += 1;
         return false;
+      }
+
+      const automaticConversion = buildAutomaticBrokerConversionOperation(
+        nextOperation,
+        operation
+      );
+
+      if (automaticConversion && !existingOperationIds.has(automaticConversion.id)) {
+        nextOperations = [...nextOperations, automaticConversion];
+        existingOperationIds.add(automaticConversion.id);
       }
 
       nextOperations = [...nextOperations, nextOperation];
@@ -2852,6 +3075,10 @@ export default function PortfolioApp({
           purchaseCurrency: importedCashCurrency,
           purchasePriceCurrency: importedPriceCurrency,
           purchaseFxRateToPln: importedPurchaseFxRateToPln,
+          purchaseSettlementFxRateToPln: getFxRateToPlnSnapshot(
+            importedCashCurrency,
+            fxRates
+          ),
           feePln: operation.feePln,
           marketCurrency: importedMarketCurrency,
           provider: operation.provider,
@@ -2860,8 +3087,8 @@ export default function PortfolioApp({
           createdAt: new Date(`${operation.date}T00:00:00.000Z`).toISOString(),
         };
 
-        nextAssets = [nextAsset, ...nextAssets];
         if (appendCoreOperation(operation)) {
+          nextAssets = [nextAsset, ...nextAssets];
           importedBuys += 1;
         }
         continue;
@@ -2917,16 +3144,20 @@ export default function PortfolioApp({
           },
         });
 
-        nextAssets = result.assets;
-        nextSales = getSortedPortfolioSales([
-          applyBrokerRealizedResult(result.sale, operation),
-          ...nextSales,
-        ]);
-
         if (appendCoreOperation(operation)) {
+          nextAssets = result.assets;
+          nextSales = getSortedPortfolioSales([
+            applyBrokerRealizedResult(result.sale, operation),
+            ...nextSales,
+          ]);
           importedSells += 1;
         }
-      } catch {
+      } catch (error) {
+        console.warn("[broker-import] Pomieto sprzedaz z powodu niezgodnej historii.", {
+          importKey: operation.importKey,
+          symbol: operation.symbol,
+          error,
+        });
         skippedSells += 1;
       }
     }
@@ -3139,7 +3370,7 @@ export default function PortfolioApp({
       return;
     }
 
-    const currentPortfolios = commitActivePortfolioSnapshot(portfolios);
+    const currentPortfolios = commitActivePortfolioSnapshot(portfoliosRef.current);
     const nextPortfolio = currentPortfolios.find((portfolio) => portfolio.id === portfolioId);
 
     if (!nextPortfolio) {
@@ -3172,13 +3403,16 @@ export default function PortfolioApp({
       return;
     }
 
-    const name = window.prompt("Nazwa nowego portfela", `Portfel ${portfolios.length + 1}`);
+    const name = window.prompt(
+      "Nazwa nowego portfela",
+      `Portfel ${portfoliosRef.current.length + 1}`
+    );
 
     if (!name?.trim()) {
       return;
     }
 
-    const currentPortfolios = commitActivePortfolioSnapshot(portfolios);
+    const currentPortfolios = commitActivePortfolioSnapshot(portfoliosRef.current);
     const nextPortfolio = createInvestmentPortfolio(name.trim());
     const nextPortfolios = [...currentPortfolios, nextPortfolio];
 
@@ -3203,8 +3437,8 @@ export default function PortfolioApp({
     }
   };
 
-  const handleRenamePortfolio = () => {
-    if (!activePortfolio) {
+  const handleRenamePortfolio = async () => {
+    if (!activePortfolio || isPortfolioMutationPending) {
       return;
     }
 
@@ -3215,7 +3449,7 @@ export default function PortfolioApp({
     }
 
     const now = new Date().toISOString();
-    const nextPortfolios = commitActivePortfolioSnapshot(portfolios).map((portfolio) =>
+    const nextPortfolios = commitActivePortfolioSnapshot(portfoliosRef.current).map((portfolio) =>
       portfolio.id === activePortfolioId
         ? {
             ...portfolio,
@@ -3224,7 +3458,23 @@ export default function PortfolioApp({
           }
         : portfolio
     );
+    setIsPortfolioMutationPending(true);
     applyPortfolioBook(nextPortfolios, activePortfolioId);
+
+    try {
+      await queuePortfolioSave(
+        {
+          schemaVersion: 2,
+          portfolios: nextPortfolios,
+          activePortfolioId,
+        },
+        true
+      );
+    } catch {
+      // queuePortfolioSave exposes the persistence error to the user.
+    } finally {
+      setIsPortfolioMutationPending(false);
+    }
   };
 
   const handleDeletePortfolio = async () => {
@@ -3245,7 +3495,7 @@ export default function PortfolioApp({
       return;
     }
 
-    const currentPortfolios = commitActivePortfolioSnapshot(portfolios);
+    const currentPortfolios = commitActivePortfolioSnapshot(portfoliosRef.current);
     const nextPortfolios = currentPortfolios.filter(
       (portfolio) => portfolio.id !== activePortfolioId
     );

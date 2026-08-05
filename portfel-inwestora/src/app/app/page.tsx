@@ -12,6 +12,7 @@ export default async function AppPage() {
       initialRealizedAdjustments={accountData.realizedAdjustments}
       initialPortfolios={accountData.portfolios}
       initialActivePortfolioId={accountData.activePortfolioId}
+      initialPortfolioRevision={accountData.portfolioRevision}
       initialProfile={accountData.profile}
       account={accountData.user}
       isAdmin={isAdminEmail(accountData.user.email)}

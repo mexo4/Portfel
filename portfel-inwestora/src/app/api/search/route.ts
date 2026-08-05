@@ -5,7 +5,10 @@ import {
   mergeSearchResults,
   searchCatalogAssets,
 } from "@/lib/search";
+import { getCurrentAccountData } from "@/lib/server/auth";
 import type { AssetKind, AssetSearchMode, AssetSearchResult } from "@/types/portfolio";
+
+export const runtime = "nodejs";
 
 const shouldReturnQuickResults = (quickResults: AssetSearchResult[]) => {
   if (quickResults.length === 0) {
@@ -39,8 +42,12 @@ const withTimeout = async <T,>(promise: Promise<T>, timeoutMs: number, fallback:
 };
 
 export async function GET(request: Request) {
+  if (!(await getCurrentAccountData())) {
+    return NextResponse.json({ error: "Brak autoryzacji." }, { status: 401 });
+  }
+
   const { searchParams } = new URL(request.url);
-  const query = searchParams.get("q")?.trim() ?? "";
+  const query = (searchParams.get("q")?.trim() ?? "").slice(0, 128);
   const kind = (searchParams.get("kind") as AssetKind | null) ?? "stock";
   const mode = (searchParams.get("mode") as AssetSearchMode | null) ?? undefined;
   const minimumSearchLength = getMinimumSearchLength(mode ?? "stock-global");

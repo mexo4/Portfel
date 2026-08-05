@@ -103,12 +103,14 @@ export async function POST(request: Request) {
     };
     const updatedPortfolio = await updateCurrentUserPortfolio(
       accountData.user.id,
-      updatedBook
+      updatedBook,
+      accountData.portfolioRevision
     );
 
     return NextResponse.json({
       operation,
-      ...updatedPortfolio,
+      ...updatedPortfolio.portfolioBook,
+      portfolioRevision: updatedPortfolio.portfolioRevision,
     });
   } catch (error) {
     const message =

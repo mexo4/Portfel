@@ -7,9 +7,9 @@ import { normalizePortfolioBook, normalizePortfolioState } from "@/lib/portfolio
 import type { NextResponse } from "next/server";
 import { createFreshUserProfile, normalizeUserProfile } from "@/lib/profile";
 import { isForcedProEmail } from "@/lib/server/access";
-import { execute, queryOne } from "@/lib/server/db";
+import { execute, queryOne, withTransaction } from "@/lib/server/db";
 import { sendPasswordResetEmail, sendVerificationEmail } from "@/lib/server/email";
-import { syncPortfolioCoreTables } from "@/lib/server/portfolio-core-sync";
+import { syncPortfolioCoreTablesInTransaction } from "@/lib/server/portfolio-core-sync";
 import type {
   AuthenticatedUser,
   PortfolioBook,
@@ -35,6 +35,7 @@ type UserRow = {
   subscription_updated_at: string | null;
   profile_json: string;
   portfolio_json: string;
+  portfolio_revision: number;
   created_at: string;
   updated_at: string;
 };
@@ -50,11 +51,8 @@ type TokenRow = {
 
 type PortfolioJsonRow = {
   portfolio_json: string;
+  portfolio_revision: number;
 };
-
-declare global {
-  var portfelPortfolioBookCache: Map<string, PortfolioBook> | undefined;
-}
 
 export class EmailVerificationRequiredError extends Error {
   userId: string;
@@ -63,6 +61,16 @@ export class EmailVerificationRequiredError extends Error {
     super("Potwierdz adres email przed logowaniem.");
     this.name = "EmailVerificationRequiredError";
     this.userId = userId;
+  }
+}
+
+export class PortfolioRevisionConflictError extends Error {
+  readonly currentRevision: number;
+
+  constructor(currentRevision: number) {
+    super("Dane portfela zostaly zmienione w innej sesji. Odswiezono aktualny stan.");
+    this.name = "PortfolioRevisionConflictError";
+    this.currentRevision = currentRevision;
   }
 }
 
@@ -167,32 +175,17 @@ const parsePortfolioBook = (portfolioJson: string): {
   }
 };
 
-const getPortfolioBookCache = () => {
-  if (!globalThis.portfelPortfolioBookCache) {
-    globalThis.portfelPortfolioBookCache = new Map();
-  }
-
-  return globalThis.portfelPortfolioBookCache;
-};
-
 const getStoredPortfolioBook = async (userId: string) => {
-  const cachedPortfolioBook = getPortfolioBookCache().get(userId);
-
-  if (cachedPortfolioBook) {
-    return {
-      portfolioBook: cachedPortfolioBook,
-      needsMigration: false,
-    };
-  }
-
   const row = await queryOne<PortfolioJsonRow>(
-    "SELECT portfolio_json FROM users WHERE id = $1",
+    "SELECT portfolio_json, portfolio_revision FROM users WHERE id = $1",
     [userId]
   );
   const parsedPortfolioBook = parsePortfolioBook(row?.portfolio_json ?? "");
-  getPortfolioBookCache().set(userId, parsedPortfolioBook.portfolioBook);
 
-  return parsedPortfolioBook;
+  return {
+    ...parsedPortfolioBook,
+    portfolioRevision: row?.portfolio_revision ?? 0,
+  };
 };
 
 const parseUserProfile = (
@@ -230,6 +223,7 @@ const userColumnsWithoutPortfolio = `
   subscription_status,
   subscription_updated_at,
   profile_json,
+  portfolio_revision,
   created_at,
   updated_at
 `;
@@ -307,10 +301,6 @@ const withForcedProSubscription = async <T extends UserRow>(user: T): Promise<T>
 
 const removeSessionByToken = async (token: string) => {
   await execute("DELETE FROM sessions WHERE token_hash = $1", [hashToken(token)]);
-};
-
-const removeSessionsByUserId = async (userId: string) => {
-  await execute("DELETE FROM sessions WHERE user_id = $1", [userId]);
 };
 
 const purgeTokensForUser = (
@@ -439,40 +429,42 @@ export const registerAccount = async ({
     realizedAdjustments: [],
   });
 
-  await execute(
-    `
-      INSERT INTO users (
-        id,
-        email,
-        password_hash,
-        display_name,
-        email_verified_at,
-        subscription_plan,
-        subscription_status,
-        subscription_updated_at,
-        profile_json,
-        portfolio_json,
-        created_at,
-        updated_at
-      )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-    `,
-    [
-      userId,
-      normalizedEmail,
-      passwordHash,
-      normalizedName,
-      null,
-      initialSubscriptionPlan,
-      "active",
-      now,
-      JSON.stringify(profile),
-      JSON.stringify(initialPortfolioBook),
-      now,
-      now,
-    ]
-  );
-  await syncPortfolioCoreTables(userId, initialPortfolioBook);
+  await withTransaction(async (transaction) => {
+    await transaction.execute(
+      `
+        INSERT INTO users (
+          id,
+          email,
+          password_hash,
+          display_name,
+          email_verified_at,
+          subscription_plan,
+          subscription_status,
+          subscription_updated_at,
+          profile_json,
+          portfolio_json,
+          created_at,
+          updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      `,
+      [
+        userId,
+        normalizedEmail,
+        passwordHash,
+        normalizedName,
+        null,
+        initialSubscriptionPlan,
+        "active",
+        now,
+        JSON.stringify(profile),
+        JSON.stringify(initialPortfolioBook),
+        now,
+        now,
+      ]
+    );
+    await syncPortfolioCoreTablesInTransaction(transaction, userId, initialPortfolioBook);
+  });
 
   return {
     id: userId,
@@ -532,40 +524,42 @@ export const upsertOAuthAccount = async ({
     realizedAdjustments: [],
   });
 
-  await execute(
-    `
-      INSERT INTO users (
-        id,
-        email,
-        password_hash,
-        display_name,
-        email_verified_at,
-        subscription_plan,
-        subscription_status,
-        subscription_updated_at,
-        profile_json,
-        portfolio_json,
-        created_at,
-        updated_at
-      )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-    `,
-    [
-      userId,
-      normalizedEmail,
-      passwordHash,
-      normalizedName,
-      now,
-      initialSubscriptionPlan,
-      "active",
-      now,
-      JSON.stringify(profile),
-      JSON.stringify(initialPortfolioBook),
-      now,
-      now,
-    ]
-  );
-  await syncPortfolioCoreTables(userId, initialPortfolioBook);
+  await withTransaction(async (transaction) => {
+    await transaction.execute(
+      `
+        INSERT INTO users (
+          id,
+          email,
+          password_hash,
+          display_name,
+          email_verified_at,
+          subscription_plan,
+          subscription_status,
+          subscription_updated_at,
+          profile_json,
+          portfolio_json,
+          created_at,
+          updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      `,
+      [
+        userId,
+        normalizedEmail,
+        passwordHash,
+        normalizedName,
+        now,
+        initialSubscriptionPlan,
+        "active",
+        now,
+        JSON.stringify(profile),
+        JSON.stringify(initialPortfolioBook),
+        now,
+        now,
+      ]
+    );
+    await syncPortfolioCoreTablesInTransaction(transaction, userId, initialPortfolioBook);
+  });
 
   const createdUser = await getUserById(userId);
 
@@ -619,20 +613,25 @@ export const getCurrentAccountData = async () => {
   }
 
   const user = await withForcedProSubscription(sessionUser);
-  const { portfolioBook, needsMigration } = await getStoredPortfolioBook(user.id);
+  const storedPortfolio = await getStoredPortfolioBook(user.id);
+  let portfolioBook = storedPortfolio.portfolioBook;
+  let portfolioRevision = storedPortfolio.portfolioRevision;
 
-  if (needsMigration) {
-    await execute(
-      "UPDATE users SET portfolio_json = $1, updated_at = $2 WHERE id = $3",
-      [JSON.stringify(portfolioBook), new Date().toISOString(), user.id]
+  if (storedPortfolio.needsMigration) {
+    const persistedPortfolio = await updateCurrentUserPortfolio(
+      user.id,
+      portfolioBook,
+      portfolioRevision,
+      { enforcePlanLimit: false }
     );
-    await syncPortfolioCoreTables(user.id, portfolioBook);
-    getPortfolioBookCache().set(user.id, portfolioBook);
+    portfolioBook = persistedPortfolio.portfolioBook;
+    portfolioRevision = persistedPortfolio.portfolioRevision;
   }
 
   return {
     user: toAuthenticatedUser(user),
     profile: parseUserProfile(user),
+    portfolioRevision,
     ...normalizePortfolioState(portfolioBook),
     ...portfolioBook,
   };
@@ -715,7 +714,9 @@ export const updateCurrentUserProfile = async (
 
 export const updateCurrentUserPortfolio = async (
   userId: string,
-  portfolio: PortfolioState | PortfolioBook
+  portfolio: PortfolioState | PortfolioBook,
+  expectedPortfolioRevision?: number,
+  options: { enforcePlanLimit?: boolean } = {}
 ) => {
   const existingUser = await getUserById(userId);
 
@@ -730,26 +731,56 @@ export const updateCurrentUserPortfolio = async (
     (item) => item.assets.length > FREE_PLAN_ASSET_LIMIT
   );
 
-  if (!canUseProFeatures(account) && hasPortfolioOverFreeLimit) {
+  if (options.enforcePlanLimit !== false && !canUseProFeatures(account) && hasPortfolioOverFreeLimit) {
     throw new Error(
       `Plan Free pozwala zapisac do ${FREE_PLAN_ASSET_LIMIT} pozycji. Przejdz na Pro, aby dodawac kolejne.`
     );
   }
 
   const updatedAt = new Date().toISOString();
+  const requestedRevision = Number.isInteger(expectedPortfolioRevision)
+    ? expectedPortfolioRevision
+    : existingUser.portfolio_revision;
 
-  await execute(
-    `
-      UPDATE users
-      SET portfolio_json = $1, updated_at = $2
-      WHERE id = $3
-    `,
-    [JSON.stringify(normalizedPortfolio), updatedAt, userId]
-  );
-  await syncPortfolioCoreTables(userId, normalizedPortfolio);
-  getPortfolioBookCache().set(userId, normalizedPortfolio);
+  return withTransaction(async (transaction) => {
+    const currentRows = await transaction.query<{ portfolio_revision: number }>(
+      "SELECT portfolio_revision FROM users WHERE id = $1 FOR UPDATE",
+      [userId]
+    );
+    const currentUser = currentRows[0];
 
-  return normalizedPortfolio;
+    if (!currentUser) {
+      throw new Error("Nie znaleziono uzytkownika.");
+    }
+
+    if (currentUser.portfolio_revision !== requestedRevision) {
+      throw new PortfolioRevisionConflictError(currentUser.portfolio_revision);
+    }
+
+    const updatedRows = await transaction.query<{ portfolio_revision: number }>(
+      `
+        UPDATE users
+        SET portfolio_json = $1,
+          portfolio_revision = portfolio_revision + 1,
+          updated_at = $2
+        WHERE id = $3
+        RETURNING portfolio_revision
+      `,
+      [JSON.stringify(normalizedPortfolio), updatedAt, userId]
+    );
+    const updatedUser = updatedRows[0];
+
+    if (!updatedUser) {
+      throw new Error("Nie udalo sie zapisac portfela.");
+    }
+
+    await syncPortfolioCoreTablesInTransaction(transaction, userId, normalizedPortfolio);
+
+    return {
+      portfolioBook: normalizedPortfolio,
+      portfolioRevision: updatedUser.portfolio_revision,
+    };
+  });
 };
 
 export const updateCurrentUserSubscription = async (
@@ -760,6 +791,10 @@ export const updateCurrentUserSubscription = async (
 
   if (!existingUser) {
     throw new Error("Nie znaleziono uzytkownika.");
+  }
+
+  if (plan === "pro" && !isForcedProEmail(existingUser.email)) {
+    throw new Error("Plan Pro wymaga potwierdzenia platnosci.");
   }
 
   const now = new Date().toISOString();
@@ -798,7 +833,6 @@ export const deleteUserByAdmin = async (adminUserId: string, targetUserId: strin
   }
 
   await execute("DELETE FROM users WHERE id = $1", [targetUser.id]);
-  getPortfolioBookCache().delete(targetUser.id);
 };
 
 export const requestEmailVerificationForUser = async (userId: string, baseUrl: string) => {
@@ -935,34 +969,47 @@ export const resetPasswordWithToken = async (token: string, password: string) =>
     throw new Error("Nowe haslo musi miec co najmniej 8 znakow.");
   }
 
-  const tokenRow = await getTokenRow("password_reset_tokens", normalizedToken);
-
-  if (!tokenRow) {
-    throw new Error("Link do resetu hasla jest niepoprawny albo juz wygasl.");
-  }
-
-  if (new Date(tokenRow.expires_at).getTime() <= Date.now()) {
-    await purgeTokensForUser("password_reset_tokens", tokenRow.user_id);
-    throw new Error("Link do resetu hasla wygasl. Popros o nowy.");
-  }
-
-  const user = await getUserById(tokenRow.user_id);
-
-  if (!user) {
-    await purgeTokensForUser("password_reset_tokens", tokenRow.user_id);
-    throw new Error("Nie znaleziono konta dla tego linku.");
-  }
-
   const passwordHash = await bcrypt.hash(password, 12);
   const now = new Date().toISOString();
 
-  await execute(
-    "UPDATE users SET password_hash = $1, updated_at = $2 WHERE id = $3",
-    [passwordHash, now, user.id]
-  );
+  await withTransaction(async (transaction) => {
+    const tokenRows = await transaction.query<TokenRow>(
+      `
+        SELECT user_id, expires_at
+        FROM password_reset_tokens
+        WHERE token_hash = $1
+        FOR UPDATE
+      `,
+      [hashToken(normalizedToken)]
+    );
+    const tokenRow = tokenRows[0];
 
-  await purgeTokensForUser("password_reset_tokens", user.id);
-  await removeSessionsByUserId(user.id);
+    if (!tokenRow) {
+      throw new Error("Link do resetu hasla jest niepoprawny albo juz wygasl.");
+    }
+
+    if (new Date(tokenRow.expires_at).getTime() <= Date.now()) {
+      throw new Error("Link do resetu hasla wygasl. Popros o nowy.");
+    }
+
+    const userRows = await transaction.query<{ id: string }>(
+      "SELECT id FROM users WHERE id = $1 FOR UPDATE",
+      [tokenRow.user_id]
+    );
+
+    if (!userRows[0]) {
+      throw new Error("Nie znaleziono konta dla tego linku.");
+    }
+
+    await transaction.execute(
+      "UPDATE users SET password_hash = $1, updated_at = $2 WHERE id = $3",
+      [passwordHash, now, tokenRow.user_id]
+    );
+    await transaction.execute("DELETE FROM password_reset_tokens WHERE user_id = $1", [
+      tokenRow.user_id,
+    ]);
+    await transaction.execute("DELETE FROM sessions WHERE user_id = $1", [tokenRow.user_id]);
+  });
 };
 
 export const changeCurrentUserPassword = async ({
@@ -999,12 +1046,14 @@ export const changeCurrentUserPassword = async ({
   const passwordHash = await bcrypt.hash(newPassword, 12);
   const now = new Date().toISOString();
 
-  await execute(
-    "UPDATE users SET password_hash = $1, updated_at = $2 WHERE id = $3",
-    [passwordHash, now, user.id]
-  );
-
-  await purgeTokensForUser("password_reset_tokens", user.id);
+  await withTransaction(async (transaction) => {
+    await transaction.execute(
+      "UPDATE users SET password_hash = $1, updated_at = $2 WHERE id = $3",
+      [passwordHash, now, user.id]
+    );
+    await transaction.execute("DELETE FROM password_reset_tokens WHERE user_id = $1", [user.id]);
+    await transaction.execute("DELETE FROM sessions WHERE user_id = $1", [user.id]);
+  });
 };
 
 export const logoutCurrentSession = async () => {

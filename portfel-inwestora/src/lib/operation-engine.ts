@@ -471,28 +471,52 @@ const buildBuyOperation = (
       : priceCurrency === BASE_CURRENCY
         ? 1
         : null;
+  const settlementCurrency = toCurrencyCode(asset.purchaseCurrency, priceCurrency);
+  const settlementFxRateToPln =
+    typeof asset.purchaseSettlementFxRateToPln === "number" &&
+    Number.isFinite(asset.purchaseSettlementFxRateToPln) &&
+    asset.purchaseSettlementFxRateToPln > 0
+      ? asset.purchaseSettlementFxRateToPln
+      : settlementCurrency === BASE_CURRENCY
+        ? 1
+        : settlementCurrency === priceCurrency
+          ? exchangeRate
+          : null;
+  const marketAmount = round(originalQuantity * asset.purchasePrice, 8);
+  const settlementAmount =
+    settlementCurrency === priceCurrency
+      ? marketAmount
+      : exchangeRate && settlementFxRateToPln
+        ? round((marketAmount * exchangeRate) / settlementFxRateToPln, 8)
+        : marketAmount;
+  const settlementFee = settlementCurrency === BASE_CURRENCY ? originalFeePln : 0;
 
   return createOperation({
     id: `op-buy-${asset.id}`,
     portfolioId,
-    accountId: getDefaultInvestmentAccountId(portfolioId),
+    accountId: getDefaultCashAccountId(portfolioId, settlementCurrency),
     assetId: getPortfolioInstrumentId(portfolioId, asset),
     operationType: "BUY",
     quantity: originalQuantity,
     price: asset.purchasePrice,
-    currency: priceCurrency,
+    currency: settlementCurrency,
     exchangeRate,
-    fee: originalFeePln,
+    fee: settlementFee,
     tax: 0,
-    amount: round(originalQuantity * asset.purchasePrice, 8),
+    amount: settlementAmount,
     date: asset.purchaseDate,
     notes: "",
     metadata: getLegacyOperationMetadata("asset", asset.id, {
       lotId: asset.id,
       feeCurrency: BASE_CURRENCY,
       marketCurrency: asset.marketCurrency,
-      settlementCurrency: asset.purchaseCurrency,
+      settlementCurrency,
+      cashCurrency: settlementCurrency,
+      cashAmount: settlementAmount,
+      cashSettlementDirect: true,
       purchasePriceCurrency: priceCurrency,
+      marketAmount,
+      settlementFxRateToPln,
       provider: asset.provider,
       providerId: asset.providerId,
       groupOrder: asset.groupOrder,
@@ -502,20 +526,35 @@ const buildBuyOperation = (
   });
 };
 
-const buildSellOperation = (portfolioId: string, sale: PortfolioSale) =>
-  createOperation({
+const buildSellOperation = (portfolioId: string, sale: PortfolioSale) => {
+  const settlementCurrency = toCurrencyCode(
+    sale.realizedValueCurrency ?? sale.allocations[0]?.purchaseCurrency,
+    sale.marketCurrency
+  );
+  const hasRecordedSettlementAmount =
+    typeof sale.realizedProceedsValue === "number" &&
+    Number.isFinite(sale.realizedProceedsValue);
+  const settlementAmount = hasRecordedSettlementAmount
+    ? sale.realizedProceedsValue!
+    : settlementCurrency === BASE_CURRENCY
+      ? sale.realizedProceedsPln
+      : round(sale.quantity * sale.salePrice, 8);
+  const settlementFee = hasRecordedSettlementAmount ? 0 : settlementCurrency === BASE_CURRENCY ? sale.feePln : 0;
+  const settlementTax = hasRecordedSettlementAmount ? 0 : settlementCurrency === BASE_CURRENCY ? sale.taxTotalPln ?? 0 : 0;
+
+  return createOperation({
     id: `op-sell-${sale.id}`,
     portfolioId,
-    accountId: getDefaultInvestmentAccountId(portfolioId),
+    accountId: getDefaultCashAccountId(portfolioId, settlementCurrency),
     assetId: getPortfolioInstrumentId(portfolioId, sale),
     operationType: "SELL",
     quantity: sale.quantity,
     price: sale.salePrice,
-    currency: sale.marketCurrency,
+    currency: settlementCurrency,
     exchangeRate: sale.marketCurrency === BASE_CURRENCY ? 1 : null,
-    fee: sale.feePln,
-    tax: sale.taxTotalPln ?? 0,
-    amount: round(sale.quantity * sale.salePrice, 8),
+    fee: settlementFee,
+    tax: settlementTax,
+    amount: settlementAmount,
     date: sale.saleDate,
     notes: "",
     metadata: getLegacyOperationMetadata("sale", sale.id, {
@@ -529,10 +568,16 @@ const buildSellOperation = (portfolioId: string, sale: PortfolioSale) =>
       realizedValueCurrency: sale.realizedValueCurrency,
       realizedProfitLossValue: sale.realizedProfitLossValue,
       grossProfitLossPln: sale.grossProfitLossPln,
+      marketCurrency: sale.marketCurrency,
+      cashCurrency: settlementCurrency,
+      cashAmount: settlementAmount,
+      cashSettlementDirect: true,
+      cashAmountIsNet: hasRecordedSettlementAmount,
     }),
     createdAt: sale.createdAt,
     updatedAt: sale.createdAt,
   });
+};
 
 const buildAdjustmentOperation = (
   portfolioId: string,
@@ -696,6 +741,93 @@ const getTradeOperationIdentity = (operation: PortfolioOperation) => {
   ].join(":");
 };
 
+const normalizeAutomaticBrokerFxOperations = (operations: PortfolioOperation[]) => {
+  const existingAutomaticConversionIds = new Set(
+    operations
+      .map((operation) =>
+        typeof operation.metadata.autoFxForOperationId === "string"
+          ? operation.metadata.autoFxForOperationId
+          : null
+      )
+      .filter((operationId): operationId is string => Boolean(operationId))
+  );
+
+  return operations.flatMap((operation) => {
+    const isTrade = operation.operationType === "BUY" || operation.operationType === "SELL";
+    const marketCurrency = getMetadataString(operation.metadata, "marketCurrency");
+    const cashCurrency = getMetadataString(operation.metadata, "cashCurrency");
+    const marketAmount =
+      getMetadataNumber(operation.metadata, "marketAmount") ??
+      (operation.quantity && operation.price ? operation.quantity * operation.price : 0);
+    const cashAmount = getMetadataNumber(operation.metadata, "cashAmount") ?? operation.amount;
+    const isAlreadyNormalized = operation.metadata.autoFxTradeNormalized === true;
+
+    if (
+      !isTrade ||
+      operation.metadata.autoFxConversion !== true ||
+      isAlreadyNormalized ||
+      !marketCurrency ||
+      !cashCurrency ||
+      marketCurrency === cashCurrency ||
+      marketAmount <= 0 ||
+      cashAmount <= 0 ||
+      existingAutomaticConversionIds.has(operation.id)
+    ) {
+      return [operation];
+    }
+
+    const isBuy = operation.operationType === "BUY";
+    const sourceCurrency = toCurrencyCode(isBuy ? cashCurrency : marketCurrency);
+    const sourceAmount = isBuy ? cashAmount : marketAmount;
+    const targetCurrency = toCurrencyCode(isBuy ? marketCurrency : cashCurrency);
+    const targetAmount = isBuy ? marketAmount : cashAmount;
+    const conversionId = `${operation.id}:auto-fx`;
+    const conversionCreatedAt = new Date(
+      Date.parse(operation.createdAt) + (isBuy ? -1 : 1)
+    ).toISOString();
+    const normalizedTrade: PortfolioOperation = {
+      ...operation,
+      currency: toCurrencyCode(marketCurrency),
+      amount: round(marketAmount, 6),
+      metadata: {
+        ...operation.metadata,
+        autoFxTradeNormalized: true,
+      },
+    };
+    const automaticConversion: PortfolioOperation = {
+      id: conversionId,
+      portfolioId: operation.portfolioId,
+      accountId: operation.accountId,
+      assetId: null,
+      operationType: "CONVERSION",
+      quantity: null,
+      price: null,
+      currency: sourceCurrency,
+      exchangeRate: null,
+      fee: 0,
+      tax: 0,
+      amount: round(sourceAmount, 6),
+      date: operation.date,
+      notes: "Automatyczne przewalutowanie brokera",
+      metadata: {
+        kind: "cash",
+        cashImpact: true,
+        importSource: operation.metadata.importSource,
+        autoFxConversion: true,
+        autoFxForOperationId: operation.id,
+        brokerFxSpreadRate: operation.metadata.brokerFxSpreadRate,
+        targetAccountId: operation.accountId,
+        targetCurrency,
+        targetAmount: round(targetAmount, 6),
+      },
+      createdAt: conversionCreatedAt,
+      updatedAt: conversionCreatedAt,
+    };
+
+    return [automaticConversion, normalizedTrade];
+  });
+};
+
 export const normalizePortfolioOperations = (
   portfolioId: string,
   operations: unknown,
@@ -709,8 +841,10 @@ export const normalizePortfolioOperations = (
       normalizePortfolioOperation(portfolioId, operation, accounts, instruments, now)
     )
     .filter((operation): operation is PortfolioOperation => Boolean(operation));
-  const existingCustomOperations = normalizedExisting.filter(
+  const existingCustomOperations = normalizeAutomaticBrokerFxOperations(
+    normalizedExisting.filter(
     (operation) => !isLegacyOperation(operation)
+    )
   );
   const customTradeCounts = new Map<string, number>();
 
@@ -1016,21 +1150,35 @@ const getMetadataNumber = (
   key: string
 ) => (hasFiniteNumber(metadata[key]) ? metadata[key] : undefined);
 
-const hasExplicitCashImpact = (operation: PortfolioOperation) =>
-  operation.metadata.cashImpact === true ||
-  operation.metadata.kind === "cash" ||
-  operation.metadata.kind === "dividend";
-
-const isMigratedLegacyOperation = (operation: PortfolioOperation) =>
-  typeof operation.metadata.legacySource === "string";
-
 export const getOperationCashDeltas = (operation: PortfolioOperation): CashBalance[] => {
   if (operation.operationType === "SPLIT" || operation.operationType === "REVERSE_SPLIT") {
     return [];
   }
 
-  if (isMigratedLegacyOperation(operation) && !hasExplicitCashImpact(operation)) {
-    return [];
+  if (
+    (operation.operationType === "BUY" || operation.operationType === "SELL") &&
+    operation.metadata.cashSettlementDirect === true
+  ) {
+    const cashCurrency = toCurrencyCode(
+      getMetadataString(operation.metadata, "cashCurrency"),
+      operation.currency
+    );
+    const cashAmount =
+      getMetadataNumber(operation.metadata, "cashAmount") ?? Math.abs(operation.amount);
+    const cashAmountIsNet = operation.metadata.cashAmountIsNet === true;
+    const feesAndTaxes = cashAmountIsNet ? 0 : Math.abs(operation.fee) + Math.abs(operation.tax);
+    const amount =
+      operation.operationType === "BUY"
+        ? -(Math.abs(cashAmount) + feesAndTaxes)
+        : Math.abs(cashAmount) - feesAndTaxes;
+
+    return [
+      {
+        accountId: operation.accountId,
+        currency: cashCurrency,
+        amount: round(amount, 8),
+      },
+    ];
   }
 
   if (operation.operationType === "TRANSFER") {

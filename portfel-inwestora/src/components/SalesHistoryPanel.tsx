@@ -2,11 +2,14 @@
 
 import { useMemo, useState } from "react";
 import TruncatedText from "@/components/TruncatedText";
+import { convertFromPln } from "@/lib/pricing";
 import { formatCurrency, formatDate, formatNumber, normalizeText } from "@/lib/utils";
-import type { CurrencyCode, PortfolioSale } from "@/types/portfolio";
+import type { CurrencyCode, FxRates, PortfolioSale } from "@/types/portfolio";
 
 type SalesHistoryPanelProps = {
   sales: PortfolioSale[];
+  baseCurrency: CurrencyCode;
+  fxRates: FxRates;
   canUndoSale: (saleId: string) => boolean;
   onUndoSale: (saleId: string) => void;
 };
@@ -39,6 +42,15 @@ const getSaleDisplayCurrency = (sale: PortfolioSale): CurrencyCode =>
 const getSaleDisplayProfit = (sale: PortfolioSale) =>
   sale.realizedProfitLossValue ?? sale.realizedProfitLossPln;
 
+const getSaleProfitLossPln = (sale: PortfolioSale) => {
+  const isBondSettlement =
+    sale.transactionKind === "bond-redemption" || sale.transactionKind === "bond-swap";
+
+  return isBondSettlement
+    ? sale.grossProfitLossPln ?? sale.realizedProfitLossPln
+    : sale.realizedProfitLossPln;
+};
+
 const uniqueOptions = (values: string[]) =>
   Array.from(new Set(values.filter(Boolean))).sort((left, right) =>
     left.localeCompare(right)
@@ -46,6 +58,8 @@ const uniqueOptions = (values: string[]) =>
 
 export default function SalesHistoryPanel({
   sales,
+  baseCurrency,
+  fxRates,
   canUndoSale,
   onUndoSale,
 }: SalesHistoryPanelProps) {
@@ -118,11 +132,11 @@ export default function SalesHistoryPanel({
       }
 
       if (sortMode === "profit-desc") {
-        return getSaleDisplayProfit(right) - getSaleDisplayProfit(left);
+        return getSaleProfitLossPln(right) - getSaleProfitLossPln(left);
       }
 
       if (sortMode === "profit-asc") {
-        return getSaleDisplayProfit(left) - getSaleDisplayProfit(right);
+        return getSaleProfitLossPln(left) - getSaleProfitLossPln(right);
       }
 
       if (sortMode === "symbol-asc") {
@@ -292,16 +306,33 @@ export default function SalesHistoryPanel({
                   sale.transactionKind === "bond-swap";
                 const displayCurrency = getSaleDisplayCurrency(sale);
                 const displayProfit = getSaleDisplayProfit(sale);
-                const displayInvested =
-                  sale.realizedInvestedValue ?? sale.realizedInvestedPln;
-                const displayProceeds = isBondSettlement
-                  ? sale.grossProceedsValue ??
-                    sale.grossProceedsPln ??
-                    sale.realizedProceedsValue ??
-                    sale.realizedProceedsPln
-                  : sale.realizedProceedsValue ?? sale.realizedProceedsPln;
-                const netProceeds =
-                  sale.realizedProceedsValue ?? sale.realizedProceedsPln;
+                const baseProfit = convertFromPln(
+                  getSaleProfitLossPln(sale),
+                  baseCurrency,
+                  fxRates
+                );
+                const baseInvested = convertFromPln(
+                  sale.realizedInvestedPln,
+                  baseCurrency,
+                  fxRates
+                );
+                const baseProceeds = convertFromPln(
+                  isBondSettlement
+                    ? sale.grossProceedsPln ?? sale.realizedProceedsPln
+                    : sale.realizedProceedsPln,
+                  baseCurrency,
+                  fxRates
+                );
+                const baseNetProceeds = convertFromPln(
+                  sale.realizedProceedsPln,
+                  baseCurrency,
+                  fxRates
+                );
+                const baseGrossProfit = convertFromPln(
+                  sale.grossProfitLossPln ?? getSaleProfitLossPln(sale),
+                  baseCurrency,
+                  fxRates
+                );
                 const transactionLabel = getSaleTypeLabel(sale);
                 const priceLabel =
                   sale.transactionKind === "bond-swap"
@@ -333,17 +364,15 @@ export default function SalesHistoryPanel({
                             Rozliczenie: {formatDate(sale.settlementDate)}
                           </p>
                         ) : null}
-                        {sale.realizedValueCurrency && sale.realizedValueCurrency !== "PLN" ? (
-                          <p className="table-note">
-                            Wynik bazowy: {formatCurrency(sale.realizedProfitLossPln)}
-                          </p>
-                        ) : null}
+                        <p className="table-note">
+                          Wynik w walucie transakcji: {formatCurrency(displayProfit, displayCurrency)}
+                        </p>
                       </div>
 
                       <strong
-                        className={displayProfit >= 0 ? "tone-positive" : "tone-negative"}
+                        className={baseProfit >= 0 ? "tone-positive" : "tone-negative"}
                       >
-                        {formatCurrency(displayProfit, displayCurrency)}
+                        {formatCurrency(baseProfit, baseCurrency)}
                       </strong>
                     </div>
 
@@ -360,11 +389,11 @@ export default function SalesHistoryPanel({
                         <p className="table-note">
                           {isBondSettlement ? "Wplyw brutto" : "Wplyw netto"}
                         </p>
-                        <strong>{formatCurrency(displayProceeds, displayCurrency)}</strong>
+                        <strong>{formatCurrency(baseProceeds, baseCurrency)}</strong>
                       </div>
                       <div>
                         <p className="table-note">Koszt FIFO</p>
-                        <strong>{formatCurrency(displayInvested, displayCurrency)}</strong>
+                        <strong>{formatCurrency(baseInvested, baseCurrency)}</strong>
                       </div>
                       <div>
                         <p className="table-note">
@@ -372,8 +401,11 @@ export default function SalesHistoryPanel({
                         </p>
                         <strong>
                           {isBondSettlement
-                            ? formatCurrency(netProceeds, displayCurrency)
-                            : formatCurrency(sale.feePln)}
+                            ? formatCurrency(baseNetProceeds, baseCurrency)
+                            : formatCurrency(
+                                convertFromPln(sale.feePln, baseCurrency, fxRates),
+                                baseCurrency
+                              )}
                         </strong>
                       </div>
                       <div>
@@ -387,21 +419,30 @@ export default function SalesHistoryPanel({
                         <div>
                           <p className="table-note">Wynik brutto</p>
                           <strong>
-                            {formatCurrency(
-                              sale.grossProfitLossValue ??
-                                sale.grossProfitLossPln ??
-                                displayProfit,
-                              displayCurrency
-                            )}
+                            {formatCurrency(baseGrossProfit, baseCurrency)}
                           </strong>
                         </div>
                         <div>
                           <p className="table-note">Podatek</p>
-                          <strong>{formatCurrency(sale.taxTotalPln ?? 0)}</strong>
+                          <strong>
+                            {formatCurrency(
+                              convertFromPln(sale.taxTotalPln ?? 0, baseCurrency, fxRates),
+                              baseCurrency
+                            )}
+                          </strong>
                         </div>
                         <div>
                           <p className="table-note">Oplata</p>
-                          <strong>{formatCurrency(sale.redemptionFeeTotalPln ?? 0)}</strong>
+                          <strong>
+                            {formatCurrency(
+                              convertFromPln(
+                                sale.redemptionFeeTotalPln ?? 0,
+                                baseCurrency,
+                                fxRates
+                              ),
+                              baseCurrency
+                            )}
+                          </strong>
                         </div>
                         {sale.transactionKind === "bond-swap" ? (
                           <>
@@ -422,7 +463,14 @@ export default function SalesHistoryPanel({
                             <div>
                               <p className="table-note">Pozostalo do wyplaty</p>
                               <strong>
-                                {formatCurrency(sale.swapResidualCashPln ?? 0)}
+                                {formatCurrency(
+                                  convertFromPln(
+                                    sale.swapResidualCashPln ?? 0,
+                                    baseCurrency,
+                                    fxRates
+                                  ),
+                                  baseCurrency
+                                )}
                               </strong>
                             </div>
                           </>

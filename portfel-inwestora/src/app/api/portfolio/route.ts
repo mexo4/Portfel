@@ -56,9 +56,9 @@ export async function PUT(request: Request) {
               : [],
           };
 
-    const updatedPortfolio = await updateCurrentUserPortfolio(accountData.user.id, nextPortfolio);
+    await updateCurrentUserPortfolio(accountData.user.id, nextPortfolio);
 
-    return NextResponse.json(updatedPortfolio);
+    return NextResponse.json({ saved: true });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Nie udalo sie zapisac portfela.";
     return NextResponse.json({ error: message }, { status: 400 });

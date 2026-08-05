@@ -18,6 +18,7 @@ import TruncatedText from "@/components/TruncatedText";
 import { SEARCH_DEBOUNCE_MS, SEARCH_MODE_OPTIONS } from "@/lib/constants";
 import { fetchPortfolioHistory, searchAssets } from "@/lib/api";
 import {
+  convertFromPln,
   getAssetPurchaseUnitValuePln,
   getAssetPurchaseValuePln,
 } from "@/lib/pricing";
@@ -37,6 +38,7 @@ import {
 import type {
   AssetSearchMode,
   AssetSearchResult,
+  CurrencyCode,
   FxRates,
   PortfolioAsset,
   PortfolioAssetHistorySeries,
@@ -53,7 +55,9 @@ type PortfolioLineChartsProps = {
   sales: PortfolioSale[];
   realizedAdjustments: PortfolioRealizedAdjustment[];
   fxRates: FxRates;
-  combinedProfitLossPln: number;
+  baseCurrency: CurrencyCode;
+  combinedProfitLoss: number;
+  refreshRevision: number;
 };
 
 type RangePreset = "1D" | "1W" | "1M" | "1Q" | "YTD" | "ALL";
@@ -168,7 +172,7 @@ const MODE_OPTIONS: Array<{
   {
     value: "daily-change",
     label: "Zmiana dzienna",
-    copy: "sesja do sesji w PLN",
+    copy: "sesja do sesji w walucie bazowej",
   },
 ];
 
@@ -319,8 +323,8 @@ const formatPercent = (value: number, fractionDigits = 2) =>
 const formatSignedPercent = (value: number, fractionDigits = 2) =>
   `${value > 0 ? "+" : ""}${formatPercent(value, fractionDigits)}`;
 
-const formatSignedCurrency = (value: number) =>
-  `${value > 0 ? "+" : ""}${formatCurrency(value)}`;
+const formatSignedCurrency = (value: number, currency: CurrencyCode) =>
+  `${value > 0 ? "+" : ""}${formatCurrency(value, currency)}`;
 
 const formatSignedPercentagePoints = (value: number, fractionDigits = 2) =>
   `${value > 0 ? "+" : ""}${new Intl.NumberFormat("pl-PL", {
@@ -328,7 +332,7 @@ const formatSignedPercentagePoints = (value: number, fractionDigits = 2) =>
     maximumFractionDigits: fractionDigits,
   }).format(value)} p.p.`;
 
-const formatCompactCurrency = (value: number) => {
+const formatCompactCurrency = (value: number, currency: CurrencyCode) => {
   const absValue = Math.abs(value);
   const prefix = value < 0 ? "-" : "";
 
@@ -340,8 +344,33 @@ const formatCompactCurrency = (value: number) => {
     return `${prefix}${formatNumber(absValue / 1_000, absValue >= 100_000 ? 0 : 1)} tys.`;
   }
 
-  return `${formatNumber(value, 0)} zl`;
+  return `${formatNumber(value, 0)} ${currency}`;
 };
+
+const convertHistoryPointsToBase = (
+  points: PortfolioHistoryPoint[],
+  baseCurrency: CurrencyCode,
+  fxRates: FxRates
+) =>
+  points.map((point) => ({
+    ...point,
+    portfolioValuePln: convertFromPln(point.portfolioValuePln, baseCurrency, fxRates),
+    netInvestedPln: convertFromPln(point.netInvestedPln, baseCurrency, fxRates),
+    profitLossPln: convertFromPln(point.profitLossPln, baseCurrency, fxRates),
+  }));
+
+const convertBenchmarkSeriesToBase = (
+  series: PortfolioBenchmarkHistorySeries[],
+  baseCurrency: CurrencyCode,
+  fxRates: FxRates
+) =>
+  series.map((entry) => ({
+    ...entry,
+    points: entry.points.map((point) => ({
+      ...point,
+      pricePln: convertFromPln(point.pricePln, baseCurrency, fxRates),
+    })),
+  }));
 
 const formatAxisPercent = (value: number) => formatPercent(value, 0);
 
@@ -884,7 +913,9 @@ export default function PortfolioLineCharts({
   sales,
   realizedAdjustments,
   fxRates,
-  combinedProfitLossPln,
+  baseCurrency,
+  combinedProfitLoss,
+  refreshRevision,
 }: PortfolioLineChartsProps) {
   const [mode, setMode] = useState<ChartMode>("value");
   const [rangePreset, setRangePreset] = useState<RangePreset>("1M");
@@ -1020,11 +1051,18 @@ export default function PortfolioLineCharts({
       isCancelled = true;
       abortController.abort();
     };
-  }, [assets, realizedAdjustments, sales, selectedBenchmarks]);
+  }, [assets, realizedAdjustments, refreshRevision, sales, selectedBenchmarks]);
 
-  const displayPoints =
+  const historyPoints =
     serverHistory.points.length > 0 ? serverHistory.points : fallbackHistory.points;
-  const displayBenchmarkSeries = serverHistory.benchmarkSeries;
+  const displayPoints = useMemo(
+    () => convertHistoryPointsToBase(historyPoints, baseCurrency, fxRates),
+    [baseCurrency, fxRates, historyPoints]
+  );
+  const displayBenchmarkSeries = useMemo(
+    () => convertBenchmarkSeriesToBase(serverHistory.benchmarkSeries, baseCurrency, fxRates),
+    [baseCurrency, fxRates, serverHistory.benchmarkSeries]
+  );
   const isUsingFallbackHistory =
     serverHistory.points.length === 0 && fallbackHistory.points.length > 0;
   const displayWarnings = useMemo(() => compactWarnings(warnings), [warnings]);
@@ -1164,16 +1202,16 @@ export default function PortfolioLineCharts({
       if (!firstPoint || !lastPoint) {
         return {
           title: "Wartosc portfela",
-          copy: "Glowny widok portfela w PLN z kapitalem netto jako linia odniesienia.",
+          copy: `Glowny widok portfela w ${baseCurrency} z kapitalem netto jako linia odniesienia.`,
           data: [],
           lines: [],
           summaryLabel: "Brak danych",
-          summaryValue: "0 zl",
+          summaryValue: formatCurrency(0, baseCurrency),
           deltaLabel: "Zmiana w zakresie",
-          deltaValue: "0 zl",
+          deltaValue: formatCurrency(0, baseCurrency),
           deltaTone: "tone-neutral",
           stats: [],
-          yAxisTickFormatter: formatCompactCurrency,
+          yAxisTickFormatter: (value) => formatCompactCurrency(value, baseCurrency),
           emptyTitle: "Brakuje historii do wykresu wartosci",
           emptyCopy: "Dodaj aktywa albo poczekaj, az pojawi sie seria dziennych punktow.",
         };
@@ -1199,25 +1237,25 @@ export default function PortfolioLineCharts({
             color: SERIES_COLORS[0],
             variant: "area",
             strokeWidth: 3,
-            valueFormatter: (value) => formatCurrency(value),
+            valueFormatter: (value) => formatCurrency(value, baseCurrency),
           },
           {
             dataKey: "netInvestedPln",
             label: "Kapital netto",
             color: SERIES_COLORS[1],
             strokeWidth: 2.2,
-            valueFormatter: (value) => formatCurrency(value),
+            valueFormatter: (value) => formatCurrency(value, baseCurrency),
           },
         ],
         summaryLabel: "Wartosc teraz",
-        summaryValue: formatCurrency(lastPoint.portfolioValuePln),
+        summaryValue: formatCurrency(lastPoint.portfolioValuePln, baseCurrency),
         deltaLabel: "Zmiana w zakresie",
-        deltaValue: formatSignedCurrency(rangeChangePln),
+        deltaValue: formatSignedCurrency(rangeChangePln, baseCurrency),
         deltaTone: getToneClass(rangeChangePln),
         stats: [
           {
             label: "Wynik od poczatku",
-            value: formatSignedCurrency(lastPoint.profitLossPln),
+            value: formatSignedCurrency(lastPoint.profitLossPln, baseCurrency),
             tone: getToneClass(lastPoint.profitLossPln),
           },
           {
@@ -1227,11 +1265,11 @@ export default function PortfolioLineCharts({
           },
           {
             label: "Kapital netto",
-            value: formatCurrency(lastPoint.netInvestedPln),
+            value: formatCurrency(lastPoint.netInvestedPln, baseCurrency),
           },
         ],
         yAxisDomain,
-        yAxisTickFormatter: formatCompactCurrency,
+        yAxisTickFormatter: (value) => formatCompactCurrency(value, baseCurrency),
         emptyTitle: "Brakuje historii do wykresu wartosci",
         emptyCopy: "Dodaj aktywa albo poczekaj, az pojawi sie seria dziennych punktow.",
       };
@@ -1281,7 +1319,7 @@ export default function PortfolioLineCharts({
             valueFormatter: (value) => formatSignedPercent(value),
             detailFormatter: (row) =>
               typeof row.profitLossPln === "number"
-                ? formatSignedCurrency(row.profitLossPln)
+                ? formatSignedCurrency(row.profitLossPln, baseCurrency)
                 : null,
           },
         ],
@@ -1292,13 +1330,13 @@ export default function PortfolioLineCharts({
         deltaTone: getToneClass(rangeChangePercent),
         stats: [
           {
-            label: "Wynik w PLN",
-            value: formatSignedCurrency(lastPoint.profitLossPln),
+            label: `Wynik w ${baseCurrency}`,
+            value: formatSignedCurrency(lastPoint.profitLossPln, baseCurrency),
             tone: getToneClass(lastPoint.profitLossPln),
           },
           {
             label: "Kapital netto",
-            value: formatCurrency(lastPoint.netInvestedPln),
+            value: formatCurrency(lastPoint.netInvestedPln, baseCurrency),
           },
           {
             label: "Najwyzej w zakresie",
@@ -1354,7 +1392,7 @@ export default function PortfolioLineCharts({
             valueFormatter: (value) => formatPercent(value),
             detailFormatter: (row) =>
               typeof row.runningPeakPln === "number"
-                ? `szczyt ${formatCurrency(row.runningPeakPln)}`
+                ? `szczyt ${formatCurrency(row.runningPeakPln, baseCurrency)}`
                 : null,
           },
         ],
@@ -1366,11 +1404,11 @@ export default function PortfolioLineCharts({
         stats: [
           {
             label: "Biezaca wartosc",
-            value: formatCurrency(lastPoint.portfolioValuePln),
+            value: formatCurrency(lastPoint.portfolioValuePln, baseCurrency),
           },
           {
             label: "Ostatni szczyt",
-            value: formatCurrency(lastPoint.runningPeakPln),
+            value: formatCurrency(lastPoint.runningPeakPln, baseCurrency),
           },
           {
             label: "Odbicie od dolka",
@@ -1447,8 +1485,8 @@ export default function PortfolioLineCharts({
           const profitLossPln = getFiniteNumber(row.portfolioProfitLossPln);
 
           return [
-            valuePln === null ? null : `wartosc ${formatCurrency(valuePln)}`,
-            profitLossPln === null ? null : `wynik ${formatSignedCurrency(profitLossPln)}`,
+            valuePln === null ? null : `wartosc ${formatCurrency(valuePln, baseCurrency)}`,
+            profitLossPln === null ? null : `wynik ${formatSignedCurrency(profitLossPln, baseCurrency)}`,
           ]
             .filter(Boolean)
             .join(" | ");
@@ -1555,7 +1593,7 @@ export default function PortfolioLineCharts({
             return [
               returnPercent === null ? null : `stopa ${formatSignedPercent(returnPercent)}`,
               price === null ? null : `kurs ${formatNumber(price, 2)}`,
-              pricePln === null ? null : `kurs PLN ${formatCurrency(pricePln)}`,
+              pricePln === null ? null : `kurs ${baseCurrency} ${formatCurrency(pricePln, baseCurrency)}`,
             ]
               .filter(Boolean)
               .join(" | ");
@@ -1588,8 +1626,8 @@ export default function PortfolioLineCharts({
             },
             {
               label: "Wynik laczny",
-              value: formatSignedCurrency(combinedProfitLossPln),
-              tone: getToneClass(combinedProfitLossPln),
+              value: formatSignedCurrency(combinedProfitLoss, baseCurrency),
+              tone: getToneClass(combinedProfitLoss),
             },
           ],
           referenceValue: 0,
@@ -1622,8 +1660,8 @@ export default function PortfolioLineCharts({
             },
             {
               label: "Wynik laczny",
-              value: formatSignedCurrency(combinedProfitLossPln),
-              tone: getToneClass(combinedProfitLossPln),
+              value: formatSignedCurrency(combinedProfitLoss, baseCurrency),
+              tone: getToneClass(combinedProfitLoss),
             },
           ],
           referenceValue: 0,
@@ -1673,8 +1711,8 @@ export default function PortfolioLineCharts({
           : null,
         {
           label: "Wynik laczny",
-          value: formatSignedCurrency(combinedProfitLossPln),
-          tone: getToneClass(combinedProfitLossPln),
+          value: formatSignedCurrency(combinedProfitLoss, baseCurrency),
+          tone: getToneClass(combinedProfitLoss),
         },
       ].filter((stat): stat is ChartStat => Boolean(stat));
 
@@ -1712,13 +1750,13 @@ export default function PortfolioLineCharts({
         data: [],
         lines: [],
         summaryLabel: "Brak danych",
-        summaryValue: "0 zl",
+        summaryValue: formatCurrency(0, baseCurrency),
         deltaLabel: "Dzienna stopa",
         deltaValue: "0,00%",
         deltaTone: "tone-neutral",
         stats: [],
         referenceValue: 0,
-        yAxisTickFormatter: formatCompactCurrency,
+        yAxisTickFormatter: (value) => formatCompactCurrency(value, baseCurrency),
         emptyTitle: "Brakuje danych do zmian dziennych",
         emptyCopy: "Zmiana dzienna pojawi sie po zebraniu kolejnych punktow historii.",
       };
@@ -1741,7 +1779,7 @@ export default function PortfolioLineCharts({
           label: "Zmiana dzienna",
           color: SERIES_COLORS[2],
           strokeWidth: 2.6,
-          valueFormatter: (value) => formatSignedCurrency(value),
+          valueFormatter: (value) => formatSignedCurrency(value, baseCurrency),
           detailFormatter: (row) =>
             typeof row.dailyChangePercent === "number"
               ? formatSignedPercent(Number(row.dailyChangePercent))
@@ -1749,19 +1787,19 @@ export default function PortfolioLineCharts({
         },
       ],
       summaryLabel: "Ostatnia zmiana",
-      summaryValue: formatSignedCurrency(lastPoint.dailyChangePln),
+      summaryValue: formatSignedCurrency(lastPoint.dailyChangePln, baseCurrency),
       deltaLabel: "Dzienna stopa",
       deltaValue: formatSignedPercent(lastPoint.dailyChangePercent),
       deltaTone: getToneClass(lastPoint.dailyChangePercent),
       stats: [
         {
           label: "Najlepszy dzien",
-          value: formatSignedCurrency(bestDayPln),
+          value: formatSignedCurrency(bestDayPln, baseCurrency),
           tone: getToneClass(bestDayPln),
         },
         {
             label: "Najslabszy dzien",
-          value: formatSignedCurrency(worstDayPln),
+          value: formatSignedCurrency(worstDayPln, baseCurrency),
           tone: getToneClass(worstDayPln),
         },
         {
@@ -1773,13 +1811,14 @@ export default function PortfolioLineCharts({
         },
       ],
       referenceValue: 0,
-      yAxisTickFormatter: formatCompactCurrency,
+      yAxisTickFormatter: (value) => formatCompactCurrency(value, baseCurrency),
       emptyTitle: "Brakuje danych do zmian dziennych",
       emptyCopy: "Zmiana dzienna pojawi sie po zebraniu kolejnych punktow historii.",
     };
   }, [
     benchmarkSeriesById,
-    combinedProfitLossPln,
+    baseCurrency,
+    combinedProfitLoss,
     displayPoints,
     mode,
     rangePreset,

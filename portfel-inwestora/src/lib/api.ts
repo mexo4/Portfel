@@ -191,28 +191,63 @@ export const fetchTreasuryBondSwap = async ({
 };
 
 export const refreshPortfolioQuotes = async (assets: PortfolioAsset[]) => {
-  const refreshed = await Promise.all(
-    assets.map(async (asset) => {
+  const quoteRequestKey = (asset: PortfolioAsset) =>
+    [
+      asset.kind,
+      asset.symbol,
+      asset.marketCurrency,
+      asset.provider,
+      asset.providerId ?? "",
+      asset.priceScale ?? "",
+    ].join(":");
+  const assetsByQuoteKey = new Map<string, PortfolioAsset>();
+
+  assets.forEach((asset) => {
+    const key = quoteRequestKey(asset);
+
+    if (!assetsByQuoteKey.has(key)) {
+      assetsByQuoteKey.set(key, asset);
+    }
+  });
+
+  const quoteRequests = Array.from(assetsByQuoteKey.entries());
+  const quotesByKey = new Map<string, AssetQuote | null>();
+  let nextRequestIndex = 0;
+  const workerCount = Math.min(6, quoteRequests.length);
+
+  const refreshNextQuote = async () => {
+    while (nextRequestIndex < quoteRequests.length) {
+      const requestIndex = nextRequestIndex;
+      nextRequestIndex += 1;
+      const [key, asset] = quoteRequests[requestIndex];
       const quote = await fetchAssetQuote(asset);
-      if (!quote) return asset;
+      quotesByKey.set(key, quote);
+    }
+  };
 
-      return {
-        ...asset,
-        symbol: quote.symbol,
-        latestPrice: quote.price,
-        previousClose: quote.previousClose ?? asset.previousClose,
-        marketCurrency: quote.marketCurrency,
-        provider: quote.provider,
-        providerId: quote.providerId ?? asset.providerId,
-        priceScale: quote.priceScale ?? asset.priceScale,
-        bondMeta: quote.bondMeta ?? asset.bondMeta,
-        lastUpdatedAt: quote.fetchedAt,
-        name: quote.name ?? asset.name,
-      };
-    })
-  );
+  await Promise.all(Array.from({ length: workerCount }, refreshNextQuote));
 
-  return refreshed;
+  return assets.map((asset) => {
+    const quote = quotesByKey.get(quoteRequestKey(asset));
+
+    if (!quote) {
+      return asset;
+    }
+
+    return {
+      ...asset,
+      symbol: quote.symbol,
+      latestPrice: quote.price,
+      previousClose: quote.previousClose ?? asset.previousClose,
+      marketCurrency: quote.marketCurrency,
+      provider: quote.provider,
+      providerId: quote.providerId ?? asset.providerId,
+      priceScale: quote.priceScale ?? asset.priceScale,
+      bondMeta: quote.bondMeta ?? asset.bondMeta,
+      lastUpdatedAt: quote.fetchedAt,
+      name: quote.name ?? asset.name,
+    };
+  });
 };
 
 export const fetchFxRates = async (codes?: string[], date?: string) => {
@@ -257,13 +292,7 @@ export const savePortfolioState = async ({
   portfolios?: InvestmentPortfolio[];
   activePortfolioId?: string;
 }) => {
-  const data = await requestJson<{
-    assets: PortfolioAsset[];
-    sales: PortfolioSale[];
-    realizedAdjustments: PortfolioRealizedAdjustment[];
-    portfolios?: InvestmentPortfolio[];
-    activePortfolioId?: string;
-  }>("/api/portfolio", {
+  const data = await requestJson<{ saved: true }>("/api/portfolio", {
     method: "PUT",
     body: JSON.stringify(
       portfolios

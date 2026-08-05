@@ -18,6 +18,7 @@ import {
   getDefaultCurrencyAccountId,
   getPortfolioInstrumentId,
 } from "@/lib/operation-engine";
+import { convertCurrency, convertFromPln } from "@/lib/pricing";
 import { normalizeSymbol } from "@/lib/ticker";
 import {
   formatCurrency,
@@ -30,6 +31,7 @@ import {
 import type {
   DividendCalendarGroup,
   DividendReportBucket,
+  CurrencyCode,
   FxRates,
   InvestmentPortfolio,
   PortfolioAccount,
@@ -43,6 +45,7 @@ type DividendCashWorkspaceProps = {
   activeView: "dividends" | "cash";
   portfolio: InvestmentPortfolio;
   fxRates: FxRates;
+  baseCurrency: CurrencyCode;
   onPortfolioChange: (portfolio: InvestmentPortfolio) => void;
 };
 
@@ -246,6 +249,7 @@ export default function DividendCashWorkspace({
   activeView,
   portfolio,
   fxRates,
+  baseCurrency,
   onPortfolioChange,
 }: DividendCashWorkspaceProps) {
   const [dividendDraft, setDividendDraft] = useState(() =>
@@ -302,6 +306,25 @@ export default function DividendCashWorkspace({
     [portfolio.accounts, portfolio.operations]
   );
   const cashHistory = useMemo(() => buildCashHistory(portfolio), [portfolio]);
+  const dividendSummaryInBase = useMemo(
+    () => ({
+      ytd: convertFromPln(dividendSummary.ytd, baseCurrency, fxRates),
+      month: convertFromPln(dividendSummary.month, baseCurrency, fxRates),
+      taxes: convertFromPln(dividendSummary.taxes, baseCurrency, fxRates),
+      gross: convertFromPln(dividendSummary.gross, baseCurrency, fxRates),
+      net: convertFromPln(dividendSummary.net, baseCurrency, fxRates),
+    }),
+    [baseCurrency, dividendSummary, fxRates]
+  );
+  const cashBalanceInBase = useMemo(
+    () =>
+      cashBalances.reduce(
+        (total, balance) =>
+          total + convertCurrency(balance.amount, balance.currency, baseCurrency, fxRates),
+        0
+      ),
+    [baseCurrency, cashBalances, fxRates]
+  );
   const selectedDividendInstrument =
     instruments.find((instrument) => instrument.id === dividendDraft.instrumentId) ?? null;
   const selectedDividendCurrency = toCurrencyCode(
@@ -708,26 +731,25 @@ export default function DividendCashWorkspace({
           <article className="metric-card">
             <span>Saldo gotowki</span>
             <strong>
-              {formatCurrency(
-                cashBalances.reduce(
-                  (total, balance) =>
-                    total + balance.amount * (fxRates[balance.currency] ?? 1),
-                  0
-                )
-              )}
+              {formatCurrency(cashBalanceInBase, baseCurrency)}
             </strong>
           </article>
           <article className="metric-card">
             <span>Dywidendy YTD</span>
-            <strong>{formatCurrency(dividendSummary.ytd)}</strong>
+            <strong>{formatCurrency(dividendSummaryInBase.ytd, baseCurrency)}</strong>
           </article>
           <article className="metric-card">
             <span>Dywidendy w tym miesiacu</span>
-            <strong>{formatCurrency(dividendSummary.month)}</strong>
+            <strong>{formatCurrency(dividendSummaryInBase.month, baseCurrency)}</strong>
           </article>
           <article className="metric-card">
             <span>Roczny dochod z dywidend</span>
-            <strong>{formatCurrency(dividendForecast.annualIncomePln)}</strong>
+            <strong>
+              {formatCurrency(
+                convertFromPln(dividendForecast.annualIncomePln, baseCurrency, fxRates),
+                baseCurrency
+              )}
+            </strong>
           </article>
           <article className="metric-card metric-card-muted">
             <span>Najblizsza wyplata</span>
@@ -1041,12 +1063,22 @@ export default function DividendCashWorkspace({
               <article>
                 <span>Brutto</span>
                 <strong>{formatCurrency(dividendGross, selectedDividendCurrency)}</strong>
-                <small>{formatCurrency(dividendGrossPln)}</small>
+                <small>
+                  {formatCurrency(
+                    convertFromPln(dividendGrossPln, baseCurrency, fxRates),
+                    baseCurrency
+                  )}
+                </small>
               </article>
               <article>
                 <span>Netto</span>
                 <strong>{formatCurrency(dividendNet, selectedDividendCurrency)}</strong>
-                <small>{formatCurrency(dividendNetPln)}</small>
+                <small>
+                  {formatCurrency(
+                    convertFromPln(dividendNetPln, baseCurrency, fxRates),
+                    baseCurrency
+                  )}
+                </small>
               </article>
               <article>
                 <span>Podatki</span>
@@ -1082,21 +1114,23 @@ export default function DividendCashWorkspace({
                 <p className="eyebrow">Raporty dywidend</p>
                 <h2 className="section-title">Podsumowania i prognozy</h2>
               </div>
-              <span className="tag">{formatCurrency(dividendSummary.net)} netto</span>
+              <span className="tag">
+                {formatCurrency(dividendSummaryInBase.net, baseCurrency)} netto
+              </span>
             </div>
 
             <div className="metric-grid mt-6">
               <article className="metric-card">
                 <span>Suma brutto</span>
-                <strong>{formatCurrency(dividendSummary.gross)}</strong>
+                <strong>{formatCurrency(dividendSummaryInBase.gross, baseCurrency)}</strong>
               </article>
               <article className="metric-card">
                 <span>Suma netto</span>
-                <strong>{formatCurrency(dividendSummary.net)}</strong>
+                <strong>{formatCurrency(dividendSummaryInBase.net, baseCurrency)}</strong>
               </article>
               <article className="metric-card">
                 <span>Podatki</span>
-                <strong>{formatCurrency(dividendSummary.taxes)}</strong>
+                <strong>{formatCurrency(dividendSummaryInBase.taxes, baseCurrency)}</strong>
               </article>
               <article className="metric-card">
                 <span>Liczba wyplat</span>
@@ -1125,10 +1159,21 @@ export default function DividendCashWorkspace({
               {dividendReports.map((row) => (
                 <div key={row.key} className="report-row">
                   <span>{getReportLabel(row.label, portfolio)}</span>
-                  <strong>{formatCurrency(row.netAmountPln)}</strong>
+                  <strong>
+                    {formatCurrency(
+                      convertFromPln(row.netAmountPln, baseCurrency, fxRates),
+                      baseCurrency
+                    )}
+                  </strong>
                   <em>
-                    brutto {formatCurrency(row.grossAmountPln)} / podatki{" "}
-                    {formatCurrency(row.taxPln)} / {row.paymentsCount} wyplat
+                    brutto {formatCurrency(
+                      convertFromPln(row.grossAmountPln, baseCurrency, fxRates),
+                      baseCurrency
+                    )} / podatki{" "}
+                    {formatCurrency(
+                      convertFromPln(row.taxPln, baseCurrency, fxRates),
+                      baseCurrency
+                    )} / {row.paymentsCount} wyplat
                   </em>
                 </div>
               ))}
@@ -1140,11 +1185,21 @@ export default function DividendCashWorkspace({
             <div className="dividend-forecast mt-6">
               <article>
                 <span>Prognoza miesieczna</span>
-                <strong>{formatCurrency(dividendForecast.monthlyIncomePln)}</strong>
+                <strong>
+                  {formatCurrency(
+                    convertFromPln(dividendForecast.monthlyIncomePln, baseCurrency, fxRates),
+                    baseCurrency
+                  )}
+                </strong>
               </article>
               <article>
                 <span>Prognoza roczna</span>
-                <strong>{formatCurrency(dividendForecast.annualIncomePln)}</strong>
+                <strong>
+                  {formatCurrency(
+                    convertFromPln(dividendForecast.annualIncomePln, baseCurrency, fxRates),
+                    baseCurrency
+                  )}
+                </strong>
               </article>
               <article>
                 <span>Nastepna wyplata</span>
@@ -1172,7 +1227,12 @@ export default function DividendCashWorkspace({
 
             <div className="dividend-calendar-grid mt-6">
               {dividendCalendar.map((group) => (
-                <CalendarGroup key={group.bucket} group={group} />
+                <CalendarGroup
+                  key={group.bucket}
+                  group={group}
+                  baseCurrency={baseCurrency}
+                  fxRates={fxRates}
+                />
               ))}
             </div>
           </article>
@@ -1226,7 +1286,12 @@ export default function DividendCashWorkspace({
                       </td>
                       <td>
                         <strong>{formatCurrency(dividend.netAmount, dividend.currency)}</strong>
-                        <p className="table-note">{formatCurrency(dividend.netAmountPln)}</p>
+                        <p className="table-note">
+                          {formatCurrency(
+                            convertFromPln(dividend.netAmountPln, baseCurrency, fxRates),
+                            baseCurrency
+                          )}
+                        </p>
                       </td>
                       <td>
                         <div className="sprint-inline-actions">
@@ -1426,7 +1491,12 @@ export default function DividendCashWorkspace({
                   <article key={`${balance.accountId}:${balance.currency}`}>
                     <span>{account?.name ?? "Konto"}</span>
                     <strong>{formatCurrency(balance.amount, balance.currency)}</strong>
-                    <small>{balance.currency}</small>
+                    <small>
+                      {balance.currency} · {formatCurrency(
+                        convertCurrency(balance.amount, balance.currency, baseCurrency, fxRates),
+                        baseCurrency
+                      )}
+                    </small>
                   </article>
                 );
               })}
@@ -1491,7 +1561,15 @@ export default function DividendCashWorkspace({
   );
 }
 
-function CalendarGroup({ group }: { group: DividendCalendarGroup }) {
+function CalendarGroup({
+  group,
+  baseCurrency,
+  fxRates,
+}: {
+  group: DividendCalendarGroup;
+  baseCurrency: CurrencyCode;
+  fxRates: FxRates;
+}) {
   return (
     <article className="calendar-card">
       <div className="calendar-card-head">
@@ -1499,8 +1577,8 @@ function CalendarGroup({ group }: { group: DividendCalendarGroup }) {
         <span>{group.dividends.length}</span>
       </div>
       <p className="table-note">
-        netto {formatCurrency(group.netAmountPln)} / brutto{" "}
-        {formatCurrency(group.grossAmountPln)}
+        netto {formatCurrency(convertFromPln(group.netAmountPln, baseCurrency, fxRates), baseCurrency)} / brutto{" "}
+        {formatCurrency(convertFromPln(group.grossAmountPln, baseCurrency, fxRates), baseCurrency)}
       </p>
       <div className="calendar-list">
         {group.dividends.slice(0, 4).map((dividend) => (

@@ -4,11 +4,12 @@ import { useEffect, useMemo, useState } from "react";
 import TruncatedText from "@/components/TruncatedText";
 import { fetchBenchmarkComparisons } from "@/lib/api";
 import { buildPortfolioBenchmarkInvestments } from "@/lib/portfolio-state";
-import { getGroupedPortfolioAssets } from "@/lib/pricing";
+import { convertFromPln, getGroupedPortfolioAssets } from "@/lib/pricing";
 import { isGpwSymbol } from "@/lib/ticker";
 import { formatCurrency, round } from "@/lib/utils";
 import type {
   BenchmarkComparison,
+  CurrencyCode,
   FxRates,
   PortfolioAsset,
   PortfolioRealizedAdjustment,
@@ -20,7 +21,8 @@ type PortfolioChartsProps = {
   sales: PortfolioSale[];
   realizedAdjustments: PortfolioRealizedAdjustment[];
   fxRates: FxRates;
-  combinedProfitLossPln: number;
+  baseCurrency: CurrencyCode;
+  combinedProfitLoss: number;
 };
 
 type AssetClassBreakdownTarget = Pick<PortfolioAsset, "kind" | "symbol">;
@@ -108,27 +110,33 @@ export default function PortfolioCharts({
   assets,
   sales,
   fxRates,
-  combinedProfitLossPln,
+  baseCurrency,
+  combinedProfitLoss,
 }: PortfolioChartsProps) {
   const [benchmarkComparisons, setBenchmarkComparisons] = useState<BenchmarkComparison[]>([]);
   const [benchmarkError, setBenchmarkError] = useState<string | null>(null);
   const [isLoadingBenchmarks, setIsLoadingBenchmarks] = useState(false);
 
   const groupedAssets = useMemo(
-    () => getGroupedPortfolioAssets(assets, fxRates),
-    [assets, fxRates]
+    () => getGroupedPortfolioAssets(assets, fxRates, baseCurrency),
+    [assets, baseCurrency, fxRates]
   );
-  const totalValuePln = groupedAssets.reduce(
-    (total, asset) => total + asset.totalValuePln,
+  const totalValue = groupedAssets.reduce(
+    (total, asset) => total + asset.totalValue,
     0
   );
   const benchmarkInvestments = useMemo(
     () => buildPortfolioBenchmarkInvestments(assets, sales, fxRates),
     [assets, sales, fxRates]
   );
-  const comparisonInvestedPln = useMemo(
-    () => benchmarkInvestments.reduce((total, investment) => total + investment.amountPln, 0),
-    [benchmarkInvestments]
+  const comparisonInvested = useMemo(
+    () =>
+      convertFromPln(
+        benchmarkInvestments.reduce((total, investment) => total + investment.amountPln, 0),
+        baseCurrency,
+        fxRates
+      ),
+    [baseCurrency, benchmarkInvestments, fxRates]
   );
   const toCapitalReturnPercent = (profitLossPln: number, netInvestedPln: number) =>
     netInvestedPln > 0 && Number.isFinite(profitLossPln) && Number.isFinite(netInvestedPln)
@@ -187,11 +195,11 @@ export default function PortfolioCharts({
   }
 
   const topAssets = [...groupedAssets]
-    .sort((left, right) => right.totalValuePln - left.totalValuePln)
+    .sort((left, right) => right.totalValue - left.totalValue)
     .slice(0, 6)
     .map((asset, index) => ({
       ...asset,
-      share: toPercent(asset.totalValuePln, totalValuePln),
+      share: toPercent(asset.totalValue, totalValue),
       color: CHART_COLORS[index % CHART_COLORS.length],
     }));
 
@@ -199,39 +207,47 @@ export default function PortfolioCharts({
     .map((definition) => {
       const total = groupedAssets
         .filter((asset) => definition.matches(asset))
-        .reduce((sum, asset) => sum + asset.totalValuePln, 0);
+        .reduce((sum, asset) => sum + asset.totalValue, 0);
 
       return {
         id: definition.id,
         label: definition.label,
         total,
-        share: toPercent(total, totalValuePln),
+        share: toPercent(total, totalValue),
         color: definition.color,
       };
     })
     .filter((item) => item.total > 0);
 
   const performanceRanking = [...groupedAssets].sort(
-    (left, right) => right.totalProfitLossPln - left.totalProfitLossPln
+    (left, right) => right.totalProfitLoss - left.totalProfitLoss
   );
   const topWinners = performanceRanking
-    .filter((asset) => asset.totalProfitLossPln > 0)
+    .filter((asset) => asset.totalProfitLoss > 0)
     .slice(0, 3);
   const topLosers = [...performanceRanking]
     .reverse()
-    .filter((asset) => asset.totalProfitLossPln < 0)
+    .filter((asset) => asset.totalProfitLoss < 0)
     .slice(0, 3);
 
   const portfolioComparison: BenchmarkComparison = {
     id: "portfolio",
     label: "Twoj portfel",
-    investedPln: comparisonInvestedPln,
-    currentValuePln: round(totalValuePln),
-    profitLossPln: combinedProfitLossPln,
-    returnPercent: toCapitalReturnPercent(combinedProfitLossPln, comparisonInvestedPln),
+    investedPln: comparisonInvested,
+    currentValuePln: round(totalValue),
+    profitLossPln: combinedProfitLoss,
+    returnPercent: toCapitalReturnPercent(combinedProfitLoss, comparisonInvested),
   };
 
-  const comparisonItems = [portfolioComparison, ...benchmarkComparisons].map((item) => ({
+  const comparisonItems = [
+    portfolioComparison,
+    ...benchmarkComparisons.map((item) => ({
+      ...item,
+      investedPln: convertFromPln(item.investedPln, baseCurrency, fxRates),
+      currentValuePln: convertFromPln(item.currentValuePln, baseCurrency, fxRates),
+      profitLossPln: convertFromPln(item.profitLossPln, baseCurrency, fxRates),
+    })),
+  ].map((item) => ({
     ...item,
     returnPercent: toCapitalReturnPercent(item.profitLossPln, item.investedPln),
   }));
@@ -261,8 +277,8 @@ export default function PortfolioCharts({
                   <div>
                     <p className="table-title">{item.label}</p>
                     <p className="table-note">
-                      inwestycja: {formatCurrency(item.investedPln)} · dzisiaj:{" "}
-                      {formatCurrency(item.currentValuePln)}
+                      inwestycja: {formatCurrency(item.investedPln, baseCurrency)} · dzisiaj:{" "}
+                      {formatCurrency(item.currentValuePln, baseCurrency)}
                     </p>                    <p className="table-note">
                       zwrot: {item.returnPercent >= 0 ? "+" : ""}
                       {item.returnPercent.toFixed(2)}%
@@ -296,7 +312,7 @@ export default function PortfolioCharts({
 
                 <p className="table-note mt-3">
                   {item.profitLossPln >= 0 ? "zysk" : "strata"}:{" "}
-                  {formatCurrency(item.profitLossPln)}
+                  {formatCurrency(item.profitLossPln, baseCurrency)}
                 </p>
               </article>
             );
@@ -331,10 +347,10 @@ export default function PortfolioCharts({
                     {asset.name} <span className="table-note">({asset.symbol})</span>
                   </TruncatedText>
                   <p className="table-note">
-                    {asset.share.toFixed(1)}% portfela · {formatCurrency(asset.totalValuePln)}
+                    {asset.share.toFixed(1)}% portfela · {formatCurrency(asset.totalValue, baseCurrency)}
                   </p>
                 </div>
-                <strong>{formatCurrency(asset.totalProfitLossPln)}</strong>
+                <strong>{formatCurrency(asset.totalProfitLoss, baseCurrency)}</strong>
               </div>
 
               <div className="chart-bar-track">
@@ -365,7 +381,7 @@ export default function PortfolioCharts({
           >
             <div className="donut-hole">
               <span className="table-note">Razem</span>
-              <strong>{formatCurrency(totalValuePln)}</strong>
+              <strong>{formatCurrency(totalValue, baseCurrency)}</strong>
             </div>
           </div>
 
@@ -379,7 +395,7 @@ export default function PortfolioCharts({
                 <div>
                   <p className="table-title">{item.label}</p>
                   <p className="table-note">
-                    {item.share.toFixed(1)}% · {formatCurrency(item.total)}
+                    {item.share.toFixed(1)}% · {formatCurrency(item.total, baseCurrency)}
                   </p>
                 </div>
               </div>
@@ -411,10 +427,10 @@ export default function PortfolioCharts({
                       >
                         {asset.name} <span className="table-note">({asset.symbol})</span>
                       </TruncatedText>
-                      <p className="table-note">{formatCurrency(asset.totalValuePln)}</p>
+                      <p className="table-note">{formatCurrency(asset.totalValue, baseCurrency)}</p>
                     </div>
                     <strong className="tone-positive">
-                      {formatCurrency(asset.totalProfitLossPln)}
+                      {formatCurrency(asset.totalProfitLoss, baseCurrency)}
                     </strong>
                   </div>
                 ))
@@ -440,10 +456,10 @@ export default function PortfolioCharts({
                       >
                         {asset.name} <span className="table-note">({asset.symbol})</span>
                       </TruncatedText>
-                      <p className="table-note">{formatCurrency(asset.totalValuePln)}</p>
+                      <p className="table-note">{formatCurrency(asset.totalValue, baseCurrency)}</p>
                     </div>
                     <strong className="tone-negative">
-                      {formatCurrency(asset.totalProfitLossPln)}
+                      {formatCurrency(asset.totalProfitLoss, baseCurrency)}
                     </strong>
                   </div>
                 ))

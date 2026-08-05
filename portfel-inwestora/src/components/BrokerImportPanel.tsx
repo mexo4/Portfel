@@ -21,6 +21,7 @@ type BrokerImportPanelProps = {
     importedCashOperations?: number;
     skippedSells: number;
     skippedDuplicates?: number;
+    skippedPlanLimit?: number;
   }>;
 };
 
@@ -185,14 +186,25 @@ export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) 
       const importedDividends = result.importedDividends ?? 0;
       const importedCashOperations = result.importedCashOperations ?? 0;
       const skippedDuplicates = result.skippedDuplicates ?? 0;
+      const skippedPlanLimit = result.skippedPlanLimit ?? 0;
       const importedTotal =
         result.importedBuys +
         result.importedSells +
         importedDividends +
         importedCashOperations;
 
+      const resultDetails = [
+        `Pominiete sprzedaze bez pozycji: ${result.skippedSells}.`,
+        `Duplikaty: ${skippedDuplicates}.`,
+        skippedPlanLimit > 0 ? `Pozycje ponad limitem planu: ${skippedPlanLimit}.` : "",
+      ]
+        .filter(Boolean)
+        .join(" ");
+
       setSuccess(
-        `Zaimportowano ${importedTotal} operacji: ${result.importedBuys} kupna, ${result.importedSells} sprzedazy, ${importedDividends} dywidend i ${importedCashOperations} operacji gotowkowych. Pominiete sprzedaze bez pozycji: ${result.skippedSells}. Duplikaty: ${skippedDuplicates}.`
+        importedTotal > 0
+          ? `Zaimportowano ${importedTotal} operacji: ${result.importedBuys} kupna, ${result.importedSells} sprzedazy, ${importedDividends} dywidend i ${importedCashOperations} operacji gotowkowych. ${resultDetails}`
+          : `Nie dodano nowych operacji, bo wszystkie rekordy zostaly pominiete. ${resultDetails}`
       );
     } catch (importError) {
       setError(

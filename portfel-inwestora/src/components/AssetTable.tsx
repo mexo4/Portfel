@@ -24,7 +24,7 @@ import TruncatedText from "@/components/TruncatedText";
 import { KIND_LABELS } from "@/lib/constants";
 import {
   getAssetLatestUnitPrice,
-  getAssetProfitLossPln,
+  getAssetProfitLoss,
   getAssetPurchasePriceCurrency,
   getGroupedPortfolioAssets,
   hasAssetLivePrice,
@@ -33,6 +33,7 @@ import {
 import { formatCurrency, formatDate, formatDateTime, formatNumber } from "@/lib/utils";
 import type {
   AssetTableSortMode,
+  CurrencyCode,
   FxRates,
   PortfolioAsset,
 } from "@/types/portfolio";
@@ -40,6 +41,7 @@ import type {
 type AssetTableProps = {
   assets: PortfolioAsset[];
   fxRates: FxRates;
+  baseCurrency: CurrencyCode;
   filter: string;
   sortMode: AssetTableSortMode;
   onFilterChange: (value: string) => void;
@@ -51,6 +53,7 @@ type AssetTableProps = {
 type SortableGroupSectionProps = {
   group: PortfolioAssetGroup;
   fxRates: FxRates;
+  baseCurrency: CurrencyCode;
   isExpanded: boolean;
   isManualSortMode: boolean;
   isManualReorderLocked: boolean;
@@ -196,6 +199,7 @@ const DragRowPlaceholder = () => <span className="drag-row-placeholder" aria-hid
 const SortableGroupSection = ({
   group,
   fxRates,
+  baseCurrency,
   isExpanded,
   isManualSortMode,
   isManualReorderLocked,
@@ -220,7 +224,7 @@ const SortableGroupSection = ({
       ? formatCurrency(group.latestUnitPrice, group.marketCurrency)
       : "brak kursu";
   const totalValueLabel = group.hasLivePrice
-    ? formatCurrency(group.totalValuePln)
+    ? formatCurrency(group.totalValue, baseCurrency)
     : "brak kursu";
   const style: CSSProperties = {
     transform: CSS.Transform.toString(transform),
@@ -303,7 +307,9 @@ const SortableGroupSection = ({
           ) : (
             <>
               {formatCurrency(group.averagePurchasePrice, group.averagePurchasePriceCurrency)}
-              <div className="table-note">koszt: {formatCurrency(group.totalInvestedPln)}</div>
+              <div className="table-note">
+                koszt: {formatCurrency(group.totalInvested, baseCurrency)}
+              </div>
             </>
           )}
         </td>
@@ -320,7 +326,7 @@ const SortableGroupSection = ({
         <td
           className={
             group.hasLivePrice
-              ? group.totalProfitLossPln >= 0
+              ? group.totalProfitLoss >= 0
                 ? "tone-positive"
                 : "tone-negative"
               : ""
@@ -329,7 +335,7 @@ const SortableGroupSection = ({
           {isDragging ? (
             <DragRowPlaceholder />
           ) : group.hasLivePrice ? (
-            formatCurrency(group.totalProfitLossPln)
+            formatCurrency(group.totalProfitLoss, baseCurrency)
           ) : (
             "brak kursu"
           )}
@@ -366,7 +372,7 @@ const SortableGroupSection = ({
           <td colSpan={8} className="portfolio-detail-cell">
             <div className="lot-list">
               {group.lots.map((lot, index) => {
-                const lotProfitLoss = getAssetProfitLossPln(lot, fxRates);
+                const lotProfitLoss = getAssetProfitLoss(lot, fxRates, baseCurrency);
                 const latestLotPrice = getAssetLatestUnitPrice(lot);
                 const lotHasLivePrice = hasAssetLivePrice(lot);
 
@@ -423,7 +429,9 @@ const SortableGroupSection = ({
                               : ""
                           }
                         >
-                          {lotHasLivePrice ? formatCurrency(lotProfitLoss) : "brak kursu"}
+                          {lotHasLivePrice
+                            ? formatCurrency(lotProfitLoss, baseCurrency)
+                            : "brak kursu"}
                         </strong>
                       </div>
                     </div>
@@ -441,6 +449,7 @@ const SortableGroupSection = ({
 export default function AssetTable({
   assets,
   fxRates,
+  baseCurrency,
   filter,
   sortMode,
   onFilterChange,
@@ -465,7 +474,7 @@ export default function AssetTable({
   );
 
   const filteredGroups = useMemo(() => {
-    const groupedAssets = getGroupedPortfolioAssets(assets, fxRates).filter((group) => {
+    const groupedAssets = getGroupedPortfolioAssets(assets, fxRates, baseCurrency).filter((group) => {
       if (!normalizedFilter) return true;
 
       const haystack = [group.name, group.symbol, group.kind].join(" ").toLowerCase();
@@ -473,7 +482,7 @@ export default function AssetTable({
     });
 
     return sortGroupedAssets(groupedAssets, sortMode);
-  }, [assets, fxRates, normalizedFilter, sortMode]);
+  }, [assets, baseCurrency, fxRates, normalizedFilter, sortMode]);
 
   const sortableGroupKeys = filteredGroups.map((group) => group.key);
   const activeGroup = activeGroupKey
@@ -575,7 +584,7 @@ export default function AssetTable({
                 <th>Ilosc</th>
                 <th>Sredni zakup</th>
                 <th>Rynek</th>
-                <th>P/L PLN</th>
+                <th>P/L {baseCurrency}</th>
                 <th>Aktualizacja</th>
                 <th />
               </tr>
@@ -599,6 +608,7 @@ export default function AssetTable({
                     key={group.key}
                     group={group}
                     fxRates={fxRates}
+                    baseCurrency={baseCurrency}
                     isExpanded={Boolean(expandedGroups[group.key])}
                     isManualSortMode={isManualSortMode}
                     isManualReorderLocked={isManualReorderLocked}

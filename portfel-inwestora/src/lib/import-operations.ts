@@ -1666,7 +1666,16 @@ const detectXtbAccountNumber = (rows: string[][]) => {
   return "";
 };
 
-const parseXtbTransferComment = (comment: string) => {
+type XtbTransferDetails = {
+  sourceCurrency: CurrencyCode;
+  targetCurrency: CurrencyCode;
+  sourceAccountNumber: string;
+  targetAccountNumber: string;
+  exchangeRate: number | null;
+  isCurrencyConversion: boolean;
+};
+
+const parseXtbTransferComment = (comment: string): XtbTransferDetails | null => {
   const match = comment.match(
     /currency\s+conversion\s*,?\s*([A-Z]{3})\s+to\s+([A-Z]{3})[\s\S]*?from\s+TA\s*:?\s*(\d+)[\s\S]*?\bto\s*:?\s*(\d+)[\s\S]*?exchange\s+rate\s*:?\s*([-+]?\d[\d.,]*)/i
   );
@@ -1683,6 +1692,27 @@ const parseXtbTransferComment = (comment: string) => {
     sourceAccountNumber: match[3],
     targetAccountNumber: match[4],
     exchangeRate: exchangeRate && exchangeRate > 0 ? exchangeRate : null,
+    isCurrencyConversion: true,
+  };
+};
+
+const parseXtbPlainTransferComment = (
+  comment: string,
+  accountCurrency: CurrencyCode
+): XtbTransferDetails | null => {
+  const match = comment.match(/\btransfer\s+from\s+(\d+)\s+to\s+(\d+)\b/i);
+
+  if (!match) {
+    return null;
+  }
+
+  return {
+    sourceAccountNumber: match[1],
+    targetAccountNumber: match[2],
+    sourceCurrency: accountCurrency,
+    targetCurrency: accountCurrency,
+    exchangeRate: null,
+    isCurrencyConversion: false,
   };
 };
 
@@ -1777,7 +1807,7 @@ const getXtbOperationImportKeys = (
 
 const getXtbTransferImportKey = (
   row: XtbCashRow,
-  transfer: NonNullable<ReturnType<typeof parseXtbTransferComment>>
+  transfer: XtbTransferDetails
 ) => {
   const timestampSeconds =
     row.serialTime && Number.isFinite(row.serialTime)
@@ -1786,6 +1816,7 @@ const getXtbTransferImportKey = (
 
   return [
     "xtb-transfer",
+    transfer.isCurrencyConversion ? "conversion" : "transfer",
     timestampSeconds,
     transfer.sourceAccountNumber,
     transfer.targetAccountNumber,
@@ -2434,24 +2465,30 @@ const parseXtbCashOperationRows = (
     }
 
     if (row.normalizedType === "transfer") {
-      const transfer = parseXtbTransferComment(row.comment);
+      const transfer =
+        parseXtbTransferComment(row.comment) ??
+        parseXtbPlainTransferComment(row.comment, accountCurrency);
       const operation = buildBaseXtbOperation({
         row,
         accountCurrency,
-        operationType: transfer ? "CONVERSION" : "TRANSFER",
+        operationType: transfer?.isCurrencyConversion ? "CONVERSION" : "TRANSFER",
         amount: absoluteAmount,
         currency: transfer?.sourceCurrency ?? accountCurrency,
         exchangeRate: transfer?.exchangeRate ?? undefined,
       });
 
-      if (transfer?.exchangeRate) {
+      if (transfer) {
         const isCurrentSource = transfer.sourceAccountNumber === accountNumber || signedAmount < 0;
-        const targetAmount = isCurrentSource
-          ? round(absoluteAmount * transfer.exchangeRate, 6)
+        const targetAmount = transfer.exchangeRate
+          ? isCurrentSource
+            ? round(absoluteAmount * transfer.exchangeRate, 6)
+            : absoluteAmount
           : absoluteAmount;
-        const sourceAmount = isCurrentSource
-          ? absoluteAmount
-          : round(absoluteAmount / transfer.exchangeRate, 6);
+        const sourceAmount = transfer.exchangeRate
+          ? isCurrentSource
+            ? absoluteAmount
+            : round(absoluteAmount / transfer.exchangeRate, 6)
+          : absoluteAmount;
 
         operations.push({
           ...operation,

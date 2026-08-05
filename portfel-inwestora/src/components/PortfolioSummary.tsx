@@ -4,7 +4,6 @@ import {
   AUTO_REFRESH_INTERVAL_MS,
   FREE_PLAN_ASSET_LIMIT,
 } from "@/lib/constants";
-import { getBaseCurrency } from "@/lib/pricing";
 import { formatCurrency, formatDateTime } from "@/lib/utils";
 import type { PortfolioSummary as SummaryModel, SubscriptionPlan } from "@/types/portfolio";
 
@@ -44,7 +43,7 @@ export default function PortfolioSummary({
   onRequestVerification,
 }: PortfolioSummaryProps) {
   const foreignRealizedEntries = Object.entries(summary.realizedProfitLossByCurrency)
-    .filter(([currency]) => currency !== "PLN")
+    .filter(([currency]) => currency !== summary.currency)
     .sort(([leftCurrency], [rightCurrency]) => leftCurrency.localeCompare(rightCurrency, "pl"));
 
   return (
@@ -54,7 +53,7 @@ export default function PortfolioSummary({
           <p className="eyebrow">Portfel inwestycyjny</p>
           <h2 className="section-title">Szybki podglad portfela</h2>
           <p className="section-copy">
-            Glowny wynik liczony jest w {getBaseCurrency()}, a zysk zrealizowany pokazujemy
+            Glowny wynik liczony jest w {summary.currency}, a zysk zrealizowany pokazujemy
             dodatkowo w walutach transakcji.
           </p>
         </div>
@@ -92,7 +91,7 @@ export default function PortfolioSummary({
             onClick={onRefresh}
             disabled={isRefreshing}
           >
-            {isRefreshing ? "Odswiezam dane..." : "Odswiez dane"}
+            {isRefreshing ? "Od\u015bwie\u017canie..." : "Od\u015bwie\u017c"}
           </button>
         </div>
       </div>
@@ -100,30 +99,30 @@ export default function PortfolioSummary({
       <div className="metric-grid mt-6">
         <article className="metric-card">
           <span>Wartosc portfela</span>
-          <strong>{formatCurrency(summary.totalValuePln)}</strong>
+          <strong>{formatCurrency(summary.totalValue, summary.currency)}</strong>
         </article>
         <article className="metric-card">
           <span>Zainwestowano otwarte</span>
-          <strong>{formatCurrency(summary.totalInvestedPln)}</strong>
+          <strong>{formatCurrency(summary.totalInvested, summary.currency)}</strong>
         </article>
         <article className="metric-card">
           <span>Wynik otwarty</span>
           <strong
             className={
-              summary.openProfitLossPln >= 0 ? "tone-positive" : "tone-negative"
+              summary.openProfitLoss >= 0 ? "tone-positive" : "tone-negative"
             }
           >
-            {formatCurrency(summary.openProfitLossPln)}
+            {formatCurrency(summary.openProfitLoss, summary.currency)}
           </strong>
         </article>
         <article className="metric-card">
           <span>Wynik zrealizowany</span>
           <strong
             className={
-              summary.realizedProfitLossPln >= 0 ? "tone-positive" : "tone-negative"
+              summary.realizedProfitLoss >= 0 ? "tone-positive" : "tone-negative"
             }
           >
-            {formatCurrency(summary.realizedProfitLossPln)}
+            {formatCurrency(summary.realizedProfitLoss, summary.currency)}
           </strong>
         </article>
         {foreignRealizedEntries.map(([currency, value]) => (
@@ -138,10 +137,10 @@ export default function PortfolioSummary({
           <span>Wynik laczny</span>
           <strong
             className={
-              summary.combinedProfitLossPln >= 0 ? "tone-positive" : "tone-negative"
+              summary.combinedProfitLoss >= 0 ? "tone-positive" : "tone-negative"
             }
           >
-            {formatCurrency(summary.combinedProfitLossPln)}
+            {formatCurrency(summary.combinedProfitLoss, summary.currency)}
           </strong>
         </article>
         <article className="metric-card metric-card-muted">
@@ -159,7 +158,7 @@ export default function PortfolioSummary({
           plan: {subscriptionPlan === "pro" ? "Pro bez limitu" : `Free: do ${FREE_PLAN_ASSET_LIMIT} pozycji w portfelu`}
         </span>
         <span className="tag">auto refresh: co {AUTO_REFRESH_INTERVAL_MS / 1000}s</span>
-        <span className="tag">baza: {getBaseCurrency()}</span>
+        <span className="tag">baza: {summary.currency}</span>
       </div>
 
       {syncError ? <p className="field-note field-note-error mt-4">{syncError}</p> : null}

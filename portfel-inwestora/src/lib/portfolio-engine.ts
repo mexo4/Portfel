@@ -34,6 +34,10 @@ export type PortfolioAssetGroup = {
   totalInvestedPln: number;
   totalValuePln: number;
   totalProfitLossPln: number;
+  baseCurrency: CurrencyCode;
+  totalInvested: number;
+  totalValue: number;
+  totalProfitLoss: number;
   lastUpdatedAt?: string;
   groupOrder: number;
   lotsCount: number;
@@ -65,11 +69,34 @@ export const createPortfolioEngineCache = (): PortfolioEngineCache => {
   };
 };
 
+const getRateToPln = (currency: CurrencyCode, fxRates: FxRates) =>
+  currency === BASE_CURRENCY ? 1 : fxRates[currency] ?? 1;
+
+export const getCurrencyConversionRate = (
+  sourceCurrency: CurrencyCode,
+  targetCurrency: CurrencyCode,
+  fxRates: FxRates
+) => getRateToPln(sourceCurrency, fxRates) / getRateToPln(targetCurrency, fxRates);
+
+export const convertCurrency = (
+  amount: number,
+  sourceCurrency: CurrencyCode,
+  targetCurrency: CurrencyCode,
+  fxRates: FxRates,
+  precision = 6
+) => round(amount * getCurrencyConversionRate(sourceCurrency, targetCurrency, fxRates), precision);
+
 export const convertToPln = (
   amount: number,
   currency: CurrencyCode,
   fxRates: FxRates
-) => round(amount * (fxRates[currency] ?? 1));
+) => convertCurrency(amount, currency, BASE_CURRENCY, fxRates);
+
+export const convertFromPln = (
+  amount: number,
+  currency: CurrencyCode,
+  fxRates: FxRates
+) => convertCurrency(amount, BASE_CURRENCY, currency, fxRates);
 
 const hasPositiveNumber = (value: unknown): value is number =>
   typeof value === "number" && Number.isFinite(value) && value > 0;
@@ -147,9 +174,28 @@ export const getAssetProfitLossPln = (asset: PortfolioAsset, fxRates: FxRates) =
     ? round(getAssetMarketValuePln(asset, fxRates) - getAssetInvestedPln(asset, fxRates))
     : 0;
 
+export const getAssetInvestedValue = (
+  asset: PortfolioAsset,
+  fxRates: FxRates,
+  baseCurrency: CurrencyCode = BASE_CURRENCY
+) => convertFromPln(getAssetInvestedPln(asset, fxRates), baseCurrency, fxRates);
+
+export const getAssetMarketValue = (
+  asset: PortfolioAsset,
+  fxRates: FxRates,
+  baseCurrency: CurrencyCode = BASE_CURRENCY
+) => convertFromPln(getAssetMarketValuePln(asset, fxRates), baseCurrency, fxRates);
+
+export const getAssetProfitLoss = (
+  asset: PortfolioAsset,
+  fxRates: FxRates,
+  baseCurrency: CurrencyCode = BASE_CURRENCY
+) => convertFromPln(getAssetProfitLossPln(asset, fxRates), baseCurrency, fxRates);
+
 export const getGroupedPortfolioAssets = (
   assets: PortfolioAsset[],
-  fxRates: FxRates
+  fxRates: FxRates,
+  baseCurrency: CurrencyCode = BASE_CURRENCY
 ): PortfolioAssetGroup[] => {
   const groups = new Map<string, PortfolioAsset[]>();
 
@@ -228,6 +274,10 @@ export const getGroupedPortfolioAssets = (
       .filter((value): value is string => Boolean(value))
       .sort((left, right) => new Date(right).getTime() - new Date(left).getTime())[0];
 
+    const totalProfitLossPln = round(
+      sortedLots.reduce((total, lot) => total + getAssetProfitLossPln(lot, fxRates), 0)
+    );
+
     return {
       key,
       name: representativeLot.name,
@@ -251,9 +301,11 @@ export const getGroupedPortfolioAssets = (
       dailyChangePercent,
       totalInvestedPln,
       totalValuePln,
-      totalProfitLossPln: round(
-        sortedLots.reduce((total, lot) => total + getAssetProfitLossPln(lot, fxRates), 0)
-      ),
+      totalProfitLossPln,
+      baseCurrency,
+      totalInvested: convertFromPln(totalInvestedPln, baseCurrency, fxRates),
+      totalValue: convertFromPln(totalValuePln, baseCurrency, fxRates),
+      totalProfitLoss: convertFromPln(totalProfitLossPln, baseCurrency, fxRates),
       lastUpdatedAt,
       groupOrder: groupOrderCandidates[0] ?? Number.MAX_SAFE_INTEGER,
       lotsCount: sortedLots.length,
@@ -266,7 +318,8 @@ export const getPortfolioSummary = (
   assets: PortfolioAsset[],
   sales: PortfolioSale[],
   realizedAdjustments: PortfolioRealizedAdjustment[],
-  fxRates: FxRates
+  fxRates: FxRates,
+  baseCurrency: CurrencyCode = BASE_CURRENCY
 ): PortfolioSummary => {
   const openTotals = assets.reduce(
     (acc, asset) => {
@@ -328,6 +381,14 @@ export const getPortfolioSummary = (
   const portfolioValuePln = round(totalInvestedPln + realizedProfitLossPln);
 
   return {
+    currency: baseCurrency,
+    totalValue: convertFromPln(portfolioValuePln, baseCurrency, fxRates),
+    marketValue: convertFromPln(marketValuePln, baseCurrency, fxRates),
+    totalInvested: convertFromPln(totalInvestedPln, baseCurrency, fxRates),
+    totalProfitLoss: convertFromPln(openProfitLossPln, baseCurrency, fxRates),
+    openProfitLoss: convertFromPln(openProfitLossPln, baseCurrency, fxRates),
+    realizedProfitLoss: convertFromPln(realizedProfitLossPln, baseCurrency, fxRates),
+    combinedProfitLoss: convertFromPln(combinedProfitLossPln, baseCurrency, fxRates),
     totalValuePln: portfolioValuePln,
     marketValuePln,
     totalInvestedPln,
@@ -460,12 +521,14 @@ export const calculatePortfolioSnapshot = ({
     return cachedSnapshot;
   }
 
-  const groups = getGroupedPortfolioAssets(corePortfolio.assets, fxRates);
+  const baseCurrency = corePortfolio.baseCurrency ?? BASE_CURRENCY;
+  const groups = getGroupedPortfolioAssets(corePortfolio.assets, fxRates, baseCurrency);
   const summary = getPortfolioSummary(
     corePortfolio.assets,
     corePortfolio.sales,
     corePortfolio.realizedAdjustments,
-    fxRates
+    fxRates,
+    baseCurrency
   );
   const cashBalances = calculateCashBalances(
     corePortfolio.operations ?? [],

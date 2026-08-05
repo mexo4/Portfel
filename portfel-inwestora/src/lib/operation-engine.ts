@@ -460,7 +460,9 @@ const getLegacyOperationMetadata = (
 
 const buildBuyOperation = (
   portfolioId: string,
-  asset: PortfolioState["assets"][number]
+  asset: PortfolioState["assets"][number],
+  originalQuantity = asset.quantity,
+  originalFeePln = asset.feePln
 ) => {
   const priceCurrency = toCurrencyCode(asset.purchasePriceCurrency, asset.purchaseCurrency);
   const exchangeRate =
@@ -476,13 +478,13 @@ const buildBuyOperation = (
     accountId: getDefaultInvestmentAccountId(portfolioId),
     assetId: getPortfolioInstrumentId(portfolioId, asset),
     operationType: "BUY",
-    quantity: asset.quantity,
+    quantity: originalQuantity,
     price: asset.purchasePrice,
     currency: priceCurrency,
     exchangeRate,
-    fee: asset.feePln,
+    fee: originalFeePln,
     tax: 0,
-    amount: round(asset.quantity * asset.purchasePrice, 8),
+    amount: round(originalQuantity * asset.purchasePrice, 8),
     date: asset.purchaseDate,
     notes: "",
     metadata: getLegacyOperationMetadata("asset", asset.id, {
@@ -572,17 +574,51 @@ const buildAdjustmentOperation = (
   });
 };
 
+const getSoldLotHistoryById = (sales: PortfolioSale[]) => {
+  const soldLotHistoryById = new Map<string, { quantity: number; feePln: number }>();
+
+  sales.forEach((sale) => {
+    sale.allocations.forEach((allocation) => {
+      const current = soldLotHistoryById.get(allocation.lotId) ?? {
+        quantity: 0,
+        feePln: 0,
+      };
+      soldLotHistoryById.set(
+        allocation.lotId,
+        {
+          quantity: round(current.quantity + allocation.quantity, 8),
+          feePln: round(current.feePln + allocation.allocatedBuyFeePln, 8),
+        }
+      );
+    });
+  });
+
+  return soldLotHistoryById;
+};
+
 export const buildOperationsFromLegacyState = (
   portfolioId: string,
   state: PortfolioState
-) =>
-  sortOperations([
-    ...state.assets.map((asset) => buildBuyOperation(portfolioId, asset)),
+) => {
+  const soldLotHistoryById = getSoldLotHistoryById(state.sales);
+
+  return sortOperations([
+    ...state.assets.map((asset) => {
+      const soldLotHistory = soldLotHistoryById.get(asset.id);
+
+      return buildBuyOperation(
+        portfolioId,
+        asset,
+        round(asset.quantity + (soldLotHistory?.quantity ?? 0), 8),
+        round(asset.feePln + (soldLotHistory?.feePln ?? 0), 8)
+      );
+    }),
     ...state.sales.map((sale) => buildSellOperation(portfolioId, sale)),
     ...state.realizedAdjustments.map((adjustment) =>
       buildAdjustmentOperation(portfolioId, adjustment)
     ),
   ]);
+};
 
 const normalizeOperationType = (value: unknown): OperationType =>
   typeof value === "string" && SUPPORTED_OPERATION_TYPES.has(value as OperationType)
@@ -641,6 +677,25 @@ export const normalizePortfolioOperation = (
 const isLegacyOperation = (operation: PortfolioOperation) =>
   typeof operation.metadata.legacySource === "string";
 
+const getTradeOperationIdentity = (operation: PortfolioOperation) => {
+  if (
+    (operation.operationType !== "BUY" && operation.operationType !== "SELL") ||
+    !operation.assetId ||
+    operation.quantity === null ||
+    operation.price === null
+  ) {
+    return null;
+  }
+
+  return [
+    operation.operationType,
+    operation.assetId,
+    operation.date,
+    round(operation.quantity, 8),
+    round(operation.price, 8),
+  ].join(":");
+};
+
 export const normalizePortfolioOperations = (
   portfolioId: string,
   operations: unknown,
@@ -657,7 +712,29 @@ export const normalizePortfolioOperations = (
   const existingCustomOperations = normalizedExisting.filter(
     (operation) => !isLegacyOperation(operation)
   );
-  const derivedLegacyOperations = buildOperationsFromLegacyState(portfolioId, state);
+  const customTradeCounts = new Map<string, number>();
+
+  existingCustomOperations.forEach((operation) => {
+    const identity = getTradeOperationIdentity(operation);
+
+    if (identity) {
+      customTradeCounts.set(identity, (customTradeCounts.get(identity) ?? 0) + 1);
+    }
+  });
+
+  const derivedLegacyOperations = buildOperationsFromLegacyState(portfolioId, state).filter(
+    (operation) => {
+      const identity = getTradeOperationIdentity(operation);
+      const matchingCustomCount = identity ? customTradeCounts.get(identity) ?? 0 : 0;
+
+      if (!identity || matchingCustomCount === 0) {
+        return true;
+      }
+
+      customTradeCounts.set(identity, matchingCustomCount - 1);
+      return false;
+    }
+  );
   const operationsById = new Map(
     [...existingCustomOperations, ...derivedLegacyOperations].map(
       (operation) => [operation.id, operation] as const

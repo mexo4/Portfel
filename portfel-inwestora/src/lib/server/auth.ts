@@ -48,6 +48,14 @@ type TokenRow = {
   expires_at: string;
 };
 
+type PortfolioJsonRow = {
+  portfolio_json: string;
+};
+
+declare global {
+  var portfelPortfolioBookCache: Map<string, PortfolioBook> | undefined;
+}
+
 export class EmailVerificationRequiredError extends Error {
   userId: string;
 
@@ -159,6 +167,34 @@ const parsePortfolioBook = (portfolioJson: string): {
   }
 };
 
+const getPortfolioBookCache = () => {
+  if (!globalThis.portfelPortfolioBookCache) {
+    globalThis.portfelPortfolioBookCache = new Map();
+  }
+
+  return globalThis.portfelPortfolioBookCache;
+};
+
+const getStoredPortfolioBook = async (userId: string) => {
+  const cachedPortfolioBook = getPortfolioBookCache().get(userId);
+
+  if (cachedPortfolioBook) {
+    return {
+      portfolioBook: cachedPortfolioBook,
+      needsMigration: false,
+    };
+  }
+
+  const row = await queryOne<PortfolioJsonRow>(
+    "SELECT portfolio_json FROM users WHERE id = $1",
+    [userId]
+  );
+  const parsedPortfolioBook = parsePortfolioBook(row?.portfolio_json ?? "");
+  getPortfolioBookCache().set(userId, parsedPortfolioBook.portfolioBook);
+
+  return parsedPortfolioBook;
+};
+
 const parseUserProfile = (
   user: Pick<
     UserRow,
@@ -184,16 +220,42 @@ const parseUserProfile = (
   }
 };
 
+const userColumnsWithoutPortfolio = `
+  id,
+  email,
+  password_hash,
+  display_name,
+  email_verified_at,
+  subscription_plan,
+  subscription_status,
+  subscription_updated_at,
+  profile_json,
+  created_at,
+  updated_at
+`;
+const sessionUserColumnsWithoutPortfolio = userColumnsWithoutPortfolio
+  .split(",")
+  .map((column) => `users.${column.trim()}`)
+  .join(", ");
+
 const getUserByEmail = (email: string) =>
-  queryOne<UserRow>("SELECT * FROM users WHERE email = $1", [email]);
+  queryOne<UserRow>(
+    `SELECT ${userColumnsWithoutPortfolio}, '' AS portfolio_json FROM users WHERE email = $1`,
+    [email]
+  );
 
 const getUserById = (id: string) =>
-  queryOne<UserRow>("SELECT * FROM users WHERE id = $1", [id]);
+  queryOne<UserRow>(
+    `SELECT ${userColumnsWithoutPortfolio}, '' AS portfolio_json FROM users WHERE id = $1`,
+    [id]
+  );
 
 const getSessionUser = (token: string) =>
   queryOne<SessionUserRow>(
     `
-      SELECT users.*, sessions.expires_at
+      SELECT ${sessionUserColumnsWithoutPortfolio},
+        '' AS portfolio_json,
+        sessions.expires_at
       FROM sessions
       INNER JOIN users ON users.id = sessions.user_id
       WHERE sessions.token_hash = $1
@@ -557,7 +619,7 @@ export const getCurrentAccountData = async () => {
   }
 
   const user = await withForcedProSubscription(sessionUser);
-  const { portfolioBook, needsMigration } = parsePortfolioBook(user.portfolio_json);
+  const { portfolioBook, needsMigration } = await getStoredPortfolioBook(user.id);
 
   if (needsMigration) {
     await execute(
@@ -565,6 +627,7 @@ export const getCurrentAccountData = async () => {
       [JSON.stringify(portfolioBook), new Date().toISOString(), user.id]
     );
     await syncPortfolioCoreTables(user.id, portfolioBook);
+    getPortfolioBookCache().set(user.id, portfolioBook);
   }
 
   return {
@@ -662,7 +725,6 @@ export const updateCurrentUserPortfolio = async (
 
   const account = toAuthenticatedUser(await withForcedProSubscription(existingUser));
   const normalizedPortfolio = normalizePortfolioBook(portfolio);
-  const aggregatedPortfolio = normalizePortfolioState(normalizedPortfolio);
 
   const hasPortfolioOverFreeLimit = normalizedPortfolio.portfolios.some(
     (item) => item.assets.length > FREE_PLAN_ASSET_LIMIT
@@ -674,20 +736,20 @@ export const updateCurrentUserPortfolio = async (
     );
   }
 
+  const updatedAt = new Date().toISOString();
+
   await execute(
     `
       UPDATE users
       SET portfolio_json = $1, updated_at = $2
       WHERE id = $3
     `,
-    [JSON.stringify(normalizedPortfolio), new Date().toISOString(), userId]
+    [JSON.stringify(normalizedPortfolio), updatedAt, userId]
   );
   await syncPortfolioCoreTables(userId, normalizedPortfolio);
+  getPortfolioBookCache().set(userId, normalizedPortfolio);
 
-  return {
-    ...aggregatedPortfolio,
-    ...normalizedPortfolio,
-  };
+  return normalizedPortfolio;
 };
 
 export const updateCurrentUserSubscription = async (
@@ -736,6 +798,7 @@ export const deleteUserByAdmin = async (adminUserId: string, targetUserId: strin
   }
 
   await execute("DELETE FROM users WHERE id = $1", [targetUser.id]);
+  getPortfolioBookCache().delete(targetUser.id);
 };
 
 export const requestEmailVerificationForUser = async (userId: string, baseUrl: string) => {

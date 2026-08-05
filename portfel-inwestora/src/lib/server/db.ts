@@ -1,6 +1,11 @@
-import { Pool, type QueryResultRow } from "pg";
+import { Pool, type PoolClient, type QueryResultRow } from "pg";
 
-type QueryParameter = string | number | boolean | null;
+type QueryParameter = string | number | boolean | null | string[] | number[];
+
+export type DatabaseTransaction = {
+  query: <T>(statement: string, parameters?: QueryParameter[]) => Promise<T[]>;
+  execute: (statement: string, parameters?: QueryParameter[]) => Promise<void>;
+};
 
 let schemaInitialization: Promise<void> | null = null;
 
@@ -289,4 +294,38 @@ export const execute = async (
   parameters: QueryParameter[] = []
 ) => {
   await query<Record<string, never>>(statement, parameters);
+};
+
+const createTransaction = (client: PoolClient): DatabaseTransaction => ({
+  query: async <T>(statement: string, parameters: QueryParameter[] = []) => {
+    const result = await client.query<T & QueryResultRow>(statement, parameters);
+    return result.rows;
+  },
+  execute: async (statement: string, parameters: QueryParameter[] = []) => {
+    await client.query(statement, parameters);
+  },
+});
+
+export const withTransaction = async <T>(
+  callback: (transaction: DatabaseTransaction) => Promise<T>
+) => {
+  await initializeDatabase();
+  const client = await getPool().connect();
+
+  try {
+    await client.query("BEGIN");
+    const result = await callback(createTransaction(client));
+    await client.query("COMMIT");
+    return result;
+  } catch (error) {
+    try {
+      await client.query("ROLLBACK");
+    } catch {
+      // The original database error is more useful to the caller.
+    }
+
+    throw error;
+  } finally {
+    client.release();
+  }
 };

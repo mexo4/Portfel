@@ -74,6 +74,11 @@ export class GoogleOAuthError extends Error {
 
 let jwksCache: { keys: GoogleJwk[]; expiresAt: number } | null = null;
 
+export const getGoogleOAuthConfigurationPresence = () => ({
+  googleClientIdPresent: Boolean(process.env.GOOGLE_CLIENT_ID?.trim()),
+  googleClientSecretPresent: Boolean(process.env.GOOGLE_CLIENT_SECRET?.trim()),
+});
+
 const getGoogleConfig = () => {
   const clientId = process.env.GOOGLE_CLIENT_ID?.trim();
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET?.trim();

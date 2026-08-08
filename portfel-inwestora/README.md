@@ -64,3 +64,7 @@ GOOGLE_CLIENT_SECRET=
 ```
 
 The application requests only `openid`, `email`, and `profile`. Never expose the client secret with a `NEXT_PUBLIC_` prefix.
+
+### Netlify
+
+Google OAuth routes are Next.js server routes, which Netlify runs as Functions. Set both variables in Netlify's site environment variables for the **Production** deploy context with a scope that includes **Functions** (and **Builds** when using scoped variables). Trigger a new production deploy after changing them. Do not define these secrets in `netlify.toml`: Netlify does not expose variables from that file to Functions at runtime.

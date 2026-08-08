@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   createGoogleOAuthPending,
   getGoogleAuthorizationUrl,
+  getGoogleOAuthConfigurationPresence,
   getGoogleOAuthRedirectUri,
   GoogleOAuthConfigurationError,
   isGoogleOAuthStateValid,
@@ -40,6 +41,10 @@ test("fails safely when Google OAuth is not configured", () => {
   delete process.env.GOOGLE_CLIENT_ID;
   delete process.env.GOOGLE_CLIENT_SECRET;
 
+  assert.deepEqual(getGoogleOAuthConfigurationPresence(), {
+    googleClientIdPresent: false,
+    googleClientSecretPresent: false,
+  });
   assert.throws(() => createGoogleOAuthPending(), GoogleOAuthConfigurationError);
 });
 
@@ -47,6 +52,11 @@ test("creates a signed OAuth context and the standard Google OIDC request", () =
   process.env.NODE_ENV = "development";
   process.env.GOOGLE_CLIENT_ID = "google-client-id";
   process.env.GOOGLE_CLIENT_SECRET = "google-client-secret";
+
+  assert.deepEqual(getGoogleOAuthConfigurationPresence(), {
+    googleClientIdPresent: true,
+    googleClientSecretPresent: true,
+  });
 
   const { pending, cookieValue } = createGoogleOAuthPending();
   const authorizationUrl = getGoogleAuthorizationUrl(pending);

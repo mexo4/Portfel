@@ -46,3 +46,21 @@ DATABASE_URL="postgresql://USER:PASSWORD@HOST.neon.tech/DBNAME?sslmode=require"
 ```
 
 On Vercel, add the same `DATABASE_URL` value in Project Settings -> Environment Variables for Production, Preview, and Development as needed. The app creates required tables automatically on first database access.
+
+## Google OAuth
+
+Create a Google OAuth 2.0 Web application and configure these authorized redirect URIs:
+
+```text
+https://mexo.com.pl/api/auth/oauth/google/callback
+http://localhost:3000/api/auth/oauth/google/callback
+```
+
+Add the following server-side variables locally in `.env.local` and in Vercel for the required environments:
+
+```bash
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+```
+
+The application requests only `openid`, `email`, and `profile`. Never expose the client secret with a `NEXT_PUBLIC_` prefix.

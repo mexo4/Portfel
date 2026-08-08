@@ -5,6 +5,7 @@ import { getCurrentAccountData } from "@/lib/server/auth";
 type LoginPageProps = {
   searchParams: Promise<{
     oauthError?: string;
+    oauthNotice?: string;
     verified?: string;
   }>;
 };
@@ -18,8 +19,8 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
 
   const params = await searchParams;
   const initialNotice =
-    params.oauthError ??
+    params.oauthNotice ??
     (params.verified ? "Email potwierdzony. Mozesz sie zalogowac." : null);
 
-  return <AuthCard mode="login" initialNotice={initialNotice} />;
+  return <AuthCard mode="login" initialError={params.oauthError ?? null} initialNotice={initialNotice} />;
 }

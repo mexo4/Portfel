@@ -36,7 +36,7 @@ const assertRowsBelongToUser = async (
   );
 
   if (rows.length > 0) {
-    throw new Error("Identyfikator danych portfela należy do innego użytkownika.");
+    throw new Error("Identyfikator danych portfela nalezy do innego uzytkownika.");
   }
 };
 

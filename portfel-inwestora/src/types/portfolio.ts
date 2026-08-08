@@ -413,6 +413,7 @@ export type PortfolioSummary = {
   currency: CurrencyCode;
   totalValue: number;
   marketValue: number;
+  cashValue: number;
   totalInvested: number;
   totalProfitLoss: number;
   openProfitLoss: number;
@@ -420,6 +421,7 @@ export type PortfolioSummary = {
   combinedProfitLoss: number;
   totalValuePln: number;
   marketValuePln: number;
+  cashValuePln: number;
   totalInvestedPln: number;
   totalProfitLossPln: number;
   openProfitLossPln: number;
@@ -711,6 +713,7 @@ export type AuthenticatedUser = {
   emailVerifiedAt: string | null;
   subscriptionPlan: SubscriptionPlan;
   subscriptionStatus: SubscriptionStatus;
+  hasPassword: boolean;
 };
 
 export type WealthItemKind = "asset" | "liability";

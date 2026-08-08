@@ -1,10 +1,15 @@
 "use client";
 
+import Link from "next/link";
 import { useRef, useState } from "react";
 import PasswordField from "@/components/PasswordField";
 import { changePassword } from "@/lib/api";
 
-export default function ChangePasswordPanel() {
+type ChangePasswordPanelProps = {
+  hasPassword?: boolean;
+};
+
+export default function ChangePasswordPanel({ hasPassword = true }: ChangePasswordPanelProps) {
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -73,6 +78,20 @@ export default function ChangePasswordPanel() {
         </p>
       </div>
 
+      {!hasPassword ? (
+        <div className="mt-6">
+          <p className="section-copy">
+            To konto korzysta z logowania przez Google. Aby dodac haslo do Mexo, uzyj
+            bezpiecznego linku resetu hasla.
+          </p>
+          <p className="section-copy mt-4">
+            <Link href="/forgot-password" className="auth-link">
+              Ustaw haslo przez email
+            </Link>
+          </p>
+        </div>
+      ) : (
+        <>
       <div className="profile-grid mt-6">
         <PasswordField
           label="Aktualne haslo"
@@ -115,6 +134,8 @@ export default function ChangePasswordPanel() {
           {isSubmitting ? "Zmieniam haslo..." : "Zmien haslo"}
         </button>
       </div>
+        </>
+      )}
     </section>
   );
 }

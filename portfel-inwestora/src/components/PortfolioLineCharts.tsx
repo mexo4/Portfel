@@ -19,6 +19,7 @@ import { SEARCH_DEBOUNCE_MS, SEARCH_MODE_OPTIONS } from "@/lib/constants";
 import { fetchPortfolioHistory, searchAssets } from "@/lib/api";
 import {
   convertFromPln,
+  convertToPln,
   getAssetPurchaseUnitValuePln,
   getAssetPurchaseValuePln,
 } from "@/lib/pricing";
@@ -404,9 +405,6 @@ const formatShortDate = (value: string) =>
     day: "2-digit",
     month: "short",
   }).format(getPointDate(value));
-
-const convertToPln = (amount: number, currency: string, fxRates: FxRates) =>
-  round(amount * (fxRates[currency] ?? 1));
 
 const getEarliestHistoryDate = ({
   assets,

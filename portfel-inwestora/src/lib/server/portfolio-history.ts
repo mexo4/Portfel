@@ -2,6 +2,7 @@ import { getMarketCachePayload, setMarketCachePayload } from "@/lib/server/marke
 import { fetchFxRatesServer } from "@/lib/server/market-data";
 import { fetchTreasuryBondQuoteSeriesServer } from "@/lib/server/treasury-bonds";
 import { normalizeYahooMoneyUnit } from "@/lib/server/yahoo";
+import { FALLBACK_FX_RATES } from "@/lib/constants";
 import { createHash } from "node:crypto";
 import https from "node:https";
 import {
@@ -927,13 +928,15 @@ const buildFxSeries = async (
 
       const [points, fallbackRates] = await Promise.all([
         fetchHistoricalFxPoints(code, startDate, endDate),
-        fetchFxRatesServer([code]).catch(() => ({ [code]: 1 } as Record<CurrencyCode, number>)),
+        fetchFxRatesServer([code]).catch(() => ({} as Record<CurrencyCode, number>)),
       ]);
-      const fallbackRate = fallbackRates[code] ?? 1;
+      const fallbackFxRates: Record<CurrencyCode, number> = FALLBACK_FX_RATES;
+      const fallbackRate = fallbackRates[code] ?? fallbackFxRates[code];
       const dailyRates = new Map<string, number>();
       let pointIndex = 0;
       let lastKnownRate: number | undefined;
       let usedFallback = false;
+      let missingRate = false;
 
       for (const date of dates) {
         while (pointIndex < points.length && points[pointIndex]!.date <= date) {
@@ -946,19 +949,26 @@ const buildFxSeries = async (
           continue;
         }
 
-        dailyRates.set(date, fallbackRate);
-        usedFallback = true;
+        if (typeof fallbackRate === "number" && Number.isFinite(fallbackRate) && fallbackRate > 0) {
+          dailyRates.set(date, fallbackRate);
+          usedFallback = true;
+        } else {
+          dailyRates.set(date, 0);
+          missingRate = true;
+        }
       }
 
       return {
         code,
         dailyRates,
         warnings:
-          usedFallback || points.length === 0
-            ? [
-                `Brak pelnej historii FX dla ${code}; brakujace dni uzupelniono biezacym kursem.`,
-              ]
-            : [],
+          missingRate
+            ? [`Brakuje kursu FX dla ${code}; nie wyceniono czesci historii.`]
+            : usedFallback || points.length === 0
+              ? [
+                  `Brak pelnej historii FX dla ${code}; brakujace dni uzupelniono biezacym kursem.`,
+                ]
+              : [],
       };
     })
   );
@@ -1138,7 +1148,16 @@ const getFxRateForDate = (
   fxSeriesByCode: Map<CurrencyCode, Map<string, number>>,
   code: CurrencyCode,
   date: string
-) => fxSeriesByCode.get(toCurrencyCode(code, "PLN"))?.get(date) ?? 1;
+) => {
+  const normalizedCode = toCurrencyCode(code, "PLN");
+
+  if (normalizedCode === "PLN") {
+    return 1;
+  }
+
+  const fallbackFxRates: Record<CurrencyCode, number> = FALLBACK_FX_RATES;
+  return fxSeriesByCode.get(normalizedCode)?.get(date) ?? fallbackFxRates[normalizedCode] ?? 0;
+};
 
 const convertToPlnOnDate = (
   amount: number,

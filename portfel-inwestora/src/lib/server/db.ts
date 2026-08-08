@@ -47,7 +47,7 @@ const schemaStatements = [
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
       email TEXT NOT NULL UNIQUE,
-      password_hash TEXT NOT NULL,
+      password_hash TEXT,
       display_name TEXT NOT NULL,
       email_verified_at TEXT,
       subscription_plan TEXT NOT NULL DEFAULT 'free',
@@ -56,10 +56,24 @@ const schemaStatements = [
       profile_json TEXT NOT NULL,
       portfolio_json TEXT NOT NULL,
       portfolio_revision INTEGER NOT NULL DEFAULT 0,
+      portfolio_core_revision INTEGER NOT NULL DEFAULT -1,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     )
   `,
+  `
+    CREATE TABLE IF NOT EXISTS auth_accounts (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      provider_account_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      UNIQUE (provider, provider_account_id)
+    )
+  `,
+  "CREATE INDEX IF NOT EXISTS idx_auth_accounts_user_id ON auth_accounts(user_id)",
   `
     CREATE TABLE IF NOT EXISTS sessions (
       id TEXT PRIMARY KEY,
@@ -257,6 +271,8 @@ const schemaStatements = [
   "ALTER TABLE users ADD COLUMN IF NOT EXISTS subscription_status TEXT NOT NULL DEFAULT 'active'",
   "ALTER TABLE users ADD COLUMN IF NOT EXISTS subscription_updated_at TEXT",
   "ALTER TABLE users ADD COLUMN IF NOT EXISTS portfolio_revision INTEGER NOT NULL DEFAULT 0",
+  "ALTER TABLE users ADD COLUMN IF NOT EXISTS portfolio_core_revision INTEGER NOT NULL DEFAULT -1",
+  "ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL",
 ] as const;
 
 export const initializeDatabase = async () => {

@@ -27,7 +27,7 @@ const PASSWORD_RESET_MAX_AGE_MS = 1000 * 60 * 60 * 2;
 type UserRow = {
   id: string;
   email: string;
-  password_hash: string;
+  password_hash: string | null;
   display_name: string;
   email_verified_at: string | null;
   subscription_plan: string;
@@ -36,6 +36,7 @@ type UserRow = {
   profile_json: string;
   portfolio_json: string;
   portfolio_revision: number;
+  portfolio_core_revision: number;
   created_at: string;
   updated_at: string;
 };
@@ -82,6 +83,8 @@ const createRawToken = () => randomBytes(32).toString("hex");
 
 const isEmailValid = (email: string) => /^\S+@\S+\.\S+$/.test(email);
 
+const normalizeEmail = (email: string) => email.trim().toLowerCase();
+
 const normalizeSubscriptionPlan = (plan: string | null | undefined): SubscriptionPlan =>
   plan === "pro" ? "pro" : "free";
 
@@ -111,6 +114,7 @@ const toAuthenticatedUser = (
     | "display_name"
     | "created_at"
     | "email_verified_at"
+    | "password_hash"
     | "subscription_plan"
     | "subscription_status"
   >
@@ -122,6 +126,7 @@ const toAuthenticatedUser = (
   emailVerifiedAt: user.email_verified_at,
   subscriptionPlan: normalizeSubscriptionPlan(user.subscription_plan),
   subscriptionStatus: normalizeSubscriptionStatus(user.subscription_status),
+  hasPassword: Boolean(user.password_hash),
 });
 
 const hasPortfolioV2Shape = (value: unknown) => {
@@ -224,6 +229,7 @@ const userColumnsWithoutPortfolio = `
   subscription_updated_at,
   profile_json,
   portfolio_revision,
+  portfolio_core_revision,
   created_at,
   updated_at
 `;
@@ -242,6 +248,17 @@ const getUserById = (id: string) =>
   queryOne<UserRow>(
     `SELECT ${userColumnsWithoutPortfolio}, '' AS portfolio_json FROM users WHERE id = $1`,
     [id]
+  );
+
+const getUserByProviderAccount = (provider: string, providerAccountId: string) =>
+  queryOne<UserRow>(
+    `
+      SELECT ${sessionUserColumnsWithoutPortfolio}, '' AS portfolio_json
+      FROM auth_accounts
+      INNER JOIN users ON users.id = auth_accounts.user_id
+      WHERE auth_accounts.provider = $1 AND auth_accounts.provider_account_id = $2
+    `,
+    [provider, providerAccountId]
   );
 
 const getSessionUser = (token: string) =>
@@ -385,7 +402,7 @@ export const registerAccount = async ({
   email: string;
   password: string;
 }) => {
-  const normalizedEmail = email.trim().toLowerCase();
+  const normalizedEmail = normalizeEmail(email);
   const normalizedName = displayName.trim();
 
   if (!normalizedEmail || !isEmailValid(normalizedEmail)) {
@@ -464,6 +481,10 @@ export const registerAccount = async ({
       ]
     );
     await syncPortfolioCoreTablesInTransaction(transaction, userId, initialPortfolioBook);
+    await transaction.execute(
+      "UPDATE users SET portfolio_core_revision = portfolio_revision WHERE id = $1",
+      [userId]
+    );
   });
 
   return {
@@ -474,57 +495,108 @@ export const registerAccount = async ({
     emailVerifiedAt: null,
     subscriptionPlan: initialSubscriptionPlan,
     subscriptionStatus: "active",
+    hasPassword: true,
   } satisfies AuthenticatedUser;
 };
 
-export const upsertOAuthAccount = async ({
+export const resolveGoogleOAuthAccount = async ({
+  providerAccountId,
   email,
   displayName,
+  emailVerified,
 }: {
+  providerAccountId: string;
   email: string;
   displayName?: string | null;
+  emailVerified: boolean;
 }) => {
-  const normalizedEmail = email.trim().toLowerCase();
+  const provider = "google";
+  const normalizedEmail = normalizeEmail(email);
   const normalizedName = displayName?.trim() || normalizedEmail.split("@")[0] || "Uzytkownik";
 
-  if (!normalizedEmail || !isEmailValid(normalizedEmail)) {
-    throw new Error("Dostawca logowania nie zwrocil poprawnego adresu email.");
+  if (!providerAccountId || !normalizedEmail || !isEmailValid(normalizedEmail)) {
+    throw new Error("Dostawca logowania nie zwrocil poprawnej tozsamosci.");
   }
 
-  const existingUser = await getUserByEmail(normalizedEmail);
-  const now = new Date().toISOString();
+  if (!emailVerified) {
+    throw new Error("Konto Google nie ma potwierdzonego adresu email.");
+  }
 
-  if (existingUser) {
-    if (!existingUser.email_verified_at) {
-      await execute(
-        "UPDATE users SET email_verified_at = $1, updated_at = $2 WHERE id = $3",
-        [now, now, existingUser.id]
-      );
-      await purgeTokensForUser("email_verification_tokens", existingUser.id);
+  const resolvedUserId = await withTransaction(async (transaction) => {
+    // Serializujemy laczenie kont po trwalym identyfikatorze Google i emailu.
+    await transaction.query<{ locked: number }>(
+      "SELECT pg_advisory_xact_lock(hashtext($1)) AS locked",
+      [`oauth:${provider}:${providerAccountId}`]
+    );
+    await transaction.query<{ locked: number }>(
+      "SELECT pg_advisory_xact_lock(hashtext($1)) AS locked",
+      [`oauth-email:${normalizedEmail}`]
+    );
+
+    const mappedRows = await transaction.query<UserRow>(
+      `
+        SELECT ${sessionUserColumnsWithoutPortfolio}, '' AS portfolio_json
+        FROM auth_accounts
+        INNER JOIN users ON users.id = auth_accounts.user_id
+        WHERE auth_accounts.provider = $1 AND auth_accounts.provider_account_id = $2
+        FOR UPDATE
+      `,
+      [provider, providerAccountId]
+    );
+    const mappedUser = mappedRows[0];
+
+    if (mappedUser) {
+      return mappedUser.id;
     }
 
-    const updatedUser = (await getUserById(existingUser.id)) ?? existingUser;
-    return toAuthenticatedUser(await withForcedProSubscription(updatedUser));
-  }
+    const emailRows = await transaction.query<UserRow>(
+      `SELECT ${userColumnsWithoutPortfolio}, '' AS portfolio_json FROM users WHERE email = $1 FOR UPDATE`,
+      [normalizedEmail]
+    );
+    const existingUser = emailRows[0];
+    const now = new Date().toISOString();
 
-  const userId = randomUUID();
-  const passwordHash = await bcrypt.hash(randomUUID(), 12);
-  const profile = {
-    ...createFreshUserProfile({
-      displayName: normalizedName,
-      email: normalizedEmail,
-    }),
-    createdAt: now,
-    updatedAt: now,
-  };
-  const initialSubscriptionPlan = isForcedProEmail(normalizedEmail) ? "pro" : "free";
-  const initialPortfolioBook = normalizePortfolioBook({
-    assets: [],
-    sales: [],
-    realizedAdjustments: [],
-  });
+    if (existingUser) {
+      if (!existingUser.email_verified_at) {
+        await transaction.execute(
+          "UPDATE users SET email_verified_at = $1, updated_at = $2 WHERE id = $3",
+          [now, now, existingUser.id]
+        );
+        await transaction.execute("DELETE FROM email_verification_tokens WHERE user_id = $1", [
+          existingUser.id,
+        ]);
+      }
 
-  await withTransaction(async (transaction) => {
+      await transaction.execute(
+        `
+          INSERT INTO auth_accounts (
+            id, user_id, provider, provider_account_id, created_at, updated_at
+          )
+          VALUES ($1, $2, $3, $4, $5, $6)
+          ON CONFLICT (provider, provider_account_id) DO NOTHING
+        `,
+        [randomUUID(), existingUser.id, provider, providerAccountId, now, now]
+      );
+
+      return existingUser.id;
+    }
+
+    const userId = randomUUID();
+    const profile = {
+      ...createFreshUserProfile({
+        displayName: normalizedName,
+        email: normalizedEmail,
+      }),
+      createdAt: now,
+      updatedAt: now,
+    };
+    const initialSubscriptionPlan = isForcedProEmail(normalizedEmail) ? "pro" : "free";
+    const initialPortfolioBook = normalizePortfolioBook({
+      assets: [],
+      sales: [],
+      realizedAdjustments: [],
+    });
+
     await transaction.execute(
       `
         INSERT INTO users (
@@ -546,7 +618,7 @@ export const upsertOAuthAccount = async ({
       [
         userId,
         normalizedEmail,
-        passwordHash,
+        null,
         normalizedName,
         now,
         initialSubscriptionPlan,
@@ -559,15 +631,32 @@ export const upsertOAuthAccount = async ({
       ]
     );
     await syncPortfolioCoreTablesInTransaction(transaction, userId, initialPortfolioBook);
+    await transaction.execute(
+      "UPDATE users SET portfolio_core_revision = portfolio_revision WHERE id = $1",
+      [userId]
+    );
+    await transaction.execute(
+      `
+        INSERT INTO auth_accounts (
+          id, user_id, provider, provider_account_id, created_at, updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6)
+      `,
+      [randomUUID(), userId, provider, providerAccountId, now, now]
+    );
+
+    return userId;
   });
 
-  const createdUser = await getUserById(userId);
+  const user =
+    (await getUserByProviderAccount(provider, providerAccountId)) ??
+    (await getUserById(resolvedUserId));
 
-  if (!createdUser) {
-    throw new Error("Nie udalo sie utworzyc konta przez logowanie zewnetrzne.");
+  if (!user) {
+    throw new Error("Nie udalo sie polaczyc konta Google z kontem Mexo.");
   }
 
-  return toAuthenticatedUser(await withForcedProSubscription(createdUser));
+  return toAuthenticatedUser(await withForcedProSubscription(user));
 };
 
 export const loginAccount = async ({
@@ -577,11 +666,17 @@ export const loginAccount = async ({
   email: string;
   password: string;
 }) => {
-  const normalizedEmail = email.trim().toLowerCase();
+  const normalizedEmail = normalizeEmail(email);
   const user = await getUserByEmail(normalizedEmail);
 
   if (!user) {
     throw new Error("Nie znaleziono konta z tym adresem email.");
+  }
+
+  if (!user.password_hash) {
+    throw new Error(
+      "To konto nie ma ustawionego hasla. Kontynuuj z Google albo ustaw haslo przez reset."
+    );
   }
 
   const passwordMatches = await bcrypt.compare(password, user.password_hash);
@@ -617,7 +712,10 @@ export const getCurrentAccountData = async () => {
   let portfolioBook = storedPortfolio.portfolioBook;
   let portfolioRevision = storedPortfolio.portfolioRevision;
 
-  if (storedPortfolio.needsMigration) {
+  if (
+    storedPortfolio.needsMigration ||
+    user.portfolio_core_revision !== portfolioRevision
+  ) {
     const persistedPortfolio = await updateCurrentUserPortfolio(
       user.id,
       portfolioBook,
@@ -628,11 +726,16 @@ export const getCurrentAccountData = async () => {
     portfolioRevision = persistedPortfolio.portfolioRevision;
   }
 
+  const activePortfolio =
+    portfolioBook.portfolios.find(
+      (portfolio) => portfolio.id === portfolioBook.activePortfolioId
+    ) ?? portfolioBook.portfolios[0];
+
   return {
     user: toAuthenticatedUser(user),
     profile: parseUserProfile(user),
     portfolioRevision,
-    ...normalizePortfolioState(portfolioBook),
+    ...normalizePortfolioState(activePortfolio),
     ...portfolioBook,
   };
 };
@@ -664,17 +767,19 @@ export const updateCurrentUserProfile = async (
     throw new Error("Nazwa uzytkownika musi miec co najmniej 2 znaki.");
   }
 
-  if (!normalizedProfile.email || !isEmailValid(normalizedProfile.email)) {
+  const normalizedEmail = normalizeEmail(normalizedProfile.email);
+
+  if (!normalizedEmail || !isEmailValid(normalizedEmail)) {
     throw new Error("Podaj poprawny adres email.");
   }
 
-  const sameEmailUser = await getUserByEmail(normalizedProfile.email);
+  const sameEmailUser = await getUserByEmail(normalizedEmail);
   if (sameEmailUser && sameEmailUser.id !== userId) {
     throw new Error("Ten adres email jest juz zajety.");
   }
 
   const now = new Date().toISOString();
-  const emailChanged = normalizedProfile.email !== existingUser.email;
+  const emailChanged = normalizedEmail !== existingUser.email;
   const nextEmailVerifiedAt = emailChanged ? null : existingUser.email_verified_at;
 
   if (emailChanged) {
@@ -688,11 +793,12 @@ export const updateCurrentUserProfile = async (
       WHERE id = $6
     `,
     [
-      normalizedProfile.email,
+      normalizedEmail,
       normalizedProfile.displayName,
       nextEmailVerifiedAt,
       JSON.stringify({
         ...normalizedProfile,
+        email: normalizedEmail,
         updatedAt: now,
       }),
       now,
@@ -743,8 +849,11 @@ export const updateCurrentUserPortfolio = async (
     : existingUser.portfolio_revision;
 
   return withTransaction(async (transaction) => {
-    const currentRows = await transaction.query<{ portfolio_revision: number }>(
-      "SELECT portfolio_revision FROM users WHERE id = $1 FOR UPDATE",
+    const currentRows = await transaction.query<{
+      portfolio_revision: number;
+      portfolio_core_revision: number;
+    }>(
+      "SELECT portfolio_revision, portfolio_core_revision FROM users WHERE id = $1 FOR UPDATE",
       [userId]
     );
     const currentUser = currentRows[0];
@@ -775,6 +884,10 @@ export const updateCurrentUserPortfolio = async (
     }
 
     await syncPortfolioCoreTablesInTransaction(transaction, userId, normalizedPortfolio);
+    await transaction.execute(
+      "UPDATE users SET portfolio_core_revision = $1 WHERE id = $2",
+      [updatedUser.portfolio_revision, userId]
+    );
 
     return {
       portfolioBook: normalizedPortfolio,
@@ -926,7 +1039,7 @@ export const verifyEmailToken = async (token: string) => {
 };
 
 export const requestPasswordResetForEmail = async (email: string, baseUrl: string) => {
-  const normalizedEmail = email.trim().toLowerCase();
+  const normalizedEmail = normalizeEmail(email);
 
   if (!normalizedEmail || !isEmailValid(normalizedEmail)) {
     throw new Error("Podaj poprawny adres email.");
@@ -1025,6 +1138,10 @@ export const changeCurrentUserPassword = async ({
 
   if (!user) {
     throw new Error("Nie znaleziono konta.");
+  }
+
+  if (!user.password_hash) {
+    throw new Error("To konto nie ma jeszcze hasla. Ustaw je przez link resetu hasla.");
   }
 
   if (newPassword.length < 8) {

@@ -102,6 +102,10 @@ export default function PortfolioSummary({
           <strong>{formatCurrency(summary.totalValue, summary.currency)}</strong>
         </article>
         <article className="metric-card">
+          <span>Gotowka</span>
+          <strong>{formatCurrency(summary.cashValue, summary.currency)}</strong>
+        </article>
+        <article className="metric-card">
           <span>Zainwestowano otwarte</span>
           <strong>{formatCurrency(summary.totalInvested, summary.currency)}</strong>
         </article>

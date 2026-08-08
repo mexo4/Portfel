@@ -117,7 +117,15 @@ export const getDefaultCashAccountId = (
 export const getDefaultCurrencyAccountId = (
   portfolioId: string,
   currency: CurrencyCode
-) => `${portfolioId}:account:currency:${toCurrencyCode(currency, BASE_CURRENCY)}`;
+) => getDefaultCashAccountId(portfolioId, currency);
+
+const normalizePortfolioAccountId = (portfolioId: string, accountId: string) => {
+  const legacyPrefix = `${portfolioId}:account:currency:`;
+
+  return accountId.startsWith(legacyPrefix)
+    ? `${portfolioId}:account:cash:${accountId.slice(legacyPrefix.length)}`
+    : accountId;
+};
 
 export const getPortfolioInstrumentId = (
   portfolioId: string,
@@ -181,12 +189,10 @@ const normalizeAccountKind = (value: unknown, fallback: AccountKind): AccountKin
 
 export const createDefaultPortfolioAccounts = (
   portfolioId: string,
-  currencies: CurrencyCode[] = [BASE_CURRENCY],
+  baseCurrency: CurrencyCode = BASE_CURRENCY,
   now = new Date().toISOString()
 ) => {
-  const normalizedCurrencies = Array.from(
-    new Set([BASE_CURRENCY, ...currencies].map((currency) => toCurrencyCode(currency)))
-  );
+  const normalizedBaseCurrency = toCurrencyCode(baseCurrency, BASE_CURRENCY);
 
   return [
     createDefaultAccount({
@@ -195,30 +201,25 @@ export const createDefaultPortfolioAccounts = (
       name: "Domyslne konto inwestycyjne",
       kind: "investment",
       broker: "OTHER",
-      currency: BASE_CURRENCY,
+      currency: normalizedBaseCurrency,
       now,
     }),
-    ...normalizedCurrencies.map((currency) =>
-      createDefaultAccount({
-        portfolioId,
-        id:
-          currency === BASE_CURRENCY
-            ? getDefaultCashAccountId(portfolioId, currency)
-            : getDefaultCurrencyAccountId(portfolioId, currency),
-        name: currency === BASE_CURRENCY ? "Gotowka PLN" : `Konto walutowe ${currency}`,
-        kind: currency === BASE_CURRENCY ? "cash" : "currency",
-        broker: currency === BASE_CURRENCY ? "CASH" : "CURRENCY",
-        currency,
-        now,
-      })
-    ),
+    createDefaultAccount({
+      portfolioId,
+      id: getDefaultCashAccountId(portfolioId, normalizedBaseCurrency),
+      name: `Gotowka ${normalizedBaseCurrency}`,
+      kind: "cash",
+      broker: "CASH",
+      currency: normalizedBaseCurrency,
+      now,
+    }),
   ];
 };
 
 export const normalizePortfolioAccounts = (
   portfolioId: string,
   accounts: unknown,
-  currencies: CurrencyCode[] = [],
+  baseCurrency: CurrencyCode = BASE_CURRENCY,
   now = new Date().toISOString()
 ) => {
   const normalizedAccounts = (Array.isArray(accounts) ? accounts : [])
@@ -230,11 +231,17 @@ export const normalizePortfolioAccounts = (
         return null;
       }
 
+      const metadata = asRecord(rawAccount.metadata);
+
+      if (metadata.archived === true) {
+        return null;
+      }
+
       const kind = normalizeAccountKind(rawAccount.kind, "investment");
       const currency = normalizeCurrency(rawAccount.currency);
 
       return {
-        id,
+        id: normalizePortfolioAccountId(portfolioId, id),
         portfolioId,
         parentAccountId: getString(rawAccount.parentAccountId) || undefined,
         name: getString(rawAccount.name, kind === "investment" ? "Konto inwestycyjne" : `Gotowka ${currency}`),
@@ -242,14 +249,14 @@ export const normalizePortfolioAccounts = (
         broker: normalizeBroker(rawAccount.broker, kind === "investment" ? "OTHER" : "CASH"),
         currency,
         isDefault: getBoolean(rawAccount.isDefault, false),
-        metadata: asRecord(rawAccount.metadata),
+        metadata,
         createdAt: normalizeIsoDateTime(rawAccount.createdAt, now),
         updatedAt: normalizeIsoDateTime(rawAccount.updatedAt, now),
       } satisfies PortfolioAccount;
     })
     .filter((account): account is PortfolioAccount => Boolean(account));
 
-  const defaultAccounts = createDefaultPortfolioAccounts(portfolioId, currencies, now);
+  const defaultAccounts = createDefaultPortfolioAccounts(portfolioId, baseCurrency, now);
   const accountsById = new Map<string, PortfolioAccount>();
 
   [...normalizedAccounts, ...defaultAccounts].forEach((account) => {
@@ -456,6 +463,8 @@ const getLegacyOperationMetadata = (
   ...metadata,
   legacySource: source,
   legacySourceId: sourceId,
+  // Legacy positions describe holdings, not a complete cash ledger.
+  cashImpact: false,
 });
 
 const buildBuyOperation = (
@@ -686,7 +695,10 @@ export const normalizePortfolioOperation = (
 
   const instrumentIds = new Set(instruments.map((instrument) => instrument.id));
   const fallbackAccountId = getDefaultInvestmentAccountId(portfolioId);
-  const accountId = getString(rawOperation.accountId, fallbackAccountId);
+  const accountId = normalizePortfolioAccountId(
+    portfolioId,
+    getString(rawOperation.accountId, fallbackAccountId)
+  );
   const assetId = getString(rawOperation.assetId) || null;
   const operationType = normalizeOperationType(rawOperation.operationType);
   const quantity = hasFiniteNumber(rawOperation.quantity) ? rawOperation.quantity : null;
@@ -1046,8 +1058,8 @@ export const ensurePortfolioCoreModel = (
   portfolio: InvestmentPortfolio
 ): InvestmentPortfolio => {
   const now = new Date().toISOString();
-  const currencies = collectPortfolioCurrencies(portfolio, portfolio.operations);
-  const accounts = normalizePortfolioAccounts(portfolio.id, portfolio.accounts, currencies, now);
+  const baseCurrency = toCurrencyCode(portfolio.baseCurrency, BASE_CURRENCY);
+  const accounts = normalizePortfolioAccounts(portfolio.id, portfolio.accounts, baseCurrency, now);
   const instruments = normalizePortfolioInstruments(
     portfolio.id,
     portfolio.instruments,
@@ -1067,7 +1079,7 @@ export const ensurePortfolioCoreModel = (
   return {
     ...portfolio,
     schemaVersion: 2,
-    baseCurrency: toCurrencyCode(portfolio.baseCurrency, BASE_CURRENCY),
+    baseCurrency,
     subPortfolios: Array.isArray(portfolio.subPortfolios)
       ? portfolio.subPortfolios
           .map((subPortfolio) => {
@@ -1151,6 +1163,10 @@ const getMetadataNumber = (
 ) => (hasFiniteNumber(metadata[key]) ? metadata[key] : undefined);
 
 export const getOperationCashDeltas = (operation: PortfolioOperation): CashBalance[] => {
+  if (operation.metadata.cashImpact === false) {
+    return [];
+  }
+
   if (operation.operationType === "SPLIT" || operation.operationType === "REVERSE_SPLIT") {
     return [];
   }
@@ -1253,7 +1269,11 @@ export const calculateCashBalances = (
 ) => {
   const balancesByKey = new Map<string, CashBalance>();
   const activeAccountIds = accounts && accounts.length > 0
-    ? new Set(accounts.map((account) => account.id))
+    ? new Set(
+        accounts
+          .filter((account) => account.metadata.archived !== true)
+          .map((account) => account.id)
+      )
     : null;
 
   operations.forEach((operation) => {

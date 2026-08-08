@@ -1,4 +1,4 @@
-import { BASE_CURRENCY } from "@/lib/constants";
+import { BASE_CURRENCY, FALLBACK_FX_RATES } from "@/lib/constants";
 import { calculateCashBalances, ensurePortfolioCoreModel } from "@/lib/operation-engine";
 import { getPortfolioAssetGroupKey } from "@/lib/ticker";
 import { round } from "@/lib/utils";
@@ -69,14 +69,34 @@ export const createPortfolioEngineCache = (): PortfolioEngineCache => {
   };
 };
 
-const getRateToPln = (currency: CurrencyCode, fxRates: FxRates) =>
-  currency === BASE_CURRENCY ? 1 : fxRates[currency] ?? 1;
+const hasPositiveNumber = (value: unknown): value is number =>
+  typeof value === "number" && Number.isFinite(value) && value > 0;
+
+const getRateToPln = (currency: CurrencyCode, fxRates: FxRates) => {
+  if (currency === BASE_CURRENCY) {
+    return 1;
+  }
+
+  const fallbackRates: FxRates = FALLBACK_FX_RATES;
+  const rate = fxRates[currency] ?? fallbackRates[currency];
+
+  return hasPositiveNumber(rate) ? rate : 0;
+};
 
 export const getCurrencyConversionRate = (
   sourceCurrency: CurrencyCode,
   targetCurrency: CurrencyCode,
   fxRates: FxRates
-) => getRateToPln(sourceCurrency, fxRates) / getRateToPln(targetCurrency, fxRates);
+) => {
+  if (sourceCurrency === targetCurrency) {
+    return 1;
+  }
+
+  const sourceRate = getRateToPln(sourceCurrency, fxRates);
+  const targetRate = getRateToPln(targetCurrency, fxRates);
+
+  return sourceRate > 0 && targetRate > 0 ? sourceRate / targetRate : 0;
+};
 
 export const convertCurrency = (
   amount: number,
@@ -98,9 +118,6 @@ export const convertFromPln = (
   fxRates: FxRates
 ) => convertCurrency(amount, BASE_CURRENCY, currency, fxRates);
 
-const hasPositiveNumber = (value: unknown): value is number =>
-  typeof value === "number" && Number.isFinite(value) && value > 0;
-
 type PurchasePriceSource = {
   purchaseCurrency: CurrencyCode;
   purchasePriceCurrency?: CurrencyCode;
@@ -119,7 +136,7 @@ export const getAssetPurchaseFxRateToPln = (
     return asset.purchaseFxRateToPln;
   }
 
-  return fxRates[getAssetPurchasePriceCurrency(asset)] ?? 1;
+  return getRateToPln(getAssetPurchasePriceCurrency(asset), fxRates);
 };
 
 export const getAssetPurchaseValuePln = (
@@ -319,7 +336,8 @@ export const getPortfolioSummary = (
   sales: PortfolioSale[],
   realizedAdjustments: PortfolioRealizedAdjustment[],
   fxRates: FxRates,
-  baseCurrency: CurrencyCode = BASE_CURRENCY
+  baseCurrency: CurrencyCode = BASE_CURRENCY,
+  cashBalances: CashBalance[] = []
 ): PortfolioSummary => {
   const openTotals = assets.reduce(
     (acc, asset) => {
@@ -377,13 +395,15 @@ export const getPortfolioSummary = (
   const openProfitLossPln = round(openTotals.totalProfitLossPln);
   const combinedProfitLossPln = round(openProfitLossPln + realizedProfitLossBasePln);
   const marketValuePln = round(openTotals.totalValuePln);
+  const cashValuePln = getCashValuePln(cashBalances, fxRates);
   const totalInvestedPln = round(openTotals.totalInvestedPln);
-  const portfolioValuePln = round(totalInvestedPln + realizedProfitLossPln);
+  const portfolioValuePln = round(marketValuePln + cashValuePln);
 
   return {
     currency: baseCurrency,
     totalValue: convertFromPln(portfolioValuePln, baseCurrency, fxRates),
     marketValue: convertFromPln(marketValuePln, baseCurrency, fxRates),
+    cashValue: convertFromPln(cashValuePln, baseCurrency, fxRates),
     totalInvested: convertFromPln(totalInvestedPln, baseCurrency, fxRates),
     totalProfitLoss: convertFromPln(openProfitLossPln, baseCurrency, fxRates),
     openProfitLoss: convertFromPln(openProfitLossPln, baseCurrency, fxRates),
@@ -391,6 +411,7 @@ export const getPortfolioSummary = (
     combinedProfitLoss: convertFromPln(combinedProfitLossPln, baseCurrency, fxRates),
     totalValuePln: portfolioValuePln,
     marketValuePln,
+    cashValuePln,
     totalInvestedPln,
     totalProfitLossPln: openProfitLossPln,
     openProfitLossPln,
@@ -523,16 +544,17 @@ export const calculatePortfolioSnapshot = ({
 
   const baseCurrency = corePortfolio.baseCurrency ?? BASE_CURRENCY;
   const groups = getGroupedPortfolioAssets(corePortfolio.assets, fxRates, baseCurrency);
+  const cashBalances = calculateCashBalances(
+    corePortfolio.operations ?? [],
+    corePortfolio.accounts ?? []
+  );
   const summary = getPortfolioSummary(
     corePortfolio.assets,
     corePortfolio.sales,
     corePortfolio.realizedAdjustments,
     fxRates,
-    baseCurrency
-  );
-  const cashBalances = calculateCashBalances(
-    corePortfolio.operations ?? [],
-    corePortfolio.accounts ?? []
+    baseCurrency,
+    cashBalances
   );
   const snapshot = {
     portfolioId: corePortfolio.id,

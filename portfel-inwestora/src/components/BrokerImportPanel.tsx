@@ -20,6 +20,7 @@ type BrokerImportPanelProps = {
     importedDividends?: number;
     importedCashOperations?: number;
     skippedSells: number;
+    skippedInvalid?: number;
     skippedDuplicates?: number;
     skippedPlanLimit?: number;
   }>;
@@ -186,6 +187,7 @@ export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) 
       const importedDividends = result.importedDividends ?? 0;
       const importedCashOperations = result.importedCashOperations ?? 0;
       const skippedDuplicates = result.skippedDuplicates ?? 0;
+      const skippedInvalid = result.skippedInvalid ?? 0;
       const skippedPlanLimit = result.skippedPlanLimit ?? 0;
       const importedTotal =
         result.importedBuys +
@@ -198,6 +200,7 @@ export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) 
 
       const resultDetails = [
         `Pominiete sprzedaze bez pozycji: ${result.skippedSells}.`,
+        `Nieprawidlowe rekordy: ${skippedInvalid}.`,
         `Duplikaty: ${skippedDuplicates}.`,
         skippedPlanLimit > 0 ? `Pozycje ponad limitem planu: ${skippedPlanLimit}.` : "",
       ]

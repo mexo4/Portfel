@@ -6,7 +6,6 @@ import type {
   AssetSearchResult,
   EtfListing,
   EtfSearchGroup,
-  InstrumentSearchResult,
   BenchmarkComparison,
   BenchmarkInvestment,
   BondRedemptionQuote,
@@ -99,23 +98,14 @@ export const searchAssets = async ({ query, kind, mode, signal }: SearchParams) 
   return data.results;
 };
 
-export const searchOpenFigiInstruments = async ({
-  query,
-  signal,
-}: Pick<SearchParams, "query" | "signal">) => {
+export const searchEtfInstruments = async ({ query, signal }: Pick<SearchParams, "query" | "signal">) => {
   const params = new URLSearchParams({ q: query });
-  const data = await requestJson<{
-    results: InstrumentSearchResult[];
-    groups: EtfSearchGroup[];
-  }>(
+  const data = await requestJson<{ groups: EtfSearchGroup[] }>(
     `/api/instruments/search?${params.toString()}`,
     { signal }
   );
 
-  return {
-    results: data.results,
-    etfGroups: data.groups,
-  };
+  return data.groups;
 };
 
 export const resolveEtfListingPrice = async (listing: EtfListing) => {

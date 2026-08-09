@@ -39,7 +39,7 @@ import {
   savePortfolioState,
   saveUserProfile,
   searchAssets,
-  searchOpenFigiInstruments,
+  searchEtfInstruments,
 } from "@/lib/api";
 import {
   applySaleToPortfolio,
@@ -112,7 +112,6 @@ import type {
   EtfListing,
   EtfSearchGroup,
   FxRates,
-  InstrumentSearchResult,
   InvestmentPortfolio,
   PortfolioAsset,
   PortfolioAccount,
@@ -910,7 +909,6 @@ export default function PortfolioApp({
   const [bondSwapPreview, setBondSwapPreview] = useState<BondSwapQuote | null>(null);
   const [results, setResults] = useState<AssetSearchResult[]>([]);
   const [etfResultGroups, setEtfResultGroups] = useState<EtfSearchGroup[]>([]);
-  const [instrumentSearchResults, setInstrumentSearchResults] = useState<InstrumentSearchResult[]>([]);
   const [lastAddedResult, setLastAddedResult] = useState<AssetSearchResult | null>(null);
   const [filter, setFilter] = useState("");
   const [assetSortMode, setAssetSortMode] = useState<AssetTableSortMode>("manual");
@@ -1534,7 +1532,6 @@ export default function PortfolioApp({
     if (trimmedQuery.length < minimumSearchLength) {
       setResults([]);
       setEtfResultGroups([]);
-      setInstrumentSearchResults([]);
       setSearchError(null);
       setIsSearching(false);
       return;
@@ -1548,14 +1545,13 @@ export default function PortfolioApp({
 
       try {
         if (searchMode === "etf") {
-          const discovery = await searchOpenFigiInstruments({
+          const groups = await searchEtfInstruments({
             query: trimmedQuery,
             signal: controller.signal,
           });
 
           if (!isCancelled) {
-            setEtfResultGroups(discovery.etfGroups);
-            setInstrumentSearchResults(discovery.results);
+            setEtfResultGroups(groups);
             setResults([]);
           }
           return;
@@ -1571,7 +1567,6 @@ export default function PortfolioApp({
         if (!isCancelled) {
           setResults(nextResults);
           setEtfResultGroups([]);
-          setInstrumentSearchResults([]);
 
           if (!isManualSymbolRef.current) {
             const autoResult = pickBestSearchResult(trimmedQuery, nextResults, {
@@ -1631,7 +1626,6 @@ export default function PortfolioApp({
         setSearchError(toErrorMessage(error, "Nie udalo sie pobrac wynikow."));
         setResults([]);
         setEtfResultGroups([]);
-        setInstrumentSearchResults([]);
       } finally {
         if (!isCancelled) {
           setIsSearching(false);
@@ -1663,14 +1657,13 @@ export default function PortfolioApp({
 
       try {
         if (searchMode === "etf") {
-          const discovery = await searchOpenFigiInstruments({
+          const groups = await searchEtfInstruments({
             query: trimmedSymbol,
             signal: controller.signal,
           });
 
           if (!isCancelled) {
-            setEtfResultGroups(discovery.etfGroups);
-            setInstrumentSearchResults(discovery.results);
+            setEtfResultGroups(groups);
             setResults([]);
           }
           return;
@@ -1750,7 +1743,6 @@ export default function PortfolioApp({
         if (!isCancelled) {
           setSearchError(toErrorMessage(error, "Nie udalo sie pobrac wynikow."));
           setEtfResultGroups([]);
-          setInstrumentSearchResults([]);
         }
       } finally {
         if (!isCancelled) {
@@ -2040,7 +2032,6 @@ export default function PortfolioApp({
     setLastAddedResult(null);
     setResults([]);
     setEtfResultGroups([]);
-    setInstrumentSearchResults([]);
     setSearchError(null);
   };
 
@@ -2357,7 +2348,6 @@ export default function PortfolioApp({
     }));
     setResults([]);
     setEtfResultGroups([]);
-    setInstrumentSearchResults([]);
 
     if (!selectedEtf) {
       return;
@@ -2964,7 +2954,6 @@ export default function PortfolioApp({
     setDraft(createDraftFromMode(searchMode));
     setResults([]);
     setEtfResultGroups([]);
-    setInstrumentSearchResults([]);
     setSearchError(null);
     setQuoteError(null);
   };
@@ -4250,7 +4239,6 @@ export default function PortfolioApp({
                 draft={draft}
                 results={results}
                 etfResultGroups={etfResultGroups}
-                instrumentSearchResults={instrumentSearchResults}
                 lastAddedResult={lastAddedResult}
                 isSearching={isSearching}
                 isQuoteLoading={isQuoteLoading}
@@ -4269,7 +4257,6 @@ export default function PortfolioApp({
                   setIsQuoteLoading(false);
                   setResults([]);
                   setEtfResultGroups([]);
-                  setInstrumentSearchResults([]);
                   setSearchError(null);
                   setQuoteError(null);
                   setDraft((currentDraft) => ({
@@ -4294,7 +4281,6 @@ export default function PortfolioApp({
                   setIsQuoteLoading(false);
                   setResults([]);
                   setEtfResultGroups([]);
-                  setInstrumentSearchResults([]);
                   setSearchError(null);
                   setQuoteError(null);
                   setDraft((currentDraft) => ({

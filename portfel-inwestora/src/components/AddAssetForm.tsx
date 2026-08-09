@@ -14,7 +14,6 @@ import type {
   AssetSearchResult,
   EtfListing,
   EtfSearchGroup,
-  InstrumentSearchResult,
 } from "@/types/portfolio";
 
 type AddAssetFormProps = {
@@ -23,7 +22,6 @@ type AddAssetFormProps = {
   draft: AssetDraft;
   results: AssetSearchResult[];
   etfResultGroups?: EtfSearchGroup[];
-  instrumentSearchResults?: InstrumentSearchResult[];
   lastAddedResult: AssetSearchResult | null;
   isSearching: boolean;
   isQuoteLoading: boolean;
@@ -59,7 +57,6 @@ export default function AddAssetForm({
   draft,
   results,
   etfResultGroups,
-  instrumentSearchResults,
   lastAddedResult,
   isSearching,
   isQuoteLoading,
@@ -83,16 +80,11 @@ export default function AddAssetForm({
   const hasReachedMinimumSearchLength = activeSearchText.length >= minimumSearchLength;
   const isEtfSearch = searchMode === "etf";
   const groupedEtfResults = isEtfSearch ? etfResultGroups ?? [] : [];
-  const nonEtfInstrumentResults = isEtfSearch
-    ? (instrumentSearchResults ?? []).filter((result) => !result.isEtf)
-    : [];
   const etfListingsCount = groupedEtfResults.reduce(
     (total, group) => total + group.listings.length,
     0
   );
-  const hasSearchResults = isEtfSearch
-    ? groupedEtfResults.length > 0 || nonEtfInstrumentResults.length > 0
-    : results.length > 0;
+  const hasSearchResults = isEtfSearch ? groupedEtfResults.length > 0 : results.length > 0;
   const activeSelectedEtfListing =
     isEtfSearch &&
     selectedEtfListing !== null &&
@@ -257,19 +249,19 @@ export default function AddAssetForm({
               <p className="search-panel-title">Sugestie</p>
               {hasSearchResults ? (
                 <span className="search-panel-count">
-                  {isEtfSearch ? etfListingsCount + nonEtfInstrumentResults.length : results.length}
+                  {isEtfSearch ? etfListingsCount : results.length}
                 </span>
               ) : null}
             </div>
 
             {hasActiveSearchText && isSearching ? (
               <p className="field-note">
-                {isEtfSearch ? "Wyszukuję instrumenty..." : "Szukam wynikow..."}
+                {isEtfSearch ? "Wyszukuję instrumenty ETF..." : "Szukam wynikow..."}
               </p>
             ) : null}
 
             {isEtfSearch && !hasActiveSearchText && !isSearching && !hasSearchResults ? (
-              <p className="field-note">Wpisz ticker, nazwe, FIGI lub ISIN, aby znalezc instrument.</p>
+              <p className="field-note">Wpisz ticker, nazwe, FIGI lub ISIN, aby znalezc ETF.</p>
             ) : null}
 
             {hasActiveSearchText && searchError ? (
@@ -287,7 +279,7 @@ export default function AddAssetForm({
             !hasSearchResults &&
             !searchError ? (
               <p className="field-note">
-                {isEtfSearch ? "Nie znaleziono pasujących instrumentów." : "Brak wynikow"}
+                {isEtfSearch ? "Nie znaleziono pasujących ETF-ów." : "Brak wynikow"}
               </p>
             ) : null}
 
@@ -338,32 +330,7 @@ export default function AddAssetForm({
                   </section>
                 ))}
               </div>
-            ) : null}
-
-            {isEtfSearch && nonEtfInstrumentResults.length > 0 ? (
-              <div className="search-result-list search-result-list-prominent mt-3" role="list">
-                <p className="field-note">Inne znalezione instrumenty</p>
-                {nonEtfInstrumentResults.map((result) => (
-                  <div
-                    className="search-result-card search-result-card-prominent text-left"
-                    key={result.id}
-                    role="listitem"
-                  >
-                    <TruncatedText as="p" className="search-result-title" text={result.name} />
-                    <p className="search-result-meta">
-                      {[result.symbol, result.exchange, result.currency, result.instrumentType]
-                        .filter(Boolean)
-                        .join(" · ")}
-                    </p>
-                    <small className="field-note">
-                      Ten typ nie moze jeszcze zostac dodany w formularzu ETF.
-                    </small>
-                  </div>
-                ))}
-              </div>
-            ) : null}
-
-            {!isEtfSearch && results.length > 0 ? (
+            ) : results.length > 0 ? (
               <div className="search-result-list search-result-list-prominent">
                 {results.map((result) => (
                   <button

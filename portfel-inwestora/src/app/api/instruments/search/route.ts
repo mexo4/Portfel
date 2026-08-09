@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getCurrentAccountData } from "@/lib/server/auth";
 import {
   OpenFigiSearchError,
-  searchInstruments,
+  searchEtfInstruments,
 } from "@/lib/server/openfigi";
 
 export const runtime = "nodejs";
@@ -10,9 +10,9 @@ export const runtime = "nodejs";
 const errorMessageFor = (error: OpenFigiSearchError) => {
   switch (error.code) {
     case "configuration":
-      return "Wyszukiwanie instrumentow jest chwilowo niedostepne. Skontaktuj sie z obsluga.";
+      return "Wyszukiwanie ETF jest chwilowo niedostepne. Skontaktuj sie z obsluga.";
     case "rate_limit":
-      return "Wyszukiwanie instrumentow jest chwilowo zbyt obciazone. Sprobuj za chwile.";
+      return "Wyszukiwanie ETF jest chwilowo zbyt obciazone. Sprobuj za chwile.";
     default:
       return "Nie udalo sie wyszukac instrumentow. Sprobuj ponownie.";
   }
@@ -33,11 +33,8 @@ export async function GET(request: Request) {
   }
 
   try {
-    const discovery = await searchInstruments(query, undefined, account.user.id);
-    return NextResponse.json({
-      results: discovery.results,
-      groups: discovery.etfGroups,
-    });
+    const groups = await searchEtfInstruments(query, undefined, account.user.id);
+    return NextResponse.json({ groups });
   } catch (error) {
     if (error instanceof OpenFigiSearchError) {
       const status = error.code === "rate_limit" ? 429 : error.code === "configuration" ? 503 : 502;

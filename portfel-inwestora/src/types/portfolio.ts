@@ -150,6 +150,53 @@ export type AssetSearchResult = {
   subtitle?: string;
   isin?: string;
   priceScale?: number;
+  instrumentIdentity?: InstrumentIdentity;
+};
+
+/**
+ * Stable identity returned by an instrument-discovery provider.  A ticker is a
+ * display value only: it can be reused on another exchange, so an ETF listing
+ * keeps its FIGI identifiers and venue alongside it.
+ */
+export type InstrumentIdentity = {
+  figi?: string;
+  compositeFigi?: string;
+  shareClassFigi?: string;
+  ticker: string;
+  name: string;
+  instrumentType: "ETF";
+  exchange?: string;
+  exchangeCode?: string;
+  mic?: string;
+  currency?: CurrencyCode;
+  securityType?: string;
+  securityType2?: string;
+  providerPriceSymbol?: string;
+};
+
+export type EtfPriceStatus = "available" | "unavailable" | "unchecked";
+
+export type EtfListing = AssetSearchResult & {
+  kind: "etf";
+  listingId: string;
+  exchange?: string;
+  exchangeCode?: string;
+  mic?: string;
+  securityType?: string;
+  providerPriceSymbol?: string;
+  priceStatus: EtfPriceStatus;
+  instrumentIdentity: InstrumentIdentity;
+};
+
+export type EtfSearchGroup = {
+  id: string;
+  name: string;
+  instrumentType: "ETF";
+  identity: Pick<
+    InstrumentIdentity,
+    "compositeFigi" | "shareClassFigi" | "name" | "instrumentType"
+  >;
+  listings: EtfListing[];
 };
 
 export type AssetQuote = {
@@ -194,6 +241,7 @@ export type PortfolioAsset = {
   provider: QuoteProvider;
   providerId?: string;
   priceScale?: number;
+  instrumentIdentity?: InstrumentIdentity;
   latestPrice?: number;
   previousClose?: number;
   lastUpdatedAt?: string;
@@ -218,6 +266,8 @@ export type AssetDraft = {
   provider: QuoteProvider;
   providerId?: string;
   priceScale?: number;
+  instrumentIdentity?: InstrumentIdentity;
+  marketCurrencyConfirmed?: boolean;
   latestPrice?: number;
   previousClose?: number;
 };
@@ -251,6 +301,7 @@ export type PortfolioSaleAllocation = {
   provider?: QuoteProvider;
   providerId?: string;
   priceScale?: number;
+  instrumentIdentity?: InstrumentIdentity;
   latestPrice?: number;
   previousClose?: number;
   lastUpdatedAt?: string;
@@ -275,6 +326,7 @@ export type PortfolioSale = {
   provider: QuoteProvider;
   providerId?: string;
   priceScale?: number;
+  instrumentIdentity?: InstrumentIdentity;
   bondMeta?: TreasuryBondSeries;
   realizedInvestedPln: number;
   realizedProceedsPln: number;
@@ -518,6 +570,7 @@ export type PortfolioInstrument = {
   providerId?: string;
   isin?: string;
   priceScale?: number;
+  instrumentIdentity?: InstrumentIdentity;
   metadata: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;

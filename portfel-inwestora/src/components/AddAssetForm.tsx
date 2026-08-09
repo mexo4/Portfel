@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import {
   SEARCH_MODE_OPTIONS,
   SUPPORTED_CURRENCIES,
@@ -11,6 +12,8 @@ import type {
   AssetDraft,
   AssetSearchMode,
   AssetSearchResult,
+  EtfListing,
+  EtfSearchGroup,
 } from "@/types/portfolio";
 
 type AddAssetFormProps = {
@@ -18,6 +21,7 @@ type AddAssetFormProps = {
   searchMode: AssetSearchMode;
   draft: AssetDraft;
   results: AssetSearchResult[];
+  etfResultGroups?: EtfSearchGroup[];
   lastAddedResult: AssetSearchResult | null;
   isSearching: boolean;
   isQuoteLoading: boolean;
@@ -52,6 +56,7 @@ export default function AddAssetForm({
   searchMode,
   draft,
   results,
+  etfResultGroups,
   lastAddedResult,
   isSearching,
   isQuoteLoading,
@@ -66,18 +71,55 @@ export default function AddAssetForm({
   onBuySubmit,
   onSellSubmit,
 }: AddAssetFormProps) {
+  const [selectedEtfListing, setSelectedEtfListing] = useState<EtfListing | null>(null);
   const trimmedQuery = draft.query.trim();
   const trimmedSymbol = draft.symbol.trim();
   const activeSearchText = trimmedQuery || trimmedSymbol;
   const minimumSearchLength = getMinimumSearchLength(searchMode);
   const hasActiveSearchText = activeSearchText.length > 0;
   const hasReachedMinimumSearchLength = activeSearchText.length >= minimumSearchLength;
+  const isEtfSearch = searchMode === "etf";
+  const groupedEtfResults = isEtfSearch ? etfResultGroups ?? [] : [];
+  const etfListingsCount = groupedEtfResults.reduce(
+    (total, group) => total + group.listings.length,
+    0
+  );
+  const hasSearchResults = isEtfSearch ? groupedEtfResults.length > 0 : results.length > 0;
+  const activeSelectedEtfListing =
+    isEtfSearch &&
+    selectedEtfListing !== null &&
+    selectedEtfListing.symbol.trim().toUpperCase() === trimmedSymbol.toUpperCase();
   const shouldShowSearchPanel =
-    hasActiveSearchText || results.length > 0 || isSearching;
+    !activeSelectedEtfListing &&
+    (isEtfSearch || hasActiveSearchText || hasSearchResults || isSearching);
   const shouldShowLastAdded =
     !hasActiveSearchText && !isSearching && !searchError && Boolean(lastAddedResult);
   const currencyOptions = getCurrencyOptions(draft.purchaseCurrency, draft.marketCurrency);
   const priceCurrency = draft.marketCurrency || "PLN";
+
+  const getListingLabel = (listing: EtfListing) =>
+    [
+      listing.symbol,
+      listing.exchange ?? listing.exchangeCode ?? "Giełda nieznana",
+      listing.instrumentIdentity.currency ?? "Waluta do potwierdzenia",
+    ]
+      .filter(Boolean)
+      .join(" · ");
+
+  const handleEtfListingPick = (listing: EtfListing) => {
+    setSelectedEtfListing(listing);
+    onPickResult(listing);
+  };
+
+  const handleQueryChange = (query: string) => {
+    setSelectedEtfListing(null);
+    onQueryChange(query);
+  };
+
+  const handleSymbolChange = (symbol: string) => {
+    setSelectedEtfListing(null);
+    onSymbolChange(symbol);
+  };
 
   return (
     <section className="panel">
@@ -116,11 +158,20 @@ export default function AddAssetForm({
             <span>Wyszukiwarka</span>
             <input
               value={draft.query}
-              onChange={(event) => onQueryChange(event.target.value)}
+              onChange={(event) => handleQueryChange(event.target.value)}
               placeholder={getSearchPlaceholder(searchMode)}
             />
             {isQuoteLoading ? <small className="field-note">Pobieram kurs...</small> : null}
-            {!isSearching && draft.symbol ? (
+            {isEtfSearch && !hasActiveSearchText && !selectedEtfListing ? (
+              <small className="field-note">
+                Wpisz ticker, nazwę, FIGI lub ISIN, aby wybrać konkretne notowanie.
+              </small>
+            ) : null}
+            {!isSearching && activeSelectedEtfListing ? (
+              <small className="field-note etf-selected-listing">
+                Wybrany listing: {getListingLabel(selectedEtfListing)}
+              </small>
+            ) : !isSearching && draft.symbol ? (
               <small className="field-note">Wybrany ticker: {draft.symbol}</small>
             ) : null}
             {!hasActiveSearchText && searchError ? (
@@ -137,7 +188,7 @@ export default function AddAssetForm({
           <span>Ticker / symbol</span>
           <input
             value={draft.symbol}
-            onChange={(event) => onSymbolChange(event.target.value)}
+            onChange={(event) => handleSymbolChange(event.target.value)}
             placeholder="AAPL / XTB / BTC / VWCE"
           />
         </label>
@@ -196,15 +247,21 @@ export default function AddAssetForm({
           <div className="search-stack-panel search-stack-panel-prominent">
             <div className="search-panel-header">
               <p className="search-panel-title">Sugestie</p>
-              {results.length > 0 ? (
+              {hasSearchResults ? (
                 <span className="search-panel-count">
-                  {results.length}
+                  {isEtfSearch ? etfListingsCount : results.length}
                 </span>
               ) : null}
             </div>
 
             {hasActiveSearchText && isSearching ? (
-              <p className="field-note">Szukam wynikow...</p>
+              <p className="field-note">
+                {isEtfSearch ? "Wyszukuję instrumenty ETF..." : "Szukam wynikow..."}
+              </p>
+            ) : null}
+
+            {isEtfSearch && !hasActiveSearchText && !isSearching && !hasSearchResults ? (
+              <p className="field-note">Wpisz ticker, nazwe, FIGI lub ISIN, aby znalezc ETF.</p>
             ) : null}
 
             {hasActiveSearchText && searchError ? (
@@ -219,12 +276,61 @@ export default function AddAssetForm({
 
             {!isSearching &&
             hasReachedMinimumSearchLength &&
-            results.length === 0 &&
+            !hasSearchResults &&
             !searchError ? (
-              <p className="field-note">Brak wynikow</p>
+              <p className="field-note">
+                {isEtfSearch ? "Nie znaleziono pasujących ETF-ów." : "Brak wynikow"}
+              </p>
             ) : null}
 
-            {results.length > 0 ? (
+            {isEtfSearch && groupedEtfResults.length > 0 ? (
+              <div className="etf-search-groups" aria-label="Wyniki ETF">
+                {groupedEtfResults.map((group) => (
+                  <section className="etf-search-group" key={group.id}>
+                    <header className="etf-search-group-header">
+                      <TruncatedText
+                        as="p"
+                        className="etf-search-group-title"
+                        text={group.name}
+                      />
+                      <span className="etf-type-label">ETF</span>
+                    </header>
+
+                    <div className="etf-listing-list" role="list">
+                      {group.listings.map((listing) => {
+                        const listingLabel = getListingLabel(listing);
+                        const isSelected =
+                          activeSelectedEtfListing &&
+                          selectedEtfListing?.listingId === listing.listingId;
+
+                        return (
+                          <div key={listing.listingId} role="listitem">
+                            <button
+                              type="button"
+                              className={
+                                isSelected
+                                  ? "etf-listing-choice is-selected"
+                                  : "etf-listing-choice"
+                              }
+                              onClick={() => handleEtfListingPick(listing)}
+                              aria-label={`Wybierz listing: ${listingLabel}`}
+                              aria-pressed={isSelected}
+                            >
+                              <span className="etf-listing-choice-main">{listingLabel}</span>
+                              {listing.priceStatus === "unavailable" ? (
+                                <span className="etf-listing-price-status">
+                                  Brak aktualnego kursu
+                                </span>
+                              ) : null}
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </section>
+                ))}
+              </div>
+            ) : results.length > 0 ? (
               <div className="search-result-list search-result-list-prominent">
                 {results.map((result) => (
                   <button
@@ -274,12 +380,20 @@ export default function AddAssetForm({
           label="Waluta instrumentu / ceny"
           value={draft.marketCurrency}
           currencies={currencyOptions}
-          onChange={(currency) =>
-            onDraftChange({
-              ...draft,
-              marketCurrency: currency,
-            })
-          }
+            onChange={(currency) =>
+              onDraftChange({
+                ...draft,
+                marketCurrency: currency,
+                marketCurrencyConfirmed: true,
+                instrumentIdentity:
+                  draft.kind === "etf" && draft.instrumentIdentity
+                    ? {
+                        ...draft.instrumentIdentity,
+                        currency,
+                      }
+                    : draft.instrumentIdentity,
+              })
+            }
         />
 
         <label className="field">

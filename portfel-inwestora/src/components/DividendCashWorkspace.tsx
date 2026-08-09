@@ -316,15 +316,6 @@ export default function DividendCashWorkspace({
     }),
     [baseCurrency, dividendSummary, fxRates]
   );
-  const cashBalanceInBase = useMemo(
-    () =>
-      cashBalances.reduce(
-        (total, balance) =>
-          total + convertCurrency(balance.amount, balance.currency, baseCurrency, fxRates),
-        0
-      ),
-    [baseCurrency, cashBalances, fxRates]
-  );
   const selectedDividendInstrument =
     instruments.find((instrument) => instrument.id === dividendDraft.instrumentId) ?? null;
   const selectedDividendCurrency = toCurrencyCode(
@@ -720,7 +711,7 @@ export default function DividendCashWorkspace({
         <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
           <div>
             <p className="eyebrow">Sprint 2</p>
-            <h2 className="section-title">Dywidendy i gotowka</h2>
+            <h2 className="section-title">Dywidendy</h2>
           </div>
           <p className="section-copy">
             Widok operacyjny aktywnego portfela oparty o operacje Portfolio Engine V2.
@@ -728,12 +719,6 @@ export default function DividendCashWorkspace({
         </div>
 
         <div className="metric-grid mt-6">
-          <article className="metric-card">
-            <span>Saldo gotowki</span>
-            <strong>
-              {formatCurrency(cashBalanceInBase, baseCurrency)}
-            </strong>
-          </article>
           <article className="metric-card">
             <span>Dywidendy YTD</span>
             <strong>{formatCurrency(dividendSummaryInBase.ytd, baseCurrency)}</strong>

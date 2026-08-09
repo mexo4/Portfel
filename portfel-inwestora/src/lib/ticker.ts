@@ -3,6 +3,7 @@ import type {
   AssetDraft,
   AssetKind,
   CurrencyCode,
+  InstrumentIdentity,
   PortfolioAsset,
   QuoteProvider,
 } from "@/types/portfolio";
@@ -47,9 +48,27 @@ export const toStooqGpwSymbol = (value: string) => {
 };
 
 export const getPortfolioAssetGroupKey = (
-  asset: Pick<PortfolioAsset, "kind" | "symbol">
+  asset: Pick<PortfolioAsset, "kind" | "symbol" | "instrumentIdentity">
 ) => {
   const normalizedSymbol = normalizeSymbol(asset.symbol);
+
+  if (asset.kind === "etf" && asset.instrumentIdentity) {
+    const identity: InstrumentIdentity = asset.instrumentIdentity;
+    const listingIdentity =
+      normalizeSymbol(identity.figi ?? "") ||
+      [
+        normalizeSymbol(identity.ticker || normalizedSymbol),
+        normalizeSymbol(identity.exchangeCode ?? identity.exchange ?? ""),
+        normalizeSymbol(identity.mic ?? ""),
+        normalizeSymbol(identity.currency ?? ""),
+      ]
+        .filter(Boolean)
+        .join(":");
+
+    if (listingIdentity) {
+      return `etf:${listingIdentity}`;
+    }
+  }
 
   if (asset.kind === "stock" && isGpwSymbol(normalizedSymbol)) {
     return `${asset.kind}:${getGpwTickerCore(normalizedSymbol)}`;

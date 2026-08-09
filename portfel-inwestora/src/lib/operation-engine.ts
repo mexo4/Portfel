@@ -21,6 +21,7 @@ import type {
   TagTargetType,
   InstrumentType,
   AssetKind,
+  InstrumentIdentity,
 } from "@/types/portfolio";
 
 const SUPPORTED_OPERATION_TYPES = new Set<OperationType>([
@@ -129,14 +130,22 @@ const normalizePortfolioAccountId = (portfolioId: string, accountId: string) => 
 
 export const getPortfolioInstrumentId = (
   portfolioId: string,
-  target: { kind?: AssetKind; symbol?: string }
+  target: {
+    kind?: AssetKind;
+    symbol?: string;
+    instrumentIdentity?: InstrumentIdentity;
+  }
 ) => {
   const kind = target.kind ?? "stock";
   const symbol = resolveTickerIdentity({
     symbol: target.symbol ?? "",
     kind,
   }).symbol;
-  const key = getPortfolioAssetGroupKey({ kind, symbol });
+  const key = getPortfolioAssetGroupKey({
+    kind,
+    symbol,
+    instrumentIdentity: target.instrumentIdentity,
+  });
 
   return `${portfolioId}:instrument:${key}`;
 };
@@ -299,6 +308,7 @@ const buildLegacyInstruments = (
       provider?: PortfolioInstrument["provider"];
       providerId?: string;
       priceScale?: number;
+      instrumentIdentity?: InstrumentIdentity;
     }
   ) => {
     const id = getPortfolioInstrumentId(portfolioId, source);
@@ -326,8 +336,10 @@ const buildLegacyInstruments = (
         legacyGroupKey: getPortfolioAssetGroupKey({
           kind: source.kind,
           symbol: source.symbol,
+          instrumentIdentity: source.instrumentIdentity,
         }),
       },
+      instrumentIdentity: source.instrumentIdentity,
       createdAt: now,
       updatedAt: now,
     });
@@ -346,6 +358,7 @@ const buildLegacyInstruments = (
           provider: allocation.provider,
           providerId: allocation.providerId,
           priceScale: allocation.priceScale,
+          instrumentIdentity: allocation.instrumentIdentity,
         });
       }
     });
@@ -399,6 +412,10 @@ export const normalizePortfolioInstruments = (
         priceScale:
           hasFiniteNumber(rawInstrument.priceScale) && rawInstrument.priceScale > 0
             ? rawInstrument.priceScale
+            : undefined,
+        instrumentIdentity:
+          assetKind === "etf" && asRecord(rawInstrument.instrumentIdentity).ticker
+            ? (asRecord(rawInstrument.instrumentIdentity) as InstrumentIdentity)
             : undefined,
         metadata: asRecord(rawInstrument.metadata),
         createdAt: normalizeIsoDateTime(rawInstrument.createdAt, now),

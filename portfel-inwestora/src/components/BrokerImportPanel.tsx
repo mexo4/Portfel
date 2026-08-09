@@ -14,7 +14,10 @@ import ImportPlatformPicker, {
 } from "@/components/ImportPlatformPicker";
 
 type BrokerImportPanelProps = {
-  onImport: (operations: ImportedBrokerOperation[]) => Promise<{
+  onImport: (
+    operations: ImportedBrokerOperation[],
+    onQuoteProgress: (progress: { completed: number; total: number }) => void
+  ) => Promise<{
     importedBuys: number;
     importedSells: number;
     importedDividends?: number;
@@ -23,6 +26,8 @@ type BrokerImportPanelProps = {
     skippedInvalid?: number;
     skippedDuplicates?: number;
     skippedPlanLimit?: number;
+    quoteTotal?: number;
+    missingQuotes?: number;
   }>;
 };
 
@@ -58,6 +63,7 @@ const waitForPaint = () =>
 
 export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const isImportingRef = useRef(false);
   const [selectedPlatformId, setSelectedPlatformId] = useState(
     DEFAULT_IMPORT_PLATFORM_ID
   );
@@ -68,6 +74,10 @@ export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) 
   const [parseStatus, setParseStatus] = useState<string | null>(null);
   const [isParsing, setIsParsing] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
+  const [quoteProgress, setQuoteProgress] = useState<{
+    completed: number;
+    total: number;
+  } | null>(null);
   const previewRows = useMemo(
     () => parseResult?.operations.slice(0, 6) ?? [],
     [parseResult]
@@ -75,6 +85,7 @@ export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) 
   const selectedPlatform = getImportPlatformById(selectedPlatformId);
   const preset = selectedPlatform.preset;
   const isXtbImport = selectedPlatform.id === "xtb";
+  const isBossaImport = selectedPlatform.id === "bm-bos";
   const acceptedFileTypes = isXtbImport
     ? ".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     : ".csv,text/csv";
@@ -127,7 +138,11 @@ export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) 
         );
       } else {
         setParseStatus("Mapuje kolumny CSV...");
-        result = parseBrokerOperationsCsv(await file.text(), preset);
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        const text = isBossaImport
+          ? new TextDecoder("windows-1250").decode(bytes)
+          : new TextDecoder("utf-8").decode(bytes);
+        result = parseBrokerOperationsCsv(text, preset);
       }
 
       setParseResult(result);
@@ -152,7 +167,7 @@ export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) 
     } finally {
       setIsParsing(false);
     }
-  }, [isXtbImport, preset]);
+  }, [isBossaImport, isXtbImport, preset]);
 
   useEffect(() => {
     const fileInput = fileInputRef.current;
@@ -173,17 +188,23 @@ export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) 
   }, [handleFileChange]);
 
   const handleImport = async () => {
+    if (isImportingRef.current) {
+      return;
+    }
+
     if (!parseResult || parseResult.operations.length === 0) {
       setError("Najpierw wybierz plik z operacjami.");
       return;
     }
 
+    isImportingRef.current = true;
     setIsImporting(true);
+    setQuoteProgress(null);
     setError(null);
     setSuccess(null);
 
     try {
-      const result = await onImport(parseResult.operations);
+      const result = await onImport(parseResult.operations, setQuoteProgress);
       const importedDividends = result.importedDividends ?? 0;
       const importedCashOperations = result.importedCashOperations ?? 0;
       const skippedDuplicates = result.skippedDuplicates ?? 0;
@@ -203,17 +224,27 @@ export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) 
         `Nieprawidlowe rekordy: ${skippedInvalid}.`,
         `Duplikaty: ${skippedDuplicates}.`,
         skippedPlanLimit > 0 ? `Pozycje ponad limitem planu: ${skippedPlanLimit}.` : "",
+        result.missingQuotes
+          ? `Nie udalo sie pobrac kursu dla ${result.missingQuotes} ${result.missingQuotes === 1 ? "instrumentu" : "instrumentow"}.`
+          : "",
       ]
         .filter(Boolean)
         .join(" ");
 
       setSuccess(
         importedTotal > 0
-          ? `Zaimportowano ${importedTotal} operacji: ${result.importedBuys} kupna, ${result.importedSells} sprzedazy, ${importedDividends} dywidend i ${importedCashOperations} operacji gotowkowych. ${resultDetails}`
+          ? `Zaimportowano ${importedTotal} operacji: ${result.importedBuys} kupna, ${result.importedSells} sprzedazy i ${importedDividends} dywidend. ${resultDetails}`
           : allRecordsAreDuplicates
             ? `Ten raport zostal juz zaimportowany do aktywnego portfela. ${resultDetails}`
             : `Nie dodano nowych operacji, bo wszystkie rekordy zostaly odrzucone. ${resultDetails}`
       );
+      setParseResult(null);
+      setFileName("");
+      setParseStatus(null);
+      setError(null);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
     } catch (importError) {
       setError(
         importError instanceof Error
@@ -221,9 +252,20 @@ export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) 
           : "Nie udalo sie zaimportowac operacji."
       );
     } finally {
+      isImportingRef.current = false;
       setIsImporting(false);
+      setQuoteProgress(null);
     }
   };
+
+  const importButtonLabel =
+    isImporting && quoteProgress && quoteProgress.total > 0
+      ? `Pobieranie kursow ${quoteProgress.completed}/${quoteProgress.total}...`
+      : isImporting
+        ? "Importowanie..."
+        : isParsing
+          ? "Odczytuje..."
+          : "Importuj";
 
   return (
     <section className="panel">
@@ -261,12 +303,17 @@ export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) 
             void handleImport();
           }}
         >
-          {isImporting ? "Importuje..." : isParsing ? "Odczytuje..." : "Importuj"}
+          {importButtonLabel}
         </button>
       </div>
 
       {fileName ? <p className="field-note mt-4">Wybrany plik: {fileName}</p> : null}
       {isParsing && parseStatus ? <p className="field-note mt-4">{parseStatus}</p> : null}
+      {isImporting && quoteProgress && quoteProgress.total > 0 ? (
+        <p className="field-note mt-4" aria-live="polite">
+          Pobieranie kursow {quoteProgress.completed}/{quoteProgress.total}...
+        </p>
+      ) : null}
       {error ? <p className="field-note field-note-error mt-4">{error}</p> : null}
       {success ? <p className="field-note mt-4">{success}</p> : null}
 

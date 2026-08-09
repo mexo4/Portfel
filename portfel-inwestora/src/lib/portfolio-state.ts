@@ -21,6 +21,7 @@ import type {
   BenchmarkInvestment,
   BondTransactionKind,
   FxRates,
+  InstrumentIdentity,
   InvestmentPortfolio,
   PortfolioBook,
   PortfolioAsset,
@@ -48,6 +49,56 @@ const SUPPORTED_QUOTE_PROVIDERS = new Set<QuoteProvider>([
 
 const hasFiniteNumber = (value: unknown): value is number =>
   typeof value === "number" && Number.isFinite(value);
+
+const asRecord = (value: unknown): Record<string, unknown> | null =>
+  value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+
+const cleanIdentityText = (value: unknown, maxLength = 160) =>
+  typeof value === "string" ? value.trim().slice(0, maxLength) : "";
+
+const normalizeEtfInstrumentIdentity = (
+  value: unknown,
+  fallback: { symbol: string; name: string; marketCurrency: string }
+): InstrumentIdentity | undefined => {
+  const source = asRecord(value);
+
+  if (!source) {
+    return undefined;
+  }
+
+  const ticker = normalizePortfolioSymbol(
+    cleanIdentityText(source.ticker) || fallback.symbol,
+    "etf"
+  );
+  const name = cleanIdentityText(source.name, 240) || fallback.name;
+
+  if (!ticker || !name) {
+    return undefined;
+  }
+
+  const normalizedCode = (raw: unknown) => {
+    const value = cleanIdentityText(raw);
+    return value ? normalizePortfolioSymbol(value, "etf") : undefined;
+  };
+
+  return {
+    figi: normalizedCode(source.figi),
+    compositeFigi: normalizedCode(source.compositeFigi),
+    shareClassFigi: normalizedCode(source.shareClassFigi),
+    ticker,
+    name,
+    instrumentType: "ETF",
+    exchange: cleanIdentityText(source.exchange) || undefined,
+    exchangeCode: normalizedCode(source.exchangeCode),
+    mic: normalizedCode(source.mic),
+    currency: toCurrencyCode(cleanIdentityText(source.currency) || undefined, fallback.marketCurrency),
+    securityType: cleanIdentityText(source.securityType) || undefined,
+    securityType2: cleanIdentityText(source.securityType2) || undefined,
+    providerPriceSymbol: cleanIdentityText(source.providerPriceSymbol) || undefined,
+  };
+};
 
 const convertFromPln = (
   amountPln: number,
@@ -286,14 +337,28 @@ export const normalizeStoredPortfolioAssets = (assets: PortfolioAsset[]) => {
     .map((asset) => {
       const symbol = normalizePortfolioSymbol(asset.symbol, asset.kind);
       const provider = getSafeQuoteProvider(asset.provider, asset.kind);
+      const marketCurrency = toCurrencyCode(
+        asset.marketCurrency,
+        asset.kind === "stock" || asset.kind === "bond" ? "PLN" : "USD"
+      );
+      const instrumentIdentity =
+        asset.kind === "etf"
+          ? normalizeEtfInstrumentIdentity(asset.instrumentIdentity, {
+              symbol,
+              name: asset.name || symbol,
+              marketCurrency,
+            })
+          : undefined;
 
       return {
         ...asset,
         symbol,
+        marketCurrency,
         provider,
         providerId:
           normalizePortfolioProviderId(asset.providerId, asset.kind) ??
-          getFallbackProviderId(asset.kind, provider, symbol),
+          (instrumentIdentity ? undefined : getFallbackProviderId(asset.kind, provider, symbol)),
+        instrumentIdentity,
         quantity: round(asset.quantity, 6),
         feePln: hasFiniteNumber(asset.feePln) ? round(asset.feePln, 6) : 0,
         purchaseDate: toDateInputValue(asset.purchaseDate, getTodayDateInputValue()),
@@ -377,6 +442,15 @@ const normalizePortfolioSaleAllocation = (
       hasFiniteNumber(allocation.priceScale) && allocation.priceScale > 0
         ? allocation.priceScale
         : undefined,
+    instrumentIdentity:
+      kind === "etf"
+        ? normalizeEtfInstrumentIdentity(allocation.instrumentIdentity, {
+            symbol: typeof allocation.symbol === "string" ? allocation.symbol : "",
+            name: typeof allocation.name === "string" ? allocation.name : "",
+            marketCurrency:
+              typeof allocation.marketCurrency === "string" ? allocation.marketCurrency : "USD",
+          })
+        : undefined,
     latestPrice:
       hasFiniteNumber(allocation.latestPrice) && allocation.latestPrice > 0
         ? round(allocation.latestPrice, 8)
@@ -419,12 +493,25 @@ const normalizePortfolioSale = (
   const kind = sale.kind;
   const symbol = normalizePortfolioSymbol(sale.symbol, kind);
   const provider = getSafeQuoteProvider(sale.provider, kind);
-  const assetKey = getPortfolioAssetGroupKey({ kind, symbol });
+  const marketCurrency = toCurrencyCode(
+    sale.marketCurrency,
+    kind === "stock" || kind === "bond" ? "PLN" : "USD"
+  );
+  const name = typeof sale.name === "string" && sale.name ? sale.name : symbol;
+  const instrumentIdentity =
+    kind === "etf"
+      ? normalizeEtfInstrumentIdentity(sale.instrumentIdentity, {
+          symbol,
+          name,
+          marketCurrency,
+        })
+      : undefined;
+  const assetKey = getPortfolioAssetGroupKey({ kind, symbol, instrumentIdentity });
 
   return {
     id: sale.id,
     assetKey,
-    name: typeof sale.name === "string" && sale.name ? sale.name : symbol,
+    name,
     symbol,
     kind,
     transactionKind: isBondTransactionKind(sale.transactionKind)
@@ -438,10 +525,7 @@ const normalizePortfolioSale = (
         ? toDateInputValue(sale.settlementDate, sale.saleDate ?? getTodayDateInputValue())
         : undefined,
     feePln: hasFiniteNumber(sale.feePln) ? round(sale.feePln, 6) : 0,
-    marketCurrency: toCurrencyCode(
-      sale.marketCurrency,
-      kind === "stock" || kind === "bond" ? "PLN" : "USD"
-    ),
+    marketCurrency,
     provider,
     providerId:
       normalizePortfolioProviderId(sale.providerId, kind) ??
@@ -450,6 +534,7 @@ const normalizePortfolioSale = (
       hasFiniteNumber(sale.priceScale) && sale.priceScale > 0
         ? sale.priceScale
         : undefined,
+    instrumentIdentity,
     bondMeta: normalizeTreasuryBondSeries(sale.bondMeta),
     realizedInvestedPln: hasFiniteNumber(sale.realizedInvestedPln)
       ? round(sale.realizedInvestedPln)
@@ -538,11 +623,23 @@ const normalizePortfolioAsset = (
   const kind = asset.kind;
   const symbol = normalizePortfolioSymbol(asset.symbol, kind);
   const provider = getSafeQuoteProvider(asset.provider, kind);
+  const marketCurrency = toCurrencyCode(
+    asset.marketCurrency,
+    kind === "stock" || kind === "bond" ? "PLN" : "USD"
+  );
+  const name = typeof asset.name === "string" && asset.name ? asset.name : symbol;
+  const instrumentIdentity =
+    kind === "etf"
+      ? normalizeEtfInstrumentIdentity(asset.instrumentIdentity, {
+          symbol,
+          name,
+          marketCurrency,
+        })
+      : undefined;
 
   return {
     id: asset.id,
-    name:
-      typeof asset.name === "string" && asset.name ? asset.name : symbol,
+    name,
     symbol,
     kind,
     purchaseDate: toDateInputValue(asset.purchaseDate, getTodayDateInputValue()),
@@ -566,18 +663,16 @@ const normalizePortfolioAsset = (
         ? round(asset.purchaseSettlementFxRateToPln, 8)
         : undefined,
     feePln: hasFiniteNumber(asset.feePln) ? round(asset.feePln, 6) : 0,
-    marketCurrency: toCurrencyCode(
-      asset.marketCurrency,
-      kind === "stock" || kind === "bond" ? "PLN" : "USD"
-    ),
+    marketCurrency,
     provider,
     providerId:
       normalizePortfolioProviderId(asset.providerId, kind) ??
-      getFallbackProviderId(kind, provider, symbol),
+      (instrumentIdentity ? undefined : getFallbackProviderId(kind, provider, symbol)),
     priceScale:
       hasFiniteNumber(asset.priceScale) && asset.priceScale > 0
         ? asset.priceScale
         : undefined,
+    instrumentIdentity,
     latestPrice:
       hasFiniteNumber(asset.latestPrice) && asset.latestPrice > 0
         ? round(asset.latestPrice, 8)
@@ -1087,6 +1182,7 @@ export const applySaleToPortfolio = ({
       provider: lot.provider,
       providerId: lot.providerId,
       priceScale: lot.priceScale,
+      instrumentIdentity: lot.instrumentIdentity,
       latestPrice: lot.latestPrice,
       previousClose: lot.previousClose,
       lastUpdatedAt: lot.lastUpdatedAt,
@@ -1170,6 +1266,7 @@ export const applySaleToPortfolio = ({
     provider: draft.provider,
     providerId: draft.providerId,
     priceScale: draft.priceScale,
+    instrumentIdentity: group.lots[0]?.instrumentIdentity,
     bondMeta: group.lots[0]?.bondMeta,
     realizedInvestedPln,
     realizedProceedsPln,
@@ -1258,6 +1355,7 @@ const createRestoredAssetFromAllocation = ({
       : sale.provider,
   providerId: allocation.providerId ?? sale.providerId,
   priceScale: allocation.priceScale ?? sale.priceScale,
+  instrumentIdentity: allocation.instrumentIdentity ?? sale.instrumentIdentity,
   latestPrice: allocation.latestPrice,
   previousClose: allocation.previousClose,
   lastUpdatedAt: allocation.lastUpdatedAt,

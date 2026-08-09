@@ -136,11 +136,11 @@ const IMPORT_PLATFORMS: ImportPlatformDefinition[] = [
   platform({
     id: "bm-bos",
     name: "BM BOS (Bossa)",
-    preset: "generic",
+    preset: "bossa",
     formats: ["CSV"],
-    status: "planned",
+    status: "partial",
     logoText: "BOS",
-    description: "Dedykowany mapper zostanie dopiety pozniej.",
+    description: "Rozliczenia kupna i sprzedazy z eksportu CSV.",
     searchTerms: ["bos", "bossa"],
   }),
   platform({

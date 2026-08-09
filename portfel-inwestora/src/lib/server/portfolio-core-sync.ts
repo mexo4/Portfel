@@ -107,7 +107,12 @@ export const syncPortfolioCoreTablesInTransaction = async (
       provider_id: instrument.providerId ?? null,
       isin: instrument.isin ?? null,
       price_scale: instrument.priceScale ?? null,
-      metadata_json: stringifyMetadata(instrument.metadata),
+      metadata_json: stringifyMetadata({
+        ...instrument.metadata,
+        ...(instrument.instrumentIdentity
+          ? { instrumentIdentity: instrument.instrumentIdentity }
+          : {}),
+      }),
       created_at: instrument.createdAt,
       updated_at: instrument.updatedAt,
     }))

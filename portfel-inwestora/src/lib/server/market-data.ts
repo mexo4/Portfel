@@ -1321,6 +1321,12 @@ export const fetchAssetQuoteServer = async ({
   providerId?: string;
   priceScale?: number;
 }) => {
+  // An OpenFIGI ETF listing may deliberately have no price-provider mapping.
+  // Do not turn its display ticker into a guessed quote request on another venue.
+  if (kind === "etf" && !providerId?.trim()) {
+    return null;
+  }
+
   const requestedSymbol = normalizeSymbol(symbol);
   const identity = resolveTickerIdentity({
     symbol: requestedSymbol,
@@ -1424,6 +1430,10 @@ export const fetchAssetQuoteServer = async ({
 
     if (eodhdQuote) {
       return eodhdQuote;
+    }
+
+    if (resolvedKind === "etf") {
+      return null;
     }
 
     let yahooQuote: AssetQuote | null = null;

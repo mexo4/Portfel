@@ -6,7 +6,7 @@
     "dev": "next dev --webpack",
     "build": "next build",
     "start": "next start",
-    "test": "node --experimental-default-type=module --experimental-strip-types --test tests/**/*.test.mjs",
+    "test": "node --experimental-default-type=module --experimental-strip-types --import ./tests/register-alias-loader.mjs --test tests/**/*.test.mjs",
     "migrate:sqlite-to-postgres": "node --experimental-strip-types scripts/migrate-sqlite-to-postgres.ts",
     "migrate:sqlite-to-postgres:apply": "node --experimental-strip-types scripts/migrate-sqlite-to-postgres.ts --apply",
     "lint": "eslint"

@@ -3,7 +3,6 @@
 export type AppSection =
   | "portfolio"
   | "dividends"
-  | "cash"
   | "wealth"
   | "charts"
   | "line-charts";
@@ -19,7 +18,6 @@ const SECTION_OPTIONS: Array<{
 }> = [
   { value: "portfolio", label: "Portfel" },
   { value: "dividends", label: "Dywidendy" },
-  { value: "cash", label: "Gotowka" },
   { value: "wealth", label: "Majatek" },
   { value: "charts", label: "Wykresy" },
   { value: "line-charts", label: "Wykresy liniowe" },

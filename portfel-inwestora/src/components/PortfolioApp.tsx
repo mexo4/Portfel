@@ -33,10 +33,13 @@ import {
   fetchTreasuryBondSwap,
   logoutUser,
   refreshPortfolioQuotes,
+  refreshPortfolioQuotesWithProgress,
   requestEmailVerification,
+  resolveEtfListingPrice,
   savePortfolioState,
   saveUserProfile,
   searchAssets,
+  searchEtfInstruments,
 } from "@/lib/api";
 import {
   applySaleToPortfolio,
@@ -54,13 +57,11 @@ import {
   undoPortfolioSale,
 } from "@/lib/portfolio-state";
 import {
-  convertCurrency,
   convertFromPln,
   getGroupedPortfolioAssets,
   getPortfolioSummary,
 } from "@/lib/pricing";
 import {
-  calculateCashBalances,
   ensurePortfolioCoreModel,
   getInstrumentTypeForAssetKind,
   getPortfolioInstrumentId,
@@ -108,6 +109,8 @@ import type {
   BondSwapQuote,
   BrokerCode,
   CurrencyCode,
+  EtfListing,
+  EtfSearchGroup,
   FxRates,
   InvestmentPortfolio,
   PortfolioAsset,
@@ -905,6 +908,7 @@ export default function PortfolioApp({
     useState<BondRedemptionQuote | null>(null);
   const [bondSwapPreview, setBondSwapPreview] = useState<BondSwapQuote | null>(null);
   const [results, setResults] = useState<AssetSearchResult[]>([]);
+  const [etfResultGroups, setEtfResultGroups] = useState<EtfSearchGroup[]>([]);
   const [lastAddedResult, setLastAddedResult] = useState<AssetSearchResult | null>(null);
   const [filter, setFilter] = useState("");
   const [assetSortMode, setAssetSortMode] = useState<AssetTableSortMode>("manual");
@@ -989,16 +993,6 @@ export default function PortfolioApp({
         : null,
     [activePortfolio, assets, realizedAdjustments, sales]
   );
-  const activeCashBalances = useMemo(
-    () =>
-      activePortfolioForEngine
-        ? calculateCashBalances(
-            activePortfolioForEngine.operations ?? [],
-            activePortfolioForEngine.accounts ?? []
-          )
-        : [],
-    [activePortfolioForEngine]
-  );
   const activePortfolioDividends = useMemo(
     () =>
       activePortfolioForEngine
@@ -1009,21 +1003,6 @@ export default function PortfolioApp({
   const activeDividendForecast = useMemo(
     () => buildDividendForecast(activePortfolioDividends),
     [activePortfolioDividends]
-  );
-  const activeCashBalance = useMemo(
-    () =>
-      activeCashBalances.reduce(
-        (total, balance) =>
-          total +
-          convertCurrency(
-            balance.amount,
-            balance.currency,
-            activeBaseCurrency,
-            fxRates
-          ),
-        0
-      ),
-    [activeBaseCurrency, activeCashBalances, fxRates]
   );
   const activeDividendYtd = useMemo(() => {
     const year = getTodayDateInputValue().slice(0, 4);
@@ -1188,11 +1167,6 @@ export default function PortfolioApp({
           ...corePortfolio.realizedAdjustments,
           ...buildAutomaticBondCouponAdjustments(corePortfolio.assets, corePortfolio.sales),
         ]);
-        const cashBalances = calculateCashBalances(
-          corePortfolio.operations ?? [],
-          corePortfolio.accounts ?? []
-        );
-
         return {
           portfolio,
           summary: getPortfolioSummary(
@@ -1200,8 +1174,7 @@ export default function PortfolioApp({
             corePortfolio.sales,
             portfolioEffectiveAdjustments,
             fxRates,
-            toCurrencyCode(corePortfolio.baseCurrency, "PLN"),
-            cashBalances
+            toCurrencyCode(corePortfolio.baseCurrency, "PLN")
           ),
         };
       }),
@@ -1215,19 +1188,12 @@ export default function PortfolioApp({
       ...portfolio.realizedAdjustments,
       ...buildAutomaticBondCouponAdjustments(portfolio.assets, portfolio.sales),
     ]);
-    const allCashBalances = portfolios.flatMap((portfolio) => {
-      const corePortfolio = ensurePortfolioCoreModel(portfolio);
-
-      return calculateCashBalances(corePortfolio.operations ?? [], corePortfolio.accounts ?? []);
-    });
-
     return getPortfolioSummary(
       allAssets,
       allSales,
       allRealizedAdjustments,
       fxRates,
-      activeBaseCurrency,
-      allCashBalances
+      activeBaseCurrency
     );
   }, [activeBaseCurrency, fxRates, portfolios]);
 
@@ -1565,25 +1531,42 @@ export default function PortfolioApp({
 
     if (trimmedQuery.length < minimumSearchLength) {
       setResults([]);
+      setEtfResultGroups([]);
       setSearchError(null);
       setIsSearching(false);
       return;
     }
 
     let isCancelled = false;
+    const controller = new AbortController();
     const timeoutId = window.setTimeout(async () => {
       setIsSearching(true);
       setSearchError(null);
 
       try {
+        if (searchMode === "etf") {
+          const groups = await searchEtfInstruments({
+            query: trimmedQuery,
+            signal: controller.signal,
+          });
+
+          if (!isCancelled) {
+            setEtfResultGroups(groups);
+            setResults([]);
+          }
+          return;
+        }
+
         const nextResults = await searchAssets({
           query: trimmedQuery,
           kind: draft.kind,
           mode: searchMode,
+          signal: controller.signal,
         });
 
         if (!isCancelled) {
           setResults(nextResults);
+          setEtfResultGroups([]);
 
           if (!isManualSymbolRef.current) {
             const autoResult = pickBestSearchResult(trimmedQuery, nextResults, {
@@ -1641,6 +1624,7 @@ export default function PortfolioApp({
 
         setSearchError(toErrorMessage(error, "Nie udalo sie pobrac wynikow."));
         setResults([]);
+        setEtfResultGroups([]);
       } finally {
         if (!isCancelled) {
           setIsSearching(false);
@@ -1650,6 +1634,7 @@ export default function PortfolioApp({
 
     return () => {
       isCancelled = true;
+      controller.abort();
       window.clearTimeout(timeoutId);
     };
   }, [draft.kind, draft.query, searchMode]);
@@ -1664,15 +1649,30 @@ export default function PortfolioApp({
     }
 
     let isCancelled = false;
+    const controller = new AbortController();
     const timeoutId = window.setTimeout(async () => {
       setIsSearching(true);
       setSearchError(null);
 
       try {
+        if (searchMode === "etf") {
+          const groups = await searchEtfInstruments({
+            query: trimmedSymbol,
+            signal: controller.signal,
+          });
+
+          if (!isCancelled) {
+            setEtfResultGroups(groups);
+            setResults([]);
+          }
+          return;
+        }
+
         const nextResults = await searchAssets({
           query: trimmedSymbol,
           kind: draft.kind,
           mode: searchMode,
+          signal: controller.signal,
         });
 
         if (isCancelled) {
@@ -1739,6 +1739,7 @@ export default function PortfolioApp({
       } catch (error) {
         if (!isCancelled) {
           setSearchError(toErrorMessage(error, "Nie udalo sie pobrac wynikow."));
+          setEtfResultGroups([]);
         }
       } finally {
         if (!isCancelled) {
@@ -1749,6 +1750,7 @@ export default function PortfolioApp({
 
     return () => {
       isCancelled = true;
+      controller.abort();
       window.clearTimeout(timeoutId);
     };
   }, [draft.kind, draft.symbol, searchMode]);
@@ -2024,6 +2026,7 @@ export default function PortfolioApp({
     setDraft(createDraftFromMode(mode));
     setLastAddedResult(null);
     setResults([]);
+    setEtfResultGroups([]);
     setSearchError(null);
   };
 
@@ -2266,7 +2269,11 @@ export default function PortfolioApp({
         }
 
         if (!quote) {
-          setQuoteError("Brak kursu dla wybranego aktywa. Wybierz inny wynik.");
+          setQuoteError(
+            draftQuotePreviewRequest.kind === "etf"
+              ? "Brak aktualnego kursu dla wybranego listingu. Mozesz dodac ETF z cena transakcji."
+              : "Brak kursu dla wybranego aktywa. Wybierz inny wynik."
+          );
           return;
         }
 
@@ -2306,6 +2313,9 @@ export default function PortfolioApp({
   ]);
 
   const handlePickResult = async (result: AssetSearchResult) => {
+    const selectedEtf = result.kind === "etf" && "instrumentIdentity" in result
+      ? (result as EtfListing)
+      : null;
     const normalizedResultSymbol = normalizeSymbolForMode(result.symbol, searchMode);
 
     quoteRequestSeqRef.current += 1;
@@ -2314,7 +2324,7 @@ export default function PortfolioApp({
     setIsSearching(false);
     setSearchError(null);
     setQuoteError(null);
-    setIsQuoteLoading(false);
+    setIsQuoteLoading(Boolean(selectedEtf));
     setDraft((currentDraft) => ({
       ...currentDraft,
       query: result.name,
@@ -2324,10 +2334,51 @@ export default function PortfolioApp({
       provider: result.provider,
       providerId: result.providerId,
       priceScale: result.priceScale,
+      instrumentIdentity: selectedEtf?.instrumentIdentity,
+      marketCurrencyConfirmed: Boolean(selectedEtf?.instrumentIdentity.currency),
       latestPrice: undefined,
       previousClose: undefined,
     }));
     setResults([]);
+    setEtfResultGroups([]);
+
+    if (!selectedEtf) {
+      return;
+    }
+
+    try {
+      const resolvedListing = await resolveEtfListingPrice(selectedEtf);
+
+      setDraft((currentDraft) => {
+        if (
+          currentDraft.kind !== "etf" ||
+          normalizeSymbol(currentDraft.symbol) !== normalizedResultSymbol
+        ) {
+          return currentDraft;
+        }
+
+        return {
+          ...currentDraft,
+          marketCurrency: resolvedListing.marketCurrency,
+          provider: resolvedListing.provider,
+          providerId: resolvedListing.providerId,
+          priceScale: resolvedListing.priceScale,
+          instrumentIdentity: resolvedListing.instrumentIdentity,
+          marketCurrencyConfirmed: Boolean(resolvedListing.instrumentIdentity.currency),
+        };
+      });
+      setQuoteError(
+        resolvedListing.priceStatus === "unavailable"
+          ? "Brak aktualnego kursu dla wybranego listingu. Mozesz dodac ETF z cena transakcji."
+          : null
+      );
+    } catch {
+      setQuoteError(
+        "Nie udalo sie sprawdzic aktualnego kursu. Mozesz dodac ETF z cena transakcji."
+      );
+    } finally {
+      setIsQuoteLoading(false);
+    }
   };
 
   const resolveDraftQuote = async (
@@ -2347,6 +2398,13 @@ export default function PortfolioApp({
         priceScale: draft.priceScale,
         fetchedAt: new Date().toISOString(),
       };
+    }
+
+    if (draft.kind === "etf" && !draft.providerId) {
+      setQuoteError(
+        "Brak aktualnego kursu dla wybranego listingu. Mozesz dodac ETF z cena transakcji."
+      );
+      return null;
     }
 
     const requestSeq = ++quoteRequestSeqRef.current;
@@ -2370,7 +2428,9 @@ export default function PortfolioApp({
       applyQuoteToDraftIfCurrent(
         normalizedSymbol,
         quote,
-        "Brak kursu dla tego tickera. Sprawdz symbol i sprobuj ponownie."
+        draft.kind === "etf"
+          ? "Brak aktualnego kursu dla wybranego listingu. Mozesz dodac ETF z cena transakcji."
+          : "Brak kursu dla tego tickera. Sprawdz symbol i sprobuj ponownie."
       );
 
       return quote;
@@ -2765,6 +2825,22 @@ export default function PortfolioApp({
       return;
     }
 
+    if (draft.kind === "etf" && !draft.instrumentIdentity) {
+      setSearchError("Wybierz konkretny listing ETF z wynikow wyszukiwania.");
+      return;
+    }
+
+    if (
+      draft.kind === "etf" &&
+      !draft.instrumentIdentity?.currency &&
+      !draft.marketCurrencyConfirmed
+    ) {
+      setSearchError(
+        "Potwierdz walute instrumentu przed dodaniem ETF. OpenFIGI nie zwrocil tej informacji dla wybranego listingu."
+      );
+      return;
+    }
+
     if (isQuoteLoading) {
       setQuoteError("Poczekaj na pobranie kursu przed dodaniem pozycji.");
       return;
@@ -2788,14 +2864,15 @@ export default function PortfolioApp({
       allowRetry: shouldRetryQuoteRequest(searchMode),
     });
 
-    if (!quote) {
+    if (!quote && draft.kind !== "etf") {
       return;
     }
 
-    const storedSymbol = normalizeSymbolForMode(quote.symbol ?? symbol, searchMode);
-    const storedName = quote.name?.trim() || name;
+    const storedSymbol = normalizeSymbolForMode(quote?.symbol ?? symbol, searchMode);
+    const storedName = quote?.name?.trim() || name;
     const purchaseCurrency = toCurrencyCode(draft.purchaseCurrency, "PLN");
-    const purchasePriceCurrency = toCurrencyCode(quote.marketCurrency, draft.marketCurrency);
+    const marketCurrency = quote?.marketCurrency ?? draft.marketCurrency;
+    const purchasePriceCurrency = toCurrencyCode(marketCurrency, draft.marketCurrency);
     const purchaseFxRates = await fetchHistoricalFxRates(
       [purchaseCurrency, purchasePriceCurrency],
       purchaseDate,
@@ -2819,6 +2896,7 @@ export default function PortfolioApp({
     const nextAssetGroupKey = getPortfolioAssetGroupKey({
       kind: draft.kind,
       symbol: storedSymbol,
+      instrumentIdentity: draft.instrumentIdentity,
     });
     const existingGroupOrder = assets.find(
       (asset) => getPortfolioAssetGroupKey(asset) === nextAssetGroupKey
@@ -2837,13 +2915,14 @@ export default function PortfolioApp({
       purchaseFxRateToPln,
       purchaseSettlementFxRateToPln,
       feePln: draft.feePln,
-      marketCurrency: quote.marketCurrency,
-      provider: quote.provider,
-      providerId: quote.providerId ?? draft.providerId,
-      priceScale: quote.priceScale ?? draft.priceScale,
-      latestPrice: quote.price,
-      previousClose: quote.previousClose ?? draft.previousClose,
-      lastUpdatedAt: quote.fetchedAt,
+      marketCurrency,
+      provider: quote?.provider ?? draft.provider,
+      providerId: quote?.providerId ?? draft.providerId,
+      priceScale: quote?.priceScale ?? draft.priceScale,
+      instrumentIdentity: draft.instrumentIdentity,
+      latestPrice: quote?.price,
+      previousClose: quote?.previousClose ?? draft.previousClose,
+      lastUpdatedAt: quote?.fetchedAt,
       groupOrder: existingGroupOrder ?? getNextGroupOrder(assets),
       createdAt: new Date().toISOString(),
     };
@@ -2856,14 +2935,16 @@ export default function PortfolioApp({
       symbol: storedSymbol,
       name: storedName,
       kind: draft.kind,
-      marketCurrency: quote.marketCurrency,
-      provider: quote.provider,
-      providerId: quote.providerId ?? draft.providerId,
-      priceScale: quote.priceScale ?? draft.priceScale,
+      marketCurrency,
+      provider: quote?.provider ?? draft.provider,
+      providerId: quote?.providerId ?? draft.providerId,
+      priceScale: quote?.priceScale ?? draft.priceScale,
+      instrumentIdentity: draft.instrumentIdentity,
       source: "catalog",
     });
     setDraft(createDraftFromMode(searchMode));
     setResults([]);
+    setEtfResultGroups([]);
     setSearchError(null);
     setQuoteError(null);
   };
@@ -2884,6 +2965,7 @@ export default function PortfolioApp({
     const groupKey = getPortfolioAssetGroupKey({
       kind: draft.kind,
       symbol,
+      instrumentIdentity: draft.instrumentIdentity,
     });
     const targetGroup = groupedAssets.find((group) => group.key === groupKey);
 
@@ -2979,7 +3061,10 @@ export default function PortfolioApp({
     }
   };
 
-  const handleImportBrokerOperations = async (operations: ImportedBrokerOperation[]) => {
+  const handleImportBrokerOperations = async (
+    operations: ImportedBrokerOperation[],
+    onQuoteProgress: (progress: { completed: number; total: number }) => void
+  ) => {
     if (!activePortfolio) {
       throw new Error("Brakuje aktywnego portfela do importu.");
     }
@@ -3439,15 +3524,7 @@ export default function PortfolioApp({
           }
         : portfolio
     );
-    const nextWorkspace = {
-      assets: nextAssets,
-      sales: nextSales,
-      realizedAdjustments,
-    };
-
-    replaceWorkspace(nextWorkspace);
     setIsPortfolioMutationPending(true);
-    applyPortfolioBook(nextPortfolios, activePortfolioIdRef.current);
     try {
       await queuePortfolioSave(
         {
@@ -3457,25 +3534,82 @@ export default function PortfolioApp({
         },
         true
       );
+
+      const quoteRefresh = await refreshPortfolioQuotesWithProgress(
+        nextPortfolios.flatMap((portfolio) => portfolio.assets),
+        onQuoteProgress
+      );
+      const refreshedById = new Map(
+        quoteRefresh.assets.map((asset) => [asset.id, asset])
+      );
+      const refreshedPortfolios = nextPortfolios.map((portfolio) => ({
+        ...portfolio,
+        assets: normalizeStoredPortfolioAssets(
+          portfolio.assets.map((asset) => {
+            const refreshed = refreshedById.get(asset.id);
+
+            if (!refreshed) {
+              return asset;
+            }
+
+            return {
+              ...asset,
+              symbol: refreshed.symbol ?? asset.symbol,
+              name: refreshed.name ?? asset.name,
+              latestPrice: refreshed.latestPrice,
+              previousClose: refreshed.previousClose ?? asset.previousClose,
+              marketCurrency: refreshed.marketCurrency,
+              provider: refreshed.provider,
+              providerId: refreshed.providerId ?? asset.providerId,
+              priceScale: refreshed.priceScale ?? asset.priceScale,
+              bondMeta: refreshed.bondMeta ?? asset.bondMeta,
+              lastUpdatedAt: refreshed.lastUpdatedAt,
+            };
+          })
+        ),
+        updatedAt: new Date().toISOString(),
+      }));
+      const refreshedActivePortfolio =
+        refreshedPortfolios.find(
+          (portfolio) => portfolio.id === activePortfolioIdRef.current
+        ) ?? refreshedPortfolios[0];
+      const refreshedWorkspace = {
+        assets: refreshedActivePortfolio.assets,
+        sales: refreshedActivePortfolio.sales,
+        realizedAdjustments: refreshedActivePortfolio.realizedAdjustments,
+      };
+      const refreshedBook = {
+        schemaVersion: 2 as const,
+        portfolios: refreshedPortfolios,
+        activePortfolioId: activePortfolioIdRef.current,
+      };
+
+      quoteRefreshSeqRef.current += 1;
+      ignoredPortfolioSaveFingerprintRef.current = getPortfolioSaveFingerprint(refreshedBook);
+      applyPortfolioBook(refreshedPortfolios, activePortfolioIdRef.current);
+      replaceWorkspace(refreshedWorkspace);
+      setLastSyncAt(new Date().toISOString());
+      setRefreshRevision((currentRevision) => currentRevision + 1);
+      setSyncError(null);
+
+      return {
+        importedBuys,
+        importedSells,
+        importedDividends,
+        importedCashOperations,
+        skippedSells,
+        skippedInvalid,
+        skippedDuplicates,
+        skippedPlanLimit,
+        quoteTotal: quoteRefresh.total,
+        missingQuotes: quoteRefresh.missing,
+      };
     } catch (error) {
       restoreLastPersistedPortfolioBook();
       throw error;
     } finally {
       setIsPortfolioMutationPending(false);
     }
-
-    void syncQuotes();
-
-    return {
-      importedBuys,
-      importedSells,
-      importedDividends,
-      importedCashOperations,
-      skippedSells,
-      skippedInvalid,
-      skippedDuplicates,
-      skippedPlanLimit,
-    };
   };
 
   const handleAddRealizedAdjustment = async () => {
@@ -3815,12 +3949,10 @@ export default function PortfolioApp({
         sales,
         effectiveRealizedAdjustments,
         fxRates,
-        activeBaseCurrency,
-        activeCashBalances
+        activeBaseCurrency
       ),
     [
       activeBaseCurrency,
-      activeCashBalances,
       assets,
       effectiveRealizedAdjustments,
       sales,
@@ -3963,10 +4095,6 @@ export default function PortfolioApp({
 
           <div className="portfolio-hub-total portfolio-hub-total-income mt-3">
             <article>
-              <span>Saldo gotowki</span>
-              <strong>{formatCurrency(activeCashBalance, activeBaseCurrency)}</strong>
-            </article>
-            <article>
               <span>Dywidendy YTD</span>
               <strong>{formatCurrency(activeDividendYtd, activeBaseCurrency)}</strong>
             </article>
@@ -4100,6 +4228,7 @@ export default function PortfolioApp({
                 searchMode={searchMode}
                 draft={draft}
                 results={results}
+                etfResultGroups={etfResultGroups}
                 lastAddedResult={lastAddedResult}
                 isSearching={isSearching}
                 isQuoteLoading={isQuoteLoading}
@@ -4117,6 +4246,7 @@ export default function PortfolioApp({
                   setIsSearching(trimmedQuery.length >= minimumSearchLength);
                   setIsQuoteLoading(false);
                   setResults([]);
+                  setEtfResultGroups([]);
                   setSearchError(null);
                   setQuoteError(null);
                   setDraft((currentDraft) => ({
@@ -4126,6 +4256,8 @@ export default function PortfolioApp({
                     symbol: "",
                     providerId: undefined,
                     priceScale: undefined,
+                    instrumentIdentity: undefined,
+                    marketCurrencyConfirmed: undefined,
                     latestPrice: undefined,
                     previousClose: undefined,
                   }));
@@ -4137,6 +4269,7 @@ export default function PortfolioApp({
                   setIsSearching(false);
                   setIsQuoteLoading(false);
                   setResults([]);
+                  setEtfResultGroups([]);
                   setSearchError(null);
                   setQuoteError(null);
                   setDraft((currentDraft) => ({
@@ -4146,6 +4279,8 @@ export default function PortfolioApp({
                     name: "",
                     providerId: undefined,
                     priceScale: undefined,
+                    instrumentIdentity: undefined,
+                    marketCurrencyConfirmed: undefined,
                     latestPrice: undefined,
                     previousClose: undefined,
                   }));
@@ -4210,7 +4345,7 @@ export default function PortfolioApp({
 
             <ChangePasswordPanel hasPassword={account.hasPassword} />
           </>
-        ) : activeSection === "dividends" || activeSection === "cash" ? (
+        ) : activeSection === "dividends" ? (
           activePortfolioForEngine ? (
             <DividendCashWorkspace
               activeView={activeSection}

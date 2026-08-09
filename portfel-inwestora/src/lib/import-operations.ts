@@ -9,7 +9,7 @@ import {
 import { normalizeText, round, toCurrencyCode, toDateInputValue, uniqueBy } from "@/lib/utils";
 import type { AssetKind, CurrencyCode, OperationType, QuoteProvider } from "@/types/portfolio";
 
-export type BrokerImportPreset = "auto" | "xtb" | "degiro" | "ibkr" | "mbank" | "etoro" | "trading212" | "generic";
+export type BrokerImportPreset = "auto" | "xtb" | "bossa" | "degiro" | "ibkr" | "mbank" | "etoro" | "trading212" | "generic";
 
 export type BrokerOperationSide = "buy" | "sell";
 
@@ -413,6 +413,139 @@ const parseBrokerOperationRows = (
     operations,
     skippedRows,
     warnings,
+  };
+};
+
+const parseBossaOperationRows = (rows: string[][]): BrokerImportParseResult => {
+  const cleanedRows = rows
+    .map((row) => row.map((cell) => cell.trim()))
+    .filter((row) => row.some(Boolean));
+  const headers = cleanedRows[0]?.map(normalizeHeader) ?? [];
+  const dateIndex = headers.findIndex((header) => header === "data");
+  const titleIndex = headers.findIndex(
+    (header) => header.startsWith("tytu") && header.includes("operacji")
+  );
+  const detailsIndex = headers.findIndex((header) => header.startsWith("szczeg"));
+  const amountIndex = headers.findIndex((header) => header === "kwota");
+
+  if (dateIndex < 0 || titleIndex < 0 || detailsIndex < 0 || amountIndex < 0) {
+    return {
+      operations: [],
+      skippedRows: [
+        {
+          rowNumber: 1,
+          reason: "Brakuje wymaganych kolumn eksportu BM BOS: data, tytul operacji, szczegoly i kwota.",
+        },
+      ],
+    };
+  }
+
+  const operations: ImportedBrokerOperation[] = [];
+  const skippedRows: BrokerImportParseResult["skippedRows"] = [];
+
+  cleanedRows.slice(1).forEach((values, index) => {
+    const rowNumber = index + 2;
+    const rawDate = parseDate(values[dateIndex] ?? "");
+    const title = values[titleIndex] ?? "";
+    const details = values[detailsIndex] ?? "";
+    const amount = parseNumber(values[amountIndex] ?? "");
+    const normalizedTitle = normalizeHeader(title);
+    const side = normalizedTitle.includes("kupna")
+      ? "buy"
+      : normalizedTitle.includes("sprzedazy")
+        ? "sell"
+        : inferSide(title);
+    const trade = details.match(
+      /^(.*?)\s+\(([A-Z]{2}[A-Z0-9]{9}\d)\)\s+([\d\s.,]+)\s*x\s*([\d\s.,]+)\s*([A-Z]{3})\b/i
+    );
+
+    if (!side) {
+      skippedRows.push({
+        rowNumber,
+        reason: `Nieobslugiwana operacja BM BOS: ${title || "brak tytulu"}.`,
+      });
+      return;
+    }
+
+    if (!rawDate || !trade || amount === null) {
+      skippedRows.push({
+        rowNumber,
+        reason: "Nie udalo sie odczytac daty, instrumentu, ilosci, ceny albo kwoty z operacji BM BOS.",
+      });
+      return;
+    }
+
+    const [, rawName, isin, quantityText, priceText, currencyText] = trade;
+    const quantity = parseNumber(quantityText);
+    const price = parseNumber(priceText);
+    const currency = toCurrencyCode(currencyText, "PLN");
+
+    if (!quantity || quantity <= 0 || !price || price <= 0) {
+      skippedRows.push({
+        rowNumber,
+        reason: "Operacja BM BOS ma niepoprawna ilosc albo cene.",
+      });
+      return;
+    }
+
+    const identity = resolveTickerIdentity({
+      symbol: isin,
+      kind: "stock",
+      marketCurrency: currency,
+    });
+    const resolvedCurrency = identity.marketCurrency ?? currency;
+    const transactionValue = round(Math.abs(amount), 6);
+    const marketValue = round(Math.abs(quantity * price), 6);
+    const fee = round(Math.abs(transactionValue - marketValue), 6);
+    const brokerOperationId = details.match(/\bnr\s+([A-Z0-9]+)/i)?.[1];
+    const provider = identity.provider ?? getProvider("stock", identity.symbol, resolvedCurrency);
+
+    operations.push({
+      rowNumber,
+      operationType: side === "buy" ? "BUY" : "SELL",
+      side,
+      date: rawDate,
+      symbol: identity.symbol,
+      rawSymbol: isin,
+      name: (identity.name ?? rawName.trim()) || identity.symbol,
+      kind: identity.kind ?? "stock",
+      quantity: round(Math.abs(quantity), 6),
+      price: round(Math.abs(price), 6),
+      currency: resolvedCurrency,
+      marketCurrency: resolvedCurrency,
+      cashCurrency: resolvedCurrency,
+      cashAmount: transactionValue,
+      marketAmount: marketValue,
+      feePln: fee,
+      fee,
+      amount: transactionValue,
+      transactionValue,
+      accountCurrency: resolvedCurrency,
+      broker: "BM BOS",
+      brokerOperationId,
+      importKey: [
+        "bossa",
+        brokerOperationId ?? "",
+        rawDate,
+        isin,
+        quantity,
+        price,
+        transactionValue,
+        side,
+      ].join(":"),
+      rawType: title,
+      provider,
+      providerId: identity.providerId,
+      priceScale: identity.priceScale,
+      isin: identity.isin ?? isin,
+      warnings: [],
+    });
+  });
+
+  return {
+    operations,
+    skippedRows,
+    warnings: ["BM BOS: rozpoznano rozliczenia kupna i sprzedazy z eksportu CSV."],
   };
 };
 
@@ -1158,15 +1291,19 @@ export const parseBrokerOperationsCsv = (
   text: string,
   _preset: BrokerImportPreset = "auto"
 ): BrokerImportParseResult => {
-  void _preset;
-
   const lines = text
     .replace(/^\uFEFF/, "")
     .split(/\r?\n/)
     .filter((line) => line.trim());
 
   const delimiter = getDelimiter(lines[0]);
-  return parseBrokerOperationRows(lines.map((line) => parseCsvLine(line, delimiter)));
+  const rows = lines.map((line) => parseCsvLine(line, delimiter));
+
+  if (_preset === "bossa") {
+    return parseBossaOperationRows(rows);
+  }
+
+  return parseBrokerOperationRows(rows);
 };
 
 const ZIP_EOCD_SIGNATURE = 0x06054b50;

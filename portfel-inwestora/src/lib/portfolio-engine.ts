@@ -553,8 +553,7 @@ export const calculatePortfolioSnapshot = ({
     corePortfolio.sales,
     corePortfolio.realizedAdjustments,
     fxRates,
-    baseCurrency,
-    cashBalances
+    baseCurrency
   );
   const snapshot = {
     portfolioId: corePortfolio.id,

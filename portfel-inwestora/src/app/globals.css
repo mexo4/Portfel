@@ -1956,6 +1956,158 @@ textarea {
   grid-template-columns: minmax(0, 1fr);
 }
 
+.etf-search-groups {
+  display: grid;
+  gap: 16px;
+}
+
+.etf-search-group {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  border-top: 1px solid rgba(20, 35, 48, 0.1);
+  padding-top: 16px;
+}
+
+.etf-search-group:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.etf-search-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.etf-search-group-title {
+  margin: 0;
+  color: var(--text);
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.28;
+}
+
+.etf-type-label {
+  flex: 0 0 auto;
+  border: 1px solid rgba(15, 118, 110, 0.18);
+  border-radius: 999px;
+  padding: 3px 8px;
+  color: #0f766e;
+  background: rgba(15, 118, 110, 0.06);
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  line-height: 1.2;
+}
+
+.etf-listing-list {
+  display: grid;
+  gap: 7px;
+}
+
+.etf-listing-choice {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 48px;
+  border: 1px solid rgba(20, 35, 48, 0.12);
+  border-radius: 12px;
+  padding: 10px 12px;
+  color: var(--text);
+  text-align: left;
+  background: rgba(255, 255, 255, 0.66);
+  cursor: pointer;
+  transition:
+    border-color 160ms ease,
+    background 160ms ease,
+    box-shadow 160ms ease,
+    transform 160ms ease;
+}
+
+.etf-listing-choice:hover {
+  border-color: rgba(15, 118, 110, 0.35);
+  background: rgba(240, 249, 247, 0.82);
+  box-shadow: 0 8px 18px rgba(20, 35, 48, 0.06);
+  transform: translateY(-1px);
+}
+
+.etf-listing-choice.is-selected {
+  border-color: rgba(15, 118, 110, 0.48);
+  background: rgba(226, 244, 240, 0.84);
+  box-shadow: inset 3px 0 0 #0f766e;
+}
+
+.etf-listing-choice:focus-visible {
+  outline: none;
+  border-color: rgba(15, 118, 110, 0.58);
+  box-shadow: 0 0 0 4px rgba(15, 118, 110, 0.12);
+}
+
+.etf-listing-choice-main {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-family: var(--font-mono), "IBM Plex Mono", monospace;
+  font-size: 0.82rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.35;
+}
+
+.etf-listing-price-status {
+  color: #a16207;
+  font-size: 0.76rem;
+  line-height: 1.25;
+  text-align: right;
+}
+
+.etf-selected-listing {
+  color: #0f766e;
+}
+
+@media (max-width: 639px) {
+  .etf-search-groups {
+    gap: 12px;
+  }
+
+  .etf-search-group {
+    gap: 8px;
+    padding-top: 12px;
+  }
+
+  .etf-search-group-title {
+    font-size: 0.82rem;
+  }
+
+  .etf-type-label {
+    padding: 2px 6px;
+    font-size: 0.62rem;
+  }
+
+  .etf-listing-choice {
+    min-width: 0;
+    min-height: 46px;
+    gap: 8px;
+    border-radius: 10px;
+    padding: 9px 10px;
+  }
+
+  .etf-listing-choice-main {
+    font-size: 0.72rem;
+  }
+
+  .etf-listing-price-status {
+    max-width: 84px;
+    font-size: 0.64rem;
+  }
+}
+
 .table-controls {
   display: flex;
   flex-wrap: wrap;

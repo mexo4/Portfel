@@ -154,6 +154,30 @@ export type AssetSearchResult = {
 };
 
 /**
+ * Provider-neutral discovery result. Unlike a portfolio asset this can also
+ * represent an index or another instrument type that the current form does
+ * not yet allow a user to add to a portfolio.
+ */
+export type InstrumentSearchResult = {
+  id: string;
+  symbol: string;
+  name: string;
+  instrumentType: string;
+  isEtf: boolean;
+  figi?: string;
+  compositeFigi?: string;
+  shareClassFigi?: string;
+  isin?: string;
+  exchange?: string;
+  exchangeCode?: string;
+  mic?: string;
+  currency?: CurrencyCode;
+  securityType?: string;
+  securityType2?: string;
+  marketSector?: string;
+};
+
+/**
  * Stable identity returned by an instrument-discovery provider.  A ticker is a
  * display value only: it can be reused on another exchange, so an ETF listing
  * keeps its FIGI identifiers and venue alongside it.
@@ -205,6 +229,10 @@ export type AssetQuote = {
   marketCurrency: CurrencyCode;
   provider: QuoteProvider;
   fetchedAt: string;
+  /** Date of the market session that produced this price (YYYY-MM-DD). */
+  priceDate?: string;
+  /** Provider's market timestamp when it is available. */
+  marketTimestamp?: string;
   providerId?: string;
   name?: string;
   priceScale?: number;
@@ -243,6 +271,7 @@ export type PortfolioAsset = {
   priceScale?: number;
   instrumentIdentity?: InstrumentIdentity;
   latestPrice?: number;
+  latestPriceDate?: string;
   previousClose?: number;
   lastUpdatedAt?: string;
   groupOrder?: number;
@@ -269,6 +298,7 @@ export type AssetDraft = {
   instrumentIdentity?: InstrumentIdentity;
   marketCurrencyConfirmed?: boolean;
   latestPrice?: number;
+  latestPriceDate?: string;
   previousClose?: number;
 };
 
@@ -303,6 +333,7 @@ export type PortfolioSaleAllocation = {
   priceScale?: number;
   instrumentIdentity?: InstrumentIdentity;
   latestPrice?: number;
+  latestPriceDate?: string;
   previousClose?: number;
   lastUpdatedAt?: string;
   groupOrder?: number;

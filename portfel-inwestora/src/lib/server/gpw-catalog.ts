@@ -12,14 +12,12 @@ import type { AssetSearchResult } from "@/types/portfolio";
 type PersistedCatalogItem = {
   symbol: string;
   name: string;
-  price?: number | null;
 };
 
 type GpwCatalogItem = {
   symbol: string;
   symbolCore: string;
   name: string;
-  price: number | null;
   normalizedSymbol: string;
   normalizedName: string;
   normalizedHaystack: string;
@@ -60,21 +58,7 @@ const LOCAL_GPW_ITEM_BY_CORE = new Map(
   ])
 );
 
-const parsePrice = (value?: string | number | null) => {
-  if (typeof value === "number") {
-    return Number.isFinite(value) && value > 0 ? value : null;
-  }
-
-  const normalized = value
-    ?.replaceAll("*", "")
-    .replace(/\s+/g, "")
-    .replace(",", ".");
-  const parsed = Number(normalized);
-
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
-};
-
-const createCatalogItem = (symbol: string, name: string, price?: number | null): GpwCatalogItem => {
+const createCatalogItem = (symbol: string, name: string): GpwCatalogItem => {
   const symbolCore = getSymbolCore(symbol);
   const localCatalogItem = LOCAL_GPW_ITEM_BY_CORE.get(symbolCore);
   const displaySymbol = localCatalogItem
@@ -88,7 +72,6 @@ const createCatalogItem = (symbol: string, name: string, price?: number | null):
     symbol: displaySymbol,
     symbolCore,
     name: displayName,
-    price: parsePrice(price),
     normalizedSymbol,
     normalizedName,
     normalizedHaystack: normalizeText(
@@ -101,14 +84,14 @@ const createCatalogItem = (symbol: string, name: string, price?: number | null):
 };
 
 const createSnapshot = (
-  items: Array<{ symbol: string; name: string; price?: number | null }>,
+  items: Array<{ symbol: string; name: string }>,
   updatedAt: string,
   source: GpwCatalogSnapshot["source"]
 ): GpwCatalogSnapshot => ({
   items: uniqueBy(
     items
       .filter((item) => item.symbol.trim() && item.name.trim())
-      .map((item) => createCatalogItem(item.symbol, item.name, item.price)),
+      .map((item) => createCatalogItem(item.symbol, item.name)),
     (item) => item.symbolCore
   ),
   updatedAt,
@@ -120,7 +103,6 @@ const bootstrapSnapshot = (): GpwCatalogSnapshot =>
     LOCAL_STOCK_CATALOG.filter((item) => isGpwCatalogSymbol(item.symbol)).map((item) => ({
       symbol: item.symbol,
       name: item.name,
-      price: null,
     })),
     new Date(0).toISOString(),
     "bootstrap"
@@ -131,9 +113,6 @@ const isFresh = (updatedAt: string, ttlMs = GPW_CATALOG_REFRESH_TTL_MS) => {
   if (!Number.isFinite(timestamp)) return false;
   return Date.now() - timestamp < ttlMs;
 };
-
-const hasSnapshotPrices = (snapshot: GpwCatalogSnapshot) =>
-  snapshot.items.some((item) => typeof item.price === "number" && item.price > 0);
 
 const loadSnapshotFromDb = async () => {
   const row = await queryOne<CacheRow>(
@@ -168,7 +147,6 @@ const persistSnapshot = (snapshot: GpwCatalogSnapshot) =>
       items: snapshot.items.map((item) => ({
         symbol: item.symbol,
         name: item.name,
-        price: item.price,
       })),
     },
     snapshot.updatedAt
@@ -195,8 +173,6 @@ const parseMarkdownRows = (content: string) => {
   for (const match of content.matchAll(STOOQ_ROW_MARKDOWN_PATTERN)) {
     const symbol = match[1]?.trim().toUpperCase();
     const name = match[2]?.trim();
-    const price = parsePrice(match[3]);
-
     if (!symbol || !name) {
       continue;
     }
@@ -204,7 +180,6 @@ const parseMarkdownRows = (content: string) => {
     items.push({
       symbol: `${symbol}.WA`,
       name,
-      price,
     });
   }
 
@@ -226,7 +201,6 @@ const parseHtmlRows = (content: string) => {
     items.push({
       symbol: `${symbol}.WA`,
       name,
-      price: null,
     });
   }
 
@@ -321,7 +295,7 @@ const getAvailableSnapshot = async () => {
   const snapshot = await getLoadedSnapshot();
 
   if (snapshot) {
-    if (!isFresh(snapshot.updatedAt) || !hasSnapshotPrices(snapshot)) {
+    if (!isFresh(snapshot.updatedAt)) {
       void refreshSnapshotInBackground();
     }
 
@@ -384,29 +358,6 @@ export const findGpwCatalogEntry = async (symbol: string) => {
 
   const snapshot = await getAvailableSnapshot();
   return snapshot.items.find((item) => item.symbolCore === symbolCore) ?? null;
-};
-
-export const findGpwCatalogEntryWithPrice = async (symbol: string) => {
-  const symbolCore = getSymbolCore(symbol);
-
-  if (!symbolCore) {
-    return null;
-  }
-
-  const snapshot = await getAvailableSnapshot();
-  const currentEntry = snapshot.items.find((item) => item.symbolCore === symbolCore) ?? null;
-
-  if (currentEntry?.price) {
-    return currentEntry;
-  }
-
-  const refreshedSnapshot = await refreshSnapshotInBackground();
-
-  if (!refreshedSnapshot) {
-    return currentEntry;
-  }
-
-  return refreshedSnapshot.items.find((item) => item.symbolCore === symbolCore) ?? currentEntry;
 };
 
 export const warmGpwCatalog = async () => {

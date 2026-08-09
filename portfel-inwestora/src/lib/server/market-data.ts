@@ -7,7 +7,6 @@ import {
 import { fetchYahooQuote, searchYahooStocks } from "@/lib/server/yahoo";
 import {
   findGpwCatalogEntry,
-  findGpwCatalogEntryWithPrice,
   searchGpwCatalog,
   warmGpwCatalog,
 } from "@/lib/server/gpw-catalog";
@@ -85,6 +84,14 @@ type BinanceTickerResponse = {
 type StooqHistorySnapshot = {
   price: number;
   previousClose?: number;
+  priceDate: string;
+  marketTimestamp?: string;
+};
+
+type StooqLiveSnapshot = {
+  price: number;
+  priceDate?: string;
+  marketTimestamp?: string;
 };
 
 const FINNHUB_API_KEY =
@@ -154,6 +161,7 @@ const STOOQ_DOMAINS = ["https://stooq.pl", "https://stooq.com"] as const;
 const STOOQ_TEXT_PROXY_URL = "https://r.jina.ai/http://stooq.pl/q/?s=";
 const STOOQ_RATE_LIMIT_PATTERN = /przekroczony\s+dzienny\s+limit\s+wywolan/i;
 const GPW_QUOTE_CACHE_TTL_MS = 30_000;
+const GPW_MARKET_CLOSE_MINUTE = 17 * 60 + 15;
 const GPW_SEARCH_FALLBACK_TIMEOUT_MS = 1_500;
 const FINNHUB_SEARCH_TIMEOUT_MS = 3_500;
 const COINGECKO_SEARCH_CACHE_TTL_MS = 60_000;
@@ -189,6 +197,118 @@ const safeFetch = async (
     clearTimeout(timeoutId);
   }
 };
+
+const logStooqDiagnostic = (payload: {
+  endpoint: "live-json" | "live-csv" | "history-csv" | "page";
+  symbol: string;
+  requestSymbol: string;
+  status?: number;
+  price?: number;
+  priceDate?: string;
+  marketTimestamp?: string;
+  accepted: boolean;
+}) => {
+  if (process.env.STOOQ_DIAGNOSTICS !== "true") {
+    return;
+  }
+
+  const providerEndpoint =
+    payload.endpoint === "history-csv"
+      ? "stooq.pl/q/d/l"
+      : payload.endpoint === "page"
+        ? "r.jina.ai/http://stooq.pl/q/"
+        : "stooq.pl/q/l";
+
+  console.info("Stooq quote diagnostic", {
+    ...payload,
+    providerEndpoint,
+  });
+};
+
+const toWarsawParts = (date: Date) => {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/Warsaw",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(date);
+  const valueFor = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((part) => part.type === type)?.value ?? "";
+
+  return {
+    date: `${valueFor("year")}-${valueFor("month")}-${valueFor("day")}`,
+    minute: Number(valueFor("hour")) * 60 + Number(valueFor("minute")),
+  };
+};
+
+const shiftUtcDate = (value: string, days: number) => {
+  const date = new Date(`${value}T12:00:00.000Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+};
+
+const getEasterSunday = (year: number) => {
+  const a = year % 19;
+  const b = Math.floor(year / 100);
+  const c = year % 100;
+  const d = Math.floor(b / 4);
+  const e = b % 4;
+  const f = Math.floor((b + 8) / 25);
+  const g = Math.floor((b - f + 1) / 3);
+  const h = (19 * a + b - d - g + 15) % 30;
+  const i = Math.floor(c / 4);
+  const k = c % 4;
+  const l = (32 + 2 * e + 2 * i - h - k) % 7;
+  const m = Math.floor((a + 11 * h + 22 * l) / 451);
+  const month = Math.floor((h + l - 7 * m + 114) / 31);
+  const day = ((h + l - 7 * m + 114) % 31) + 1;
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+};
+
+const getGpwNonTradingDays = (year: number) => {
+  const easter = getEasterSunday(year);
+  const fixed = ["01-01", "01-06", "05-01", "05-03", "08-15", "11-01", "11-11", "12-25", "12-26"];
+  const holidays = new Set(fixed.map((day) => `${year}-${day}`));
+
+  holidays.add(shiftUtcDate(easter, -2)); // Good Friday
+  holidays.add(shiftUtcDate(easter, 1)); // Easter Monday
+  holidays.add(shiftUtcDate(easter, 60)); // Corpus Christi
+
+  if (year >= 2025) {
+    holidays.add(`${year}-12-24`);
+  }
+
+  return holidays;
+};
+
+const isGpwTradingDay = (date: string) => {
+  const dayOfWeek = new Date(`${date}T12:00:00.000Z`).getUTCDay();
+  return dayOfWeek !== 0 && dayOfWeek !== 6 && !getGpwNonTradingDays(Number(date.slice(0, 4))).has(date);
+};
+
+export const getLatestCompletedGpwSessionDate = (now = new Date()) => {
+  const warsaw = toWarsawParts(now);
+  let candidate = warsaw.date;
+
+  if (warsaw.minute < GPW_MARKET_CLOSE_MINUTE) {
+    candidate = shiftUtcDate(candidate, -1);
+  }
+
+  while (!isGpwTradingDay(candidate)) {
+    candidate = shiftUtcDate(candidate, -1);
+  }
+
+  return candidate;
+};
+
+export const isFreshGpwMarketPrice = (priceDate: string | undefined, now = new Date()) =>
+  Boolean(priceDate) && priceDate === getLatestCompletedGpwSessionDate(now);
+
+const requiresFreshGpwSession = (symbol: string, fallbackCurrency: CurrencyCode) =>
+  fallbackCurrency === "PLN" || isGpwSymbol(symbol);
 
 const firstNonNull = async <T>(promises: Array<Promise<T | null>>) => {
   for (const promise of promises) {
@@ -307,17 +427,6 @@ const setCachedGpwQuote = (quote: AssetQuote) => {
   });
 };
 
-const toGpwCatalogQuote = async (
-  symbol: string,
-  catalogEntry: { price: number | null; name: string } | null
-) => {
-  if (!catalogEntry?.price) {
-    return null;
-  }
-
-  return buildGpwQuote(symbol, catalogEntry.price, catalogEntry.name);
-};
-
 const parseStooqJsonQuote = async (response: Response) => {
   try {
     const payload = (await response.json()) as StooqQuoteResponse;
@@ -328,13 +437,26 @@ const parseStooqJsonQuote = async (response: Response) => {
       return null;
     }
 
-    return round(close);
+    const priceDate =
+      typeof item?.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(item.date)
+        ? item.date
+        : undefined;
+    const marketTimestamp =
+      priceDate && typeof item?.time === "string" && /^\d{2}:\d{2}(?::\d{2})?$/.test(item.time)
+        ? `${priceDate}T${item.time}`
+        : undefined;
+
+    return {
+      price: round(close),
+      priceDate,
+      marketTimestamp,
+    } satisfies StooqLiveSnapshot;
   } catch {
     return null;
   }
 };
 
-const parseStooqCsvQuote = (csv: string) => {
+export const parseStooqCsvQuote = (csv: string): StooqLiveSnapshot | null => {
   if (containsStooqRateLimitMessage(csv)) {
     return null;
   }
@@ -349,50 +471,78 @@ const parseStooqCsvQuote = (csv: string) => {
     return null;
   }
 
-  const candidateLine =
-    lines.length > 1 && /symbol/i.test(lines[0]) ? lines[1] : lines[0];
-  const parts = candidateLine.split(",").map((part) => part.trim());
-  const close = Number(parts[6] ?? parts[4] ?? parts[parts.length - 1]);
+  const header = lines.length > 1 && /symbol/i.test(lines[0]) ? lines[0] : null;
+  const candidateLine = header ? lines[1] : lines[0];
 
-  return Number.isFinite(close) && close > 0 ? round(close) : null;
+  if (!candidateLine) {
+    return null;
+  }
+
+  const parts = candidateLine.split(",").map((part) => part.trim());
+  const columns = header?.split(",").map((column) => column.trim().toLowerCase()) ?? [];
+  const columnIndex = (name: string, fallback: number) => {
+    const index = columns.indexOf(name);
+    return index >= 0 ? index : fallback;
+  };
+  const date = parts[columnIndex("date", 1)];
+  const time = parts[columnIndex("time", 2)];
+  const close = Number(parts[columnIndex("close", 6)]);
+
+  if (!Number.isFinite(close) || close <= 0) {
+    return null;
+  }
+
+  const priceDate = /^\d{4}-\d{2}-\d{2}$/.test(date ?? "") ? date : undefined;
+  const marketTimestamp =
+    priceDate && /^\d{2}:\d{2}(?::\d{2})?$/.test(time ?? "")
+      ? `${priceDate}T${time}`
+      : undefined;
+
+  return {
+    price: round(close),
+    priceDate,
+    marketTimestamp,
+  };
 };
 
-const parseStooqHistorySnapshot = (csv: string): StooqHistorySnapshot | null => {
+export const parseStooqHistorySnapshot = (csv: string): StooqHistorySnapshot | null => {
   if (containsStooqRateLimitMessage(csv)) {
     return null;
   }
 
-  const dataLines = csv
+  const snapshots = csv
     .trim()
     .split(/\r?\n/)
     .map((line) => line.trim())
-    .filter((line) => /^\d{4}-\d{2}-\d{2},/i.test(line));
+    .filter((line) => /^\d{4}-\d{2}-\d{2},/i.test(line))
+    .map((line) => {
+      const parts = line.split(",").map((part) => part.trim());
+      return {
+        priceDate: parts[0] ?? "",
+        price: Number(parts[4]),
+      };
+    })
+    .filter(
+      (snapshot): snapshot is { priceDate: string; price: number } =>
+        /^\d{4}-\d{2}-\d{2}$/.test(snapshot.priceDate) &&
+        Number.isFinite(snapshot.price) &&
+        snapshot.price > 0
+    )
+    .sort((left, right) => left.priceDate.localeCompare(right.priceDate));
 
-  if (dataLines.length === 0) {
+  if (snapshots.length === 0) {
     return null;
   }
 
-  const lastLine = dataLines.at(-1);
+  const latest = snapshots.at(-1);
+  const previous = snapshots.length > 1 ? snapshots.at(-2) : undefined;
 
-  if (!lastLine) {
-    return null;
-  }
-
-  const lastClose = Number(lastLine.split(",")[4]);
-
-  if (!Number.isFinite(lastClose) || lastClose <= 0) {
-    return null;
-  }
-
-  const previousLine = dataLines.length > 1 ? dataLines.at(-2) : null;
-  const previousClose = previousLine ? Number(previousLine.split(",")[4]) : Number.NaN;
+  if (!latest) return null;
 
   return {
-    price: round(lastClose),
-    previousClose:
-      Number.isFinite(previousClose) && previousClose > 0
-        ? round(previousClose)
-        : undefined,
+    price: round(latest.price),
+    previousClose: previous ? round(previous.price) : undefined,
+    priceDate: latest.priceDate,
   };
 };
 
@@ -447,7 +597,8 @@ const buildGpwQuote = async (
   symbol: string,
   price: number,
   name?: string,
-  previousClose?: number
+  previousClose?: number,
+  marketData?: Pick<AssetQuote, "priceDate" | "marketTimestamp">
 ): Promise<AssetQuote> => {
   const normalizedSymbol = normalizeGpwSymbol(symbol);
   const catalogEntry = await findGpwCatalogEntry(normalizedSymbol);
@@ -460,14 +611,10 @@ const buildGpwQuote = async (
     fetchedAt: new Date().toISOString(),
     name: name?.trim() || catalogEntry?.name,
     previousClose,
+    priceDate: marketData?.priceDate,
+    marketTimestamp: marketData?.marketTimestamp,
   };
 };
-
-const getCachedGpwCatalogQuote = async (symbol: string) =>
-  toGpwCatalogQuote(symbol, await findGpwCatalogEntry(symbol));
-
-const getRefreshedGpwCatalogQuote = async (symbol: string) =>
-  toGpwCatalogQuote(symbol, await findGpwCatalogEntryWithPrice(symbol));
 
 const fetchStooqHistoryQuoteForRequestSymbol = async (
   symbol: string,
@@ -488,13 +635,35 @@ const fetchStooqHistoryQuoteForRequestSymbol = async (
   );
 
   if (!response?.ok) {
+    logStooqDiagnostic({
+      endpoint: "history-csv",
+      symbol,
+      requestSymbol,
+      status: response?.status,
+      accepted: false,
+    });
     return null;
   }
 
   const csv = await response.text();
   const snapshot = parseStooqHistorySnapshot(csv);
 
-  if (!snapshot) {
+  const accepted =
+    Boolean(snapshot) &&
+    (!requiresFreshGpwSession(symbol, fallbackCurrency) ||
+      isFreshGpwMarketPrice(snapshot?.priceDate));
+  logStooqDiagnostic({
+    endpoint: "history-csv",
+    symbol,
+    requestSymbol,
+    status: response.status,
+    price: snapshot?.price,
+    priceDate: snapshot?.priceDate,
+    marketTimestamp: snapshot?.marketTimestamp,
+    accepted,
+  });
+
+  if (!snapshot || !accepted) {
     return null;
   }
 
@@ -505,6 +674,8 @@ const fetchStooqHistoryQuoteForRequestSymbol = async (
     marketCurrency: inferCurrencyFromSymbol(symbol, fallbackCurrency),
     provider: "stooq",
     fetchedAt: new Date().toISOString(),
+    priceDate: snapshot.priceDate,
+    marketTimestamp: snapshot.marketTimestamp,
   };
 };
 
@@ -528,6 +699,13 @@ const fetchStooqLiveCsvQuote = async (
     );
 
     if (!response?.ok) {
+      logStooqDiagnostic({
+        endpoint: "live-csv",
+        symbol,
+        requestSymbol,
+        status: response?.status,
+        accepted: false,
+      });
       continue;
     }
 
@@ -537,9 +715,23 @@ const fetchStooqLiveCsvQuote = async (
       continue;
     }
 
-    const close = parseStooqCsvQuote(csv);
+    const snapshot = parseStooqCsvQuote(csv);
+    const accepted =
+      Boolean(snapshot) &&
+      (!requiresFreshGpwSession(symbol, fallbackCurrency) ||
+        isFreshGpwMarketPrice(snapshot?.priceDate));
+    logStooqDiagnostic({
+      endpoint: "live-csv",
+      symbol,
+      requestSymbol,
+      status: response.status,
+      price: snapshot?.price,
+      priceDate: snapshot?.priceDate,
+      marketTimestamp: snapshot?.marketTimestamp,
+      accepted,
+    });
 
-    if (close !== null) {
+    if (snapshot && accepted) {
       const historyQuote = await fetchStooqHistoryQuoteForRequestSymbol(
         symbol,
         requestSymbol,
@@ -549,11 +741,13 @@ const fetchStooqLiveCsvQuote = async (
 
       return {
         symbol,
-        price: close,
+        price: snapshot.price,
         previousClose: historyQuote?.previousClose,
         marketCurrency: inferCurrencyFromSymbol(symbol, fallbackCurrency),
         provider: "stooq",
         fetchedAt: new Date().toISOString(),
+        priceDate: snapshot.priceDate,
+        marketTimestamp: snapshot.marketTimestamp,
       };
     }
   }
@@ -876,9 +1070,23 @@ const fetchStooqQuote = async (
       );
 
       if (liveResponse?.ok) {
-        const close = await parseStooqJsonQuote(liveResponse);
+        const snapshot = await parseStooqJsonQuote(liveResponse);
+        const accepted =
+          Boolean(snapshot) &&
+          (!requiresFreshGpwSession(symbol, fallbackCurrency) ||
+            isFreshGpwMarketPrice(snapshot?.priceDate));
+        logStooqDiagnostic({
+          endpoint: "live-json",
+          symbol,
+          requestSymbol,
+          status: liveResponse.status,
+          price: snapshot?.price,
+          priceDate: snapshot?.priceDate,
+          marketTimestamp: snapshot?.marketTimestamp,
+          accepted,
+        });
 
-        if (close !== null) {
+        if (snapshot && accepted) {
           const historyQuote = await fetchStooqHistoryQuoteForRequestSymbol(
             symbol,
             requestSymbol,
@@ -888,13 +1096,23 @@ const fetchStooqQuote = async (
 
           return {
             symbol,
-            price: close,
+            price: snapshot.price,
             previousClose: historyQuote?.previousClose,
             marketCurrency: inferCurrencyFromSymbol(symbol, fallbackCurrency),
             provider: "stooq",
             fetchedAt: new Date().toISOString(),
+            priceDate: snapshot.priceDate,
+            marketTimestamp: snapshot.marketTimestamp,
           };
         }
+      } else {
+        logStooqDiagnostic({
+          endpoint: "live-json",
+          symbol,
+          requestSymbol,
+          status: liveResponse?.status,
+          accepted: false,
+        });
       }
 
       const csvLiveResponse = await safeFetch(
@@ -914,9 +1132,23 @@ const fetchStooqQuote = async (
           continue;
         }
 
-        const close = parseStooqCsvQuote(csv);
+        const snapshot = parseStooqCsvQuote(csv);
+        const accepted =
+          Boolean(snapshot) &&
+          (!requiresFreshGpwSession(symbol, fallbackCurrency) ||
+            isFreshGpwMarketPrice(snapshot?.priceDate));
+        logStooqDiagnostic({
+          endpoint: "live-csv",
+          symbol,
+          requestSymbol,
+          status: csvLiveResponse.status,
+          price: snapshot?.price,
+          priceDate: snapshot?.priceDate,
+          marketTimestamp: snapshot?.marketTimestamp,
+          accepted,
+        });
 
-        if (close !== null) {
+        if (snapshot && accepted) {
           const historyQuote = await fetchStooqHistoryQuoteForRequestSymbol(
             symbol,
             requestSymbol,
@@ -926,13 +1158,23 @@ const fetchStooqQuote = async (
 
           return {
             symbol,
-            price: close,
+            price: snapshot.price,
             previousClose: historyQuote?.previousClose,
             marketCurrency: inferCurrencyFromSymbol(symbol, fallbackCurrency),
             provider: "stooq",
             fetchedAt: new Date().toISOString(),
+            priceDate: snapshot.priceDate,
+            marketTimestamp: snapshot.marketTimestamp,
           };
         }
+      } else {
+        logStooqDiagnostic({
+          endpoint: "live-csv",
+          symbol,
+          requestSymbol,
+          status: csvLiveResponse?.status,
+          accepted: false,
+        });
       }
 
       const today = new Date().toISOString().slice(0, 10).replaceAll("-", "");
@@ -948,6 +1190,13 @@ const fetchStooqQuote = async (
       );
 
       if (!historyResponse?.ok) {
+        logStooqDiagnostic({
+          endpoint: "history-csv",
+          symbol,
+          requestSymbol,
+          status: historyResponse?.status,
+          accepted: false,
+        });
         continue;
       }
 
@@ -959,7 +1208,22 @@ const fetchStooqQuote = async (
 
       const snapshot = parseStooqHistorySnapshot(csv);
 
-      if (snapshot) {
+      const accepted =
+        Boolean(snapshot) &&
+        (!requiresFreshGpwSession(symbol, fallbackCurrency) ||
+          isFreshGpwMarketPrice(snapshot?.priceDate));
+      logStooqDiagnostic({
+        endpoint: "history-csv",
+        symbol,
+        requestSymbol,
+        status: historyResponse.status,
+        price: snapshot?.price,
+        priceDate: snapshot?.priceDate,
+        marketTimestamp: snapshot?.marketTimestamp,
+        accepted,
+      });
+
+      if (snapshot && accepted) {
         return {
           symbol,
           price: snapshot.price,
@@ -967,12 +1231,16 @@ const fetchStooqQuote = async (
           marketCurrency: inferCurrencyFromSymbol(symbol, fallbackCurrency),
           provider: "stooq",
           fetchedAt: new Date().toISOString(),
+          priceDate: snapshot.priceDate,
+          marketTimestamp: snapshot.marketTimestamp,
         };
       }
     }
   }
 
-  return fetchStooqPageQuote(symbol, fallbackCurrency);
+  return requiresFreshGpwSession(symbol, fallbackCurrency)
+    ? null
+    : fetchStooqPageQuote(symbol, fallbackCurrency);
 };
 
 const getGpwQuoteSymbolCandidates = async (symbol: string) => {
@@ -981,10 +1249,13 @@ const getGpwQuoteSymbolCandidates = async (symbol: string) => {
   const tickerCore = getGpwTickerCore(normalizedGpwSymbol);
   const catalogEntry = await findGpwCatalogEntry(normalizedGpwSymbol);
   const catalogMatches = tickerCore ? await searchGpwCatalog(tickerCore) : [];
+  const catalogCandidates = catalogEntry
+    ? [catalogEntry.symbol]
+    : catalogMatches.map((match) => match.symbol);
 
   return uniqueBy(
     [
-      catalogEntry?.symbol ?? "",
+      ...catalogCandidates,
       normalizedGpwSymbol,
       tickerCore ? `${tickerCore}.WA` : "",
       tickerCore ? `${tickerCore}.PL` : "",
@@ -1030,7 +1301,8 @@ const fetchGpwStooqQuoteForCandidate = async (
         normalizedGpwSymbol,
         liveQuote.price,
         liveQuote.name,
-        liveQuote.previousClose
+        liveQuote.previousClose,
+        liveQuote
       );
       setCachedGpwQuote(normalizedQuote);
       return normalizedQuote;
@@ -1043,40 +1315,11 @@ const fetchGpwStooqQuoteForCandidate = async (
         normalizedGpwSymbol,
         historyQuote.price,
         historyQuote.name,
-        historyQuote.previousClose
+        historyQuote.previousClose,
+        historyQuote
       );
       setCachedGpwQuote(normalizedQuote);
       return normalizedQuote;
-    }
-
-    const pageQuote = await fetchStooqPageQuote(
-      getStooqTickerCore(requestGpwSymbol),
-      "PLN",
-      20_000
-    );
-
-    if (pageQuote) {
-      const normalizedQuote = await buildGpwQuote(
-        normalizedGpwSymbol,
-        pageQuote.price,
-        pageQuote.name
-      );
-      setCachedGpwQuote(normalizedQuote);
-      return normalizedQuote;
-    }
-
-    const catalogQuote = await getCachedGpwCatalogQuote(normalizedGpwSymbol);
-
-    if (catalogQuote) {
-      setCachedGpwQuote(catalogQuote);
-      return catalogQuote;
-    }
-
-    const refreshedCatalogQuote = await getRefreshedGpwCatalogQuote(normalizedGpwSymbol);
-
-    if (refreshedCatalogQuote) {
-      setCachedGpwQuote(refreshedCatalogQuote);
-      return refreshedCatalogQuote;
     }
 
     return null;

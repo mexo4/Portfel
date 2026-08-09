@@ -7,6 +7,7 @@ import type {
   EtfListing,
   EtfSearchGroup,
   InstrumentIdentity,
+  InstrumentSearchResult,
 } from "@/types/portfolio";
 
 const OPENFIGI_API_ROOT = "https://api.openfigi.com/v3";
@@ -41,7 +42,7 @@ export class OpenFigiSearchError extends Error {
 }
 
 export type InstrumentSearchProvider = {
-  searchEtfs: (query: string) => Promise<EtfSearchGroup[]>;
+  search: (query: string) => Promise<InstrumentSearchResult[]>;
 };
 
 type FetchLike = typeof fetch;
@@ -69,6 +70,7 @@ const normaliseFigi = (value: string) => normalizeSymbol(value);
 
 const getSecurityType = (record: JsonRecord) => field(record, "securityType");
 const getSecurityType2 = (record: JsonRecord) => field(record, "securityType2");
+const getMarketSector = (record: JsonRecord) => field(record, "marketSector");
 
 const isEtf = (record: JsonRecord) => {
   const descriptor = normalizeText(
@@ -84,6 +86,118 @@ const toCurrency = (value: string): CurrencyCode | undefined => {
   const normalized = normalizeSymbol(value);
   return /^[A-Z]{3}$/.test(normalized) ? toCurrencyCode(normalized) : undefined;
 };
+
+const toSearchComparable = (value: string) => normalizeText(value).replaceAll(" ", "");
+
+const getOpenFigiQueryVariants = (query: string) => {
+  const normalized = query.trim().replace(/\s+/g, " ");
+  const withNumberBoundaries = normalized
+    .replace(/([\p{L}])(?=\d)/gu, "$1 ")
+    .replace(/(\d)(?=\p{L})/gu, "$1 ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const punctuationSeparated = withNumberBoundaries
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const compact = punctuationSeparated.replaceAll(" ", "");
+
+  return uniqueBy(
+    [normalized, withNumberBoundaries, punctuationSeparated, compact].filter(Boolean),
+    (variant) => variant.toLocaleLowerCase()
+  ).slice(0, 4);
+};
+
+const logOpenFigiSearchDiagnostic = (payload: {
+  query: string;
+  sentQueries: string[];
+  responses: Array<{
+    query: string;
+    status: number;
+    rawResultCount: number;
+    firstTypes: string[];
+  }>;
+  normalizedResultCount: number;
+  etfContextResultCount: number;
+}) => {
+  if (process.env.OPENFIGI_DIAGNOSTICS !== "true") {
+    return;
+  }
+
+  console.info("OpenFIGI search diagnostic", payload);
+};
+
+const toInstrumentSearchResult = (value: unknown): InstrumentSearchResult | null => {
+  const record = asRecord(value);
+
+  if (!record) {
+    return null;
+  }
+
+  const ticker = normalizeSymbol(field(record, "ticker"));
+  const name = field(record, "name", "securityDescription");
+  const figi = normaliseFigi(field(record, "figi"));
+  const compositeFigi = normaliseFigi(field(record, "compositeFIGI", "compositeFigi"));
+  const shareClassFigi = normaliseFigi(field(record, "shareClassFIGI", "shareClassFigi"));
+  const isin = normaliseFigi(field(record, "isin", "ISIN"));
+  const exchangeCode = normalizeSymbol(field(record, "exchCode", "exchangeCode"));
+  const mic = normalizeSymbol(field(record, "micCode", "mic"));
+  const currency = toCurrency(field(record, "currency"));
+  const securityType = getSecurityType(record);
+  const securityType2 = getSecurityType2(record);
+  const marketSector = getMarketSector(record);
+
+  const symbol = ticker || figi || compositeFigi || shareClassFigi || isin;
+
+  if (!symbol || !name) {
+    return null;
+  }
+
+  return {
+    id: figi || [symbol, exchangeCode, mic, currency ?? "unknown", name].join(":"),
+    symbol,
+    name,
+    instrumentType: securityType || securityType2 || marketSector || "Instrument",
+    isEtf: isEtf(record),
+    figi: figi || undefined,
+    compositeFigi: compositeFigi || undefined,
+    shareClassFigi: shareClassFigi || undefined,
+    isin: isin || undefined,
+    exchange: exchangeCode || undefined,
+    exchangeCode: exchangeCode || undefined,
+    mic: mic || undefined,
+    currency,
+    securityType: securityType || undefined,
+    securityType2: securityType2 || undefined,
+    marketSector: marketSector || undefined,
+  };
+};
+
+const getInstrumentMatchScore = (query: string, result: InstrumentSearchResult) => {
+  const compactQuery = toSearchComparable(query);
+  const symbol = toSearchComparable(result.symbol);
+  const name = toSearchComparable(result.name);
+  const identifiers = [
+    result.figi,
+    result.compositeFigi,
+    result.shareClassFigi,
+    result.isin,
+  ]
+    .filter((value): value is string => Boolean(value))
+    .map(toSearchComparable);
+
+  if (symbol === compactQuery) return 0;
+  if (identifiers.includes(compactQuery)) return 1;
+  if (name === compactQuery) return 2;
+  if (name.startsWith(compactQuery)) return 3;
+  if (name.includes(compactQuery)) return 4;
+  return 5;
+};
+
+const compareInstruments = (query: string, left: InstrumentSearchResult, right: InstrumentSearchResult) =>
+  getInstrumentMatchScore(query, left) - getInstrumentMatchScore(query, right) ||
+  left.symbol.localeCompare(right.symbol) ||
+  left.name.localeCompare(right.name);
 
 const getMatchScore = (query: string, listing: EtfListing) => {
   const normalizedQuery = normalizeSymbol(query);
@@ -227,6 +341,31 @@ export const groupEtfListings = (query: string, rawItems: unknown[]): EtfSearchG
     );
 };
 
+export const groupEtfInstrumentResults = (
+  query: string,
+  results: InstrumentSearchResult[]
+) =>
+  groupEtfListings(
+    query,
+    results
+      .filter((result) => result.isEtf)
+      .map((result) => ({
+        ticker: result.symbol,
+        name: result.name,
+        figi: result.figi,
+        compositeFIGI: result.compositeFigi,
+        shareClassFIGI: result.shareClassFigi,
+        isin: result.isin,
+        exchCode: result.exchangeCode,
+        micCode: result.mic,
+        currency: result.currency,
+        securityType: result.securityType,
+        securityType2: result.securityType2,
+        marketSector: result.marketSector,
+        securityDescription: result.isEtf ? "ETF" : undefined,
+      }))
+  );
+
 const isFigiQuery = (query: string) => /^BBG[A-Z0-9]{9,}$/i.test(query);
 const isIsinQuery = (query: string) => /^[A-Z]{2}[A-Z0-9]{9}\d$/i.test(query);
 
@@ -236,6 +375,11 @@ const parseResponse = async (response: Response) => {
   } catch {
     throw new OpenFigiSearchError("invalid_response");
   }
+};
+
+type OpenFigiRequestResult = {
+  payload: unknown;
+  status: number;
 };
 
 const requestOpenFigi = async ({
@@ -273,7 +417,10 @@ const requestOpenFigi = async ({
       throw new OpenFigiSearchError("unavailable");
     }
 
-    return parseResponse(response);
+    return {
+      payload: await parseResponse(response),
+      status: response.status,
+    } satisfies OpenFigiRequestResult;
   } catch (error) {
     if (error instanceof OpenFigiSearchError) {
       throw error;
@@ -297,15 +444,21 @@ export class OpenFigiInstrumentSearchProvider implements InstrumentSearchProvide
     this.fetcher = fetcher;
   }
 
-  async searchEtfs(query: string) {
+  private async searchRaw(query: string) {
     if (!this.apiKey) {
       throw new OpenFigiSearchError("configuration");
     }
 
     const normalizedQuery = query.trim().replace(/\s+/g, " ");
     const isIdentifier = isFigiQuery(normalizedQuery) || isIsinQuery(normalizedQuery);
-    const response = isIdentifier
-      ? await requestOpenFigi({
+    const responses: Array<{
+      query: string;
+      status: number;
+      rawItems: unknown[];
+    }> = [];
+
+    if (isIdentifier) {
+      const response = await requestOpenFigi({
           path: "/mapping",
           payload: [
             {
@@ -315,35 +468,101 @@ export class OpenFigiInstrumentSearchProvider implements InstrumentSearchProvide
           ],
           apiKey: this.apiKey,
           fetcher: this.fetcher,
-        })
-      : await requestOpenFigi({
+        });
+      if (!Array.isArray(response.payload)) {
+        throw new OpenFigiSearchError("invalid_response");
+      }
+
+      responses.push({
+        query: normalizedQuery,
+        status: response.status,
+        rawItems: (response.payload as OpenFigiMappingResponse)
+          .flatMap((item) => (Array.isArray(item.data) ? item.data : []))
+          .slice(0, OPENFIGI_MAX_RESULTS) as unknown[],
+      });
+    } else {
+      for (const variant of getOpenFigiQueryVariants(normalizedQuery)) {
+        const response = await requestOpenFigi({
           path: "/filter",
-          payload: {
-            query: normalizedQuery,
-            securityType: "ETF",
-          },
+          payload: { query: variant },
           apiKey: this.apiKey,
           fetcher: this.fetcher,
         });
-    if (isIdentifier && !Array.isArray(response)) {
-      throw new OpenFigiSearchError("invalid_response");
+
+        if (!asRecord(response.payload)) {
+          throw new OpenFigiSearchError("invalid_response");
+        }
+
+        const rawItems = ((response.payload as OpenFigiFilterResponse).data ?? []).slice(
+          0,
+          OPENFIGI_MAX_RESULTS
+        );
+        responses.push({ query: variant, status: response.status, rawItems });
+
+        const normalized = rawItems
+          .map(toInstrumentSearchResult)
+          .filter((result): result is InstrumentSearchResult => Boolean(result));
+        if (
+          normalized.some((result) => {
+            const matchScore = getInstrumentMatchScore(normalizedQuery, result);
+            return matchScore <= 3 || (!result.isEtf && matchScore < 5);
+          })
+        ) {
+          break;
+        }
+      }
     }
 
-    if (!isIdentifier && !asRecord(response)) {
-      throw new OpenFigiSearchError("invalid_response");
-    }
+    const rawItems = uniqueBy(
+      responses.flatMap((response) => response.rawItems),
+      (item) => {
+        const normalized = toInstrumentSearchResult(item);
+        return normalized?.id ?? JSON.stringify(item);
+      }
+    );
+    const normalizedResults = uniqueBy(
+      rawItems
+        .map(toInstrumentSearchResult)
+        .filter((result): result is InstrumentSearchResult => Boolean(result)),
+      (result) => result.id
+    )
+      .sort((left, right) => compareInstruments(normalizedQuery, left, right))
+      .slice(0, OPENFIGI_MAX_RESULTS);
 
-    const rawItems = isIdentifier
-      ? ((response as OpenFigiMappingResponse)
-          .flatMap((item) => (Array.isArray(item.data) ? item.data : []))
-          .slice(0, OPENFIGI_MAX_RESULTS) as unknown[])
-      : ((response as OpenFigiFilterResponse).data ?? []).slice(0, OPENFIGI_MAX_RESULTS);
+    logOpenFigiSearchDiagnostic({
+      query: normalizedQuery,
+      sentQueries: responses.map((response) => response.query),
+      responses: responses.map((response) => ({
+        query: response.query,
+        status: response.status,
+        rawResultCount: response.rawItems.length,
+        firstTypes: response.rawItems
+          .slice(0, 3)
+          .map(asRecord)
+          .filter((record): record is JsonRecord => Boolean(record))
+          .map((record) => [getSecurityType(record), getSecurityType2(record), getMarketSector(record)]
+            .filter(Boolean)
+            .join(" / ") || "unknown"),
+      })),
+      normalizedResultCount: normalizedResults.length,
+      etfContextResultCount: normalizedResults.filter((result) => result.isEtf).length,
+    });
 
-    return groupEtfListings(normalizedQuery, rawItems);
+    return normalizedResults;
   }
+
+  async search(query: string) {
+    return this.searchRaw(query);
+  }
+
 }
 
-const localSearchCache = new Map<string, { groups: EtfSearchGroup[]; expiresAt: number }>();
+export type InstrumentSearchDiscovery = {
+  results: InstrumentSearchResult[];
+  etfGroups: EtfSearchGroup[];
+};
+
+const localSearchCache = new Map<string, { result: InstrumentSearchDiscovery; expiresAt: number }>();
 const requestWindows = new Map<string, number[]>();
 const SEARCH_RATE_WINDOW_MS = 60_000;
 const SEARCH_RATE_LIMIT = 12;
@@ -366,13 +585,13 @@ const getCachedSearch = async (cacheKey: string) => {
   const memory = localSearchCache.get(cacheKey);
 
   if (memory && memory.expiresAt > Date.now()) {
-    return memory.groups;
+    return memory.result;
   }
 
-  let stored: EtfSearchGroup[] | null = null;
+  let stored: InstrumentSearchDiscovery | null = null;
 
   try {
-    stored = await getMarketCachePayload<EtfSearchGroup[]>(
+    stored = await getMarketCachePayload<InstrumentSearchDiscovery>(
       cacheKey,
       OPENFIGI_SEARCH_CACHE_TTL_MS,
       { ignoreEmptyArray: false }
@@ -384,7 +603,7 @@ const getCachedSearch = async (cacheKey: string) => {
 
   if (stored) {
     localSearchCache.set(cacheKey, {
-      groups: stored,
+      result: stored,
       expiresAt: Date.now() + OPENFIGI_SEARCH_CACHE_TTL_MS,
     });
   }
@@ -392,13 +611,13 @@ const getCachedSearch = async (cacheKey: string) => {
   return stored;
 };
 
-export const searchEtfInstruments = async (
+export const searchInstruments = async (
   query: string,
   provider: InstrumentSearchProvider = new OpenFigiInstrumentSearchProvider(),
   actorId?: string
 ) => {
   const normalizedQuery = query.trim().replace(/\s+/g, " ");
-  const cacheKey = `openfigi:etf:search:${normalizeText(normalizedQuery)}`;
+  const cacheKey = `openfigi:instrument:search:${toSearchComparable(normalizedQuery)}`;
   const cached = await getCachedSearch(cacheKey);
 
   if (cached) {
@@ -409,17 +628,21 @@ export const searchEtfInstruments = async (
     enforceOpenFigiSearchRateLimit(actorId);
   }
 
-  const groups = await provider.searchEtfs(normalizedQuery);
+  const results = await provider.search(normalizedQuery);
+  const result: InstrumentSearchDiscovery = {
+    results,
+    etfGroups: groupEtfInstrumentResults(normalizedQuery, results),
+  };
   localSearchCache.set(cacheKey, {
-    groups,
+    result,
     expiresAt: Date.now() + OPENFIGI_SEARCH_CACHE_TTL_MS,
   });
   try {
-    await setMarketCachePayload(cacheKey, groups);
+    await setMarketCachePayload(cacheKey, result);
   } catch {
     // The in-memory cache remains useful for the current runtime instance.
   }
-  return groups;
+  return result;
 };
 
 const getEodhdTicker = (providerId: string | undefined, fallbackSymbol: string) =>

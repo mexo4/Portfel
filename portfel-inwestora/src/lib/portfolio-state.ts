@@ -50,6 +50,9 @@ const SUPPORTED_QUOTE_PROVIDERS = new Set<QuoteProvider>([
 const hasFiniteNumber = (value: unknown): value is number =>
   typeof value === "number" && Number.isFinite(value);
 
+const isMarketPriceDate = (value: unknown): value is string =>
+  typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value);
+
 const asRecord = (value: unknown): Record<string, unknown> | null =>
   value !== null && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -455,6 +458,9 @@ const normalizePortfolioSaleAllocation = (
       hasFiniteNumber(allocation.latestPrice) && allocation.latestPrice > 0
         ? round(allocation.latestPrice, 8)
         : undefined,
+    latestPriceDate: isMarketPriceDate(allocation.latestPriceDate)
+      ? allocation.latestPriceDate
+      : undefined,
     previousClose:
       hasFiniteNumber(allocation.previousClose) && allocation.previousClose > 0
         ? round(allocation.previousClose, 8)
@@ -677,6 +683,9 @@ const normalizePortfolioAsset = (
       hasFiniteNumber(asset.latestPrice) && asset.latestPrice > 0
         ? round(asset.latestPrice, 8)
         : undefined,
+    latestPriceDate: isMarketPriceDate(asset.latestPriceDate)
+      ? asset.latestPriceDate
+      : undefined,
     previousClose:
       hasFiniteNumber(asset.previousClose) && asset.previousClose > 0
         ? round(asset.previousClose, 8)
@@ -1184,6 +1193,7 @@ export const applySaleToPortfolio = ({
       priceScale: lot.priceScale,
       instrumentIdentity: lot.instrumentIdentity,
       latestPrice: lot.latestPrice,
+      latestPriceDate: lot.latestPriceDate,
       previousClose: lot.previousClose,
       lastUpdatedAt: lot.lastUpdatedAt,
       groupOrder: lot.groupOrder,
@@ -1357,6 +1367,7 @@ const createRestoredAssetFromAllocation = ({
   priceScale: allocation.priceScale ?? sale.priceScale,
   instrumentIdentity: allocation.instrumentIdentity ?? sale.instrumentIdentity,
   latestPrice: allocation.latestPrice,
+  latestPriceDate: allocation.latestPriceDate,
   previousClose: allocation.previousClose,
   lastUpdatedAt: allocation.lastUpdatedAt,
   groupOrder: allocation.groupOrder ?? fallbackGroupOrder,

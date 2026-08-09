@@ -2,9 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   groupEtfListings,
+  groupEtfInstrumentResults,
   OpenFigiInstrumentSearchProvider,
   OpenFigiSearchError,
-  searchEtfInstruments,
+  searchInstruments,
 } from "../src/lib/server/openfigi.ts";
 import { fetchAssetQuoteServer } from "../src/lib/server/market-data.ts";
 import { getPortfolioAssetGroupKey } from "../src/lib/ticker.ts";
@@ -80,7 +81,7 @@ test("keeps an OpenFIGI listing when the v3 response has no currency and marks i
   assert.equal(group.listings[0].marketCurrency, "USD");
 });
 
-test("uses OpenFIGI v3 filter with the API key only in a server-side header", async () => {
+test("uses an unfiltered OpenFIGI v3 search with the API key only in a server-side header", async () => {
   let requestedUrl = "";
   let requestInit;
   const provider = new OpenFigiInstrumentSearchProvider(
@@ -105,12 +106,13 @@ test("uses OpenFIGI v3 filter with the API key only in a server-side header", as
     }
   );
 
-  const groups = await provider.searchEtfs(" alpha ");
+  const results = await provider.search(" alpha ");
 
   assert.equal(requestedUrl, "https://api.openfigi.com/v3/filter");
   assert.equal(requestInit.headers["X-OPENFIGI-APIKEY"], "server-only-key");
-  assert.deepEqual(JSON.parse(requestInit.body), { query: "alpha", securityType: "ETF" });
-  assert.equal(groups[0].listings[0].symbol, "ALPH");
+  assert.deepEqual(JSON.parse(requestInit.body), { query: "alpha" });
+  assert.equal(results[0].symbol, "ALPH");
+  assert.equal(results[0].isEtf, true);
 });
 
 test("uses the v3 mapping endpoint for FIGI and reports configuration or provider limits safely", async () => {
@@ -133,11 +135,11 @@ test("uses the v3 mapping endpoint for FIGI and reports configuration or provide
     }
   );
 
-  const groups = await mappingProvider.searchEtfs("BBG000000099");
-  assert.equal(groups[0].listings[0].instrumentIdentity.figi, "BBG000000099");
+  const results = await mappingProvider.search("BBG000000099");
+  assert.equal(results[0].figi, "BBG000000099");
 
   await assert.rejects(
-    () => new OpenFigiInstrumentSearchProvider("").searchEtfs("ALPHA"),
+    () => new OpenFigiInstrumentSearchProvider("").search("ALPHA"),
     (error) => error instanceof OpenFigiSearchError && error.code === "configuration"
   );
 
@@ -146,33 +148,147 @@ test("uses the v3 mapping endpoint for FIGI and reports configuration or provide
       new OpenFigiInstrumentSearchProvider(
         "server-only-key",
         async () => new Response("{}", { status: 429 })
-      ).searchEtfs("ALPHA"),
+      ).search("ALPHA"),
     (error) => error instanceof OpenFigiSearchError && error.code === "rate_limit"
   );
 });
 
-test("caches a normalized ETF search without caching a price", async () => {
+test("caches generic discovery separately from prices", async () => {
   let calls = 0;
   const provider = {
-    searchEtfs: async () => {
+    search: async () => {
       calls += 1;
-      return groupEtfListings("CACHEETF", [
-        listing({
-          ticker: "CACHEETF",
+      return [
+        {
+          id: "BBG000000111",
+          symbol: "CACHEETF",
+          name: "Cache ETF",
+          instrumentType: "ETF",
+          isEtf: true,
           figi: "BBG000000111",
-          exchCode: "US",
+          exchangeCode: "US",
           currency: "USD",
-        }),
-      ]);
+          securityType: "ETF",
+        },
+      ];
     },
   };
 
-  const first = await searchEtfInstruments("cache-etf-test-unique", provider);
-  const second = await searchEtfInstruments("cache-etf-test-unique", provider);
+  const first = await searchInstruments("cache-etf-test-unique", provider);
+  const second = await searchInstruments("cache-etf-test-unique", provider);
 
   assert.equal(calls, 1);
-  assert.equal(first[0].listings[0].priceStatus, "unchecked");
+  assert.equal(first.etfGroups[0].listings[0].priceStatus, "unchecked");
   assert.deepEqual(second, first);
+});
+
+test("retains an index in generic OpenFIGI results while grouping only ETF listings", async () => {
+  const requestedQueries = [];
+  const provider = new OpenFigiInstrumentSearchProvider(
+    "server-only-key",
+    async (_url, init) => {
+      const { query } = JSON.parse(init.body);
+      requestedQueries.push(query);
+
+      if (query === "S&P500") {
+        return new Response(JSON.stringify({ data: [] }), { status: 200 });
+      }
+
+      return new Response(
+        JSON.stringify({
+          data: [
+            {
+              ticker: "SPX",
+              name: "S&P 500 Index",
+              figi: "BBG000BDTBL9",
+              securityType: "Index",
+              securityType2: "Equity Index",
+              marketSector: "Index",
+            },
+            listing({
+              ticker: "SPY",
+              figi: "BBG000BDTBL8",
+              exchCode: "US",
+              currency: "USD",
+              name: "SPDR S&P 500 ETF Trust",
+            }),
+          ],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    }
+  );
+
+  const results = await provider.search("S&P500");
+  const groups = groupEtfInstrumentResults("S&P500", results);
+
+  assert.deepEqual(requestedQueries, ["S&P500", "S&P 500"]);
+  assert.equal(results.find((result) => result.symbol === "SPX")?.instrumentType, "Index");
+  assert.equal(results.find((result) => result.symbol === "SPX")?.isEtf, false);
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].listings[0].symbol, "SPY");
+});
+
+test("normalizes punctuation, spaces, and letter-number boundaries without instrument aliases", async () => {
+  const indexResult = {
+    ticker: "SPX",
+    name: "S&P 500 Index",
+    figi: "BBG000BDTBL9",
+    securityType: "Index",
+  };
+  const variants = {
+    "S&P 500": ["S&P 500"],
+    "S&P500": ["S&P500", "S&P 500"],
+    sp500: ["sp500", "sp 500"],
+  };
+
+  for (const [query, expectedRequests] of Object.entries(variants)) {
+    const requestedQueries = [];
+    const provider = new OpenFigiInstrumentSearchProvider(
+      "server-only-key",
+      async (_url, init) => {
+        const { query: sentQuery } = JSON.parse(init.body);
+        requestedQueries.push(sentQuery);
+        return new Response(
+          JSON.stringify({ data: sentQuery === expectedRequests.at(-1) ? [indexResult] : [] }),
+          { status: 200 }
+        );
+      }
+    );
+
+    const results = await provider.search(query);
+    assert.deepEqual(requestedQueries, expectedRequests);
+    assert.equal(results[0].symbol, "SPX");
+    assert.equal(results[0].isEtf, false);
+  }
+});
+
+test("keeps direct ticker results for ETF and non-ETF queries without a security type filter", async () => {
+  const symbolsByQuery = {
+    SPY: [listing({ ticker: "SPY", figi: "BBG000BDTBL8", exchCode: "US", currency: "USD" })],
+    QQQ: [listing({ ticker: "QQQ", figi: "BBG000BDTBL7", exchCode: "US", currency: "USD" })],
+    VWCE: [listing({ ticker: "VWCE", figi: "BBG000BDTBL6", exchCode: "GY", currency: "EUR" })],
+    SXR8: [listing({ ticker: "SXR8", figi: "BBG000BDTBL5", exchCode: "GY", currency: "EUR" })],
+  };
+  const payloads = [];
+  const provider = new OpenFigiInstrumentSearchProvider(
+    "server-only-key",
+    async (_url, init) => {
+      const payload = JSON.parse(init.body);
+      payloads.push(payload);
+      return new Response(JSON.stringify({ data: symbolsByQuery[payload.query] ?? [] }), {
+        status: 200,
+      });
+    }
+  );
+
+  for (const query of Object.keys(symbolsByQuery)) {
+    const results = await provider.search(query);
+    assert.equal(results[0].symbol, query);
+    assert.equal(results[0].isEtf, true);
+  }
+
+  assert.equal(payloads.every((payload) => !Object.hasOwn(payload, "securityType")), true);
 });
 
 test("keeps ETF listings separate and never guesses a quote without a resolved price symbol", async () => {

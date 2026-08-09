@@ -39,7 +39,7 @@ import {
   savePortfolioState,
   saveUserProfile,
   searchAssets,
-  searchEtfInstruments,
+  searchOpenFigiInstruments,
 } from "@/lib/api";
 import {
   applySaleToPortfolio,
@@ -112,6 +112,7 @@ import type {
   EtfListing,
   EtfSearchGroup,
   FxRates,
+  InstrumentSearchResult,
   InvestmentPortfolio,
   PortfolioAsset,
   PortfolioAccount,
@@ -909,6 +910,7 @@ export default function PortfolioApp({
   const [bondSwapPreview, setBondSwapPreview] = useState<BondSwapQuote | null>(null);
   const [results, setResults] = useState<AssetSearchResult[]>([]);
   const [etfResultGroups, setEtfResultGroups] = useState<EtfSearchGroup[]>([]);
+  const [instrumentSearchResults, setInstrumentSearchResults] = useState<InstrumentSearchResult[]>([]);
   const [lastAddedResult, setLastAddedResult] = useState<AssetSearchResult | null>(null);
   const [filter, setFilter] = useState("");
   const [assetSortMode, setAssetSortMode] = useState<AssetTableSortMode>("manual");
@@ -1532,6 +1534,7 @@ export default function PortfolioApp({
     if (trimmedQuery.length < minimumSearchLength) {
       setResults([]);
       setEtfResultGroups([]);
+      setInstrumentSearchResults([]);
       setSearchError(null);
       setIsSearching(false);
       return;
@@ -1545,13 +1548,14 @@ export default function PortfolioApp({
 
       try {
         if (searchMode === "etf") {
-          const groups = await searchEtfInstruments({
+          const discovery = await searchOpenFigiInstruments({
             query: trimmedQuery,
             signal: controller.signal,
           });
 
           if (!isCancelled) {
-            setEtfResultGroups(groups);
+            setEtfResultGroups(discovery.etfGroups);
+            setInstrumentSearchResults(discovery.results);
             setResults([]);
           }
           return;
@@ -1567,6 +1571,7 @@ export default function PortfolioApp({
         if (!isCancelled) {
           setResults(nextResults);
           setEtfResultGroups([]);
+          setInstrumentSearchResults([]);
 
           if (!isManualSymbolRef.current) {
             const autoResult = pickBestSearchResult(trimmedQuery, nextResults, {
@@ -1613,6 +1618,7 @@ export default function PortfolioApp({
                   providerId: autoResult.providerId,
                   priceScale: autoResult.priceScale,
                   latestPrice: undefined,
+                  latestPriceDate: undefined,
                   previousClose: undefined,
                 };
               });
@@ -1625,6 +1631,7 @@ export default function PortfolioApp({
         setSearchError(toErrorMessage(error, "Nie udalo sie pobrac wynikow."));
         setResults([]);
         setEtfResultGroups([]);
+        setInstrumentSearchResults([]);
       } finally {
         if (!isCancelled) {
           setIsSearching(false);
@@ -1656,13 +1663,14 @@ export default function PortfolioApp({
 
       try {
         if (searchMode === "etf") {
-          const groups = await searchEtfInstruments({
+          const discovery = await searchOpenFigiInstruments({
             query: trimmedSymbol,
             signal: controller.signal,
           });
 
           if (!isCancelled) {
-            setEtfResultGroups(groups);
+            setEtfResultGroups(discovery.etfGroups);
+            setInstrumentSearchResults(discovery.results);
             setResults([]);
           }
           return;
@@ -1701,6 +1709,7 @@ export default function PortfolioApp({
               providerId: undefined,
               priceScale: undefined,
               latestPrice: undefined,
+              latestPriceDate: undefined,
               previousClose: undefined,
             };
           }
@@ -1733,6 +1742,7 @@ export default function PortfolioApp({
             providerId: autoResult.providerId,
             priceScale: autoResult.priceScale,
             latestPrice: undefined,
+            latestPriceDate: undefined,
             previousClose: undefined,
           };
         });
@@ -1740,6 +1750,7 @@ export default function PortfolioApp({
         if (!isCancelled) {
           setSearchError(toErrorMessage(error, "Nie udalo sie pobrac wynikow."));
           setEtfResultGroups([]);
+          setInstrumentSearchResults([]);
         }
       } finally {
         if (!isCancelled) {
@@ -1889,6 +1900,7 @@ export default function PortfolioApp({
               symbol: refreshed.symbol ?? asset.symbol,
               name: refreshed.name ?? asset.name,
               latestPrice: refreshed.latestPrice,
+              latestPriceDate: refreshed.latestPriceDate ?? asset.latestPriceDate,
               previousClose: refreshed.previousClose ?? asset.previousClose,
               marketCurrency: refreshed.marketCurrency,
               provider: refreshed.provider,
@@ -2005,6 +2017,7 @@ export default function PortfolioApp({
       return {
         ...currentDraft,
         latestPrice: quote.price,
+        latestPriceDate: quote.priceDate,
         previousClose: quote.previousClose ?? currentDraft.previousClose,
         marketCurrency: quote.marketCurrency,
         provider: quote.provider,
@@ -2027,6 +2040,7 @@ export default function PortfolioApp({
     setLastAddedResult(null);
     setResults([]);
     setEtfResultGroups([]);
+    setInstrumentSearchResults([]);
     setSearchError(null);
   };
 
@@ -2288,6 +2302,7 @@ export default function PortfolioApp({
           return {
             ...currentDraft,
             latestPrice: quote.price,
+            latestPriceDate: quote.priceDate,
             previousClose: quote.previousClose ?? currentDraft.previousClose,
             marketCurrency: quote.marketCurrency,
             provider: quote.provider,
@@ -2337,10 +2352,12 @@ export default function PortfolioApp({
       instrumentIdentity: selectedEtf?.instrumentIdentity,
       marketCurrencyConfirmed: Boolean(selectedEtf?.instrumentIdentity.currency),
       latestPrice: undefined,
+      latestPriceDate: undefined,
       previousClose: undefined,
     }));
     setResults([]);
     setEtfResultGroups([]);
+    setInstrumentSearchResults([]);
 
     if (!selectedEtf) {
       return;
@@ -2391,6 +2408,7 @@ export default function PortfolioApp({
       return {
         symbol: normalizedSymbol,
         price: draft.latestPrice,
+        priceDate: draft.latestPriceDate,
         previousClose: draft.previousClose,
         marketCurrency: draft.marketCurrency,
         provider: draft.provider,
@@ -2921,6 +2939,7 @@ export default function PortfolioApp({
       priceScale: quote?.priceScale ?? draft.priceScale,
       instrumentIdentity: draft.instrumentIdentity,
       latestPrice: quote?.price,
+      latestPriceDate: quote?.priceDate,
       previousClose: quote?.previousClose ?? draft.previousClose,
       lastUpdatedAt: quote?.fetchedAt,
       groupOrder: existingGroupOrder ?? getNextGroupOrder(assets),
@@ -2945,6 +2964,7 @@ export default function PortfolioApp({
     setDraft(createDraftFromMode(searchMode));
     setResults([]);
     setEtfResultGroups([]);
+    setInstrumentSearchResults([]);
     setSearchError(null);
     setQuoteError(null);
   };
@@ -3557,6 +3577,7 @@ export default function PortfolioApp({
               symbol: refreshed.symbol ?? asset.symbol,
               name: refreshed.name ?? asset.name,
               latestPrice: refreshed.latestPrice,
+              latestPriceDate: refreshed.latestPriceDate ?? asset.latestPriceDate,
               previousClose: refreshed.previousClose ?? asset.previousClose,
               marketCurrency: refreshed.marketCurrency,
               provider: refreshed.provider,
@@ -4229,6 +4250,7 @@ export default function PortfolioApp({
                 draft={draft}
                 results={results}
                 etfResultGroups={etfResultGroups}
+                instrumentSearchResults={instrumentSearchResults}
                 lastAddedResult={lastAddedResult}
                 isSearching={isSearching}
                 isQuoteLoading={isQuoteLoading}
@@ -4247,6 +4269,7 @@ export default function PortfolioApp({
                   setIsQuoteLoading(false);
                   setResults([]);
                   setEtfResultGroups([]);
+                  setInstrumentSearchResults([]);
                   setSearchError(null);
                   setQuoteError(null);
                   setDraft((currentDraft) => ({
@@ -4259,6 +4282,7 @@ export default function PortfolioApp({
                     instrumentIdentity: undefined,
                     marketCurrencyConfirmed: undefined,
                     latestPrice: undefined,
+                    latestPriceDate: undefined,
                     previousClose: undefined,
                   }));
                 }}
@@ -4270,6 +4294,7 @@ export default function PortfolioApp({
                   setIsQuoteLoading(false);
                   setResults([]);
                   setEtfResultGroups([]);
+                  setInstrumentSearchResults([]);
                   setSearchError(null);
                   setQuoteError(null);
                   setDraft((currentDraft) => ({
@@ -4282,6 +4307,7 @@ export default function PortfolioApp({
                     instrumentIdentity: undefined,
                     marketCurrencyConfirmed: undefined,
                     latestPrice: undefined,
+                    latestPriceDate: undefined,
                     previousClose: undefined,
                   }));
                 }}

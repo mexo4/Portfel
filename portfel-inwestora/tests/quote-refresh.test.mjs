@@ -26,6 +26,7 @@ test("reports real quote progress and leaves an asset without a quote unchanged"
           marketCurrency: "PLN",
           provider: "stooq",
           fetchedAt: "2026-08-09T12:00:00.000Z",
+          priceDate: "2026-08-07",
         },
       }),
       { status: 200, headers: { "Content-Type": "application/json" } }
@@ -60,5 +61,6 @@ test("reports real quote progress and leaves an asset without a quote unchanged"
   assert.equal(result.total, 2);
   assert.equal(result.missing, 1);
   assert.equal(result.assets[0].latestPrice, 101.25);
+  assert.equal(result.assets[0].latestPriceDate, "2026-08-07");
   assert.equal(result.assets[1].latestPrice, undefined);
 });

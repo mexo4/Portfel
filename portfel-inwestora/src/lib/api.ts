@@ -6,6 +6,7 @@ import type {
   AssetSearchResult,
   EtfListing,
   EtfSearchGroup,
+  InstrumentSearchResult,
   BenchmarkComparison,
   BenchmarkInvestment,
   BondRedemptionQuote,
@@ -98,14 +99,23 @@ export const searchAssets = async ({ query, kind, mode, signal }: SearchParams) 
   return data.results;
 };
 
-export const searchEtfInstruments = async ({ query, signal }: Pick<SearchParams, "query" | "signal">) => {
+export const searchOpenFigiInstruments = async ({
+  query,
+  signal,
+}: Pick<SearchParams, "query" | "signal">) => {
   const params = new URLSearchParams({ q: query });
-  const data = await requestJson<{ groups: EtfSearchGroup[] }>(
+  const data = await requestJson<{
+    results: InstrumentSearchResult[];
+    groups: EtfSearchGroup[];
+  }>(
     `/api/instruments/search?${params.toString()}`,
     { signal }
   );
 
-  return data.groups;
+  return {
+    results: data.results,
+    etfGroups: data.groups,
+  };
 };
 
 export const resolveEtfListingPrice = async (listing: EtfListing) => {
@@ -288,6 +298,7 @@ export const refreshPortfolioQuotesWithProgress = async (
         ...asset,
         symbol: quote.symbol,
         latestPrice: quote.price,
+        latestPriceDate: quote.priceDate ?? asset.latestPriceDate,
         previousClose: quote.previousClose ?? asset.previousClose,
         marketCurrency: quote.marketCurrency,
         provider: quote.provider,

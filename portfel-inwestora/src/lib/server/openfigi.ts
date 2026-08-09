@@ -7,7 +7,6 @@ import type {
   EtfListing,
   EtfSearchGroup,
   InstrumentIdentity,
-  InstrumentSearchResult,
 } from "@/types/portfolio";
 
 const OPENFIGI_API_ROOT = "https://api.openfigi.com/v3";
@@ -42,7 +41,7 @@ export class OpenFigiSearchError extends Error {
 }
 
 export type InstrumentSearchProvider = {
-  search: (query: string) => Promise<InstrumentSearchResult[]>;
+  searchEtfs: (query: string) => Promise<EtfSearchGroup[]>;
 };
 
 type FetchLike = typeof fetch;
@@ -70,7 +69,6 @@ const normaliseFigi = (value: string) => normalizeSymbol(value);
 
 const getSecurityType = (record: JsonRecord) => field(record, "securityType");
 const getSecurityType2 = (record: JsonRecord) => field(record, "securityType2");
-const getMarketSector = (record: JsonRecord) => field(record, "marketSector");
 
 const isEtf = (record: JsonRecord) => {
   const descriptor = normalizeText(
@@ -85,46 +83,6 @@ const isEtf = (record: JsonRecord) => {
 const toCurrency = (value: string): CurrencyCode | undefined => {
   const normalized = normalizeSymbol(value);
   return /^[A-Z]{3}$/.test(normalized) ? toCurrencyCode(normalized) : undefined;
-};
-
-const toSearchComparable = (value: string) => normalizeText(value).replaceAll(" ", "");
-
-const getOpenFigiQueryVariants = (query: string) => {
-  const normalized = query.trim().replace(/\s+/g, " ");
-  const withNumberBoundaries = normalized
-    .replace(/([\p{L}])(?=\d)/gu, "$1 ")
-    .replace(/(\d)(?=\p{L})/gu, "$1 ")
-    .replace(/\s+/g, " ")
-    .trim();
-  const punctuationSeparated = withNumberBoundaries
-    .replace(/[^\p{L}\p{N}]+/gu, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  const compact = punctuationSeparated.replaceAll(" ", "");
-
-  return uniqueBy(
-    [normalized, withNumberBoundaries, punctuationSeparated, compact].filter(Boolean),
-    (variant) => variant.toLocaleLowerCase()
-  ).slice(0, 4);
-};
-
-const logOpenFigiSearchDiagnostic = (payload: {
-  query: string;
-  sentQueries: string[];
-  responses: Array<{
-    query: string;
-    status: number;
-    rawResultCount: number;
-    firstTypes: string[];
-  }>;
-  normalizedResultCount: number;
-  etfContextResultCount: number;
-}) => {
-  if (process.env.OPENFIGI_DIAGNOSTICS !== "true") {
-    return;
-  }
-
-  console.info("OpenFIGI search diagnostic", payload);
 };
 
 const getMatchScore = (query: string, listing: EtfListing) => {

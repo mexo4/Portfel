@@ -27,6 +27,7 @@ import type {
   TreasuryBondSeries,
   UserProfile,
 } from "@/types/portfolio";
+import { isGpwSymbol } from "@/lib/ticker";
 
 type SearchParams = {
   query: string;
@@ -304,6 +305,55 @@ export type PortfolioQuoteRefreshResult = {
   missing: number;
 };
 
+/**
+ * Quote refresh updates market data, not the user's stored instrument
+ * identity.  Polish equities are particularly sensitive because a bare
+ * ticker can collide with an unrelated US listing (for example DIA).
+ */
+export const mergeQuoteIntoPortfolioAsset = (
+  asset: PortfolioAsset,
+  quote: AssetQuote | null | undefined
+): PortfolioAsset => {
+  if (!quote) {
+    return asset;
+  }
+
+  const isGpwStock =
+    asset.kind === "stock" &&
+    (isGpwSymbol(asset.symbol) || asset.marketCurrency === "PLN");
+
+  if (isGpwStock) {
+    // A USD response cannot be a quote for the persisted GPW identity.  Do
+    // not write its price, name, provider or currency into local state.
+    if (quote.marketCurrency !== "PLN") {
+      return asset;
+    }
+
+    return {
+      ...asset,
+      latestPrice: quote.price,
+      latestPriceDate: quote.priceDate ?? asset.latestPriceDate,
+      previousClose: quote.previousClose ?? asset.previousClose,
+      lastUpdatedAt: quote.fetchedAt,
+    };
+  }
+
+  return {
+    ...asset,
+    symbol: quote.symbol,
+    latestPrice: quote.price,
+    latestPriceDate: quote.priceDate ?? asset.latestPriceDate,
+    previousClose: quote.previousClose ?? asset.previousClose,
+    marketCurrency: quote.marketCurrency,
+    provider: quote.provider,
+    providerId: quote.providerId ?? asset.providerId,
+    priceScale: quote.priceScale ?? asset.priceScale,
+    bondMeta: quote.bondMeta ?? asset.bondMeta,
+    lastUpdatedAt: quote.fetchedAt,
+    name: quote.name ?? asset.name,
+  };
+};
+
 export const refreshPortfolioQuotesWithProgress = async (
   assets: PortfolioAsset[],
   onProgress?: (progress: QuoteRefreshProgress) => void
@@ -359,24 +409,7 @@ export const refreshPortfolioQuotesWithProgress = async (
     assets: assets.map((asset) => {
       const quote = quotesByKey.get(quoteRequestKey(asset));
 
-      if (!quote) {
-        return asset;
-      }
-
-      return {
-        ...asset,
-        symbol: quote.symbol,
-        latestPrice: quote.price,
-        latestPriceDate: quote.priceDate ?? asset.latestPriceDate,
-        previousClose: quote.previousClose ?? asset.previousClose,
-        marketCurrency: quote.marketCurrency,
-        provider: quote.provider,
-        providerId: quote.providerId ?? asset.providerId,
-        priceScale: quote.priceScale ?? asset.priceScale,
-        bondMeta: quote.bondMeta ?? asset.bondMeta,
-        lastUpdatedAt: quote.fetchedAt,
-        name: quote.name ?? asset.name,
-      };
+      return mergeQuoteIntoPortfolioAsset(asset, quote);
     }),
     total: quoteRequests.length,
     missing,

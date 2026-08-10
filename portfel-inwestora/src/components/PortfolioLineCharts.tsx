@@ -6,7 +6,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type CSSProperties,
   type PointerEvent as ReactPointerEvent,
   type WheelEvent as ReactWheelEvent,
 } from "react";
@@ -173,6 +172,8 @@ type ChartPinchState = {
   initialViewport: ChartViewport | null;
   initialX: number;
 };
+
+type ManualChartViewport = ChartViewport | "full" | null;
 
 const DEFAULT_BENCHMARK_SEARCH_MODE: AssetSearchMode = "etf";
 const RANGE_PRESET_STORAGE_KEY = "mexo.lineCharts.rangePreset";
@@ -865,12 +866,9 @@ export default function PortfolioLineCharts({
   const [mode, setMode] = useState<ChartMode>("value");
   const [rangePreset, setRangePreset] = useState<RangePreset>("1M");
   const [hasLoadedStoredRange, setHasLoadedStoredRange] = useState(false);
-  const [manualViewport, setManualViewport] = useState<ChartViewport | "full" | null>(null);
+  const [manualViewport, setManualViewport] = useState<ManualChartViewport>(null);
   const [isRangePickerOpen, setIsRangePickerOpen] = useState(false);
   const [isChartInteracting, setIsChartInteracting] = useState(false);
-  const [crosshairPosition, setCrosshairPosition] = useState<{ x: number; y: number } | null>(
-    null
-  );
   const [hiddenSeriesKeys, setHiddenSeriesKeys] = useState<string[]>([]);
   const [isChartModalOpen, setIsChartModalOpen] = useState(false);
   const [selectedBenchmarks, setSelectedBenchmarks] = useState<PortfolioBenchmarkDefinition[]>(
@@ -893,7 +891,119 @@ export default function PortfolioLineCharts({
   const dragStateRef = useRef<ChartDragState | null>(null);
   const touchPointersRef = useRef(new Map<number, { x: number; y: number }>());
   const pinchStateRef = useRef<ChartPinchState | null>(null);
+  const manualViewportRef = useRef<ManualChartViewport>(null);
+  const pendingViewportRef = useRef<ManualChartViewport>(null);
+  const viewportFrameRef = useRef<number | null>(null);
+  const pendingCrosshairRef = useRef<{
+    frame: HTMLDivElement;
+    x?: number;
+    y?: number;
+    visible: boolean;
+  } | null>(null);
+  const crosshairFrameRef = useRef<number | null>(null);
   const nativeFullscreenActiveRef = useRef(false);
+
+  const cancelScheduledViewport = useCallback(() => {
+    if (viewportFrameRef.current !== null) {
+      window.cancelAnimationFrame(viewportFrameRef.current);
+      viewportFrameRef.current = null;
+    }
+
+    pendingViewportRef.current = null;
+  }, []);
+
+  const setViewportImmediately = useCallback(
+    (nextViewport: ManualChartViewport) => {
+      cancelScheduledViewport();
+      manualViewportRef.current = nextViewport;
+      setManualViewport(nextViewport);
+    },
+    [cancelScheduledViewport]
+  );
+
+  const scheduleViewportUpdate = useCallback((nextViewport: ManualChartViewport) => {
+    pendingViewportRef.current = nextViewport;
+    // Event handlers use this value immediately, while React only reconciles
+    // the expensive SVG tree once per painted frame.
+    manualViewportRef.current = nextViewport;
+
+    if (viewportFrameRef.current !== null) {
+      return;
+    }
+
+    viewportFrameRef.current = window.requestAnimationFrame(() => {
+      viewportFrameRef.current = null;
+      const scheduledViewport = pendingViewportRef.current;
+      pendingViewportRef.current = null;
+      setManualViewport((currentViewport) => {
+        if (
+          currentViewport === scheduledViewport ||
+          (currentViewport !== null &&
+            currentViewport !== "full" &&
+            scheduledViewport !== null &&
+            scheduledViewport !== "full" &&
+            currentViewport.startIndex === scheduledViewport.startIndex &&
+            currentViewport.endIndex === scheduledViewport.endIndex)
+        ) {
+          return currentViewport;
+        }
+
+        return scheduledViewport;
+      });
+    });
+  }, []);
+
+  const scheduleCrosshairUpdate = useCallback(
+    (
+      frame: HTMLDivElement,
+      position: { x?: number; y?: number; visible: boolean }
+    ) => {
+      pendingCrosshairRef.current = { frame, ...position };
+
+      if (crosshairFrameRef.current !== null) {
+        return;
+      }
+
+      crosshairFrameRef.current = window.requestAnimationFrame(() => {
+        crosshairFrameRef.current = null;
+        const update = pendingCrosshairRef.current;
+        pendingCrosshairRef.current = null;
+
+        if (!update) {
+          return;
+        }
+
+        const crosshair = update.frame.querySelector<HTMLElement>(
+          "[data-chart-crosshair]"
+        );
+
+        if (!crosshair) {
+          return;
+        }
+
+        if (!update.visible) {
+          crosshair.dataset.visible = "false";
+          return;
+        }
+
+        crosshair.style.setProperty("--crosshair-x", `${update.x ?? 0}px`);
+        crosshair.style.setProperty("--crosshair-y", `${update.y ?? 0}px`);
+        crosshair.dataset.visible = "true";
+      });
+    },
+    []
+  );
+
+  useEffect(
+    () => () => {
+      cancelScheduledViewport();
+
+      if (crosshairFrameRef.current !== null) {
+        window.cancelAnimationFrame(crosshairFrameRef.current);
+      }
+    },
+    [cancelScheduledViewport]
+  );
   const closeChartModal = useCallback(() => {
     nativeFullscreenActiveRef.current = false;
     setIsRangePickerOpen(false);
@@ -1857,9 +1967,18 @@ export default function PortfolioLineCharts({
   ].join("|");
 
   useEffect(() => {
-    setManualViewport(null);
-    setCrosshairPosition(null);
-  }, [chartViewportDataSignature]);
+    setViewportImmediately(null);
+    chartFrameRef.current
+      ?.querySelector<HTMLElement>("[data-chart-crosshair]")
+      ?.setAttribute("data-visible", "false");
+    modalChartFrameRef.current
+      ?.querySelector<HTMLElement>("[data-chart-crosshair]")
+      ?.setAttribute("data-visible", "false");
+  }, [chartViewportDataSignature, setViewportImmediately]);
+
+  useEffect(() => {
+    manualViewportRef.current = manualViewport;
+  }, [manualViewport]);
 
   const baseChartViewport = useMemo(
     () => getChartRangeViewport(chartModel.data, rangePreset),
@@ -1937,7 +2056,7 @@ export default function PortfolioLineCharts({
     });
   };
 
-  const handleResetViewport = () => setManualViewport(null);
+  const handleResetViewport = () => setViewportImmediately(null);
 
   const getActiveChartSvg = () => {
     const activeFrame = isChartModalOpen ? modalChartFrameRef.current : chartFrameRef.current;
@@ -2097,37 +2216,46 @@ export default function PortfolioLineCharts({
       return;
     }
 
-    setManualViewport(null);
+    setViewportImmediately(null);
     setRangePreset(preset);
   };
 
   const handleChartZoom = (factor: number, anchorRatio = 0.5) => {
-    setManualViewport((currentViewport) => {
-      const viewport =
-        currentViewport === "full"
-          ? getFullChartViewport(chartModel.data.length)
-          : currentViewport ?? baseChartViewport;
-      const nextViewport = zoomChartViewport({
-        viewport,
-        pointCount: chartModel.data.length,
-        factor,
-        anchorRatio,
-      });
-
-      return nextViewport ?? "full";
+    const currentViewport = pendingViewportRef.current ?? manualViewportRef.current;
+    const viewport =
+      currentViewport === "full"
+        ? getFullChartViewport(chartModel.data.length)
+        : currentViewport ?? baseChartViewport;
+    const nextViewport = zoomChartViewport({
+      viewport,
+      pointCount: chartModel.data.length,
+      factor,
+      anchorRatio,
     });
+
+    scheduleViewportUpdate(nextViewport ?? "full");
   };
 
   const updateCrosshairPosition = (event: ReactPointerEvent<HTMLDivElement>) => {
     const bounds = event.currentTarget.getBoundingClientRect();
 
-    setCrosshairPosition({
+    scheduleCrosshairUpdate(event.currentTarget, {
+      visible: true,
       x: Math.max(0, Math.min(bounds.width, event.clientX - bounds.left)),
       y: Math.max(0, Math.min(bounds.height, event.clientY - bounds.top)),
     });
   };
 
-  const getChartViewport = () => effectiveChartViewport;
+  const getChartViewport = () => {
+    const currentViewport = pendingViewportRef.current ?? manualViewportRef.current;
+    const fullViewport = getFullChartViewport(chartModel.data.length);
+
+    if (currentViewport === "full") {
+      return fullViewport;
+    }
+
+    return currentViewport ?? baseChartViewport ?? fullViewport;
+  };
 
   const handleChartWheel = (event: ReactWheelEvent<HTMLDivElement>) => {
     if (!hasRenderableData || event.deltaY === 0) {
@@ -2211,16 +2339,14 @@ export default function PortfolioLineCharts({
         );
 
         event.preventDefault();
-        setManualViewport(() => {
-          const nextViewport = zoomChartViewport({
-            viewport: pinchState.initialViewport,
-            pointCount: chartModel.data.length,
-            factor: pinchState.initialDistance / distance,
-            anchorRatio,
-          });
-
-          return nextViewport ?? "full";
+        const nextViewport = zoomChartViewport({
+          viewport: pinchState.initialViewport,
+          pointCount: chartModel.data.length,
+          factor: pinchState.initialDistance / distance,
+          anchorRatio,
         });
+
+        scheduleViewportUpdate(nextViewport ?? "full");
         return;
       }
     }
@@ -2246,15 +2372,13 @@ export default function PortfolioLineCharts({
     }
 
     event.preventDefault();
-    setManualViewport(() => {
-      const nextViewport = panChartViewport({
-        viewport: dragState.startViewport,
-        pointCount: chartModel.data.length,
-        deltaPoints,
-      });
-
-      return nextViewport ?? "full";
+    const nextViewport = panChartViewport({
+      viewport: dragState.startViewport,
+      pointCount: chartModel.data.length,
+      deltaPoints,
     });
+
+    scheduleViewportUpdate(nextViewport ?? "full");
   };
 
   const finishChartPointer = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -2499,9 +2623,9 @@ export default function PortfolioLineCharts({
         aria-label={`${chartModel.title}. Przeciągnij, aby przesunąć dane; użyj kółka lub gestu szczypania, aby zmienić przybliżenie.`}
         onPointerCancel={finishChartPointer}
         onPointerDown={handleChartPointerDown}
-        onPointerLeave={() => {
+        onPointerLeave={(event) => {
           if (!dragStateRef.current) {
-            setCrosshairPosition(null);
+            scheduleCrosshairUpdate(event.currentTarget, { visible: false });
           }
         }}
         onPointerMove={handleChartPointerMove}
@@ -2594,6 +2718,7 @@ export default function PortfolioLineCharts({
                   }}
                   animationDuration={isFullscreen ? 640 : 480}
                   animationEasing="ease-out"
+                  isAnimationActive={!isChartInteracting}
                   connectNulls={line.connectNulls}
                   dataKey={line.dataKey}
                   fill={`url(#gradient-${isFullscreen ? "modal-" : ""}${line.dataKey})`}
@@ -2613,6 +2738,7 @@ export default function PortfolioLineCharts({
                   }}
                   animationDuration={isFullscreen ? 640 : 480}
                   animationEasing="ease-out"
+                  isAnimationActive={!isChartInteracting}
                   connectNulls={line.connectNulls}
                   dataKey={line.dataKey}
                   dot={false}
@@ -2626,16 +2752,12 @@ export default function PortfolioLineCharts({
             )}
           </ComposedChart>
         </ResponsiveContainer>
-        {crosshairPosition ? (
-          <div
-            aria-hidden="true"
-            className="line-visual-crosshair"
-            style={{
-              "--crosshair-x": `${crosshairPosition.x}px`,
-              "--crosshair-y": `${crosshairPosition.y}px`,
-            } as CSSProperties}
-          />
-        ) : null}
+        <div
+          aria-hidden="true"
+          className="line-visual-crosshair"
+          data-chart-crosshair
+          data-visible="false"
+        />
       </div>
     );
   };
@@ -2857,7 +2979,7 @@ export default function PortfolioLineCharts({
               </div>
             </div>
 
-            {renderChartFrame()}
+            {!isChartModalOpen ? renderChartFrame() : null}
           </>
         ) : (
           <div className="line-chart-empty">

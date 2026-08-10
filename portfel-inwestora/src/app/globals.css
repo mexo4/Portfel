@@ -1963,7 +1963,7 @@ textarea {
 
 .etf-search-group {
   display: grid;
-  gap: 10px;
+  gap: 8px;
   min-width: 0;
   border-top: 1px solid rgba(20, 35, 48, 0.1);
   padding-top: 16px;
@@ -1974,11 +1974,49 @@ textarea {
   padding-top: 0;
 }
 
-.etf-search-group-header {
-  display: flex;
+.etf-search-group-toggle {
+  display: grid;
+  grid-template-areas: "heading meta chevron";
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
-  justify-content: space-between;
   gap: 12px;
+  width: 100%;
+  min-height: 64px;
+  border: 1px solid rgba(20, 35, 48, 0.1);
+  border-radius: 14px;
+  padding: 12px 14px;
+  color: var(--text);
+  text-align: left;
+  background: rgba(255, 255, 255, 0.52);
+  cursor: pointer;
+  transition:
+    border-color 160ms ease,
+    background 160ms ease,
+    box-shadow 160ms ease,
+    transform 160ms ease;
+}
+
+.etf-search-group-toggle:hover,
+.etf-search-group-toggle.is-expanded {
+  border-color: rgba(15, 118, 110, 0.28);
+  background: rgba(240, 249, 247, 0.72);
+}
+
+.etf-search-group-toggle:hover {
+  box-shadow: 0 8px 18px rgba(20, 35, 48, 0.05);
+  transform: translateY(-1px);
+}
+
+.etf-search-group-toggle:focus-visible {
+  outline: none;
+  border-color: rgba(15, 118, 110, 0.58);
+  box-shadow: 0 0 0 4px rgba(15, 118, 110, 0.12);
+}
+
+.etf-search-group-heading {
+  display: grid;
+  grid-area: heading;
+  gap: 4px;
   min-width: 0;
 }
 
@@ -1989,6 +2027,49 @@ textarea {
   font-weight: 700;
   letter-spacing: -0.02em;
   line-height: 1.28;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.etf-search-group-copy {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.etf-search-group-meta {
+  display: flex;
+  grid-area: meta;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.etf-listing-count {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 700;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.etf-search-group-chevron {
+  display: inline-grid;
+  grid-area: chevron;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border: 1px solid rgba(20, 35, 48, 0.12);
+  border-radius: 50%;
+  color: var(--accent);
+  font-size: 1rem;
+  font-weight: 600;
+  line-height: 1;
 }
 
 .etf-type-label {
@@ -2007,6 +2088,44 @@ textarea {
 .etf-listing-list {
   display: grid;
   gap: 7px;
+}
+
+.etf-listing-inset {
+  display: grid;
+  gap: 10px;
+  margin-top: 2px;
+  border: 1px solid rgba(15, 118, 110, 0.16);
+  border-left: 3px solid rgba(15, 118, 110, 0.62);
+  border-radius: 0 14px 14px 0;
+  padding: 13px;
+  background:
+    linear-gradient(90deg, rgba(226, 244, 240, 0.7), rgba(255, 255, 255, 0.72));
+}
+
+.etf-listing-inset-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--accent);
+  font-size: 0.78rem;
+  font-weight: 800;
+  line-height: 1.3;
+}
+
+.etf-listing-inset-header span:last-child {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.etf-expanded-fund-name {
+  margin: -3px 0 0;
+  color: var(--text);
+  font-size: 0.86rem;
+  font-weight: 650;
+  line-height: 1.42;
 }
 
 .etf-listing-choice {
@@ -2050,6 +2169,7 @@ textarea {
 }
 
 .etf-listing-choice-main {
+  display: block;
   min-width: 0;
   overflow-wrap: anywhere;
   color: var(--text);
@@ -2058,6 +2178,19 @@ textarea {
   font-weight: 600;
   letter-spacing: -0.02em;
   line-height: 1.35;
+}
+
+.etf-listing-choice-content {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.etf-listing-technical-meta {
+  color: var(--muted);
+  font-family: var(--font-mono), "IBM Plex Mono", monospace;
+  font-size: 0.68rem;
+  line-height: 1.25;
 }
 
 .etf-listing-price-status {
@@ -2081,30 +2214,94 @@ textarea {
     padding-top: 12px;
   }
 
+  .etf-search-group-toggle {
+    grid-template-areas:
+      "heading chevron"
+      "meta meta";
+    grid-template-columns: minmax(0, 1fr) auto;
+    min-height: 0;
+    gap: 10px;
+    border-radius: 12px;
+    padding: 13px;
+  }
+
   .etf-search-group-title {
-    font-size: 0.82rem;
+    display: -webkit-box;
+    overflow: hidden;
+    font-size: 0.94rem;
+    line-height: 1.32;
+    text-overflow: clip;
+    white-space: normal;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+
+  .etf-search-group-copy {
+    font-size: 0.875rem;
+    line-height: 1.35;
+    text-overflow: clip;
+    white-space: normal;
+  }
+
+  .etf-search-group-meta {
+    justify-content: flex-start;
+    gap: 5px;
   }
 
   .etf-type-label {
     padding: 2px 6px;
-    font-size: 0.62rem;
+    font-size: 0.72rem;
+  }
+
+  .etf-listing-count {
+    font-size: 0.875rem;
+  }
+
+  .etf-search-group-chevron {
+    width: 20px;
+    height: 20px;
+    font-size: 0.9rem;
   }
 
   .etf-listing-choice {
     min-width: 0;
-    min-height: 46px;
+    min-height: 56px;
     gap: 8px;
     border-radius: 10px;
-    padding: 9px 10px;
+    padding: 12px;
   }
 
   .etf-listing-choice-main {
+    font-size: 0.875rem;
+    line-height: 1.42;
+  }
+
+  .etf-listing-inset {
+    gap: 12px;
+    border-radius: 0 12px 12px 0;
+    padding: 12px;
+  }
+
+  .etf-listing-inset-header {
+    align-items: flex-start;
+    font-size: 0.875rem;
+  }
+
+  .etf-listing-inset-header span:last-child {
+    font-size: 0.75rem;
+  }
+
+  .etf-expanded-fund-name {
+    font-size: 0.875rem;
+  }
+
+  .etf-listing-technical-meta {
     font-size: 0.72rem;
   }
 
   .etf-listing-price-status {
     max-width: 84px;
-    font-size: 0.64rem;
+    font-size: 0.72rem;
   }
 }
 
@@ -4516,6 +4713,11 @@ textarea {
     box-shadow: 0 10px 22px rgba(20, 35, 48, 0.1);
   }
 
+  .etf-search-stack-panel {
+    gap: 14px;
+    padding: 14px;
+  }
+
   .search-result-card,
   .search-result-card-prominent,
   .result-card {
@@ -5248,6 +5450,11 @@ textarea {
   inset: 0;
   z-index: 4;
   pointer-events: none;
+  visibility: hidden;
+}
+
+.line-visual-crosshair[data-visible="true"] {
+  visibility: visible;
 }
 
 .line-visual-crosshair::before,

@@ -1,0 +1,94 @@
+{
+  "source": "OpenFIGI v3 /filter",
+  "recordedAt": "2026-08-10",
+  "request": {
+    "query": "s",
+    "securityType": "ETP"
+  },
+  "response": {
+    "status": 200,
+    "rawResultCount": 100
+  },
+  "items": [
+    {
+      "figi": "BBG000BCGYS8",
+      "shareClassFIGI": "BBG001S98F69",
+      "compositeFIGI": "BBG000BCGYS8",
+      "ticker": "SPXU",
+      "name": "BETAPRO S&P 500 2X DAILY B",
+      "exchCode": "CN",
+      "securityType": "ETP",
+      "securityType2": "Mutual Fund"
+    },
+    {
+      "figi": "BBG000BCH0K9",
+      "shareClassFIGI": "BBG001S98F69",
+      "compositeFIGI": "BBG000BCGYS8",
+      "ticker": "SPXU",
+      "name": "BETAPRO S&P 500 2X DAILY B",
+      "exchCode": "CT",
+      "securityType": "ETP",
+      "securityType2": "Mutual Fund"
+    },
+    {
+      "figi": "BBG000BCH2V3",
+      "shareClassFIGI": "BBG001S98F69",
+      "compositeFIGI": "BBG000BCGYS8",
+      "ticker": "SPXU",
+      "name": "BETAPRO S&P 500 2X DAILY B",
+      "exchCode": "CJ",
+      "securityType": "ETP",
+      "securityType2": "Mutual Fund"
+    },
+    {
+      "figi": "BBG000BCH403",
+      "shareClassFIGI": "BBG001S98F69",
+      "compositeFIGI": "BBG000BCGYS8",
+      "ticker": "SPXU",
+      "name": "BETAPRO S&P 500 2X DAILY B",
+      "exchCode": "TR",
+      "securityType": "ETP",
+      "securityType2": "Mutual Fund"
+    },
+    {
+      "figi": "BBG000BCH5G3",
+      "shareClassFIGI": "BBG001S98F69",
+      "compositeFIGI": "BBG000BCGYS8",
+      "ticker": "SPXU",
+      "name": "BETAPRO S&P 500 2X DAILY B",
+      "exchCode": "TX",
+      "securityType": "ETP",
+      "securityType2": "Mutual Fund"
+    },
+    {
+      "figi": "BBG000BCH5N5",
+      "shareClassFIGI": "BBG001S98F69",
+      "compositeFIGI": "BBG000BCGYS8",
+      "ticker": "SPXU",
+      "name": "BETAPRO S&P 500 2X DAILY B",
+      "exchCode": "TA",
+      "securityType": "ETP",
+      "securityType2": "Mutual Fund"
+    },
+    {
+      "figi": "BBG000BCH699",
+      "shareClassFIGI": "BBG001S98F69",
+      "compositeFIGI": "BBG000BCGYS8",
+      "ticker": "SPXU",
+      "name": "BETAPRO S&P 500 2X DAILY B",
+      "exchCode": "TG",
+      "securityType": "ETP",
+      "securityType2": "Mutual Fund"
+    },
+    {
+      "figi": "BBG000BCH6X2",
+      "shareClassFIGI": "BBG001S98F69",
+      "compositeFIGI": "BBG000BCGYS8",
+      "ticker": "SPXU",
+      "name": "BETAPRO S&P 500 2X DAILY B",
+      "exchCode": "TK",
+      "securityType": "ETP",
+      "securityType2": "Mutual Fund"
+    }
+  ]
+}

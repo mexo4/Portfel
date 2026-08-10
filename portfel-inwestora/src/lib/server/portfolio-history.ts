@@ -426,7 +426,9 @@ const fetchYahooStockHistory = async (
   const period2 = Math.floor(new Date(`${endDate}T23:59:59.000Z`).getTime() / 1_000);
 
   return getCachedOrFetch<PricePoint[]>(
-    `portfolio-history:yahoo:${normalizeSymbol(yahooSymbol)}:${startDate}:${endDate}:${
+    `portfolio-history:yahoo:${isGpwSymbol(yahooSymbol) ? "gpw-v2:" : ""}${normalizeSymbol(
+      yahooSymbol
+    )}:${startDate}:${endDate}:${
       fallbackPriceScale ?? 1
     }`,
     HISTORY_CACHE_TTL_MS,
@@ -675,6 +677,15 @@ const getHistoryLookupSymbols = ({
     providerId,
   }).map((candidate) => normalizeSymbol(candidate.value));
 
+const getGpwScopedHistorySymbols = (symbols: string[], fallbackSymbol: string) =>
+  Array.from(
+    new Set(
+      [fallbackSymbol, ...symbols]
+        .map((symbol) => normalizeSymbol(symbol))
+        .filter((symbol) => isGpwSymbol(symbol))
+    )
+  );
+
 const fetchInstrumentHistory = async ({
   kind,
   symbol,
@@ -710,6 +721,12 @@ const fetchInstrumentHistory = async ({
       marketCurrency: resolvedMarketCurrency,
       providerId: resolvedProviderId,
     });
+    const isGpwStockRequest =
+      resolvedKind === "stock" &&
+      (isGpwSymbol(resolvedSymbol) || resolvedMarketCurrency === "PLN");
+    const historyLookupSymbols = isGpwStockRequest
+      ? getGpwScopedHistorySymbols(lookupSymbols, resolvedSymbol)
+      : lookupSymbols;
 
     if (resolvedKind === "bond") {
       const points = await fetchTreasuryBondQuoteSeriesServer({
@@ -743,7 +760,7 @@ const fetchInstrumentHistory = async ({
         }
       }
 
-      for (const stockHistorySymbol of lookupSymbols) {
+      for (const stockHistorySymbol of historyLookupSymbols) {
         const points = await fetchStockHistory(
           stockHistorySymbol,
           startDate,

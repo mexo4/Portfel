@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   groupEtfListings,
+  getEtfSearchCacheKey,
   normalizeEtfSearchQuery,
   OpenFigiInstrumentSearchProvider,
   OpenFigiSearchError,
@@ -35,6 +37,9 @@ const listing = ({
 });
 
 const getSingleListing = (raw) => groupEtfListings(raw.ticker, [raw])[0].listings[0];
+const liveSpxuFixture = JSON.parse(
+  readFileSync(new URL("./fixtures/openfigi-spxu-live.fixture.json", import.meta.url), "utf8")
+);
 
 test("groups only listings with a shared shareClassFIGI and ranks an exact ticker first", () => {
   const groups = groupEtfListings("GLOB", [
@@ -99,6 +104,124 @@ test("does not group listings only because they share a composite FIGI or displa
   assert.equal(groups.length, 2);
   assert.equal(groups[0].listings.length, 1);
   assert.equal(groups[1].listings.length, 1);
+});
+
+test("presents many venue listings as one share-class result and keeps another SPXU share class separate", () => {
+  const betaProListings = [
+    ["BBG000BCGYS8", "CN"],
+    ["BBG000BCH0K9", "CT"],
+    ["BBG000BCH2V3", "CJ"],
+    ["BBG000BCH403", "TR"],
+  ].map(([figi, exchCode]) =>
+    listing({
+      ticker: "SPXU",
+      figi,
+      shareClassFIGI: "BBG001S98F69",
+      compositeFIGI: "BBG000BCGYS8",
+      exchCode,
+      currency: "",
+      name: "BETAPRO S&P 500 2X DAILY B",
+    })
+  );
+  const distinctShareClass = listing({
+    ticker: "SPXU",
+    figi: "BBG000000421",
+    shareClassFIGI: "BBG001DIFFERENT",
+    compositeFIGI: "BBG000000421",
+    exchCode: "US",
+    currency: "USD",
+    name: "PROSHARES ULTRAPRO SHORT S&P500",
+  });
+
+  const groups = groupEtfListings("s", [...betaProListings, distinctShareClass]);
+  const betaProGroup = groups.find(
+    (group) => group.identity.shareClassFigi === "BBG001S98F69"
+  );
+
+  assert.equal(groups.length, 2);
+  assert.ok(betaProGroup);
+  assert.equal(betaProGroup.name, "BETAPRO S&P 500 2X DAILY B");
+  assert.equal(betaProGroup.listings.length, 4);
+  assert.deepEqual(
+    betaProGroup.listings.map((item) => item.instrumentIdentity.figi).sort(),
+    ["BBG000BCGYS8", "BBG000BCH0K9", "BBG000BCH2V3", "BBG000BCH403"].sort()
+  );
+  assert.equal(betaProGroup.listings.find((item) => item.exchangeCode === "CJ")?.subtitle, "Pure Trading");
+  assert.equal(
+    betaProGroup.listings.find((item) => item.exchangeCode === "TR")?.subtitle,
+    "Rynek do potwierdzenia"
+  );
+  assert.equal(
+    groups.some((group) => group.identity.shareClassFigi === "BBG001DIFFERENT"),
+    true
+  );
+});
+
+test("uses the safe live SPXU fixture to verify every returned listing belongs to one share class", () => {
+  assert.equal(liveSpxuFixture.source, "OpenFIGI v3 /filter");
+  assert.equal(liveSpxuFixture.response.status, 200);
+  assert.equal(liveSpxuFixture.response.rawResultCount, 100);
+  assert.equal(liveSpxuFixture.items.length, 8);
+
+  for (const item of liveSpxuFixture.items) {
+    for (const field of [
+      "figi",
+      "shareClassFIGI",
+      "compositeFIGI",
+      "ticker",
+      "name",
+      "exchCode",
+      "securityType",
+      "securityType2",
+    ]) {
+      assert.equal(typeof item[field], "string");
+      assert.notEqual(item[field], "");
+    }
+  }
+
+  const groups = groupEtfListings("s", liveSpxuFixture.items);
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].identity.shareClassFigi, "BBG001S98F69");
+  assert.equal(groups[0].listings.length, 8);
+  assert.equal(
+    new Set(groups[0].listings.map((listing) => listing.instrumentIdentity.compositeFigi)).size,
+    1
+  );
+  assert.equal(
+    new Set(groups[0].listings.map((listing) => listing.instrumentIdentity.securityType)).size,
+    1
+  );
+});
+
+test("ranks exact tickers and ticker prefixes before a name-only match without using listing count", () => {
+  const groups = groupEtfListings("sp", [
+    listing({
+      ticker: "SPY",
+      figi: "BBG000000301",
+      exchCode: "US",
+      currency: "USD",
+      name: "SPDR S&P 500 ETF Trust",
+    }),
+    listing({
+      ticker: "BROAD",
+      figi: "BBG000000302",
+      shareClassFIGI: "BBGSHARECLASS-BROAD",
+      exchCode: "US",
+      currency: "USD",
+      name: "SPDR broad market fund",
+    }),
+    listing({
+      ticker: "BROAD2",
+      figi: "BBG000000303",
+      shareClassFIGI: "BBGSHARECLASS-BROAD",
+      exchCode: "LN",
+      currency: "GBP",
+      name: "SPDR broad market fund",
+    }),
+  ]);
+
+  assert.equal(groups[0].listings[0].symbol, "SPY");
+  assert.equal(groups[1].listings.length, 2);
 });
 
 test("keeps ambiguous ETPs but excludes only explicitly classified ETN, ETC and certificates", () => {
@@ -308,7 +431,7 @@ test("ETF client encodes special characters once and never surfaces a raw failed
   }
 });
 
-test("caches an ETF-only v2 query and deduplicates simultaneous provider calls", async () => {
+test("caches an ETF-only v4 query and deduplicates simultaneous provider calls", async () => {
   let calls = 0;
   let release;
   const provider = {
@@ -328,6 +451,10 @@ test("caches an ETF-only v2 query and deduplicates simultaneous provider calls",
     },
   };
   const query = `cache-etf-${process.pid}-${Date.now()}`;
+  assert.equal(
+    getEtfSearchCacheKey(normalizeEtfSearchQuery("  Cache ETF  ")),
+    "openfigi:etf:v4:cache etf"
+  );
   const first = searchEtfInstruments(query, provider);
   const second = searchEtfInstruments(query, provider);
 
@@ -342,6 +469,88 @@ test("caches an ETF-only v2 query and deduplicates simultaneous provider calls",
   assert.equal(firstResult[0].listings[0].priceStatus, "unchecked");
   assert.deepEqual(secondResult, firstResult);
   assert.deepEqual(thirdResult, firstResult);
+});
+
+test("uses a verified existing ETF catalogue identity when OpenFIGI truncates a GPW ticker", async () => {
+  const openFigiMapping = groupEtfListings("PLBTFDP00015", [
+    listing({
+      ticker: "ETFBDIVP",
+      figi: "BBG01WNG89P2",
+      shareClassFIGI: "BBG01WNG89W4",
+      compositeFIGI: "BBG01WNG89N4",
+      exchCode: "PW",
+      currency: "",
+      name: "BETA ETF DYWIDENDA PLUS",
+    }),
+  ]);
+  const calls = [];
+  const provider = {
+    searchEtfs: async (query) => {
+      calls.push(query);
+      return query === "PLBTFDP00015" ? openFigiMapping : [];
+    },
+  };
+
+  for (const query of [
+    "ETFBDIVPL",
+    "BETA ETF Dywidenda Plus",
+    "Beta ETF Dywidenda Plus Portfelowy Fundusz Inwestycyjny Zamkniety",
+    "PLBTFDP00015",
+  ]) {
+    const [group] = await searchEtfInstruments(query, provider);
+    const [listingResult] = group.listings;
+
+    assert.equal(group.listings.length, 1);
+    assert.equal(group.name, "Beta ETF Dywidenda Plus");
+    assert.deepEqual(
+      {
+        ticker: listingResult.symbol,
+        exchange: listingResult.exchange,
+        currency: listingResult.marketCurrency,
+        isin: listingResult.isin,
+        figi: listingResult.instrumentIdentity.figi,
+        shareClassFigi: listingResult.instrumentIdentity.shareClassFigi,
+        provider: listingResult.provider,
+        providerId: listingResult.providerId,
+      },
+      {
+        ticker: "ETFBDIVPL",
+        exchange: "GPW",
+        currency: "PLN",
+        isin: "PLBTFDP00015",
+        figi: "BBG01WNG89P2",
+        shareClassFigi: "BBG01WNG89W4",
+        provider: "yahoo",
+        providerId: "ETFBDIVPL.WA",
+      }
+    );
+  }
+
+  assert.ok(calls.includes("PLBTFDP00015"));
+});
+
+test("keeps a pre-verified ETF provider identity when EODHD cannot resolve it", async () => {
+  const [group] = await searchEtfInstruments("ETFBDIVPL", {
+    searchEtfs: async (query) =>
+      query === "PLBTFDP00015"
+        ? groupEtfListings(query, [
+            listing({
+              ticker: "ETFBDIVP",
+              figi: "BBG01WNG89P2",
+              shareClassFIGI: "BBG01WNG89W4",
+              exchCode: "PW",
+              currency: "",
+              name: "BETA ETF DYWIDENDA PLUS",
+            }),
+          ])
+        : [],
+  });
+  const resolved = await resolveEtfListingPriceSource(group.listings[0], async () => []);
+
+  assert.equal(resolved.priceStatus, "unchecked");
+  assert.equal(resolved.provider, "yahoo");
+  assert.equal(resolved.providerId, "ETFBDIVPL.WA");
+  assert.equal(resolved.instrumentIdentity.providerPriceSymbol, "ETFBDIVPL.WA");
 });
 
 test("resolves an ETF price only with exact ticker and validated venue, never a first global match", async () => {

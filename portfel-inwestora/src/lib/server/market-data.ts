@@ -107,6 +107,33 @@ const shouldUseGpwStooqQuote = ({
   marketCurrency: CurrencyCode;
 }) => kind === "stock" && (isGpwSymbol(symbol) || marketCurrency === "PLN");
 
+/**
+ * A bare ticker is not a safe market identity.  In particular, a fallback
+ * quote for `DIA` must never be accepted for a saved GPW asset `DIA.PL`.
+ * Keep only candidates that explicitly carry the Warsaw-market suffix and
+ * put the Yahoo spelling first where a Yahoo fallback is needed.
+ */
+export const getGpwScopedProviderCandidates = (candidates: string[]) =>
+  uniqueBy(
+    candidates
+      .map((candidate) => normalizeSymbol(candidate))
+      .filter((candidate) => isGpwSymbol(candidate))
+      .sort((left, right) => Number(right.endsWith(".WA")) - Number(left.endsWith(".WA"))),
+    (candidate) => candidate
+  );
+
+const isMarketIdentityDiagnosticsEnabled = () =>
+  process.env.MARKET_DATA_DIAGNOSTICS === "true";
+
+const logMarketIdentityDiagnostics = (
+  stage: string,
+  details: Record<string, unknown>
+) => {
+  if (isMarketIdentityDiagnosticsEnabled()) {
+    console.info("[market-data:identity]", { stage, ...details });
+  }
+};
+
 const isUsFinnhubSymbol = (symbol: string) => /^[A-Z]{1,5}(\.[A-Z])?$/.test(symbol);
 const US_YAHOO_EXCHANGE_PATTERN = /\b(NYSE|NASDAQ|AMEX|BATS|CBOE|OTC)\b/i;
 
@@ -1603,6 +1630,10 @@ export const fetchAssetQuoteServer = async ({
     ].filter((candidate): candidate is string => Boolean(candidate?.trim())),
     (candidate) => normalizeSymbol(candidate)
   );
+  const gpwProviderIdCandidates = getGpwScopedProviderCandidates([
+    normalizedSymbol,
+    ...providerIdCandidates,
+  ]);
   const fetchEodhdQuoteFromProviderIds = (candidateProviderIds: string[]) =>
     firstNonNull(
       candidateProviderIds.map((candidateProviderId) =>
@@ -1664,6 +1695,17 @@ export const fetchAssetQuoteServer = async ({
     marketCurrency: resolvedMarketCurrency,
   });
 
+  logMarketIdentityDiagnostics("resolved", {
+    requestedSymbol,
+    resolvedSymbol: normalizedSymbol,
+    kind: resolvedKind,
+    marketCurrency: resolvedMarketCurrency,
+    provider: resolvedProvider,
+    providerId: resolvedProviderId ?? null,
+    lookupSymbols,
+    gpwProviderIdCandidates: isGpwStockRequest ? gpwProviderIdCandidates : undefined,
+  });
+
   if (resolvedKind === "crypto") {
     return fetchCoinGeckoQuote(normalizedSymbol, resolvedProviderId);
   }
@@ -1714,17 +1756,37 @@ export const fetchAssetQuoteServer = async ({
     );
 
     if (gpwQuote) {
+      logMarketIdentityDiagnostics("gpw-stooq", {
+        requestedSymbol,
+        quoteSymbol: gpwQuote.symbol,
+        quoteName: gpwQuote.name ?? null,
+        quoteCurrency: gpwQuote.marketCurrency,
+        quoteProvider: gpwQuote.provider,
+        quoteProviderId: gpwQuote.providerId ?? null,
+        price: gpwQuote.price,
+      });
       return gpwQuote;
     }
 
-    const eodhdQuote = await fetchEodhdQuoteFromLookup();
+    // Do not discover a GPW quote through a bare global ticker.  EODHD and
+    // Yahoo receive only the explicit `.PL`/`.WA` market identity.
+    const eodhdQuote = await fetchEodhdQuoteFromProviderIds(gpwProviderIdCandidates);
 
     if (eodhdQuote) {
+      logMarketIdentityDiagnostics("gpw-eodhd", {
+        requestedSymbol,
+        quoteSymbol: eodhdQuote.symbol,
+        quoteName: eodhdQuote.name ?? null,
+        quoteCurrency: eodhdQuote.marketCurrency,
+        quoteProvider: eodhdQuote.provider,
+        quoteProviderId: eodhdQuote.providerId ?? null,
+        price: eodhdQuote.price,
+      });
       return eodhdQuote;
     }
 
     const yahooQuote = await firstNonNull(
-      providerIdCandidates.map((candidateProviderId) =>
+      gpwProviderIdCandidates.map((candidateProviderId) =>
         fetchYahooQuote({
           symbol: normalizedSymbol,
           providerId: candidateProviderId,
@@ -1734,10 +1796,26 @@ export const fetchAssetQuoteServer = async ({
     );
 
     if (yahooQuote) {
+      logMarketIdentityDiagnostics("gpw-yahoo", {
+        requestedSymbol,
+        quoteSymbol: yahooQuote.symbol,
+        quoteName: yahooQuote.name ?? null,
+        quoteCurrency: yahooQuote.marketCurrency,
+        quoteProvider: yahooQuote.provider,
+        quoteProviderId: yahooQuote.providerId ?? null,
+        price: yahooQuote.price,
+      });
       return yahooQuote;
     }
 
-    return fetchFinnhubQuoteFromLookup();
+    // Finnhub accepts bare global tickers.  Returning no quote is safer than
+    // turning a Polish asset into an unrelated US instrument.
+    logMarketIdentityDiagnostics("gpw-unavailable", {
+      requestedSymbol,
+      resolvedSymbol: normalizedSymbol,
+      marketCurrency: resolvedMarketCurrency,
+    });
+    return null;
   }
 
   if (resolvedProvider === "yahoo" && (resolvedKind === "stock" || resolvedKind === "etf")) {

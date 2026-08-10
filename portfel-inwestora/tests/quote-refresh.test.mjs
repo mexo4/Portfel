@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { refreshPortfolioQuotesWithProgress } from "../src/lib/api.ts";
+import {
+  mergeQuoteIntoPortfolioAsset,
+  refreshPortfolioQuotesWithProgress,
+} from "../src/lib/api.ts";
+import { getGpwScopedProviderCandidates } from "../src/lib/server/market-data.ts";
 
 const originalFetch = globalThis.fetch;
 
@@ -63,4 +67,71 @@ test("reports real quote progress and leaves an asset without a quote unchanged"
   assert.equal(result.assets[0].latestPrice, 101.25);
   assert.equal(result.assets[0].latestPriceDate, "2026-08-07");
   assert.equal(result.assets[1].latestPrice, undefined);
+});
+
+test("keeps a GPW identity intact and rejects a global USD ticker collision", () => {
+  const dia = {
+    id: "dia",
+    kind: "stock",
+    symbol: "DIA.PL",
+    name: "Diagnostyka",
+    marketCurrency: "PLN",
+    provider: "stooq",
+    providerId: undefined,
+  };
+
+  const collided = mergeQuoteIntoPortfolioAsset(dia, {
+    symbol: "DIA.PL",
+    name: "State Street SPDR Dow Jones Industrial Average ETF Trust",
+    price: 538.99,
+    marketCurrency: "USD",
+    provider: "yahoo",
+    providerId: "DIA",
+    fetchedAt: "2026-08-10T12:00:00.000Z",
+  });
+
+  assert.deepEqual(collided, dia);
+
+  const gpwQuote = mergeQuoteIntoPortfolioAsset(dia, {
+    symbol: "DIA.PL",
+    name: "Diagnostyka S.A.",
+    price: 41.53,
+    marketCurrency: "PLN",
+    provider: "yahoo",
+    providerId: "DIA.WA",
+    fetchedAt: "2026-08-10T12:00:00.000Z",
+    priceDate: "2026-08-07",
+  });
+
+  assert.deepEqual(
+    {
+      symbol: gpwQuote.symbol,
+      name: gpwQuote.name,
+      marketCurrency: gpwQuote.marketCurrency,
+      provider: gpwQuote.provider,
+      providerId: gpwQuote.providerId,
+      latestPrice: gpwQuote.latestPrice,
+      latestPriceDate: gpwQuote.latestPriceDate,
+    },
+    {
+      symbol: "DIA.PL",
+      name: "Diagnostyka",
+      marketCurrency: "PLN",
+      provider: "stooq",
+      providerId: undefined,
+      latestPrice: 41.53,
+      latestPriceDate: "2026-08-07",
+    }
+  );
+});
+
+test("GPW fallback candidates never contain a bare globally-colliding ticker", () => {
+  assert.deepEqual(
+    getGpwScopedProviderCandidates(["DIA", "DIA.PL", "DIA.WA", "DNP"]),
+    ["DIA.WA", "DIA.PL"]
+  );
+  assert.deepEqual(
+    getGpwScopedProviderCandidates(["DNP", "DNP.PL", "DNP.WA"]),
+    ["DNP.WA", "DNP.PL"]
+  );
 });

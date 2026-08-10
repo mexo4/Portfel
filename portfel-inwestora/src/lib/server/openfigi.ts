@@ -1,9 +1,11 @@
 import {
   searchEodhdEtfPriceCandidates,
+  searchEodhdEtfs,
   type EodhdEtfPriceCandidate,
 } from "@/lib/server/eodhd";
 import { getMarketCachePayload, setMarketCachePayload } from "@/lib/server/market-cache";
-import { normalizeSymbol } from "@/lib/ticker";
+import { getGpwTickerCore, isGpwSymbol, normalizeSymbol } from "@/lib/ticker";
+import { TICKER_ALIAS_MAP, type TickerAliasResolution } from "@/lib/ticker-aliases";
 import { normalizeText, toCurrencyCode, uniqueBy } from "@/lib/utils";
 import type {
   CurrencyCode,
@@ -67,6 +69,7 @@ type OpenFigiDiagnostics = {
   rawResultCount?: number;
   normalizedListingCount?: number;
   exchangeTradedProductCount?: number;
+  fallbackListingCount?: number;
   finalGroupCount?: number;
   rateLimitRemaining?: string | null;
 };
@@ -139,6 +142,33 @@ const toCurrency = (value: string): CurrencyCode | undefined => {
   return /^[A-Z]{3}$/.test(normalized) ? toCurrencyCode(normalized) : undefined;
 };
 
+/**
+ * OpenFIGI's `exchCode` is a Bloomberg exchange code, not a label intended
+ * for investors.  Keep this intentionally small: a wrong human-readable
+ * venue is worse than an explicit "needs confirmation" state.  Codes outside
+ * this verified set remain visible, but never masquerade as a known exchange.
+ */
+const VERIFIED_ETF_VENUE_LABELS: Record<string, string> = {
+  CJ: "Pure Trading",
+  CT: "Toronto Stock Exchange",
+  FP: "Euronext Paris",
+  GR: "Xetra",
+  GY: "Frankfurt",
+  HK: "Hong Kong Stock Exchange",
+  IM: "Borsa Italiana",
+  LN: "London Stock Exchange",
+  NA: "Euronext Amsterdam",
+  SW: "SIX Swiss Exchange",
+  US: "Rynek USA",
+};
+
+const getEtfVenueLabel = (exchangeCode: string, mic: string) => {
+  const confirmedVenue = VERIFIED_ETF_VENUE_LABELS[exchangeCode];
+  const venue = confirmedVenue ?? "Rynek do potwierdzenia";
+
+  return mic ? `${venue} · MIC ${mic}` : venue;
+};
+
 const getMatchScore = (query: string, listing: EtfListing) => {
   const normalizedQuery = normalizeSymbol(query);
   const normalizedText = normalizeText(query);
@@ -156,9 +186,16 @@ const getMatchScore = (query: string, listing: EtfListing) => {
   if (ticker === normalizedQuery) return 0;
   if (identifiers.includes(normalizedQuery)) return 1;
   if (name === normalizedText) return 2;
-  if (name.startsWith(normalizedText)) return 3;
-  if (name.includes(normalizedText)) return 4;
-  return 5;
+  if (ticker.startsWith(normalizedQuery)) return 3;
+
+  const nameWords = name.split(" ").filter(Boolean);
+  if (name.startsWith(normalizedText) || nameWords.some((word) => word.startsWith(normalizedText))) {
+    return 4;
+  }
+
+  if (ticker.includes(normalizedQuery)) return 5;
+  if (name.includes(normalizedText)) return 6;
+  return 7;
 };
 
 const compareListings = (query: string, left: EtfListing, right: EtfListing) =>
@@ -218,7 +255,7 @@ const toListing = (value: unknown): EtfListing | null => {
     marketCurrency: currency ?? "USD",
     provider: "eodhd",
     source: "api",
-    subtitle: [exchangeCode, mic].filter(Boolean).join(" / ") || undefined,
+    subtitle: getEtfVenueLabel(exchangeCode, mic),
     isin: isin || undefined,
     exchange: exchangeCode || undefined,
     exchangeCode: exchangeCode || undefined,
@@ -293,13 +330,17 @@ const groupNormalizedEtfListings = (query: string, listings: EtfListing[]): EtfS
     }))
     .sort(
       (left, right) =>
-        getMatchScore(query, left.listings[0]!) - getMatchScore(query, right.listings[0]!) ||
+        Math.min(...left.listings.map((listing) => getMatchScore(query, listing))) -
+          Math.min(...right.listings.map((listing) => getMatchScore(query, listing))) ||
         left.name.localeCompare(right.name)
     );
 };
 
 export const groupEtfListings = (query: string, rawItems: unknown[]): EtfSearchGroup[] =>
   groupNormalizedEtfListings(query, normaliseEtfResults(rawItems).listings);
+
+export const groupEtfListingResults = (query: string, listings: EtfListing[]) =>
+  groupNormalizedEtfListings(query, listings);
 
 const isFigiQuery = (query: string) => /^BBG[A-Z0-9]{9,}$/i.test(query);
 const isIsinQuery = (query: string) => /^[A-Z]{2}[A-Z0-9]{9}\d$/i.test(query);
@@ -503,6 +544,168 @@ export class OpenFigiInstrumentSearchProvider implements InstrumentSearchProvide
   }
 }
 
+const getAliasSearchFields = (alias: TickerAliasResolution) => [
+  normalizeSymbol(alias.brokerSymbol),
+  normalizeSymbol(alias.symbol),
+  normalizeSymbol(alias.providerId ?? ""),
+  normalizeSymbol(alias.isin ?? ""),
+  normalizeText(alias.name ?? ""),
+];
+
+const isEtfAliasMatch = (query: string, alias: TickerAliasResolution) => {
+  const normalizedSymbolQuery = normalizeSymbol(query);
+  const normalizedTextQuery = normalizeText(query);
+
+  if (!normalizedSymbolQuery || !normalizedTextQuery) {
+    return false;
+  }
+
+  return getAliasSearchFields(alias).some((field) => {
+    if (!field) return false;
+
+    return (
+      field === normalizedSymbolQuery ||
+      field === normalizedTextQuery ||
+      (normalizedSymbolQuery.length >= 2 && field.startsWith(normalizedSymbolQuery)) ||
+      (normalizedTextQuery.length >= 2 && field.includes(normalizedTextQuery)) ||
+      (normalizedTextQuery.length >= 2 && normalizedTextQuery.includes(field))
+    );
+  });
+};
+
+const getCatalogEtfAliases = (query: string) =>
+  TICKER_ALIAS_MAP.filter(
+    (alias) => alias.kind === "etf" && isEtfAliasMatch(query, alias)
+  );
+
+const getCatalogDisplayTicker = (alias: TickerAliasResolution) => {
+  const providerSymbol = normalizeSymbol(alias.symbol);
+
+  return isGpwSymbol(providerSymbol) ? getGpwTickerCore(providerSymbol) : providerSymbol;
+};
+
+const toCatalogEtfListing = (
+  alias: TickerAliasResolution,
+  openFigiListing?: EtfListing
+): EtfListing | null => {
+  const ticker = getCatalogDisplayTicker(alias);
+  const name = alias.name?.trim();
+  const currency = alias.marketCurrency;
+
+  if (!ticker || !name || !currency) {
+    return null;
+  }
+
+  const isGpw = isGpwSymbol(alias.symbol) || isGpwSymbol(alias.brokerSymbol);
+  const figi = openFigiListing?.instrumentIdentity.figi;
+  const instrumentIdentity: InstrumentIdentity = {
+    ...openFigiListing?.instrumentIdentity,
+    ticker,
+    name,
+    instrumentType: "ETF",
+    exchange: isGpw ? "GPW" : openFigiListing?.instrumentIdentity.exchange,
+    exchangeCode: isGpw ? "GPW" : openFigiListing?.instrumentIdentity.exchangeCode,
+    currency,
+    providerPriceSymbol: alias.providerId,
+  };
+
+  return {
+    listingId: figi || `etf:catalog:${alias.isin ?? alias.symbol}`,
+    symbol: ticker,
+    name,
+    kind: "etf",
+    marketCurrency: currency,
+    provider: alias.provider ?? "eodhd",
+    providerId: alias.providerId,
+    providerPriceSymbol: alias.providerId,
+    source: "catalog",
+    subtitle: isGpw ? "Giełda Papierów Wartościowych w Warszawie" : undefined,
+    isin: alias.isin,
+    exchange: isGpw ? "GPW" : openFigiListing?.exchange,
+    exchangeCode: isGpw ? "GPW" : openFigiListing?.exchangeCode,
+    mic: openFigiListing?.mic,
+    securityType: openFigiListing?.securityType,
+    priceStatus: "unchecked",
+    instrumentIdentity,
+  };
+};
+
+const toEodhdFallbackEtfListing = (
+  result: Awaited<ReturnType<typeof searchEodhdEtfs>>[number]
+): EtfListing | null => {
+  const ticker = normalizeSymbol(result.symbol).split(".")[0] ?? normalizeSymbol(result.symbol);
+  const exchange = normalizeSymbol(result.subtitle?.split("/")[0] ?? "");
+
+  if (!ticker || !result.name || !result.providerId) {
+    return null;
+  }
+
+  return {
+    listingId: `etf:eodhd:${normalizeSymbol(result.providerId)}`,
+    symbol: ticker,
+    name: result.name,
+    kind: "etf" as const,
+    marketCurrency: result.marketCurrency,
+    provider: "eodhd" as const,
+    providerId: result.providerId,
+    providerPriceSymbol: result.providerId,
+    source: "api" as const,
+    subtitle: result.subtitle,
+    isin: result.isin,
+    exchange: exchange || undefined,
+    exchangeCode: exchange || undefined,
+    priceStatus: "unchecked" as const,
+    instrumentIdentity: {
+      ticker,
+      name: result.name,
+      instrumentType: "ETF" as const,
+      exchange: exchange || undefined,
+      exchangeCode: exchange || undefined,
+      currency: result.marketCurrency,
+      providerPriceSymbol: result.providerId,
+    },
+  } satisfies EtfListing;
+};
+
+/**
+ * The local alias catalogue and EODHD are ETF-only complements to OpenFIGI.
+ * They are never consulted by the global asset search and are only used when
+ * a source can provide a concrete provider/listing identity.
+ */
+const getEtfFallbackListings = async (
+  query: string,
+  provider: InstrumentSearchProvider,
+  primaryListings: EtfListing[]
+) => {
+  const catalogAliases = getCatalogEtfAliases(query);
+  const mappedCatalogListings = await Promise.all(
+    catalogAliases.map(async (alias) => {
+      const mappedGroup = alias.isin
+        ? await provider.searchEtfs(alias.isin).catch(() => [])
+        : [];
+      const mappedListing = mappedGroup.flatMap((group) => group.listings)[0];
+
+      return toCatalogEtfListing(alias, mappedListing);
+    })
+  );
+  const catalogListings = mappedCatalogListings.filter(
+    (listing): listing is EtfListing => Boolean(listing)
+  );
+
+  // EODHD is deliberately a last fallback.  Its exchange-wide recovery can
+  // be more expensive, so it runs only when neither OpenFIGI nor the known
+  // local catalogue found any ETF for this query.
+  const eodhdListings =
+    primaryListings.length === 0 && catalogListings.length === 0
+      ? (await searchEodhdEtfs(query).catch(() => []))
+          .slice(0, 8)
+          .map(toEodhdFallbackEtfListing)
+          .filter((listing): listing is EtfListing => Boolean(listing))
+      : [];
+
+  return uniqueBy([...catalogListings, ...eodhdListings], (listing) => listing.listingId);
+};
+
 const localSearchCache = new Map<string, { groups: EtfSearchGroup[]; expiresAt: number }>();
 const inFlightSearches = new Map<string, Promise<EtfSearchGroup[]>>();
 const requestWindows = new Map<string, number[]>();
@@ -521,8 +724,8 @@ export const enforceOpenFigiSearchRateLimit = (actorId: string) => {
   requestWindows.set(actorId, active);
 };
 
-const getEtfSearchCacheKey = (normalizedQuery: string) =>
-  `openfigi:etf:v2:${normalizedQuery.toLocaleLowerCase("en-US")}`;
+export const getEtfSearchCacheKey = (normalizedQuery: string) =>
+  `openfigi:etf:v4:${normalizedQuery.toLocaleLowerCase("en-US")}`;
 
 const getCachedSearch = async (cacheKey: string) => {
   const memory = localSearchCache.get(cacheKey);
@@ -584,7 +787,28 @@ export const searchEtfInstruments = async (
 
   const request = provider
     .searchEtfs(normalizedQuery)
-    .then(async (groups) => {
+    .then(async (primaryGroups) => {
+      const primaryListings = primaryGroups.flatMap((group) => group.listings);
+      const fallbackListings = await getEtfFallbackListings(
+        normalizedQuery,
+        provider,
+        primaryListings
+      );
+      // Prefer a catalog record only when it was verified by its own ISIN.
+      // FIGI is then the deduplication key, so this does not guess based on a
+      // display name or a ticker collision.
+      const groups = groupEtfListingResults(
+        normalizedQuery,
+        uniqueBy([...fallbackListings, ...primaryListings], (listing) => listing.listingId)
+      );
+      logDiagnostics({
+        rawQuery: query,
+        normalizedQuery,
+        endpoint: "Mexo ETF discovery",
+        method: "POST",
+        fallbackListingCount: fallbackListings.length,
+        finalGroupCount: groups.length,
+      });
       localSearchCache.set(cacheKey, {
         groups,
         expiresAt: Date.now() + OPENFIGI_SEARCH_CACHE_TTL_MS,
@@ -693,6 +917,21 @@ export const resolveEtfListingPriceSource = async (
   findCandidates: (query: string) => Promise<EodhdEtfPriceCandidate[]> =
     searchEodhdEtfPriceCandidates
 ): Promise<EtfListing> => {
+  // A controlled ETF-catalog fallback can already provide an exact,
+  // provider-specific price symbol (for example a GPW `.WA` listing).  Do not
+  // erase that identity merely because EODHD cannot independently resolve it.
+  if (listing.provider !== "eodhd" && listing.providerId) {
+    return {
+      ...listing,
+      providerPriceSymbol: listing.providerId,
+      priceStatus: "unchecked",
+      instrumentIdentity: {
+        ...listing.instrumentIdentity,
+        providerPriceSymbol: listing.providerId,
+      },
+    };
+  }
+
   const candidates = await findCandidates(listing.symbol);
   const rankedCandidates = uniqueBy(candidates, (candidate) => candidate.providerId)
     .flatMap((candidate) => {

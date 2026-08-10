@@ -51,6 +51,17 @@ const getCurrencyOptions = (...currencies: string[]) =>
     (currency) => currency.toUpperCase()
   );
 
+const ETF_GROUPS_PRESENTATION_LIMIT = 15;
+
+const formatEtfListingCount = (count: number) => {
+  if (count === 1) return "1 listing";
+  if (count % 10 >= 2 && count % 10 <= 4 && (count < 10 || count > 20)) {
+    return `${count} listingi`;
+  }
+
+  return `${count} listingów`;
+};
+
 export default function AddAssetForm({
   showModeSelector = true,
   searchMode,
@@ -72,6 +83,7 @@ export default function AddAssetForm({
   onSellSubmit,
 }: AddAssetFormProps) {
   const [selectedEtfListing, setSelectedEtfListing] = useState<EtfListing | null>(null);
+  const [expandedEtfGroupId, setExpandedEtfGroupId] = useState<string | null>(null);
   const trimmedQuery = draft.query.trim();
   const trimmedSymbol = draft.symbol.trim();
   const activeSearchText = trimmedQuery || trimmedSymbol;
@@ -80,10 +92,7 @@ export default function AddAssetForm({
   const hasReachedMinimumSearchLength = activeSearchText.length >= minimumSearchLength;
   const isEtfSearch = searchMode === "etf";
   const groupedEtfResults = isEtfSearch ? etfResultGroups ?? [] : [];
-  const etfListingsCount = groupedEtfResults.reduce(
-    (total, group) => total + group.listings.length,
-    0
-  );
+  const presentedEtfGroups = groupedEtfResults.slice(0, ETF_GROUPS_PRESENTATION_LIMIT);
   const hasSearchResults = isEtfSearch ? groupedEtfResults.length > 0 : results.length > 0;
   const activeSelectedEtfListing =
     isEtfSearch &&
@@ -100,7 +109,7 @@ export default function AddAssetForm({
   const getListingLabel = (listing: EtfListing) =>
     [
       listing.symbol,
-      listing.exchange ?? listing.exchangeCode ?? "Giełda nieznana",
+      listing.subtitle ?? "Rynek do potwierdzenia",
       listing.instrumentIdentity.currency ?? "Waluta do potwierdzenia",
     ]
       .filter(Boolean)
@@ -113,12 +122,20 @@ export default function AddAssetForm({
 
   const handleQueryChange = (query: string) => {
     setSelectedEtfListing(null);
+    setExpandedEtfGroupId(null);
     onQueryChange(query);
   };
 
   const handleSymbolChange = (symbol: string) => {
     setSelectedEtfListing(null);
+    setExpandedEtfGroupId(null);
     onSymbolChange(symbol);
+  };
+
+  const handleEtfGroupToggle = (groupId: string) => {
+    setExpandedEtfGroupId((currentGroupId) =>
+      currentGroupId === groupId ? null : groupId
+    );
   };
 
   return (
@@ -244,12 +261,22 @@ export default function AddAssetForm({
 
       {shouldShowSearchPanel ? (
         <div className="mt-4">
-          <div className="search-stack-panel search-stack-panel-prominent">
+          <div
+            className={
+              isEtfSearch
+                ? "search-stack-panel search-stack-panel-prominent etf-search-stack-panel"
+                : "search-stack-panel search-stack-panel-prominent"
+            }
+          >
             <div className="search-panel-header">
               <p className="search-panel-title">Sugestie</p>
               {hasSearchResults ? (
                 <span className="search-panel-count">
-                  {isEtfSearch ? etfListingsCount : results.length}
+                  {isEtfSearch
+                    ? presentedEtfGroups.length === groupedEtfResults.length
+                      ? `${presentedEtfGroups.length} funduszy`
+                      : `${presentedEtfGroups.length} z ${groupedEtfResults.length}`
+                    : results.length}
                 </span>
               ) : null}
             </div>
@@ -285,50 +312,95 @@ export default function AddAssetForm({
 
             {isEtfSearch && groupedEtfResults.length > 0 ? (
               <div className="etf-search-groups" aria-label="Wyniki ETF">
-                {groupedEtfResults.map((group) => (
-                  <section className="etf-search-group" key={group.id}>
-                    <header className="etf-search-group-header">
-                      <TruncatedText
-                        as="p"
-                        className="etf-search-group-title"
-                        text={group.name}
-                      />
-                      <span className="etf-type-label">ETF</span>
-                    </header>
+                {presentedEtfGroups.map((group) => {
+                  const isExpanded = expandedEtfGroupId === group.id;
+                  const listingsId = `etf-listings-${group.id}`;
 
-                    <div className="etf-listing-list" role="list">
-                      {group.listings.map((listing) => {
-                        const listingLabel = getListingLabel(listing);
-                        const isSelected =
-                          activeSelectedEtfListing &&
-                          selectedEtfListing?.listingId === listing.listingId;
+                  return (
+                    <section className="etf-search-group" key={group.id}>
+                      <button
+                        type="button"
+                        className={
+                          isExpanded
+                            ? "etf-search-group-toggle is-expanded"
+                            : "etf-search-group-toggle"
+                        }
+                        onClick={() => handleEtfGroupToggle(group.id)}
+                        aria-expanded={isExpanded}
+                        aria-controls={listingsId}
+                      >
+                        <span className="etf-search-group-heading">
+                          <span className="etf-search-group-title" title={group.name}>
+                            {group.name}
+                          </span>
+                          <span className="etf-search-group-copy">
+                            Fundusz / share class
+                          </span>
+                        </span>
+                        <span className="etf-search-group-meta">
+                          <span className="etf-type-label">ETF</span>
+                          <span className="etf-listing-count">
+                            {formatEtfListingCount(group.listings.length)}
+                          </span>
+                        </span>
+                        <span className="etf-search-group-chevron" aria-hidden="true">
+                          {isExpanded ? "−" : "+"}
+                        </span>
+                      </button>
 
-                        return (
-                          <div key={listing.listingId} role="listitem">
-                            <button
-                              type="button"
-                              className={
-                                isSelected
-                                  ? "etf-listing-choice is-selected"
-                                  : "etf-listing-choice"
-                              }
-                              onClick={() => handleEtfListingPick(listing)}
-                              aria-label={`Wybierz listing: ${listingLabel}`}
-                              aria-pressed={isSelected}
-                            >
-                              <span className="etf-listing-choice-main">{listingLabel}</span>
-                              {listing.priceStatus === "unavailable" ? (
-                                <span className="etf-listing-price-status">
-                                  Brak aktualnego kursu
-                                </span>
-                              ) : null}
-                            </button>
+                      {isExpanded ? (
+                        <div className="etf-listing-inset" id={listingsId}>
+                          <div className="etf-listing-inset-header">
+                            <span>Wybierz konkretne notowanie</span>
+                            <span>{formatEtfListingCount(group.listings.length)}</span>
                           </div>
-                        );
-                      })}
-                    </div>
-                  </section>
-                ))}
+                          <p className="etf-expanded-fund-name">{group.name}</p>
+                          <div className="etf-listing-list" role="list">
+                            {group.listings.map((listing) => {
+                              const listingLabel = getListingLabel(listing);
+                              const isSelected =
+                                activeSelectedEtfListing &&
+                                selectedEtfListing?.listingId === listing.listingId;
+                              const isVenueUnconfirmed =
+                                listing.subtitle === "Rynek do potwierdzenia" &&
+                                Boolean(listing.exchangeCode);
+
+                              return (
+                                <div key={listing.listingId} role="listitem">
+                                  <button
+                                    type="button"
+                                    className={
+                                      isSelected
+                                        ? "etf-listing-choice is-selected"
+                                        : "etf-listing-choice"
+                                    }
+                                    onClick={() => handleEtfListingPick(listing)}
+                                    aria-label={`Wybierz listing: ${listingLabel}`}
+                                    aria-pressed={isSelected}
+                                  >
+                                    <span className="etf-listing-choice-content">
+                                      <span className="etf-listing-choice-main">{listingLabel}</span>
+                                      {isVenueUnconfirmed ? (
+                                        <span className="etf-listing-technical-meta">
+                                          Kod OpenFIGI: {listing.exchangeCode}
+                                        </span>
+                                      ) : null}
+                                    </span>
+                                    {listing.priceStatus === "unavailable" ? (
+                                      <span className="etf-listing-price-status">
+                                        Brak aktualnego kursu
+                                      </span>
+                                    ) : null}
+                                  </button>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ) : null}
+                    </section>
+                  );
+                })}
               </div>
             ) : results.length > 0 ? (
               <div className="search-result-list search-result-list-prominent">

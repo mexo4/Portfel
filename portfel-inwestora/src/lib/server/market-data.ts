@@ -46,6 +46,7 @@ type FinnhubSearchResponse = {
 type FinnhubQuoteResponse = {
   c?: number;
   pc?: number;
+  t?: number;
 };
 
 type StooqQuoteResponse = {
@@ -1064,12 +1065,19 @@ const fetchFinnhubQuote = async (
     return null;
   }
 
+  const marketTimestamp =
+    typeof quotePayload.t === "number" && quotePayload.t > 0
+      ? new Date(quotePayload.t * 1_000).toISOString()
+      : undefined;
+
   return {
     symbol,
     price: round(latestPrice),
     marketCurrency: toCurrencyCode(fallbackCurrency),
     provider: "finnhub",
     fetchedAt: new Date().toISOString(),
+    marketTimestamp,
+    priceDate: marketTimestamp?.slice(0, 10),
     previousClose:
       typeof quotePayload.pc === "number" && quotePayload.pc > 0
         ? round(quotePayload.pc)

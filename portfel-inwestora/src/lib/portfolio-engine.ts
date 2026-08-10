@@ -26,6 +26,16 @@ export type PortfolioAssetGroup = {
   averagePurchasePrice: number;
   averagePurchasePriceCurrency: CurrencyCode;
   marketCurrency: CurrencyCode;
+  /** Current market quote for one unit, never the total position value. */
+  currentUnitPrice?: number;
+  /** quantity × currentUnitPrice in the instrument quote currency. */
+  marketValueQuote?: number;
+  /** Position valuation in the portfolio's selected base currency. */
+  marketValueBase: number;
+  /** Purchase cost including fees in the portfolio's selected base currency. */
+  costBasisBase: number;
+  /** marketValueBase − costBasisBase. */
+  profitLossBase: number;
   latestUnitPrice?: number;
   previousClose?: number;
   hasLivePrice: boolean;
@@ -39,6 +49,9 @@ export type PortfolioAssetGroup = {
   totalValue: number;
   totalProfitLoss: number;
   lastUpdatedAt?: string;
+  latestPriceDate?: string;
+  latestPriceMarketTimestamp?: string;
+  latestPriceFetchedAt?: string;
   groupOrder: number;
   lotsCount: number;
   lots: PortfolioAsset[];
@@ -209,6 +222,34 @@ export const getAssetProfitLoss = (
   baseCurrency: CurrencyCode = BASE_CURRENCY
 ) => convertFromPln(getAssetProfitLossPln(asset, fxRates), baseCurrency, fxRates);
 
+/**
+ * Explicit valuation model for consumers that render a position. Keeping
+ * unit price, quote-currency value and portfolio-currency value separate
+ * prevents a position value from ever being mistaken for a market quote.
+ */
+export const getAssetValuation = (
+  asset: PortfolioAsset,
+  fxRates: FxRates,
+  baseCurrency: CurrencyCode = BASE_CURRENCY
+) => {
+  const currentUnitPrice = getAssetLatestUnitPrice(asset);
+  const marketValueQuote =
+    currentUnitPrice === undefined ? undefined : round(currentUnitPrice * asset.quantity, 8);
+  const marketValueBase = getAssetMarketValue(asset, fxRates, baseCurrency);
+  const costBasisBase = getAssetInvestedValue(asset, fxRates, baseCurrency);
+  const profitLossBase = getAssetProfitLoss(asset, fxRates, baseCurrency);
+
+  return {
+    currentUnitPrice,
+    quantity: asset.quantity,
+    quoteCurrency: asset.marketCurrency,
+    marketValueQuote,
+    marketValueBase,
+    costBasisBase,
+    profitLossBase,
+  };
+};
+
 export const getGroupedPortfolioAssets = (
   assets: PortfolioAsset[],
   fxRates: FxRates,
@@ -238,7 +279,10 @@ export const getGroupedPortfolioAssets = (
           sortedLots.reduce((total, lot) => {
             const latestUnitPrice = getAssetLatestUnitPrice(lot);
             return total + (latestUnitPrice ?? 0) * lot.quantity;
-          }, 0) / Math.max(quantity, 1),
+          // Quantity may legitimately be fractional (for example 0.03 LPP
+          // shares or 0.002 BTC). Dividing by 1 turned the displayed unit
+          // quote into the whole position's market value.
+          }, 0) / (quantity > 0 ? quantity : 1),
           8
         )
       : undefined;
@@ -253,8 +297,8 @@ export const getGroupedPortfolioAssets = (
               return total + lotPreviousClose * lot.quantity;
             }, 0) /
               Math.max(
-                previousCloseLots.reduce((total, lot) => total + lot.quantity, 0),
-                1
+              previousCloseLots.reduce((total, lot) => total + lot.quantity, 0),
+                Number.EPSILON
               ),
             8
           )
@@ -294,6 +338,25 @@ export const getGroupedPortfolioAssets = (
     const totalProfitLossPln = round(
       sortedLots.reduce((total, lot) => total + getAssetProfitLossPln(lot, fxRates), 0)
     );
+    const totalValue = convertFromPln(totalValuePln, baseCurrency, fxRates);
+    const totalInvested = convertFromPln(totalInvestedPln, baseCurrency, fxRates);
+    const totalProfitLoss = convertFromPln(totalProfitLossPln, baseCurrency, fxRates);
+    const marketValueQuote =
+      weightedLatestUnitPrice === undefined
+        ? undefined
+        : round(weightedLatestUnitPrice * quantity, 8);
+    const latestPriceDate = sortedLots
+      .map((lot) => lot.latestPriceDate)
+      .filter((value): value is string => Boolean(value))
+      .sort((left, right) => right.localeCompare(left))[0];
+    const latestPriceMarketTimestamp = sortedLots
+      .map((lot) => lot.latestPriceMarketTimestamp)
+      .filter((value): value is string => Boolean(value))
+      .sort((left, right) => new Date(right).getTime() - new Date(left).getTime())[0];
+    const latestPriceFetchedAt = sortedLots
+      .map((lot) => lot.latestPriceFetchedAt ?? lot.lastUpdatedAt)
+      .filter((value): value is string => Boolean(value))
+      .sort((left, right) => new Date(right).getTime() - new Date(left).getTime())[0];
 
     return {
       key,
@@ -311,6 +374,11 @@ export const getGroupedPortfolioAssets = (
       ),
       averagePurchasePriceCurrency,
       marketCurrency: representativeLot.marketCurrency,
+      currentUnitPrice: weightedLatestUnitPrice,
+      marketValueQuote,
+      marketValueBase: totalValue,
+      costBasisBase: totalInvested,
+      profitLossBase: totalProfitLoss,
       latestUnitPrice: weightedLatestUnitPrice,
       previousClose,
       hasLivePrice,
@@ -320,10 +388,13 @@ export const getGroupedPortfolioAssets = (
       totalValuePln,
       totalProfitLossPln,
       baseCurrency,
-      totalInvested: convertFromPln(totalInvestedPln, baseCurrency, fxRates),
-      totalValue: convertFromPln(totalValuePln, baseCurrency, fxRates),
-      totalProfitLoss: convertFromPln(totalProfitLossPln, baseCurrency, fxRates),
-      lastUpdatedAt,
+      totalInvested,
+      totalValue,
+      totalProfitLoss,
+      lastUpdatedAt: latestPriceFetchedAt ?? lastUpdatedAt,
+      latestPriceDate,
+      latestPriceMarketTimestamp,
+      latestPriceFetchedAt,
       groupOrder: groupOrderCandidates[0] ?? Number.MAX_SAFE_INTEGER,
       lotsCount: sortedLots.length,
       lots: sortedLots,

@@ -44,6 +44,7 @@ type AssetTableProps = {
   baseCurrency: CurrencyCode;
   filter: string;
   sortMode: AssetTableSortMode;
+  isRefreshing?: boolean;
   onFilterChange: (value: string) => void;
   onSortModeChange: (mode: AssetTableSortMode) => void;
   onReorderGroups: (nextGroupKeys: string[]) => void;
@@ -57,6 +58,7 @@ type SortableGroupSectionProps = {
   isExpanded: boolean;
   isManualSortMode: boolean;
   isManualReorderLocked: boolean;
+  isRefreshing: boolean;
   onToggleGroup: (groupKey: string) => void;
   onRemove: (assetId: string) => void;
 };
@@ -203,6 +205,7 @@ const SortableGroupSection = ({
   isExpanded,
   isManualSortMode,
   isManualReorderLocked,
+  isRefreshing,
   onToggleGroup,
   onRemove,
 }: SortableGroupSectionProps) => {
@@ -219,13 +222,18 @@ const SortableGroupSection = ({
     disabled: !canDrag,
   });
 
-  const latestUnitPriceLabel =
-    group.latestUnitPrice !== undefined
-      ? formatCurrency(group.latestUnitPrice, group.marketCurrency)
+  const currentUnitPriceLabel =
+    group.currentUnitPrice !== undefined
+      ? formatCurrency(group.currentUnitPrice, group.marketCurrency)
       : "brak kursu";
-  const totalValueLabel = group.hasLivePrice
-    ? formatCurrency(group.totalValue, baseCurrency)
+  const marketValueBaseLabel = group.hasLivePrice
+    ? formatCurrency(group.marketValueBase, baseCurrency)
     : "brak kursu";
+  const marketQuoteLabel = group.latestPriceDate
+    ? `cena z ${formatDate(group.latestPriceDate)}`
+    : group.latestPriceFetchedAt
+      ? `pobrano ${formatDateTime(group.latestPriceFetchedAt)}`
+      : "brak daty notowania";
   const style: CSSProperties = {
     transform: CSS.Transform.toString(transform),
     transition,
@@ -308,7 +316,7 @@ const SortableGroupSection = ({
             <>
               {formatCurrency(group.averagePurchasePrice, group.averagePurchasePriceCurrency)}
               <div className="table-note">
-                koszt: {formatCurrency(group.totalInvested, baseCurrency)}
+                koszt: {formatCurrency(group.costBasisBase, baseCurrency)}
               </div>
             </>
           )}
@@ -318,15 +326,15 @@ const SortableGroupSection = ({
             <DragRowPlaceholder />
           ) : (
             <>
-              {latestUnitPriceLabel}
-              <div className="table-note">wartosc: {totalValueLabel}</div>
+              {currentUnitPriceLabel}
+              <div className="table-note">wartosc pozycji: {marketValueBaseLabel}</div>
             </>
           )}
         </td>
         <td
           className={
             group.hasLivePrice
-              ? group.totalProfitLoss >= 0
+              ? group.profitLossBase >= 0
                 ? "tone-positive"
                 : "tone-negative"
               : ""
@@ -335,7 +343,7 @@ const SortableGroupSection = ({
           {isDragging ? (
             <DragRowPlaceholder />
           ) : group.hasLivePrice ? (
-            formatCurrency(group.totalProfitLoss, baseCurrency)
+            formatCurrency(group.profitLossBase, baseCurrency)
           ) : (
             "brak kursu"
           )}
@@ -344,7 +352,10 @@ const SortableGroupSection = ({
           {isDragging ? (
             <DragRowPlaceholder />
           ) : group.hasLivePrice ? (
-            formatDateTime(group.lastUpdatedAt)
+            <>
+              {marketQuoteLabel}
+              {isRefreshing ? <div className="table-note">aktualizowanie…</div> : null}
+            </>
           ) : (
             "brak"
           )}
@@ -452,6 +463,7 @@ export default function AssetTable({
   baseCurrency,
   filter,
   sortMode,
+  isRefreshing = false,
   onFilterChange,
   onSortModeChange,
   onReorderGroups,
@@ -583,9 +595,9 @@ export default function AssetTable({
                 <th>Typ</th>
                 <th>Ilosc</th>
                 <th>Sredni zakup</th>
-                <th>Rynek</th>
+                <th>Kurs jednostkowy</th>
                 <th>P/L {baseCurrency}</th>
-                <th>Aktualizacja</th>
+                <th>Notowanie</th>
                 <th />
               </tr>
             </thead>
@@ -612,6 +624,7 @@ export default function AssetTable({
                     isExpanded={Boolean(expandedGroups[group.key])}
                     isManualSortMode={isManualSortMode}
                     isManualReorderLocked={isManualReorderLocked}
+                    isRefreshing={isRefreshing}
                     onToggleGroup={toggleGroup}
                     onRemove={onRemove}
                   />

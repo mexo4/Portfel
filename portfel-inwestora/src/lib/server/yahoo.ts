@@ -247,7 +247,7 @@ const buildYahooQuote = ({
   rawPreviousClose,
   rawCurrency,
   fallbackCurrency,
-  fetchedAt,
+  marketTimestamp,
   name,
 }: {
   requestedSymbol: string;
@@ -256,7 +256,7 @@ const buildYahooQuote = ({
   rawPreviousClose?: number;
   rawCurrency?: string;
   fallbackCurrency: CurrencyCode;
-  fetchedAt?: string;
+  marketTimestamp?: string;
   name?: string;
 }): AssetQuote => {
   const moneyUnit = normalizeYahooMoneyUnit(rawCurrency, fallbackCurrency);
@@ -267,7 +267,11 @@ const buildYahooQuote = ({
     marketCurrency: moneyUnit.currency,
     provider: "yahoo",
     providerId: normalizeSymbol(providerId),
-    fetchedAt: fetchedAt ?? new Date().toISOString(),
+    // Provider time and local fetch time are deliberately distinct: a market
+    // may be closed while the response is fetched moments ago.
+    fetchedAt: new Date().toISOString(),
+    marketTimestamp,
+    priceDate: marketTimestamp?.slice(0, 10),
     name: name?.trim() || undefined,
     priceScale: moneyUnit.priceScale === 1 ? undefined : moneyUnit.priceScale,
     previousClose:
@@ -299,7 +303,7 @@ const toYahooSummaryQuote = (
     rawPreviousClose: getPositiveNumber(item.regularMarketPreviousClose) ?? undefined,
     rawCurrency: item.currency,
     fallbackCurrency,
-    fetchedAt:
+    marketTimestamp:
       typeof item.regularMarketTime === "number" && item.regularMarketTime > 0
         ? new Date(item.regularMarketTime * 1_000).toISOString()
         : undefined,
@@ -335,7 +339,7 @@ const toYahooChartQuote = (
     rawPreviousClose: rawPreviousClose ?? undefined,
     rawCurrency: meta.currency,
     fallbackCurrency,
-    fetchedAt:
+    marketTimestamp:
       typeof meta.regularMarketTime === "number" && meta.regularMarketTime > 0
         ? new Date(meta.regularMarketTime * 1_000).toISOString()
         : undefined,

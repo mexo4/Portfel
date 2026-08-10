@@ -53,6 +53,9 @@ const hasFiniteNumber = (value: unknown): value is number =>
 const isMarketPriceDate = (value: unknown): value is string =>
   typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value);
 
+const isMarketTimestamp = (value: unknown): value is string =>
+  typeof value === "string" && Boolean(value) && Number.isFinite(Date.parse(value));
+
 const asRecord = (value: unknown): Record<string, unknown> | null =>
   value !== null && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -461,6 +464,14 @@ const normalizePortfolioSaleAllocation = (
     latestPriceDate: isMarketPriceDate(allocation.latestPriceDate)
       ? allocation.latestPriceDate
       : undefined,
+    latestPriceMarketTimestamp: isMarketTimestamp(allocation.latestPriceMarketTimestamp)
+      ? allocation.latestPriceMarketTimestamp
+      : undefined,
+    latestPriceFetchedAt: isMarketTimestamp(allocation.latestPriceFetchedAt)
+      ? allocation.latestPriceFetchedAt
+      : isMarketTimestamp(allocation.lastUpdatedAt)
+        ? allocation.lastUpdatedAt
+        : undefined,
     previousClose:
       hasFiniteNumber(allocation.previousClose) && allocation.previousClose > 0
         ? round(allocation.previousClose, 8)
@@ -686,12 +697,25 @@ const normalizePortfolioAsset = (
     latestPriceDate: isMarketPriceDate(asset.latestPriceDate)
       ? asset.latestPriceDate
       : undefined,
+    latestPriceMarketTimestamp: isMarketTimestamp(asset.latestPriceMarketTimestamp)
+      ? asset.latestPriceMarketTimestamp
+      : undefined,
+    latestPriceFetchedAt: isMarketTimestamp(asset.latestPriceFetchedAt)
+      ? asset.latestPriceFetchedAt
+      : isMarketTimestamp(asset.lastUpdatedAt)
+        ? asset.lastUpdatedAt
+        : undefined,
     previousClose:
       hasFiniteNumber(asset.previousClose) && asset.previousClose > 0
         ? round(asset.previousClose, 8)
         : undefined,
-    lastUpdatedAt:
-      typeof asset.lastUpdatedAt === "string" ? asset.lastUpdatedAt : undefined,
+    // Keep the legacy field in sync while older persisted portfolios are still
+    // being read. New callers should use latestPriceFetchedAt explicitly.
+    lastUpdatedAt: isMarketTimestamp(asset.latestPriceFetchedAt)
+      ? asset.latestPriceFetchedAt
+      : isMarketTimestamp(asset.lastUpdatedAt)
+        ? asset.lastUpdatedAt
+        : undefined,
     groupOrder:
       hasFiniteNumber(asset.groupOrder) ? asset.groupOrder : undefined,
     bondMeta: normalizeTreasuryBondSeries(asset.bondMeta),
@@ -1194,6 +1218,8 @@ export const applySaleToPortfolio = ({
       instrumentIdentity: lot.instrumentIdentity,
       latestPrice: lot.latestPrice,
       latestPriceDate: lot.latestPriceDate,
+      latestPriceMarketTimestamp: lot.latestPriceMarketTimestamp,
+      latestPriceFetchedAt: lot.latestPriceFetchedAt,
       previousClose: lot.previousClose,
       lastUpdatedAt: lot.lastUpdatedAt,
       groupOrder: lot.groupOrder,
@@ -1368,6 +1394,8 @@ const createRestoredAssetFromAllocation = ({
   instrumentIdentity: allocation.instrumentIdentity ?? sale.instrumentIdentity,
   latestPrice: allocation.latestPrice,
   latestPriceDate: allocation.latestPriceDate,
+  latestPriceMarketTimestamp: allocation.latestPriceMarketTimestamp,
+  latestPriceFetchedAt: allocation.latestPriceFetchedAt,
   previousClose: allocation.previousClose,
   lastUpdatedAt: allocation.lastUpdatedAt,
   groupOrder: allocation.groupOrder ?? fallbackGroupOrder,

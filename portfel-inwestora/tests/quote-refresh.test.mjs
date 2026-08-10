@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  applyRefreshedPortfolioAssetSnapshot,
   mergeQuoteIntoPortfolioAsset,
   refreshPortfolioQuotesWithProgress,
 } from "../src/lib/api.ts";
@@ -19,6 +20,21 @@ test("reports real quote progress and leaves an asset without a quote unchanged"
 
     if (symbol === "MISSING") {
       return new Response(JSON.stringify({ error: "Brak kursu" }), { status: 404 });
+    }
+
+    if (symbol === "INVALID") {
+      return new Response(
+        JSON.stringify({
+          quote: {
+            symbol: "INVALID",
+            price: 0,
+            marketCurrency: "USD",
+            provider: "yahoo",
+            fetchedAt: "2026-08-09T12:00:00.000Z",
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
     }
 
     return new Response(
@@ -56,17 +72,76 @@ test("reports real quote progress and leaves an asset without a quote unchanged"
         marketCurrency: "PLN",
         provider: "stooq",
       },
+      {
+        id: "asset-3",
+        kind: "stock",
+        symbol: "INVALID",
+        name: "Ostatni dobry kurs",
+        marketCurrency: "USD",
+        provider: "yahoo",
+        latestPrice: 91.25,
+        latestPriceFetchedAt: "2026-08-09T11:00:00.000Z",
+        lastUpdatedAt: "2026-08-09T11:00:00.000Z",
+      },
     ],
     (event) => progress.push(event)
   );
 
-  assert.deepEqual(progress[0], { completed: 0, total: 2 });
-  assert.deepEqual(progress.at(-1), { completed: 2, total: 2 });
-  assert.equal(result.total, 2);
-  assert.equal(result.missing, 1);
+  assert.deepEqual(progress[0], { completed: 0, total: 3 });
+  assert.deepEqual(progress.at(-1), { completed: 3, total: 3 });
+  assert.equal(result.total, 3);
+  assert.equal(result.missing, 2);
   assert.equal(result.assets[0].latestPrice, 101.25);
   assert.equal(result.assets[0].latestPriceDate, "2026-08-07");
+  assert.equal(result.assets[0].latestPriceFetchedAt, "2026-08-09T12:00:00.000Z");
   assert.equal(result.assets[1].latestPrice, undefined);
+  assert.equal(result.assets[2].latestPrice, 91.25);
+});
+
+test("keeps the last known good price through malformed refreshes and stale responses", () => {
+  const current = {
+    id: "lpp",
+    kind: "stock",
+    symbol: "LPP.PL",
+    name: "LPP",
+    marketCurrency: "PLN",
+    provider: "stooq",
+    quantity: 0.03,
+    latestPrice: 22200,
+    latestPriceDate: "2026-08-07",
+    latestPriceFetchedAt: "2026-08-10T12:10:00.000Z",
+    lastUpdatedAt: "2026-08-10T12:10:00.000Z",
+  };
+
+  assert.deepEqual(
+    mergeQuoteIntoPortfolioAsset(current, {
+      symbol: "LPP.PL",
+      price: 0,
+      marketCurrency: "PLN",
+      provider: "stooq",
+      fetchedAt: "2026-08-10T12:11:00.000Z",
+    }),
+    current
+  );
+
+  const stale = applyRefreshedPortfolioAssetSnapshot(current, {
+    ...current,
+    latestPrice: 21000,
+    latestPriceFetchedAt: "2026-08-10T12:09:00.000Z",
+  });
+  assert.deepEqual(stale, current);
+
+  const newer = applyRefreshedPortfolioAssetSnapshot(current, {
+    ...current,
+    latestPrice: 22300,
+    latestPriceDate: "2026-08-08",
+    latestPriceMarketTimestamp: "2026-08-08T17:00:00",
+    latestPriceFetchedAt: "2026-08-10T12:12:00.000Z",
+    lastUpdatedAt: "2026-08-10T12:12:00.000Z",
+  });
+  assert.equal(newer.latestPrice, 22300);
+  assert.equal(newer.latestPriceDate, "2026-08-08");
+  assert.equal(newer.latestPriceMarketTimestamp, "2026-08-08T17:00:00");
 });
 
 test("keeps a GPW identity intact and rejects a global USD ticker collision", () => {

@@ -201,9 +201,14 @@ export type EtfSearchGroup = {
 
 export type AssetQuote = {
   symbol: string;
+  /**
+   * Current quote for one unit of the instrument. It is never a position
+   * value and must be multiplied by quantity before converting currencies.
+   */
   price: number;
   marketCurrency: CurrencyCode;
   provider: QuoteProvider;
+  /** When Mexo received the provider response. */
   fetchedAt: string;
   /** Date of the market session that produced this price (YYYY-MM-DD). */
   priceDate?: string;
@@ -248,6 +253,10 @@ export type PortfolioAsset = {
   instrumentIdentity?: InstrumentIdentity;
   latestPrice?: number;
   latestPriceDate?: string;
+  /** Provider market timestamp for latestPrice, when the provider supplies one. */
+  latestPriceMarketTimestamp?: string;
+  /** When Mexo last successfully fetched latestPrice. */
+  latestPriceFetchedAt?: string;
   previousClose?: number;
   lastUpdatedAt?: string;
   groupOrder?: number;
@@ -275,6 +284,8 @@ export type AssetDraft = {
   marketCurrencyConfirmed?: boolean;
   latestPrice?: number;
   latestPriceDate?: string;
+  latestPriceMarketTimestamp?: string;
+  latestPriceFetchedAt?: string;
   previousClose?: number;
 };
 
@@ -310,6 +321,8 @@ export type PortfolioSaleAllocation = {
   instrumentIdentity?: InstrumentIdentity;
   latestPrice?: number;
   latestPriceDate?: string;
+  latestPriceMarketTimestamp?: string;
+  latestPriceFetchedAt?: string;
   previousClose?: number;
   lastUpdatedAt?: string;
   groupOrder?: number;

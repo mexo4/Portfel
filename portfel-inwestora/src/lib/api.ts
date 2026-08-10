@@ -305,6 +305,28 @@ export type PortfolioQuoteRefreshResult = {
   missing: number;
 };
 
+const isUsableAssetQuote = (quote: AssetQuote | null | undefined): quote is AssetQuote =>
+  Boolean(
+    quote &&
+      typeof quote.price === "number" &&
+      Number.isFinite(quote.price) &&
+      quote.price > 0 &&
+      typeof quote.symbol === "string" &&
+      quote.symbol.trim() &&
+      typeof quote.marketCurrency === "string" &&
+      quote.marketCurrency.trim() &&
+      typeof quote.fetchedAt === "string" &&
+      Number.isFinite(Date.parse(quote.fetchedAt))
+  );
+
+const getStoredQuoteFetchedAt = (asset: PortfolioAsset) =>
+  asset.latestPriceFetchedAt ?? asset.lastUpdatedAt;
+
+const hasUsableStoredUnitPrice = (asset: PortfolioAsset) =>
+  typeof asset.latestPrice === "number" &&
+  Number.isFinite(asset.latestPrice) &&
+  asset.latestPrice > 0;
+
 /**
  * Quote refresh updates market data, not the user's stored instrument
  * identity.  Polish equities are particularly sensitive because a bare
@@ -314,7 +336,9 @@ export const mergeQuoteIntoPortfolioAsset = (
   asset: PortfolioAsset,
   quote: AssetQuote | null | undefined
 ): PortfolioAsset => {
-  if (!quote) {
+  // A failed, malformed or zero-valued response must never replace the last
+  // known good price. This is the client-side half of stale-while-revalidate.
+  if (!isUsableAssetQuote(quote)) {
     return asset;
   }
 
@@ -333,6 +357,9 @@ export const mergeQuoteIntoPortfolioAsset = (
       ...asset,
       latestPrice: quote.price,
       latestPriceDate: quote.priceDate ?? asset.latestPriceDate,
+      latestPriceMarketTimestamp:
+        quote.marketTimestamp ?? asset.latestPriceMarketTimestamp,
+      latestPriceFetchedAt: quote.fetchedAt,
       previousClose: quote.previousClose ?? asset.previousClose,
       lastUpdatedAt: quote.fetchedAt,
     };
@@ -343,6 +370,9 @@ export const mergeQuoteIntoPortfolioAsset = (
     symbol: quote.symbol,
     latestPrice: quote.price,
     latestPriceDate: quote.priceDate ?? asset.latestPriceDate,
+    latestPriceMarketTimestamp:
+      quote.marketTimestamp ?? asset.latestPriceMarketTimestamp,
+    latestPriceFetchedAt: quote.fetchedAt,
     previousClose: quote.previousClose ?? asset.previousClose,
     marketCurrency: quote.marketCurrency,
     provider: quote.provider,
@@ -352,6 +382,49 @@ export const mergeQuoteIntoPortfolioAsset = (
     lastUpdatedAt: quote.fetchedAt,
     name: quote.name ?? asset.name,
   };
+};
+
+/**
+ * Applies a completed refresh to the state that is current at commit time.
+ * A request may have started from an older React snapshot, so this helper
+ * refuses to replace a newer last-known-good quote with an older or malformed
+ * snapshot. Instrument identity protection stays in mergeQuoteIntoPortfolioAsset.
+ */
+export const applyRefreshedPortfolioAssetSnapshot = (
+  current: PortfolioAsset,
+  refreshed: PortfolioAsset | undefined
+): PortfolioAsset => {
+  if (!refreshed || !hasUsableStoredUnitPrice(refreshed)) {
+    return current;
+  }
+
+  const refreshedAt = getStoredQuoteFetchedAt(refreshed);
+  const currentAt = getStoredQuoteFetchedAt(current);
+  const refreshedTime = refreshedAt ? Date.parse(refreshedAt) : Number.NaN;
+  const currentTime = currentAt ? Date.parse(currentAt) : Number.NaN;
+
+  if (
+    hasUsableStoredUnitPrice(current) &&
+    (!Number.isFinite(refreshedTime) ||
+      (Number.isFinite(currentTime) && refreshedTime < currentTime))
+  ) {
+    return current;
+  }
+
+  return mergeQuoteIntoPortfolioAsset(current, {
+    symbol: refreshed.symbol,
+    price: refreshed.latestPrice!,
+    marketCurrency: refreshed.marketCurrency,
+    provider: refreshed.provider,
+    providerId: refreshed.providerId,
+    priceScale: refreshed.priceScale,
+    name: refreshed.name,
+    fetchedAt: refreshedAt ?? new Date().toISOString(),
+    priceDate: refreshed.latestPriceDate,
+    marketTimestamp: refreshed.latestPriceMarketTimestamp,
+    previousClose: refreshed.previousClose,
+    bondMeta: refreshed.bondMeta,
+  });
 };
 
 export const refreshPortfolioQuotesWithProgress = async (
@@ -391,7 +464,8 @@ export const refreshPortfolioQuotesWithProgress = async (
       const requestIndex = nextRequestIndex;
       nextRequestIndex += 1;
       const [key, asset] = quoteRequests[requestIndex];
-      const quote = await fetchAssetQuote(asset);
+      const responseQuote = await fetchAssetQuote(asset);
+      const quote = isUsableAssetQuote(responseQuote) ? responseQuote : null;
       quotesByKey.set(key, quote);
 
       if (!quote) {

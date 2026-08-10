@@ -26,13 +26,13 @@ import {
 } from "@/lib/constants";
 import {
   ApiError,
+  applyRefreshedPortfolioAssetSnapshot,
   fetchFxRates,
   fetchQuotePreview,
   fetchTreasuryBondRedemption,
   fetchTreasuryBondSeries,
   fetchTreasuryBondSwap,
   logoutUser,
-  refreshPortfolioQuotes,
   refreshPortfolioQuotesWithProgress,
   requestEmailVerification,
   resolveEtfListingPrice,
@@ -1874,7 +1874,8 @@ export default function PortfolioApp({
     setIsRefreshing(true);
 
     try {
-      const refreshedAssets = await refreshPortfolioQuotes(allAssets);
+      const quoteRefresh = await refreshPortfolioQuotesWithProgress(allAssets);
+      const refreshedAssets = quoteRefresh.assets;
 
       if (refreshSeq !== quoteRefreshSeqRef.current) {
         return;
@@ -1887,20 +1888,7 @@ export default function PortfolioApp({
             const refreshed = refreshedById.get(asset.id);
             if (!refreshed) return asset;
 
-            return {
-              ...asset,
-              symbol: refreshed.symbol ?? asset.symbol,
-              name: refreshed.name ?? asset.name,
-              latestPrice: refreshed.latestPrice,
-              latestPriceDate: refreshed.latestPriceDate ?? asset.latestPriceDate,
-              previousClose: refreshed.previousClose ?? asset.previousClose,
-              marketCurrency: refreshed.marketCurrency,
-              provider: refreshed.provider,
-              providerId: refreshed.providerId ?? asset.providerId,
-              priceScale: refreshed.priceScale ?? asset.priceScale,
-              bondMeta: refreshed.bondMeta ?? asset.bondMeta,
-              lastUpdatedAt: refreshed.lastUpdatedAt,
-            };
+            return applyRefreshedPortfolioAssetSnapshot(asset, refreshed);
           })
         );
 
@@ -1927,21 +1915,29 @@ export default function PortfolioApp({
         nextPortfolios.find((portfolio) => portfolio.id === latestActivePortfolioId)
           ?.assets ?? latestWorkspace.assets;
 
-      ignoredPortfolioSaveFingerprintRef.current = getPortfolioSaveFingerprint({
+      const refreshedBook: PortfolioBook = {
         schemaVersion: 2,
         portfolios: nextPortfolios,
         activePortfolioId: latestActivePortfolioId,
-      });
+      };
       portfoliosRef.current = nextPortfolios;
       replaceWorkspace({
         ...latestWorkspace,
         assets: refreshedActiveAssets,
       });
       setPortfolios(nextPortfolios);
+      // Persist the valid snapshot after state is updated. Previously this
+      // fingerprint was ignored, which meant a full reload could start with no
+      // quote even though a successful background refresh had just completed.
+      void queuePortfolioSave(refreshedBook, false);
 
       if (refreshSeq === quoteRefreshSeqRef.current) {
         setLastSyncAt(new Date().toISOString());
-        setSyncError(null);
+        setSyncError(
+          quoteRefresh.missing > 0
+            ? `Nie udalo sie odswiezyc kursu dla ${quoteRefresh.missing} pozycji. Pokazujemy ostatni poprawny kurs.`
+            : null
+        );
       }
     } catch (error) {
       if (refreshSeq === quoteRefreshSeqRef.current) {
@@ -1952,7 +1948,7 @@ export default function PortfolioApp({
         setIsRefreshing(false);
       }
     }
-  }, [replaceWorkspace]);
+  }, [queuePortfolioSave, replaceWorkspace]);
 
   const handleRefreshPortfolioData = async () => {
     setIsRefreshing(true);
@@ -2010,6 +2006,8 @@ export default function PortfolioApp({
         ...currentDraft,
         latestPrice: quote.price,
         latestPriceDate: quote.priceDate,
+        latestPriceMarketTimestamp: quote.marketTimestamp,
+        latestPriceFetchedAt: quote.fetchedAt,
         previousClose: quote.previousClose ?? currentDraft.previousClose,
         marketCurrency: quote.marketCurrency,
         provider: quote.provider,
@@ -2294,6 +2292,8 @@ export default function PortfolioApp({
             ...currentDraft,
             latestPrice: quote.price,
             latestPriceDate: quote.priceDate,
+            latestPriceMarketTimestamp: quote.marketTimestamp,
+            latestPriceFetchedAt: quote.fetchedAt,
             previousClose: quote.previousClose ?? currentDraft.previousClose,
             marketCurrency: quote.marketCurrency,
             provider: quote.provider,
@@ -2537,6 +2537,7 @@ export default function PortfolioApp({
         provider: "obligacjeskarbowe",
         latestPrice: response.quote.grossValue,
         previousClose: response.quote.previousClose,
+        latestPriceFetchedAt: response.quote.fetchedAt,
         lastUpdatedAt: response.quote.fetchedAt,
         bondMeta: response.series,
         groupOrder: existingGroupOrder ?? getNextGroupOrder(assets),
@@ -2777,6 +2778,7 @@ export default function PortfolioApp({
         provider: "obligacjeskarbowe",
         latestPrice: preview.targetQuote.grossValue,
         previousClose: preview.targetQuote.previousClose,
+        latestPriceFetchedAt: preview.targetQuote.fetchedAt,
         lastUpdatedAt: preview.targetQuote.fetchedAt,
         bondMeta: preview.targetSeries,
         groupOrder: existingTargetGroupOrder ?? getNextGroupOrder(result.assets),
@@ -2930,6 +2932,8 @@ export default function PortfolioApp({
       instrumentIdentity: draft.instrumentIdentity,
       latestPrice: quote?.price,
       latestPriceDate: quote?.priceDate,
+      latestPriceMarketTimestamp: quote?.marketTimestamp,
+      latestPriceFetchedAt: quote?.fetchedAt,
       previousClose: quote?.previousClose ?? draft.previousClose,
       lastUpdatedAt: quote?.fetchedAt,
       groupOrder: existingGroupOrder ?? getNextGroupOrder(assets),
@@ -3561,20 +3565,7 @@ export default function PortfolioApp({
               return asset;
             }
 
-            return {
-              ...asset,
-              symbol: refreshed.symbol ?? asset.symbol,
-              name: refreshed.name ?? asset.name,
-              latestPrice: refreshed.latestPrice,
-              latestPriceDate: refreshed.latestPriceDate ?? asset.latestPriceDate,
-              previousClose: refreshed.previousClose ?? asset.previousClose,
-              marketCurrency: refreshed.marketCurrency,
-              provider: refreshed.provider,
-              providerId: refreshed.providerId ?? asset.providerId,
-              priceScale: refreshed.priceScale ?? asset.priceScale,
-              bondMeta: refreshed.bondMeta ?? asset.bondMeta,
-              lastUpdatedAt: refreshed.lastUpdatedAt,
-            };
+            return applyRefreshedPortfolioAssetSnapshot(asset, refreshed);
           })
         ),
         updatedAt: new Date().toISOString(),
@@ -3595,9 +3586,9 @@ export default function PortfolioApp({
       };
 
       quoteRefreshSeqRef.current += 1;
-      ignoredPortfolioSaveFingerprintRef.current = getPortfolioSaveFingerprint(refreshedBook);
       applyPortfolioBook(refreshedPortfolios, activePortfolioIdRef.current);
       replaceWorkspace(refreshedWorkspace);
+      void queuePortfolioSave(refreshedBook, false);
       setLastSyncAt(new Date().toISOString());
       setRefreshRevision((currentRevision) => currentRevision + 1);
       setSyncError(null);
@@ -4320,6 +4311,7 @@ export default function PortfolioApp({
               baseCurrency={activeBaseCurrency}
               filter={filter}
               sortMode={assetSortMode}
+              isRefreshing={isRefreshing}
               onFilterChange={setFilter}
               onSortModeChange={setAssetSortMode}
               onReorderGroups={handleReorderAssetGroups}

@@ -563,15 +563,20 @@ export const fetchEodhdQuote = async ({
         : null;
 
   if (realtimePrice !== null) {
+    const fetchedAt = new Date().toISOString();
+    const marketTimestamp =
+      typeof realtimeQuote?.timestamp === "number" && realtimeQuote.timestamp > 0
+        ? new Date(realtimeQuote.timestamp * 1_000).toISOString()
+        : undefined;
     const quote: AssetQuote = {
       symbol,
       price: normalizeQuotePrice(realtimePrice, priceScale),
       marketCurrency,
       provider: "eodhd",
       providerId: normalizedProviderId,
-      fetchedAt: new Date(
-        (realtimeQuote?.timestamp ?? Math.floor(Date.now() / 1_000)) * 1_000
-      ).toISOString(),
+      fetchedAt,
+      marketTimestamp,
+      priceDate: marketTimestamp?.slice(0, 10),
       priceScale,
       previousClose:
         typeof realtimeQuote?.previousClose === "number" && realtimeQuote.previousClose > 0
@@ -590,18 +595,30 @@ export const fetchEodhdQuote = async ({
     `${EODHD_API_ROOT}/eod/${encodeURIComponent(normalizedProviderId)}?api_token=${encodeURIComponent(EODHD_API_KEY)}&fmt=json&from=${dateFrom}&to=${dateTo}`,
     20_000
   );
-  const historyCloses =
-    history
-      ?.map((item) =>
-      typeof item.close === "number" && item.close > 0
-        ? item.close
-        : typeof item.adjusted_close === "number" && item.adjusted_close > 0
-          ? item.adjusted_close
-          : null
-      )
-      .filter((value): value is number => value !== null) ?? [];
-  const historyPrice = historyCloses.at(-1);
-  const previousClose = historyCloses.length > 1 ? historyCloses.at(-2) : undefined;
+  const historyCloses = (history ?? []).reduce<Array<{ price: number; priceDate?: string }>>(
+    (snapshots, item) => {
+      const price =
+        typeof item.close === "number" && item.close > 0
+          ? item.close
+          : typeof item.adjusted_close === "number" && item.adjusted_close > 0
+            ? item.adjusted_close
+            : null;
+      const priceDate =
+        typeof item.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(item.date)
+          ? item.date
+          : undefined;
+
+      if (price !== null) {
+        snapshots.push({ price, priceDate });
+      }
+      return snapshots;
+    },
+    []
+  )
+    .sort((left, right) => (left.priceDate ?? "").localeCompare(right.priceDate ?? ""));
+  const historySnapshot = historyCloses.at(-1);
+  const historyPrice = historySnapshot?.price;
+  const previousClose = historyCloses.length > 1 ? historyCloses.at(-2)?.price : undefined;
 
   if (typeof historyPrice !== "number" || historyPrice <= 0) {
     return null;
@@ -614,6 +631,7 @@ export const fetchEodhdQuote = async ({
     provider: "eodhd",
     providerId: normalizedProviderId,
     fetchedAt: new Date().toISOString(),
+    priceDate: historySnapshot?.priceDate,
     priceScale,
     previousClose:
       typeof previousClose === "number" && previousClose > 0

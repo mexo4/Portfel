@@ -3,6 +3,7 @@ export {
   convertFromPln,
   convertToPln,
   getAssetInvestedValue,
+  getAssetValuation,
   getAssetDailyChangePercent,
   getAssetInvestedPln,
   getAssetLatestUnitPrice,

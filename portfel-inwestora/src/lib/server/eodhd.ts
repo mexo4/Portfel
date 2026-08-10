@@ -58,6 +58,16 @@ type EodhdListing = {
   priceScale?: number;
 };
 
+/**
+ * Internal, ETF-only candidate shape used to resolve a price source selected
+ * through OpenFIGI.  It intentionally keeps venue and ISIN metadata that the
+ * general asset-search result does not need to expose.
+ */
+export type EodhdEtfPriceCandidate = Pick<
+  EodhdListing,
+  "symbol" | "providerId" | "name" | "exchange" | "country" | "marketCurrency" | "isin" | "priceScale"
+>;
+
 const EODHD_API_KEY = process.env.EODHD_API_KEY ?? "";
 const EODHD_API_ROOT = "https://eodhd.com/api";
 const EODHD_SEARCH_RESULT_LIMIT = 16;
@@ -454,6 +464,23 @@ export const searchEodhdAssets = async (
 };
 
 export const searchEodhdEtfs = (query: string) => searchEodhdAssets(query, "etf");
+
+/**
+ * This deliberately does not use exchange-wide fallbacks.  Price resolution
+ * must prefer an unavailable quote to a potentially unrelated listing.
+ */
+export const searchEodhdEtfPriceCandidates = async (
+  query: string
+): Promise<EodhdEtfPriceCandidate[]> => {
+  const normalizedQuery = query.trim();
+
+  if (!normalizedQuery || !hasEodhdApiKey()) {
+    return [];
+  }
+
+  const listings = await fetchSearchListings(normalizedQuery, "etf");
+  return uniqueBy(listings, (listing) => listing.providerId);
+};
 
 export const searchEodhdStocks = (query: string) => searchEodhdAssets(query, "stock");
 

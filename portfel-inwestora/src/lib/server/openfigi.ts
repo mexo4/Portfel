@@ -1,4 +1,7 @@
-import { searchEodhdEtfs } from "@/lib/server/eodhd";
+import {
+  searchEodhdEtfPriceCandidates,
+  type EodhdEtfPriceCandidate,
+} from "@/lib/server/eodhd";
 import { getMarketCachePayload, setMarketCachePayload } from "@/lib/server/market-cache";
 import { normalizeSymbol } from "@/lib/ticker";
 import { normalizeText, toCurrencyCode, uniqueBy } from "@/lib/utils";
@@ -12,22 +15,31 @@ import type {
 const OPENFIGI_API_ROOT = "https://api.openfigi.com/v3";
 const OPENFIGI_SEARCH_CACHE_TTL_MS = 5 * 60 * 1_000;
 const OPENFIGI_REQUEST_TIMEOUT_MS = 7_000;
-const OPENFIGI_MAX_RESULTS = 60;
+const OPENFIGI_MAX_RESULTS = 200;
+const SEARCH_RATE_WINDOW_MS = 60_000;
+const SEARCH_RATE_LIMIT = 12;
 
 type JsonRecord = Record<string, unknown>;
+type FetchLike = typeof fetch;
+type OpenFigiPath = "/filter" | "/mapping";
 
 type OpenFigiFilterResponse = {
   data?: unknown[];
 };
 
-type OpenFigiMappingResponse = Array<{
+type OpenFigiMappingItem = {
   data?: unknown[];
-}>;
+  warning?: unknown;
+};
 
 export type OpenFigiSearchFailureCode =
   | "configuration"
   | "rate_limit"
-  | "unavailable"
+  | "invalid_request"
+  | "invalid_credentials"
+  | "provider_unavailable"
+  | "timeout"
+  | "network"
   | "invalid_response";
 
 export class OpenFigiSearchError extends Error {
@@ -44,7 +56,20 @@ export type InstrumentSearchProvider = {
   searchEtfs: (query: string) => Promise<EtfSearchGroup[]>;
 };
 
-type FetchLike = typeof fetch;
+type OpenFigiDiagnostics = {
+  rawQuery: string;
+  normalizedQuery: string;
+  endpoint: string;
+  method: "POST";
+  httpStatus?: number;
+  responseBodyPresent?: boolean;
+  errorClassification?: OpenFigiSearchFailureCode;
+  rawResultCount?: number;
+  normalizedListingCount?: number;
+  exchangeTradedProductCount?: number;
+  finalGroupCount?: number;
+  rateLimitRemaining?: string | null;
+};
 
 const asRecord = (value: unknown): JsonRecord | null =>
   value !== null && typeof value === "object" && !Array.isArray(value)
@@ -67,18 +92,47 @@ const field = (source: JsonRecord, ...keys: string[]) => {
 
 const normaliseFigi = (value: string) => normalizeSymbol(value);
 
+/**
+ * Keeps user-visible punctuation intact.  This value is used both in the
+ * OpenFIGI body and in the ETF-only cache key, so `S&P 500` cannot be damaged
+ * by URL or cache normalization.
+ */
+export const normalizeEtfSearchQuery = (query: string) => query.trim().replace(/\s+/g, " ");
+
 const getSecurityType = (record: JsonRecord) => field(record, "securityType");
 const getSecurityType2 = (record: JsonRecord) => field(record, "securityType2");
 
-const isEtf = (record: JsonRecord) => {
-  const descriptor = normalizeText(
-    [getSecurityType(record), getSecurityType2(record), field(record, "securityDescription")]
-      .filter(Boolean)
-      .join(" ")
-  );
+const isExchangeTradedProduct = (record: JsonRecord) =>
+  normalizeSymbol(getSecurityType(record)) === "ETP";
 
-  return descriptor.includes("etf") || descriptor.includes("exchange traded fund");
+/**
+ * OpenFIGI's ETP class is broader than ETF.  We only reject products that the
+ * provider itself explicitly identifies as an ETN, ETC or certificate.  An
+ * ambiguous ETP remains selectable instead of being filtered by its name.
+ */
+const isExplicitlyNonEtfEtp = (record: JsonRecord) => {
+  const providerClassifications = [
+    getSecurityType(record),
+    getSecurityType2(record),
+    field(record, "marketSector"),
+  ].map((value) => normalizeText(value));
+
+  return providerClassifications.some((classification) =>
+    [
+      "etn",
+      "exchange traded note",
+      "etc",
+      "exchange traded commodity",
+      "certificate",
+      "certificates",
+      "structured product",
+      "structured products",
+    ].includes(classification)
+  );
 };
+
+const isEligibleEtfResult = (record: JsonRecord) =>
+  isExchangeTradedProduct(record) && !isExplicitlyNonEtfEtp(record);
 
 const toCurrency = (value: string): CurrencyCode | undefined => {
   const normalized = normalizeSymbol(value);
@@ -118,7 +172,7 @@ const compareListings = (query: string, left: EtfListing, right: EtfListing) =>
 const toListing = (value: unknown): EtfListing | null => {
   const record = asRecord(value);
 
-  if (!record || !isEtf(record)) {
+  if (!record || !isEligibleEtfResult(record)) {
     return null;
   }
 
@@ -159,9 +213,8 @@ const toListing = (value: unknown): EtfListing | null => {
     symbol: ticker,
     name,
     kind: "etf",
-    // OpenFIGI v3 does not include currency in every result.  This is only a
-    // form default; `instrumentIdentity.currency` remains absent until the
-    // price resolver verifies it or the user explicitly confirms a currency.
+    // This only keeps the form usable until the user confirms a currency or
+    // EODHD resolves one.  Identity currency intentionally stays undefined.
     marketCurrency: currency ?? "USD",
     provider: "eodhd",
     source: "api",
@@ -177,22 +230,40 @@ const toListing = (value: unknown): EtfListing | null => {
   };
 };
 
-export const groupEtfListings = (query: string, rawItems: unknown[]): EtfSearchGroup[] => {
-  const listings = uniqueBy(
-    rawItems
-      .map(toListing)
-      .filter((listing): listing is EtfListing => Boolean(listing)),
-    (listing) => listing.listingId
-  ).sort((left, right) => compareListings(query, left, right));
+type NormalizedEtfResults = {
+  listings: EtfListing[];
+  exchangeTradedProductCount: number;
+};
+
+const normaliseEtfResults = (rawItems: unknown[]): NormalizedEtfResults => {
+  let exchangeTradedProductCount = 0;
+  const listings = rawItems.flatMap((value) => {
+    const record = asRecord(value);
+
+    if (record && isExchangeTradedProduct(record)) {
+      exchangeTradedProductCount += 1;
+    }
+
+    const listing = toListing(value);
+    return listing ? [listing] : [];
+  });
+
+  return {
+    listings: uniqueBy(listings, (listing) => listing.listingId),
+    exchangeTradedProductCount,
+  };
+};
+
+const groupNormalizedEtfListings = (query: string, listings: EtfListing[]): EtfSearchGroup[] => {
+  const sortedListings = [...listings].sort((left, right) => compareListings(query, left, right));
   const groups = new Map<string, EtfSearchGroup>();
 
-  listings.forEach((listing) => {
-    const groupIdentifier =
-      listing.instrumentIdentity.shareClassFigi ||
-      listing.instrumentIdentity.compositeFigi ||
-      listing.instrumentIdentity.figi;
-    const groupId = groupIdentifier
-      ? `etf:${groupIdentifier}`
+  sortedListings.forEach((listing) => {
+    // Only shareClassFIGI is safe for grouping distinct listings of one ETF.
+    // A composite FIGI or a matching display name alone must not merge funds.
+    const shareClassFigi = listing.instrumentIdentity.shareClassFigi;
+    const groupId = shareClassFigi
+      ? `etf:share-class:${shareClassFigi}`
       : `listing:${listing.listingId}`;
     const existing = groups.get(groupId);
 
@@ -207,7 +278,7 @@ export const groupEtfListings = (query: string, rawItems: unknown[]): EtfSearchG
       instrumentType: "ETF",
       identity: {
         compositeFigi: listing.instrumentIdentity.compositeFigi,
-        shareClassFigi: listing.instrumentIdentity.shareClassFigi,
+        shareClassFigi,
         name: listing.name,
         instrumentType: "ETF",
       },
@@ -227,33 +298,51 @@ export const groupEtfListings = (query: string, rawItems: unknown[]): EtfSearchG
     );
 };
 
+export const groupEtfListings = (query: string, rawItems: unknown[]): EtfSearchGroup[] =>
+  groupNormalizedEtfListings(query, normaliseEtfResults(rawItems).listings);
+
 const isFigiQuery = (query: string) => /^BBG[A-Z0-9]{9,}$/i.test(query);
 const isIsinQuery = (query: string) => /^[A-Z]{2}[A-Z0-9]{9}\d$/i.test(query);
 
-const parseResponse = async (response: Response) => {
-  try {
-    return await response.json();
-  } catch {
-    throw new OpenFigiSearchError("invalid_response");
+const isDiagnosticsEnabled = () => process.env.OPENFIGI_DIAGNOSTICS === "true";
+
+const logDiagnostics = (details: OpenFigiDiagnostics) => {
+  if (isDiagnosticsEnabled()) {
+    console.info("[openfigi:etf]", details);
   }
 };
+
+const classifyHttpFailure = (status: number): OpenFigiSearchFailureCode => {
+  if (status === 400) return "invalid_request";
+  if (status === 401 || status === 403) return "invalid_credentials";
+  if (status === 429) return "rate_limit";
+  return "provider_unavailable";
+};
+
+const getRateLimitRemaining = (response: Response) =>
+  response.headers.get("x-ratelimit-remaining") ?? response.headers.get("x-rate-limit-remaining");
 
 const requestOpenFigi = async ({
   path,
   payload,
   apiKey,
+  rawQuery,
+  normalizedQuery,
   fetcher = fetch,
 }: {
-  path: "/filter" | "/mapping";
+  path: OpenFigiPath;
   payload: unknown;
   apiKey: string;
+  rawQuery: string;
+  normalizedQuery: string;
   fetcher?: FetchLike;
 }) => {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), OPENFIGI_REQUEST_TIMEOUT_MS);
+  const endpoint = `${OPENFIGI_API_ROOT}${path}`;
 
   try {
-    const response = await fetcher(`${OPENFIGI_API_ROOT}${path}`, {
+    const response = await fetcher(endpoint, {
       method: "POST",
       headers: {
         Accept: "application/json",
@@ -264,25 +353,91 @@ const requestOpenFigi = async ({
       cache: "no-store",
       signal: controller.signal,
     });
-
-    if (response.status === 429) {
-      throw new OpenFigiSearchError("rate_limit");
-    }
+    const body = await response.text();
+    const details = {
+      rawQuery,
+      normalizedQuery,
+      endpoint,
+      method: "POST" as const,
+      httpStatus: response.status,
+      responseBodyPresent: body.trim().length > 0,
+      rateLimitRemaining: getRateLimitRemaining(response),
+    };
 
     if (!response.ok) {
-      throw new OpenFigiSearchError("unavailable");
+      const errorCode = classifyHttpFailure(response.status);
+      logDiagnostics({ ...details, errorClassification: errorCode });
+      throw new OpenFigiSearchError(errorCode);
     }
 
-    return parseResponse(response);
+    if (!body.trim()) {
+      logDiagnostics({ ...details, errorClassification: "invalid_response" });
+      throw new OpenFigiSearchError("invalid_response");
+    }
+
+    try {
+      const parsed = JSON.parse(body) as unknown;
+      logDiagnostics(details);
+      return parsed;
+    } catch {
+      logDiagnostics({ ...details, errorClassification: "invalid_response" });
+      throw new OpenFigiSearchError("invalid_response");
+    }
   } catch (error) {
     if (error instanceof OpenFigiSearchError) {
       throw error;
     }
 
-    throw new OpenFigiSearchError("unavailable");
+    const isAbort =
+      (error instanceof DOMException && error.name === "AbortError") ||
+      (typeof error === "object" && error !== null && "name" in error && error.name === "AbortError");
+    const errorCode: OpenFigiSearchFailureCode = isAbort ? "timeout" : "network";
+    logDiagnostics({
+      rawQuery,
+      normalizedQuery,
+      endpoint,
+      method: "POST",
+      errorClassification: errorCode,
+    });
+    throw new OpenFigiSearchError(errorCode);
   } finally {
     clearTimeout(timeoutId);
   }
+};
+
+const getFilterItems = (response: unknown): unknown[] => {
+  const payload = asRecord(response);
+
+  if (!payload || !Array.isArray((payload as OpenFigiFilterResponse).data)) {
+    throw new OpenFigiSearchError("invalid_response");
+  }
+
+  return (payload as OpenFigiFilterResponse).data!.slice(0, OPENFIGI_MAX_RESULTS);
+};
+
+const getMappingItems = (response: unknown): unknown[] => {
+  if (!Array.isArray(response)) {
+    throw new OpenFigiSearchError("invalid_response");
+  }
+
+  return response.flatMap((value) => {
+    const item = asRecord(value) as OpenFigiMappingItem | null;
+
+    if (!item) {
+      throw new OpenFigiSearchError("invalid_response");
+    }
+
+    if (Array.isArray(item.data)) {
+      return item.data;
+    }
+
+    // OpenFIGI v3 uses warning for an identifier that has no match.
+    if (text(item.warning)) {
+      return [];
+    }
+
+    throw new OpenFigiSearchError("invalid_response");
+  }).slice(0, OPENFIGI_MAX_RESULTS);
 };
 
 export class OpenFigiInstrumentSearchProvider implements InstrumentSearchProvider {
@@ -302,7 +457,7 @@ export class OpenFigiInstrumentSearchProvider implements InstrumentSearchProvide
       throw new OpenFigiSearchError("configuration");
     }
 
-    const normalizedQuery = query.trim().replace(/\s+/g, " ");
+    const normalizedQuery = normalizeEtfSearchQuery(query);
     const isIdentifier = isFigiQuery(normalizedQuery) || isIsinQuery(normalizedQuery);
     const response = isIdentifier
       ? await requestOpenFigi({
@@ -314,39 +469,43 @@ export class OpenFigiInstrumentSearchProvider implements InstrumentSearchProvide
             },
           ],
           apiKey: this.apiKey,
+          rawQuery: query,
+          normalizedQuery,
           fetcher: this.fetcher,
         })
       : await requestOpenFigi({
           path: "/filter",
           payload: {
             query: normalizedQuery,
-            securityType: "ETF",
+            securityType: "ETP",
           },
           apiKey: this.apiKey,
+          rawQuery: query,
+          normalizedQuery,
           fetcher: this.fetcher,
         });
-    if (isIdentifier && !Array.isArray(response)) {
-      throw new OpenFigiSearchError("invalid_response");
-    }
+    const rawItems = isIdentifier ? getMappingItems(response) : getFilterItems(response);
+    const normalized = normaliseEtfResults(rawItems);
+    const groups = groupNormalizedEtfListings(normalizedQuery, normalized.listings);
 
-    if (!isIdentifier && !asRecord(response)) {
-      throw new OpenFigiSearchError("invalid_response");
-    }
+    logDiagnostics({
+      rawQuery: query,
+      normalizedQuery,
+      endpoint: `${OPENFIGI_API_ROOT}${isIdentifier ? "/mapping" : "/filter"}`,
+      method: "POST",
+      rawResultCount: rawItems.length,
+      normalizedListingCount: normalized.listings.length,
+      exchangeTradedProductCount: normalized.exchangeTradedProductCount,
+      finalGroupCount: groups.length,
+    });
 
-    const rawItems = isIdentifier
-      ? ((response as OpenFigiMappingResponse)
-          .flatMap((item) => (Array.isArray(item.data) ? item.data : []))
-          .slice(0, OPENFIGI_MAX_RESULTS) as unknown[])
-      : ((response as OpenFigiFilterResponse).data ?? []).slice(0, OPENFIGI_MAX_RESULTS);
-
-    return groupEtfListings(normalizedQuery, rawItems);
+    return groups;
   }
 }
 
 const localSearchCache = new Map<string, { groups: EtfSearchGroup[]; expiresAt: number }>();
+const inFlightSearches = new Map<string, Promise<EtfSearchGroup[]>>();
 const requestWindows = new Map<string, number[]>();
-const SEARCH_RATE_WINDOW_MS = 60_000;
-const SEARCH_RATE_LIMIT = 12;
 
 export const enforceOpenFigiSearchRateLimit = (actorId: string) => {
   const now = Date.now();
@@ -361,6 +520,9 @@ export const enforceOpenFigiSearchRateLimit = (actorId: string) => {
   active.push(now);
   requestWindows.set(actorId, active);
 };
+
+const getEtfSearchCacheKey = (normalizedQuery: string) =>
+  `openfigi:etf:v2:${normalizedQuery.toLocaleLowerCase("en-US")}`;
 
 const getCachedSearch = async (cacheKey: string) => {
   const memory = localSearchCache.get(cacheKey);
@@ -397,77 +559,171 @@ export const searchEtfInstruments = async (
   provider: InstrumentSearchProvider = new OpenFigiInstrumentSearchProvider(),
   actorId?: string
 ) => {
-  const normalizedQuery = query.trim().replace(/\s+/g, " ");
-  const cacheKey = `openfigi:etf:search:${normalizeText(normalizedQuery)}`;
+  const normalizedQuery = normalizeEtfSearchQuery(query);
+
+  if (!normalizedQuery) {
+    return [];
+  }
+
+  const cacheKey = getEtfSearchCacheKey(normalizedQuery);
   const cached = await getCachedSearch(cacheKey);
 
   if (cached) {
     return cached;
   }
 
+  const existingRequest = inFlightSearches.get(cacheKey);
+
+  if (existingRequest) {
+    return existingRequest;
+  }
+
   if (actorId) {
     enforceOpenFigiSearchRateLimit(actorId);
   }
 
-  const groups = await provider.searchEtfs(normalizedQuery);
-  localSearchCache.set(cacheKey, {
-    groups,
-    expiresAt: Date.now() + OPENFIGI_SEARCH_CACHE_TTL_MS,
-  });
-  try {
-    await setMarketCachePayload(cacheKey, groups);
-  } catch {
-    // The in-memory cache remains useful for the current runtime instance.
-  }
-  return groups;
+  const request = provider
+    .searchEtfs(normalizedQuery)
+    .then(async (groups) => {
+      localSearchCache.set(cacheKey, {
+        groups,
+        expiresAt: Date.now() + OPENFIGI_SEARCH_CACHE_TTL_MS,
+      });
+      try {
+        await setMarketCachePayload(cacheKey, groups);
+      } catch {
+        // The in-memory cache remains useful for the current runtime instance.
+      }
+      return groups;
+    })
+    .finally(() => {
+      inFlightSearches.delete(cacheKey);
+    });
+
+  inFlightSearches.set(cacheKey, request);
+  return request;
 };
 
-const getEodhdTicker = (providerId: string | undefined, fallbackSymbol: string) =>
-  normalizeSymbol(providerId?.split(".")[0] ?? fallbackSymbol);
+const OPENFIGI_TO_EODHD_EXCHANGES: Record<string, readonly string[]> = {
+  US: ["US"],
+  GR: ["XETRA"],
+  GY: ["F"],
+  LN: ["LSE"],
+  FP: ["PA"],
+  NA: ["AS"],
+  IM: ["MI"],
+  SW: ["SW"],
+  CN: ["TO"],
+  HK: ["HK"],
+};
 
-/**
- * Resolves a pricing identifier only when the current price provider returns a
- * single compatible listing.  Ambiguity intentionally stays unresolved rather
- * than guessing a price from another exchange or currency.
- */
-export const resolveEtfListingPriceSource = async (listing: EtfListing): Promise<EtfListing> => {
-  const candidates = await searchEodhdEtfs(listing.symbol);
-  const ticker = normalizeSymbol(listing.symbol);
-  const compatible = candidates.filter(
-    (candidate) =>
-      getEodhdTicker(candidate.providerId, candidate.symbol) === ticker &&
-      (!listing.instrumentIdentity.currency ||
-        candidate.marketCurrency === listing.marketCurrency) &&
-      Boolean(candidate.providerId)
+const getCandidateTicker = (candidate: EodhdEtfPriceCandidate) =>
+  normalizeSymbol(candidate.providerId.split(".")[0] ?? candidate.symbol);
+
+const getExpectedEodhdExchanges = (listing: EtfListing) => {
+  const exchangeCode = normalizeSymbol(
+    listing.instrumentIdentity.exchangeCode ?? listing.exchangeCode ?? listing.exchange ?? ""
   );
-  const uniqueCandidates = uniqueBy(compatible, (candidate) => candidate.providerId ?? "");
+  return OPENFIGI_TO_EODHD_EXCHANGES[exchangeCode] ?? [];
+};
 
-  if (uniqueCandidates.length !== 1) {
-    return {
-      ...listing,
-      providerId: undefined,
-      providerPriceSymbol: undefined,
-      priceStatus: "unavailable",
-      instrumentIdentity: {
-        ...listing.instrumentIdentity,
-        providerPriceSymbol: undefined,
-      },
-    };
+type RankedPriceCandidate = {
+  candidate: EodhdEtfPriceCandidate;
+  score: number;
+};
+
+const rankPriceCandidate = (
+  listing: EtfListing,
+  candidate: EodhdEtfPriceCandidate
+): RankedPriceCandidate | null => {
+  const ticker = normalizeSymbol(listing.symbol);
+  const expectedIsin = normaliseFigi(listing.isin ?? "");
+  const expectedCurrency = listing.instrumentIdentity.currency;
+  const expectedExchanges = getExpectedEodhdExchanges(listing);
+  const candidateIsin = normaliseFigi(candidate.isin ?? "");
+  const candidateExchange = normalizeSymbol(candidate.exchange);
+
+  if (!candidate.providerId || getCandidateTicker(candidate) !== ticker) {
+    return null;
   }
 
-  const candidate = uniqueCandidates[0]!;
+  if (expectedIsin && candidateIsin !== expectedIsin) {
+    return null;
+  }
+
+  if (expectedCurrency && candidate.marketCurrency !== expectedCurrency) {
+    return null;
+  }
+
+  if (expectedExchanges.length > 0 && !expectedExchanges.includes(candidateExchange)) {
+    return null;
+  }
+
+  // A raw ticker is never enough.  We need either an exact ISIN, or a known
+  // venue correspondence that identifies the selected listing.
+  if (!expectedIsin && expectedExchanges.length === 0) {
+    return null;
+  }
+
+  let score = 40; // exact ticker
+  if (expectedIsin) score += 100;
+  if (expectedExchanges.length > 0) score += 40;
+  if (expectedCurrency) score += 20;
+
+  return { candidate, score };
+};
+
+const unavailablePriceListing = (listing: EtfListing): EtfListing => ({
+  ...listing,
+  providerId: undefined,
+  providerPriceSymbol: undefined,
+  priceStatus: "unavailable",
+  instrumentIdentity: {
+    ...listing.instrumentIdentity,
+    providerPriceSymbol: undefined,
+  },
+});
+
+/**
+ * Resolves an EODHD price source only for an unambiguous, venue-aware match.
+ * A selected ETF without such a match remains a valid historical transaction.
+ */
+export const resolveEtfListingPriceSource = async (
+  listing: EtfListing,
+  findCandidates: (query: string) => Promise<EodhdEtfPriceCandidate[]> =
+    searchEodhdEtfPriceCandidates
+): Promise<EtfListing> => {
+  const candidates = await findCandidates(listing.symbol);
+  const rankedCandidates = uniqueBy(candidates, (candidate) => candidate.providerId)
+    .flatMap((candidate) => {
+      const ranked = rankPriceCandidate(listing, candidate);
+      return ranked ? [ranked] : [];
+    })
+    .sort(
+      (left, right) =>
+        right.score - left.score ||
+        left.candidate.providerId.localeCompare(right.candidate.providerId)
+    );
+  const best = rankedCandidates[0];
+  const hasTiedBestCandidate =
+    best !== undefined && rankedCandidates.filter((candidate) => candidate.score === best.score).length > 1;
+
+  if (!best || hasTiedBestCandidate) {
+    return unavailablePriceListing(listing);
+  }
+
   return {
     ...listing,
     provider: "eodhd",
-    providerId: candidate.providerId,
-    marketCurrency: candidate.marketCurrency,
-    providerPriceSymbol: candidate.providerId,
-    priceScale: candidate.priceScale,
+    providerId: best.candidate.providerId,
+    marketCurrency: best.candidate.marketCurrency,
+    providerPriceSymbol: best.candidate.providerId,
+    priceScale: best.candidate.priceScale,
     priceStatus: "available",
     instrumentIdentity: {
       ...listing.instrumentIdentity,
-      currency: candidate.marketCurrency,
-      providerPriceSymbol: candidate.providerId,
+      currency: best.candidate.marketCurrency,
+      providerPriceSymbol: best.candidate.providerId,
     },
   };
 };

@@ -80,6 +80,90 @@ const requestJson = async <T,>(url: string, init?: RequestInit): Promise<T> => {
   return (await response.json()) as T;
 };
 
+type EtfSearchErrorPayload = {
+  code?: unknown;
+};
+
+const isAbortError = (error: unknown) =>
+  (error instanceof DOMException && error.name === "AbortError") ||
+  (typeof error === "object" && error !== null && "name" in error && error.name === "AbortError");
+
+const getEtfSearchErrorMessage = (status: number, payload: EtfSearchErrorPayload | null) => {
+  const code = typeof payload?.code === "string" ? payload.code : "";
+
+  if (status === 429 || code === "rate_limit") {
+    return "Limit wyszukiwania został chwilowo wykorzystany. Spróbuj ponownie za moment.";
+  }
+
+  if (code === "configuration" || code === "invalid_credentials") {
+    return "Wyszukiwanie ETF jest obecnie niedostępne.";
+  }
+
+  if (code === "network" || code === "timeout") {
+    return "Nie udało się połączyć z usługą wyszukiwania ETF.";
+  }
+
+  return "Nie udało się wyszukać ETF-ów. Spróbuj ponownie.";
+};
+
+/**
+ * ETF discovery has its own error contract.  It must never pass an HTML
+ * response, browser transport error or provider detail through to the UI.
+ */
+const requestEtfSearch = async (url: string, signal?: AbortSignal) => {
+  let response: Response;
+
+  try {
+    response = await fetch(url, {
+      cache: "no-store",
+      credentials: "same-origin",
+      signal,
+    });
+  } catch (error) {
+    if (isAbortError(error)) {
+      throw error;
+    }
+
+    throw new ApiError("Nie udało się połączyć z usługą wyszukiwania ETF.", 0, null);
+  }
+
+  const body = await response.text();
+  let payload: unknown = null;
+
+  if (body.trim()) {
+    try {
+      payload = JSON.parse(body) as unknown;
+    } catch {
+      payload = null;
+    }
+  }
+
+  const errorPayload =
+    payload !== null && typeof payload === "object" && !Array.isArray(payload)
+      ? (payload as EtfSearchErrorPayload)
+      : null;
+
+  if (!response.ok) {
+    throw new ApiError(
+      getEtfSearchErrorMessage(response.status, errorPayload),
+      response.status,
+      payload
+    );
+  }
+
+  if (
+    payload === null ||
+    typeof payload !== "object" ||
+    Array.isArray(payload) ||
+    !("groups" in payload) ||
+    !Array.isArray(payload.groups)
+  ) {
+    throw new ApiError("Nie udało się wyszukać ETF-ów. Spróbuj ponownie.", 502, null);
+  }
+
+  return payload.groups as EtfSearchGroup[];
+};
+
 export const searchAssets = async ({ query, kind, mode, signal }: SearchParams) => {
   const params = new URLSearchParams({
     q: query,
@@ -100,12 +184,7 @@ export const searchAssets = async ({ query, kind, mode, signal }: SearchParams) 
 
 export const searchEtfInstruments = async ({ query, signal }: Pick<SearchParams, "query" | "signal">) => {
   const params = new URLSearchParams({ q: query });
-  const data = await requestJson<{ groups: EtfSearchGroup[] }>(
-    `/api/instruments/search?${params.toString()}`,
-    { signal }
-  );
-
-  return data.groups;
+  return requestEtfSearch(`/api/etf/search?${params.toString()}`, signal);
 };
 
 export const resolveEtfListingPrice = async (listing: EtfListing) => {

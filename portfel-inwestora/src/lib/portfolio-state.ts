@@ -848,6 +848,49 @@ const normalizePortfolioName = (value: unknown, fallback: string) => {
   return trimmedValue ? trimmedValue.slice(0, 64) : fallback;
 };
 
+/**
+ * Portfolio names are user-facing labels, not identifiers.  This key is used
+ * exclusively to prevent confusing duplicate labels inside one account.
+ */
+export const getPortfolioNameComparisonKey = (value: string) =>
+  value.trim().toLocaleLowerCase("pl-PL");
+
+export const getDuplicatePortfolioName = (
+  portfolios: ReadonlyArray<Pick<InvestmentPortfolio, "id" | "name">>,
+  candidate: string,
+  excludePortfolioId?: string
+) => {
+  const comparisonKey = getPortfolioNameComparisonKey(candidate);
+
+  if (!comparisonKey) {
+    return null;
+  }
+
+  return (
+    portfolios.find(
+      (portfolio) =>
+        portfolio.id !== excludePortfolioId &&
+        getPortfolioNameComparisonKey(portfolio.name) === comparisonKey
+    ) ?? null
+  );
+};
+
+export const assertUniquePortfolioNames = (
+  portfolios: ReadonlyArray<Pick<InvestmentPortfolio, "id" | "name">>
+) => {
+  const seenNames = new Set<string>();
+
+  for (const portfolio of portfolios) {
+    const comparisonKey = getPortfolioNameComparisonKey(portfolio.name);
+
+    if (!comparisonKey || seenNames.has(comparisonKey)) {
+      throw new Error("Masz już portfel o tej nazwie. Wybierz inną nazwę.");
+    }
+
+    seenNames.add(comparisonKey);
+  }
+};
+
 export const createInvestmentPortfolio = (
   name = "Nowy portfel",
   state: PortfolioState = createEmptyPortfolioState()

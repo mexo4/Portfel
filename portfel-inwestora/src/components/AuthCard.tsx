@@ -9,6 +9,7 @@ type AuthCardProps = {
   mode: "login" | "register";
   initialError?: string | null;
   initialNotice?: string | null;
+  googleOAuthAvailable?: boolean;
 };
 
 type VerificationErrorPayload = {
@@ -53,6 +54,7 @@ export default function AuthCard({
   mode,
   initialError = null,
   initialNotice = null,
+  googleOAuthAvailable = true,
 }: AuthCardProps) {
   const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
@@ -173,10 +175,21 @@ export default function AuthCard({
             </p>
           </div>
 
-          <a className="google-button" href="/api/auth/oauth/google">
-            <GoogleMark />
-            <span>Kontynuuj z Google</span>
-          </a>
+          {googleOAuthAvailable ? (
+            <a className="google-button" href="/api/auth/oauth/google">
+              <GoogleMark />
+              <span>Kontynuuj z Google</span>
+            </a>
+          ) : (
+            <aside className="auth-local-oauth-notice" aria-label="Lokalne logowanie Google">
+              <strong>Logowanie Google jest niedostepne lokalnie</strong>
+              <p>
+                Uzyj emailu i hasla. Konto zalozone przez Google moze ustawic lokalne
+                haslo przez <Link href="/forgot-password">reset hasla</Link> — w trybie
+                developerskim otrzymasz jednorazowy link na tej stronie.
+              </p>
+            </aside>
+          )}
 
           <div className="auth-divider" aria-hidden="true">
             <span />

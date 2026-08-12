@@ -10,6 +10,8 @@ export type WorkspaceRouteKey =
   | "benchmarks"
   | "instruments"
   | "events"
+  | "portfolios"
+  | "wealth"
   | "settings";
 
 /** Maps public workspace URLs without sharing state between unrelated pages. */
@@ -25,6 +27,8 @@ export const getWorkspaceRoute = (pathname: string | null): WorkspaceRouteKey =>
   if (pathname.startsWith("/analytics/benchmarks")) return "benchmarks";
   if (pathname.startsWith("/market/instruments")) return "instruments";
   if (pathname.startsWith("/market/events")) return "events";
+  if (pathname.startsWith("/portfolios")) return "portfolios";
+  if (pathname.startsWith("/wealth")) return "wealth";
   if (pathname.startsWith("/settings")) return "settings";
   return "dashboard";
 };

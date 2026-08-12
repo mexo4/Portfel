@@ -124,6 +124,8 @@ export type AssetTableSortMode =
   | "value-asc"
   | "profit-desc"
   | "loss-asc"
+  | "profit-percent-desc"
+  | "profit-percent-asc"
   | "daily-gain-desc"
   | "daily-loss-asc";
 

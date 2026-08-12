@@ -3,6 +3,7 @@
 import { useMemo, useRef, useState } from "react";
 import FormattedNumberInput from "@/components/FormattedNumberInput";
 import TruncatedText from "@/components/TruncatedText";
+import { getBlankDividendNumericInputs } from "@/lib/dividend-input-defaults";
 import {
   buildDividendCalendar,
   buildDividendForecast,
@@ -119,23 +120,6 @@ const getAccountLabel = (account: PortfolioAccount) =>
 const getInstrumentLabel = (instrument: PortfolioInstrument) =>
   `${instrument.symbol} - ${instrument.name}`;
 
-const getOpenQuantityForInstrument = (
-  portfolio: InvestmentPortfolio,
-  instrument: PortfolioInstrument | null
-) => {
-  if (!instrument?.assetKind) return 0;
-
-  return round(
-    portfolio.assets
-      .filter(
-        (asset) =>
-          asset.kind === instrument.assetKind && asset.symbol === instrument.symbol
-      )
-      .reduce((total, asset) => total + asset.quantity, 0),
-    6
-  );
-};
-
 const getDividendAccountCandidates = (accounts: PortfolioAccount[]) =>
   accounts.filter(
     (account) =>
@@ -173,6 +157,7 @@ const getDefaultDividendDraft = (portfolio: InvestmentPortfolio): DividendDraft 
   const currency = instrument?.marketCurrency ?? "PLN";
   const account = getDefaultDividendAccountForCurrency(portfolio.accounts ?? [], currency);
   const today = getTodayDateInputValue();
+  const blankNumericInputs = getBlankDividendNumericInputs();
 
   return {
     editingId: null,
@@ -184,12 +169,15 @@ const getDefaultDividendDraft = (portfolio: InvestmentPortfolio): DividendDraft 
     accountId: account?.id ?? "",
     newAccountName: "",
     newAccountCurrency: currency,
-    quantity: getOpenQuantityForInstrument(portfolio, instrument),
+    // These are intentionally blank in the UI (numeric zero) until the user
+    // confirms the values.  A default instrument must not silently become a
+    // default number of shares or an FX rate.
+    quantity: blankNumericInputs.quantity,
     dividendPerShare: 0,
     withholdingTax: 0,
     domesticTax: 0,
     currency,
-    exchangeRate: currency === "PLN" ? 1 : 0,
+    exchangeRate: blankNumericInputs.exchangeRate,
     exDividendDate: today,
     recordDate: today,
     paymentDate: today,
@@ -374,9 +362,9 @@ export default function DividendCashWorkspace({
       ...currentDraft,
       instrumentId,
       useCustomInstrument: false,
-      quantity: getOpenQuantityForInstrument(portfolio, instrument),
+      quantity: 0,
       currency,
-      exchangeRate: currency === "PLN" ? 1 : fxRates[currency] ?? 0,
+      exchangeRate: 0,
       accountId: account?.id ?? currentDraft.accountId,
       newAccountCurrency: currency,
       country: currency === "PLN" ? "PL" : currentDraft.country,
@@ -391,7 +379,7 @@ export default function DividendCashWorkspace({
     setDividendDraft((currentDraft) => ({
       ...currentDraft,
       currency,
-      exchangeRate: currency === "PLN" ? 1 : fxRates[currency] ?? currentDraft.exchangeRate,
+      exchangeRate: 0,
       accountId: account?.currency === currency ? account.id : CREATE_DIVIDEND_ACCOUNT_VALUE,
       newAccountCurrency: currency,
       newAccountName:
@@ -406,9 +394,7 @@ export default function DividendCashWorkspace({
       ...currentDraft,
       useCustomInstrument: !currentDraft.useCustomInstrument,
       instrumentId: currentDraft.useCustomInstrument ? currentDraft.instrumentId : "",
-      quantity: currentDraft.useCustomInstrument
-        ? currentDraft.quantity
-        : Math.max(1, currentDraft.quantity),
+      quantity: currentDraft.useCustomInstrument ? currentDraft.quantity : 0,
     }));
     setDividendError(null);
   };
@@ -1230,8 +1216,17 @@ export default function DividendCashWorkspace({
               </div>
             </div>
 
-            <div className="sprint-table-wrap mt-5">
-              <table className="portfolio-table sprint-table">
+            <div className="sprint-table-wrap mt-5 dividend-payments-table-wrap">
+              <table className="portfolio-table sprint-table dividend-payments-table">
+                <colgroup>
+                  <col className="dividend-payments-column-instrument" />
+                  <col className="dividend-payments-column-account" />
+                  <col className="dividend-payments-column-dates" />
+                  <col className="dividend-payments-column-gross" />
+                  <col className="dividend-payments-column-taxes" />
+                  <col className="dividend-payments-column-net" />
+                  <col className="dividend-payments-column-actions" />
+                </colgroup>
                 <thead>
                   <tr>
                     <th>Instrument</th>
@@ -1308,6 +1303,27 @@ export default function DividendCashWorkspace({
                   ) : null}
                 </tbody>
               </table>
+            </div>
+            <div className="dividend-payment-cards mt-5">
+              {dividends.map((dividend) => (
+                <article className="dividend-payment-card" key={dividend.id}>
+                  <div className="dividend-payment-card-head">
+                    <span><strong>{dividend.symbol}</strong><TruncatedText as="span" text={dividend.instrumentName} /></span>
+                    <strong>{formatCurrency(dividend.netAmount, dividend.currency)}</strong>
+                  </div>
+                  <dl>
+                    <div><dt>Konto</dt><dd title={dividend.accountName}>{dividend.accountName}</dd></div>
+                    <div><dt>Wypłata</dt><dd>{formatDate(dividend.paymentDate)}</dd></div>
+                    <div><dt>Brutto</dt><dd>{formatCurrency(dividend.grossAmount, dividend.currency)}</dd></div>
+                    <div><dt>Podatki</dt><dd>{formatCurrency(dividend.withholdingTax + dividend.domesticTax, dividend.currency)}</dd></div>
+                  </dl>
+                  <div className="sprint-inline-actions">
+                    <span>{formatNumber(dividend.quantity)} szt.</span>
+                    <button className="ghost-button" type="button" onClick={() => editDividend(dividend)}>Edytuj</button>
+                    <button className="ghost-button admin-danger-button" type="button" onClick={() => deleteDividend(dividend)}>Usuń</button>
+                  </div>
+                </article>
+              ))}
             </div>
           </article>
         </section>

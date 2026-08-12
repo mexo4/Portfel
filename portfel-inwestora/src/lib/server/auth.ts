@@ -3,7 +3,7 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { FREE_PLAN_ASSET_LIMIT } from "@/lib/constants";
-import { normalizePortfolioBook, normalizePortfolioState } from "@/lib/portfolio-state";
+import { assertUniquePortfolioNames, normalizePortfolioBook, normalizePortfolioState } from "@/lib/portfolio-state";
 import type { NextResponse } from "next/server";
 import { createFreshUserProfile, normalizeUserProfile } from "@/lib/profile";
 import { isForcedProEmail } from "@/lib/server/access";
@@ -882,6 +882,9 @@ export const updateCurrentUserPortfolio = async (
 
   const account = toAuthenticatedUser(await withForcedProSubscription(existingUser));
   const normalizedPortfolio = normalizePortfolioBook(portfolio);
+  // Client-side feedback is helpful, but this is the authoritative guard for
+  // every portfolio-book write, including concurrent tabs and API callers.
+  assertUniquePortfolioNames(normalizedPortfolio.portfolios);
 
   const hasPortfolioOverFreeLimit = normalizedPortfolio.portfolios.some(
     (item) => item.assets.length > FREE_PLAN_ASSET_LIMIT

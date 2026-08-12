@@ -40,6 +40,9 @@ import type {
 
 type AssetTableProps = {
   assets: PortfolioAsset[];
+  /** A read-only workspace ("Wszystkie portfele") supplies pre-scoped groups
+   * so identical tickers from different portfolios are never merged. */
+  groups?: PortfolioAssetGroup[];
   fxRates: FxRates;
   baseCurrency: CurrencyCode;
   filter: string;
@@ -72,6 +75,8 @@ const SORT_OPTIONS: Array<{
   { value: "value-asc", label: "Najmniejsza wartosc" },
   { value: "profit-desc", label: "Najwiekszy zysk" },
   { value: "loss-asc", label: "Najwieksza strata" },
+  { value: "profit-percent-desc", label: "Najwiekszy zysk %" },
+  { value: "profit-percent-asc", label: "Najmniejszy zysk %" },
   { value: "daily-gain-desc", label: "Najwiekszy dzienny zysk %" },
   { value: "daily-loss-asc", label: "Najwieksza dzienna strata %" },
 ];
@@ -153,6 +158,20 @@ const sortGroupedAssets = (
     if (sortMode === "value-asc") {
       return (
         left.group.totalValuePln - right.group.totalValuePln ||
+        compareByManualOrder(left, right)
+      );
+    }
+
+    if (sortMode === "profit-percent-desc") {
+      return (
+        right.group.profitLossPercent - left.group.profitLossPercent ||
+        compareByManualOrder(left, right)
+      );
+    }
+
+    if (sortMode === "profit-percent-asc") {
+      return (
+        left.group.profitLossPercent - right.group.profitLossPercent ||
         compareByManualOrder(left, right)
       );
     }
@@ -297,6 +316,7 @@ const SortableGroupSection = ({
               <div className="table-note">
                 {group.symbol} - {group.lotsCount}{" "}
                 {group.lotsCount === 1 ? "zakup" : "zakupy"}
+                {group.portfolioName ? ` · ${group.portfolioName}` : ""}
               </div>
             </div>
           </div>
@@ -348,6 +368,23 @@ const SortableGroupSection = ({
             "brak kursu"
           )}
         </td>
+        <td
+          className={
+            group.hasLivePrice
+              ? group.profitLossPercent >= 0
+                ? "tone-positive"
+                : "tone-negative"
+              : ""
+          }
+        >
+          {isDragging ? (
+            <DragRowPlaceholder />
+          ) : group.hasLivePrice ? (
+            `${group.profitLossPercent >= 0 ? "+" : ""}${group.profitLossPercent.toFixed(2)}%`
+          ) : (
+            "brak kursu"
+          )}
+        </td>
         <td>
           {isDragging ? (
             <DragRowPlaceholder />
@@ -380,7 +417,7 @@ const SortableGroupSection = ({
 
       {isExpanded && !isDragging ? (
         <tr className="portfolio-detail-row">
-          <td colSpan={8} className="portfolio-detail-cell">
+          <td colSpan={9} className="portfolio-detail-cell">
             <div className="lot-list">
               {group.lots.map((lot, index) => {
                 const lotProfitLoss = getAssetProfitLoss(lot, fxRates, baseCurrency);
@@ -459,6 +496,7 @@ const SortableGroupSection = ({
 
 export default function AssetTable({
   assets,
+  groups,
   fxRates,
   baseCurrency,
   filter,
@@ -486,7 +524,7 @@ export default function AssetTable({
   );
 
   const filteredGroups = useMemo(() => {
-    const groupedAssets = getGroupedPortfolioAssets(assets, fxRates, baseCurrency).filter((group) => {
+    const groupedAssets = (groups ?? getGroupedPortfolioAssets(assets, fxRates, baseCurrency)).filter((group) => {
       if (!normalizedFilter) return true;
 
       const haystack = [group.name, group.symbol, group.kind].join(" ").toLowerCase();
@@ -494,7 +532,7 @@ export default function AssetTable({
     });
 
     return sortGroupedAssets(groupedAssets, sortMode);
-  }, [assets, baseCurrency, fxRates, normalizedFilter, sortMode]);
+  }, [assets, baseCurrency, fxRates, groups, normalizedFilter, sortMode]);
 
   const sortableGroupKeys = filteredGroups.map((group) => group.key);
   const activeGroup = activeGroupKey
@@ -596,6 +634,7 @@ export default function AssetTable({
               <col className="portfolio-column-average-price" />
               <col className="portfolio-column-unit-price" />
               <col className="portfolio-column-profit-loss" />
+              <col className="portfolio-column-profit-percent" />
               <col className="portfolio-column-quote" />
               <col className="portfolio-column-actions" />
             </colgroup>
@@ -607,6 +646,7 @@ export default function AssetTable({
                 <th>Sredni zakup</th>
                 <th>Kurs jednostkowy</th>
                 <th>P/L {baseCurrency}</th>
+                <th>Zysk %</th>
                 <th>Notowanie</th>
                 <th />
               </tr>
@@ -615,7 +655,7 @@ export default function AssetTable({
             {filteredGroups.length === 0 ? (
               <tbody>
                 <tr>
-                  <td className="empty-row" colSpan={8}>
+                  <td className="empty-row" colSpan={9}>
                     Brak pozycji. Dodaj pierwsze aktywo formularzem powyzej.
                   </td>
                 </tr>

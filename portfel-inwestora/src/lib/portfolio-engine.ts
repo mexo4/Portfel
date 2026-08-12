@@ -36,6 +36,8 @@ export type PortfolioAssetGroup = {
   costBasisBase: number;
   /** marketValueBase − costBasisBase. */
   profitLossBase: number;
+  /** Open P/L relative to the same cost basis used for profitLossBase. */
+  profitLossPercent: number;
   latestUnitPrice?: number;
   previousClose?: number;
   hasLivePrice: boolean;
@@ -55,6 +57,9 @@ export type PortfolioAssetGroup = {
   groupOrder: number;
   lotsCount: number;
   lots: PortfolioAsset[];
+  /** Present only in the virtual all-portfolios read model. Never persisted. */
+  portfolioId?: string;
+  portfolioName?: string;
 };
 
 export type PortfolioEngineCache = {
@@ -341,6 +346,8 @@ export const getGroupedPortfolioAssets = (
     const totalValue = convertFromPln(totalValuePln, baseCurrency, fxRates);
     const totalInvested = convertFromPln(totalInvestedPln, baseCurrency, fxRates);
     const totalProfitLoss = convertFromPln(totalProfitLossPln, baseCurrency, fxRates);
+    const profitLossPercent =
+      totalInvested > 0 ? round((totalProfitLoss / totalInvested) * 100, 2) : 0;
     const marketValueQuote =
       weightedLatestUnitPrice === undefined
         ? undefined
@@ -379,6 +386,7 @@ export const getGroupedPortfolioAssets = (
       marketValueBase: totalValue,
       costBasisBase: totalInvested,
       profitLossBase: totalProfitLoss,
+      profitLossPercent,
       latestUnitPrice: weightedLatestUnitPrice,
       previousClose,
       hasLivePrice,
@@ -494,6 +502,84 @@ export const getPortfolioSummary = (
     salesCount: sales.length,
   };
 };
+
+/**
+ * Read-only aggregate for the virtual "Wszystkie portfele" workspace.
+ * Each concrete portfolio has already been valued with its own currency and
+ * operation context; only its normalized PLN totals are combined here.
+ */
+export const aggregatePortfolioSummaries = (
+  summaries: PortfolioSummary[],
+  fxRates: FxRates,
+  displayCurrency: CurrencyCode = BASE_CURRENCY
+): PortfolioSummary => {
+  const totals = summaries.reduce(
+    (aggregate, summary) => {
+      aggregate.totalValuePln += summary.totalValuePln;
+      aggregate.marketValuePln += summary.marketValuePln;
+      aggregate.cashValuePln += summary.cashValuePln;
+      aggregate.totalInvestedPln += summary.totalInvestedPln;
+      aggregate.totalProfitLossPln += summary.totalProfitLossPln;
+      aggregate.openProfitLossPln += summary.openProfitLossPln;
+      aggregate.realizedProfitLossPln += summary.realizedProfitLossPln;
+      aggregate.combinedProfitLossPln += summary.combinedProfitLossPln;
+      aggregate.positionsCount += summary.positionsCount;
+      aggregate.assetsCount += summary.assetsCount;
+      aggregate.salesCount += summary.salesCount;
+
+      for (const [currency, amount] of Object.entries(summary.realizedProfitLossByCurrency)) {
+        aggregate.realizedProfitLossByCurrency[currency] = round(
+          (aggregate.realizedProfitLossByCurrency[currency] ?? 0) + amount,
+          currency === BASE_CURRENCY ? 2 : 6
+        );
+      }
+
+      return aggregate;
+    },
+    {
+      totalValuePln: 0,
+      marketValuePln: 0,
+      cashValuePln: 0,
+      totalInvestedPln: 0,
+      totalProfitLossPln: 0,
+      openProfitLossPln: 0,
+      realizedProfitLossPln: 0,
+      combinedProfitLossPln: 0,
+      positionsCount: 0,
+      assetsCount: 0,
+      salesCount: 0,
+      realizedProfitLossByCurrency: {} as Record<CurrencyCode, number>,
+    }
+  );
+
+  return {
+    currency: displayCurrency,
+    totalValue: convertFromPln(totals.totalValuePln, displayCurrency, fxRates),
+    marketValue: convertFromPln(totals.marketValuePln, displayCurrency, fxRates),
+    cashValue: convertFromPln(totals.cashValuePln, displayCurrency, fxRates),
+    totalInvested: convertFromPln(totals.totalInvestedPln, displayCurrency, fxRates),
+    totalProfitLoss: convertFromPln(totals.totalProfitLossPln, displayCurrency, fxRates),
+    openProfitLoss: convertFromPln(totals.openProfitLossPln, displayCurrency, fxRates),
+    realizedProfitLoss: convertFromPln(totals.realizedProfitLossPln, displayCurrency, fxRates),
+    combinedProfitLoss: convertFromPln(totals.combinedProfitLossPln, displayCurrency, fxRates),
+    ...totals,
+  };
+};
+
+/** Keeps identical instrument symbols separate in the virtual aggregate view. */
+export const getAllPortfolioScopedGroups = (
+  portfolios: InvestmentPortfolio[],
+  fxRates: FxRates,
+  displayCurrency: CurrencyCode
+) =>
+  portfolios.flatMap((portfolio) =>
+    getGroupedPortfolioAssets(portfolio.assets, fxRates, displayCurrency).map((group) => ({
+      ...group,
+      key: `${portfolio.id}:${group.key}`,
+      portfolioId: portfolio.id,
+      portfolioName: portfolio.name,
+    }))
+  );
 
 const getCashValuePln = (balances: CashBalance[], fxRates: FxRates) =>
   round(

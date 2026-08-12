@@ -22,6 +22,7 @@ import {
   type TooltipContentProps,
   type TooltipPayloadEntry,
 } from "recharts";
+import { createPortal } from "react-dom";
 import TruncatedText from "@/components/TruncatedText";
 import {
   getChartRangeViewport,
@@ -3048,7 +3049,8 @@ export default function PortfolioLineCharts({
       </div>
       </section>
 
-      {isChartModalOpen && hasRenderableData ? (
+      {isChartModalOpen && hasRenderableData && typeof document !== "undefined"
+        ? createPortal(
         <div
           className="line-visual-modal-backdrop"
           role="presentation"
@@ -3077,7 +3079,8 @@ export default function PortfolioLineCharts({
             {renderLegend(true)}
             {renderChartFrame(true)}
           </section>
-        </div>
+        </div>,
+        document.body
       ) : null}
     </>
   );

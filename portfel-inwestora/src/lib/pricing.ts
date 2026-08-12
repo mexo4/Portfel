@@ -12,6 +12,8 @@ export {
   getAssetPurchasePriceCurrency,
   getAssetPurchaseUnitValuePln,
   getAssetPurchaseValuePln,
+  getAllPortfolioScopedGroups,
+  aggregatePortfolioSummaries,
   getAssetPreviousClose,
   getAssetProfitLoss,
   getAssetProfitLossPln,

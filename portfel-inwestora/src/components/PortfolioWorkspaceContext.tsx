@@ -17,7 +17,10 @@ export type PortfolioWorkspaceValue = {
   isAdmin: boolean;
   portfolios: InvestmentPortfolio[];
   activePortfolio?: InvestmentPortfolio;
+  /** The persisted active portfolio always remains a real record. */
   activePortfolioId: string;
+  selectedPortfolioId: string;
+  isAllPortfoliosSelected: boolean;
   activeBaseCurrency: CurrencyCode;
   isPortfolioMutationPending: boolean;
   isLoggingOut: boolean;
@@ -33,7 +36,7 @@ export type PortfolioWorkspaceValue = {
   fxRates: FxRates;
   groupedAssets: PortfolioAssetGroup[];
   filter: string;
-  assetSortMode: "manual" | "value-desc" | "value-asc" | "profit-desc" | "loss-asc" | "daily-gain-desc" | "daily-loss-asc";
+  assetSortMode: "manual" | "value-desc" | "value-asc" | "profit-desc" | "loss-asc" | "profit-percent-desc" | "profit-percent-asc" | "daily-gain-desc" | "daily-loss-asc";
   isRefreshing: boolean;
   summaryTotalValue: number;
   summaryCombinedProfitLoss: number;
@@ -47,6 +50,8 @@ export type PortfolioWorkspaceValue = {
   incomeWorkspace: ReactNode;
   importWorkspace: ReactNode;
   settingsWorkspace: ReactNode;
+  portfolioManagementWorkspace: ReactNode;
+  wealthWorkspace: ReactNode;
   onFilterChange: (value: string) => void;
   onSortModeChange: (value: PortfolioWorkspaceValue["assetSortMode"]) => void;
   onReorderGroups: (keys: string[]) => void;

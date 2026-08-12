@@ -1233,7 +1233,8 @@ textarea {
 .line-visual-modal-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 1000;
+  /* Body portal: this must clear shell transforms and every app-level stack. */
+  z-index: 10000;
   display: grid;
   place-items: center;
   padding: 3vh 3vw;
@@ -1588,6 +1589,32 @@ textarea {
   border-color: rgba(20, 35, 48, 0.36);
   background: #fffefd;
   box-shadow: 0 4px 12px rgba(20, 35, 48, 0.07);
+}
+
+.auth-local-oauth-notice {
+  display: grid;
+  gap: 6px;
+  padding: 13px 15px;
+  border: 1px solid rgba(15, 118, 110, 0.23);
+  border-radius: 10px;
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent-soft) 52%, #fff);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.auth-local-oauth-notice strong {
+  color: var(--accent);
+  font-size: 0.82rem;
+}
+
+.auth-local-oauth-notice p {
+  margin: 0;
+}
+
+.auth-local-oauth-notice a {
+  color: var(--accent);
+  font-weight: 700;
 }
 
 .google-button:focus-visible,
@@ -2980,6 +3007,35 @@ textarea {
   font-size: 0.84rem;
 }
 
+.dividend-payments-table {
+  min-width: 1120px;
+  table-layout: fixed;
+}
+
+.dividend-payments-column-instrument { width: 22%; }
+.dividend-payments-column-account { width: 14%; }
+.dividend-payments-column-dates { width: 20%; }
+.dividend-payments-column-gross,
+.dividend-payments-column-taxes,
+.dividend-payments-column-net { width: 12%; }
+.dividend-payments-column-actions { width: 20%; }
+
+.dividend-payments-table td {
+  overflow-wrap: anywhere;
+  vertical-align: top;
+}
+
+.dividend-payments-table td:nth-child(4),
+.dividend-payments-table td:nth-child(5),
+.dividend-payments-table td:nth-child(6) {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.dividend-payment-cards {
+  display: none;
+}
+
 .dividend-preview,
 .dividend-forecast,
 .cash-balance-list {
@@ -3618,7 +3674,7 @@ textarea {
  * so financial values are never clipped or allowed to overlap.
  */
 .portfolio-positions-table {
-  min-width: 1330px;
+  min-width: 1470px;
 }
 
 .portfolio-positions-table th:first-child,
@@ -3650,6 +3706,10 @@ textarea {
   width: 180px;
 }
 
+.portfolio-positions-table .portfolio-column-profit-percent {
+  width: 118px;
+}
+
 .portfolio-positions-table .portfolio-column-quote {
   width: 184px;
 }
@@ -3665,12 +3725,57 @@ textarea {
 .portfolio-positions-table th:nth-child(5),
 .portfolio-positions-table td:nth-child(5),
 .portfolio-positions-table th:nth-child(6),
-.portfolio-positions-table td:nth-child(6) {
+.portfolio-positions-table td:nth-child(6),
+.portfolio-positions-table th:nth-child(7),
+.portfolio-positions-table td:nth-child(7) {
   font-variant-numeric: tabular-nums;
 }
 
 .portfolio-table.import-preview-table {
   table-layout: auto;
+}
+
+.import-file-control {
+  position: relative;
+  align-self: end;
+}
+
+.import-file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.import-file-button {
+  display: inline-flex;
+  min-height: 42px;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+}
+
+.import-file-control:focus-within .import-file-button {
+  border-color: rgba(15, 118, 110, 0.46);
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.12);
+}
+
+.import-selected-file {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+}
+
+.import-selected-file > span:first-child {
+  flex: 0 0 auto;
+}
+
+.import-selected-file .truncate-text {
+  min-width: 0;
 }
 
 .portfolio-table.import-preview-table th:first-child,
@@ -4912,6 +5017,73 @@ textarea {
     min-width: 560px;
   }
 
+  .dividend-payments-table-wrap {
+    display: none;
+  }
+
+  .dividend-payment-cards {
+    display: grid;
+    gap: 8px;
+  }
+
+  .dividend-payment-card {
+    display: grid;
+    gap: 10px;
+    padding: 12px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.72);
+  }
+
+  .dividend-payment-card-head {
+    display: flex;
+    min-width: 0;
+    align-items: start;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .dividend-payment-card-head > span {
+    display: grid;
+    min-width: 0;
+    gap: 2px;
+  }
+
+  .dividend-payment-card-head .truncate-text,
+  .dividend-payment-card dd {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .dividend-payment-card-head > strong,
+  .dividend-payment-card dd {
+    font-variant-numeric: tabular-nums;
+  }
+
+  .dividend-payment-card dl {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    margin: 0;
+  }
+
+  .dividend-payment-card dl div {
+    display: grid;
+    min-width: 0;
+    gap: 2px;
+  }
+
+  .dividend-payment-card dt,
+  .dividend-payment-card dd {
+    margin: 0;
+  }
+
+  .dividend-payment-card dt {
+    color: var(--muted);
+    font-size: 0.68rem;
+  }
+
   .portfolio-table:not(.sprint-table):not(.import-preview-table) {
     min-width: 100%;
   }
@@ -5976,6 +6148,17 @@ textarea {
   background: var(--accent);
   box-shadow: 0 8px 18px rgba(15, 118, 110, 0.19);
 }
+.workspace-brand img.workspace-brand-mark,
+.workspace-mobile-brand img {
+  display: block;
+  width: 34px;
+  height: 34px;
+  border: 0;
+  border-radius: 0;
+  object-fit: contain;
+  box-shadow: none;
+  background: transparent;
+}
 .workspace-sidebar-toggle { width: 32px; height: 32px; border: 1px solid var(--line); border-radius: 9px; color: var(--muted); background: transparent; cursor: pointer; }
 .workspace-sidebar-toggle:hover { color: var(--accent); border-color: rgba(15, 118, 110, 0.32); }
 .workspace-sidebar-nav { display: grid; gap: 8px; }
@@ -6053,8 +6236,10 @@ textarea {
 .workspace-plan-placeholder { max-width: 540px; }
 
 .workspace-position-cards { display: grid; gap: 10px; }
-.workspace-position-filter { justify-content: space-between; padding: 3px 1px; color: var(--text); font-size: .88rem; font-weight: 760; }
-.workspace-position-filter small { color: var(--muted); font-size: .75rem; font-weight: 650; }
+.workspace-position-filter { display: grid; grid-template-columns: minmax(0, 1fr) minmax(126px, auto); align-items: end; gap: 5px 10px; padding: 3px 1px; color: var(--text); font-size: .88rem; font-weight: 760; }
+.workspace-position-filter > small { grid-column: 1 / -1; color: var(--muted); font-size: .75rem; font-weight: 650; }
+.workspace-position-sort { display: grid; min-width: 0; gap: 2px; color: var(--muted); font-size: .68rem; font-weight: 700; }
+.workspace-position-sort select { max-width: 100%; min-height: 32px; border: 1px solid var(--line-strong); border-radius: 8px; padding: 4px 26px 4px 8px; color: var(--text); background: rgba(255,255,255,.9); font: inherit; font-size: .72rem; }
 .workspace-position-card { padding: 14px; border: 1px solid var(--line); border-radius: 14px; background: rgba(255,255,255,.7); box-shadow: 0 9px 22px rgba(31,41,55,.035); }
 .workspace-position-card header { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
 .workspace-position-card header > div { display: grid; min-width: 0; gap: 3px; }

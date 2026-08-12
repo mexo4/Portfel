@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import TruncatedText from "@/components/TruncatedText";
 import {
   parseBrokerOperationsCsv,
   parseBrokerOperationsXlsx,
@@ -286,13 +287,15 @@ export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) 
           onSelect={handlePlatformSelect}
         />
 
-        <label className="field">
+        <label className="field import-file-control">
           <span>{fileLabel}</span>
           <input
             ref={fileInputRef}
             type="file"
             accept={acceptedFileTypes}
+            className="import-file-input"
           />
+          <span className="ghost-button import-file-button" aria-hidden="true">Wybierz Plik</span>
         </label>
 
         <button
@@ -307,7 +310,7 @@ export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) 
         </button>
       </div>
 
-      {fileName ? <p className="field-note mt-4">Wybrany plik: {fileName}</p> : null}
+      {fileName ? <div className="field-note mt-4 import-selected-file"><span>Wybrany plik:</span><TruncatedText as="span" text={fileName} /></div> : null}
       {isParsing && parseStatus ? <p className="field-note mt-4">{parseStatus}</p> : null}
       {isImporting && quoteProgress && quoteProgress.total > 0 ? (
         <p className="field-note mt-4" aria-live="polite">

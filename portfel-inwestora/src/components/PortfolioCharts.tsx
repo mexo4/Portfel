@@ -23,6 +23,7 @@ type PortfolioChartsProps = {
   fxRates: FxRates;
   baseCurrency: CurrencyCode;
   combinedProfitLoss: number;
+  view?: "all" | "structure" | "benchmarks";
 };
 
 type AssetClassBreakdownTarget = Pick<PortfolioAsset, "kind" | "symbol">;
@@ -112,6 +113,7 @@ export default function PortfolioCharts({
   fxRates,
   baseCurrency,
   combinedProfitLoss,
+  view = "all",
 }: PortfolioChartsProps) {
   const [benchmarkComparisons, setBenchmarkComparisons] = useState<BenchmarkComparison[]>([]);
   const [benchmarkError, setBenchmarkError] = useState<string | null>(null);
@@ -258,7 +260,7 @@ export default function PortfolioCharts({
 
   return (
     <div className="charts-grid">
-      <section className="panel chart-card chart-card-wide">
+      {view !== "structure" ? <section className="panel chart-card chart-card-wide">
         <p className="eyebrow">Porownanie</p>
         <h2 className="section-title">Portfel vs benchmarki</h2>
         <p className="section-copy">
@@ -325,9 +327,9 @@ export default function PortfolioCharts({
         {benchmarkError ? (
           <p className="field-note field-note-error mt-4">{benchmarkError}</p>
         ) : null}
-      </section>
+      </section> : null}
 
-      <section className="panel chart-card">
+      {view !== "benchmarks" ? <section className="panel chart-card">
         <p className="eyebrow">Struktura</p>
         <h2 className="section-title">Najwieksze pozycje portfela</h2>
         <p className="section-copy">
@@ -365,9 +367,9 @@ export default function PortfolioCharts({
             </article>
           ))}
         </div>
-      </section>
+      </section> : null}
 
-      <section className="panel chart-card">
+      {view !== "benchmarks" ? <section className="panel chart-card">
         <p className="eyebrow">Dywersyfikacja</p>
         <h2 className="section-title">Udzial klas aktywow</h2>
         <p className="section-copy">
@@ -402,9 +404,9 @@ export default function PortfolioCharts({
             ))}
           </div>
         </div>
-      </section>
+      </section> : null}
 
-      <section className="panel chart-card chart-card-wide">
+      {view !== "benchmarks" ? <section className="panel chart-card chart-card-wide">
         <p className="eyebrow">Wynik</p>
         <h2 className="section-title">Najmocniejsze i najslabsze pozycje</h2>
         <p className="section-copy">
@@ -471,7 +473,7 @@ export default function PortfolioCharts({
             </div>
           </div>
         </div>
-      </section>
+      </section> : null}
     </div>
   );
 }

@@ -1,21 +1,3 @@
-import PortfolioApp from "@/components/PortfolioApp";
-import { requireCurrentAccountData } from "@/lib/server/auth";
-import { isAdminEmail } from "@/lib/server/access";
+import { redirect } from "next/navigation";
 
-export default async function AppPage() {
-  const accountData = await requireCurrentAccountData();
-
-  return (
-    <PortfolioApp
-      initialAssets={accountData.assets}
-      initialSales={accountData.sales}
-      initialRealizedAdjustments={accountData.realizedAdjustments}
-      initialPortfolios={accountData.portfolios}
-      initialActivePortfolioId={accountData.activePortfolioId}
-      initialPortfolioRevision={accountData.portfolioRevision}
-      initialProfile={accountData.profile}
-      account={accountData.user}
-      isAdmin={isAdminEmail(accountData.user.email)}
-    />
-  );
-}
+export default function AppPage() { redirect("/dashboard"); }

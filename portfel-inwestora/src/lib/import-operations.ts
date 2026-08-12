@@ -140,8 +140,83 @@ const HEADER_ALIASES = {
 
 const CRYPTO_SYMBOLS = new Set(["BTC", "ETH", "SOL", "BNB", "XRP", "ADA", "DOGE", "DOT", "LINK", "LTC", "BCH", "AVAX", "MATIC"]);
 
+// Broker exports use both a base asset (BTC), a quote pair (BTCUSD/BTC-USD)
+// and, in XTB exports, the human-readable BITCOIN symbol. Keep this
+// normalization inside the importer so it cannot affect the regular security
+// search or market-aware stock identity resolution.
+const CRYPTO_NAME_ALIASES: Record<string, string> = {
+  BITCOIN: "BTC",
+};
+
+const CRYPTO_QUOTE_CURRENCIES = [
+  "USDT",
+  "USDC",
+  "USD",
+  "EUR",
+  "PLN",
+  "GBP",
+  "CHF",
+  "DKK",
+  "CAD",
+  "JPY",
+  "NOK",
+  "SEK",
+  "CZK",
+] as const;
+
+type ImportedCryptoIdentity = {
+  symbol: string;
+  name: string;
+  providerId?: string;
+  quoteCurrency?: CurrencyCode;
+};
+
 const normalizeHeader = (value: string | null | undefined) =>
   normalizeText(value ?? "").replace(/\s+/g, " ");
+
+const getImportedCryptoIdentity = (
+  ...values: Array<string | null | undefined>
+): ImportedCryptoIdentity | null => {
+  for (const value of values) {
+    const normalized = normalizeSymbol(value ?? "");
+    if (!normalized) continue;
+
+    const compact = normalized.replace(/[^A-Z0-9]/g, "");
+    const directSymbol =
+      (CRYPTO_SYMBOLS.has(compact) ? compact : undefined) ??
+      CRYPTO_NAME_ALIASES[compact];
+
+    if (directSymbol) {
+      return {
+        symbol: directSymbol,
+        name: directSymbol === "BTC" ? "Bitcoin" : directSymbol,
+        providerId: directSymbol === "BTC" ? "bitcoin" : undefined,
+      };
+    }
+
+    const quoteCurrency = CRYPTO_QUOTE_CURRENCIES.find(
+      (currency) => compact.endsWith(currency) && compact.length > currency.length
+    );
+    const baseSymbol = quoteCurrency ? compact.slice(0, -quoteCurrency.length) : "";
+    const pairSymbol =
+      (CRYPTO_SYMBOLS.has(baseSymbol) ? baseSymbol : undefined) ??
+      CRYPTO_NAME_ALIASES[baseSymbol];
+
+    if (pairSymbol && quoteCurrency) {
+      return {
+        symbol: pairSymbol,
+        name: pairSymbol === "BTC" ? "Bitcoin" : pairSymbol,
+        providerId: pairSymbol === "BTC" ? "bitcoin" : undefined,
+        quoteCurrency,
+      };
+    }
+  }
+
+  return null;
+};
+
+const roundImportedQuantity = (quantity: number, kind: AssetKind) =>
+  round(Math.abs(quantity), kind === "crypto" ? 12 : 6);
 
 const getDelimiter = (line: string) => {
   const candidates = [";", ",", "\t"];
@@ -275,7 +350,13 @@ const inferKind = (value: string, symbol: string, name: string): AssetKind => {
   const normalized = normalizeHeader(`${value} ${symbol} ${name}`);
   const normalizedSymbol = normalizeSymbol(symbol).replace(/[-/].+$/, "");
 
-  if (normalized.includes("crypto") || CRYPTO_SYMBOLS.has(normalizedSymbol)) return "crypto";
+  if (
+    normalized.includes("crypto") ||
+    CRYPTO_SYMBOLS.has(normalizedSymbol) ||
+    getImportedCryptoIdentity(symbol, name)
+  ) {
+    return "crypto";
+  }
   if (normalized.includes("etf")) return "etf";
   return "stock";
 };
@@ -286,6 +367,11 @@ const getProvider = (kind: AssetKind, symbol: string, currency: CurrencyCode): Q
 };
 
 const normalizeImportedSymbol = (symbol: string, kind: AssetKind, currency: CurrencyCode) => {
+  if (kind === "crypto") {
+    const cryptoIdentity = getImportedCryptoIdentity(symbol);
+    if (cryptoIdentity) return cryptoIdentity.symbol;
+  }
+
   return resolveTickerIdentity({
     symbol,
     kind,
@@ -354,14 +440,18 @@ const parseBrokerOperationRows = (
     const price =
       rawPrice ??
       (quantity && transactionValue ? Math.abs(transactionValue) / Math.abs(quantity) : null);
+    const cryptoIdentity = getImportedCryptoIdentity(rawSymbol, rawName);
     const currency = toCurrencyCode(
-      getCell(row, HEADER_ALIASES.currency) || inferCurrencyFromSymbol(rawSymbol, "USD")
+      getCell(row, HEADER_ALIASES.currency) ||
+        cryptoIdentity?.quoteCurrency ||
+        inferCurrencyFromSymbol(rawSymbol, "USD")
     );
     const fee = parseNumber(getCell(row, HEADER_ALIASES.fee)) ?? 0;
-    const kind = inferKind(getCell(row, HEADER_ALIASES.kind), rawSymbol, rawName);
-    const alias = resolveTickerAlias(rawSymbol, kind);
-    const symbol = alias?.symbol ?? normalizeImportedSymbol(rawSymbol, kind, currency);
-    const resolvedKind = alias?.kind ?? kind;
+    const kind = cryptoIdentity ? "crypto" : inferKind(getCell(row, HEADER_ALIASES.kind), rawSymbol, rawName);
+    const alias = cryptoIdentity ? null : resolveTickerAlias(rawSymbol, kind);
+    const symbol =
+      cryptoIdentity?.symbol ?? alias?.symbol ?? normalizeImportedSymbol(rawSymbol, kind, currency);
+    const resolvedKind = cryptoIdentity ? "crypto" : alias?.kind ?? kind;
     const resolvedCurrency = alias?.marketCurrency ?? currency;
 
     if (!side || !rawDate || !symbol || !quantity || quantity <= 0 || !price || price <= 0) {
@@ -381,9 +471,9 @@ const parseBrokerOperationRows = (
       date: rawDate,
       symbol,
       rawSymbol,
-      name: alias?.name ?? (rawName || symbol),
+      name: cryptoIdentity?.name ?? alias?.name ?? (rawName || symbol),
       kind: resolvedKind,
-      quantity: round(Math.abs(quantity), 6),
+      quantity: roundImportedQuantity(quantity, resolvedKind),
       price: round(Math.abs(price), 6),
       currency: resolvedCurrency,
       feePln: round(Math.abs(fee), 6),
@@ -398,6 +488,7 @@ const parseBrokerOperationRows = (
           : undefined,
       provider,
       providerId:
+        cryptoIdentity?.providerId ??
         alias?.providerId ??
         (provider === "yahoo" || provider === "eodhd" ? symbol : undefined),
       priceScale: alias?.priceScale,
@@ -1213,13 +1304,17 @@ const parseXtbPdfChunk = (
   const rawDate = parseDate(dateText);
   const side = inferSide(chunk);
   const rawSymbol = extractPdfSymbol(chunk);
+  const cryptoIdentity = getImportedCryptoIdentity(rawSymbol, chunk);
   const currency = toCurrencyCode(
-    chunk.match(PDF_CURRENCY_PATTERN)?.[1] || inferCurrencyFromSymbol(rawSymbol, "USD")
+    chunk.match(PDF_CURRENCY_PATTERN)?.[1] ||
+      cryptoIdentity?.quoteCurrency ||
+      inferCurrencyFromSymbol(rawSymbol, "USD")
   );
-  const kind = inferKind(chunk, rawSymbol, rawSymbol);
-  const alias = resolveTickerAlias(rawSymbol, kind);
-  const symbol = alias?.symbol ?? normalizeImportedSymbol(rawSymbol, kind, currency);
-  const resolvedKind = alias?.kind ?? kind;
+  const kind = cryptoIdentity ? "crypto" : inferKind(chunk, rawSymbol, rawSymbol);
+  const alias = cryptoIdentity ? null : resolveTickerAlias(rawSymbol, kind);
+  const symbol =
+    cryptoIdentity?.symbol ?? alias?.symbol ?? normalizeImportedSymbol(rawSymbol, kind, currency);
+  const resolvedKind = cryptoIdentity ? "crypto" : alias?.kind ?? kind;
   const resolvedCurrency = alias?.marketCurrency ?? currency;
   const numbers = extractPdfNumbers(chunk, dateText).map(Math.abs);
   const quantity =
@@ -1260,9 +1355,9 @@ const parseXtbPdfChunk = (
     date: rawDate,
     symbol,
     rawSymbol,
-    name: alias?.name ?? name,
+    name: cryptoIdentity?.name ?? alias?.name ?? name,
     kind: resolvedKind,
-    quantity: round(Math.abs(quantity), 6),
+    quantity: roundImportedQuantity(quantity, resolvedKind),
     price: round(Math.abs(price), 6),
     currency: resolvedCurrency,
     feePln: round(Math.abs(fee), 6),
@@ -1277,6 +1372,7 @@ const parseXtbPdfChunk = (
         : undefined,
     provider,
     providerId:
+      cryptoIdentity?.providerId ??
       alias?.providerId ??
       (provider === "yahoo" || provider === "eodhd" ? symbol : undefined),
     priceScale: alias?.priceScale,
@@ -1983,9 +2079,15 @@ const isLikelyXtbSymbolToken = (value: string) => {
   );
 };
 
-const isXtbBuyType = (normalizedType: string) => normalizedType === "stock purchase";
+const isXtbBuyType = (normalizedType: string) =>
+  normalizedType === "stock purchase" ||
+  normalizedType === "crypto purchase" ||
+  normalizedType === "crypto buy";
 const isXtbSellType = (normalizedType: string) =>
-  normalizedType === "stock sell" || normalizedType === "stock sale";
+  normalizedType === "stock sell" ||
+  normalizedType === "stock sale" ||
+  normalizedType === "crypto sell" ||
+  normalizedType === "crypto sale";
 const isXtbDividendType = (normalizedType: string) =>
   normalizedType === "dividend" ||
   normalizedType === "cash dividend" ||
@@ -2082,9 +2184,13 @@ const buildBaseXtbOperation = ({
   side?: BrokerOperationSide;
 }): ImportedBrokerOperation => {
   const identityCurrency = marketCurrency ?? currency;
-  const alias = symbol ? resolveTickerAlias(symbol, kind) : null;
-  const resolvedSymbol = alias?.symbol ?? (symbol ? normalizeImportedSymbol(symbol, kind, identityCurrency) : "");
-  const resolvedKind = alias?.kind ?? kind;
+  const cryptoIdentity = kind === "crypto" ? getImportedCryptoIdentity(symbol, name) : null;
+  const alias = cryptoIdentity || !symbol ? null : resolveTickerAlias(symbol, kind);
+  const resolvedSymbol =
+    cryptoIdentity?.symbol ??
+    alias?.symbol ??
+    (symbol ? normalizeImportedSymbol(symbol, kind, identityCurrency) : "");
+  const resolvedKind = cryptoIdentity ? "crypto" : alias?.kind ?? kind;
   const resolvedCurrency = alias?.marketCurrency ?? identityCurrency;
   const provider = alias?.provider ?? getProvider(resolvedKind, resolvedSymbol, resolvedCurrency);
   const operation: ImportedBrokerOperation = {
@@ -2093,9 +2199,9 @@ const buildBaseXtbOperation = ({
     side,
     date: row.date,
     symbol: resolvedSymbol,
-    name: alias?.name ?? (name.trim() || resolvedSymbol || row.rawType),
+    name: cryptoIdentity?.name ?? alias?.name ?? (name.trim() || resolvedSymbol || row.rawType),
     kind: resolvedKind,
-    quantity: round(Math.abs(quantity), 6),
+    quantity: roundImportedQuantity(quantity, resolvedKind),
     price: round(Math.abs(price), 6),
     currency: resolvedCurrency,
     marketCurrency: marketCurrency ? alias?.marketCurrency ?? marketCurrency : undefined,
@@ -2119,6 +2225,7 @@ const buildBaseXtbOperation = ({
     rawSymbol: symbol,
     provider,
     providerId:
+      cryptoIdentity?.providerId ??
       alias?.providerId ??
       (provider === "yahoo" || provider === "eodhd" ? resolvedSymbol : undefined),
     priceScale: alias?.priceScale,
@@ -2452,8 +2559,15 @@ const parseXtbCashOperationRows = (
       }
 
       const side: BrokerOperationSide = isXtbBuyType(row.normalizedType) ? "buy" : "sell";
-      const kind = inferKind(row.rawType, row.rawSymbol, row.instrumentName || row.rawSymbol);
-      const marketCurrency = inferCurrencyFromSymbol(row.rawSymbol, accountCurrency);
+      const cryptoIdentity = getImportedCryptoIdentity(
+        row.rawSymbol,
+        row.instrumentName || row.rawSymbol
+      );
+      const kind = cryptoIdentity
+        ? "crypto"
+        : inferKind(row.rawType, row.rawSymbol, row.instrumentName || row.rawSymbol);
+      const marketCurrency =
+        cryptoIdentity?.quoteCurrency ?? inferCurrencyFromSymbol(row.rawSymbol, accountCurrency);
       const grossMarketValue = trade.quantity * trade.price;
       const matchingCloseTradeRow =
         side === "sell" ? closeTradeRowsBySaleId.get(row.id) : undefined;
@@ -2752,6 +2866,10 @@ const XTB_TEXT_OPERATION_TYPES = [
   "Withholding Tax",
   "Withholding tax",
   "Cash Dividend",
+  "Crypto purchase",
+  "Crypto sell",
+  "Crypto sale",
+  "Crypto buy",
   "Stock purchase",
   "Stock sale",
   "Stock sell",

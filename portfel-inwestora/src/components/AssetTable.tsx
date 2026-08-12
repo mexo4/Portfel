@@ -588,7 +588,17 @@ export default function AssetTable({
             setActiveGroupKey(null);
           }}
         >
-          <table className="portfolio-table min-w-full">
+          <table className="portfolio-table portfolio-positions-table">
+            <colgroup>
+              <col className="portfolio-column-asset" />
+              <col className="portfolio-column-kind" />
+              <col className="portfolio-column-quantity" />
+              <col className="portfolio-column-average-price" />
+              <col className="portfolio-column-unit-price" />
+              <col className="portfolio-column-profit-loss" />
+              <col className="portfolio-column-quote" />
+              <col className="portfolio-column-actions" />
+            </colgroup>
             <thead>
               <tr>
                 <th>Aktywo</th>

@@ -77,6 +77,7 @@ type PortfolioLineChartsProps = {
   baseCurrency: CurrencyCode;
   combinedProfitLoss: number;
   refreshRevision: number;
+  initialMode?: ChartMode;
 };
 
 type RangePreset = ChartRangePreset;
@@ -893,8 +894,9 @@ export default function PortfolioLineCharts({
   baseCurrency,
   combinedProfitLoss,
   refreshRevision,
+  initialMode = "value",
 }: PortfolioLineChartsProps) {
-  const [mode, setMode] = useState<ChartMode>("value");
+  const [mode, setMode] = useState<ChartMode>(initialMode);
   const [rangePreset, setRangePreset] = useState<RangePreset>("1M");
   const [hasLoadedStoredRange, setHasLoadedStoredRange] = useState(false);
   const [manualViewport, setManualViewport] = useState<ManualChartViewport>(null);

@@ -28,6 +28,7 @@ import type {
   UserProfile,
 } from "@/types/portfolio";
 import { isGpwSymbol } from "@/lib/ticker";
+import type { CorporateEventsResponse } from "@/lib/corporate-events";
 
 type SearchParams = {
   query: string;
@@ -80,6 +81,8 @@ const requestJson = async <T,>(url: string, init?: RequestInit): Promise<T> => {
 
   return (await response.json()) as T;
 };
+
+const fxRequestsInFlight = new Map<string, Promise<{ rates: FxRates; fetchedAt: string }>>();
 
 type EtfSearchErrorPayload = {
   code?: unknown;
@@ -186,6 +189,32 @@ export const searchAssets = async ({ query, kind, mode, signal }: SearchParams) 
 export const searchEtfInstruments = async ({ query, signal }: Pick<SearchParams, "query" | "signal">) => {
   const params = new URLSearchParams({ q: query });
   return requestEtfSearch(`/api/etf/search?${params.toString()}`, signal);
+};
+
+export const fetchCorporateEvents = async ({
+  portfolioId,
+  instrumentId,
+  days = 60,
+  signal,
+}: {
+  portfolioId: string;
+  instrumentId?: string;
+  days?: number;
+  signal?: AbortSignal;
+}) => {
+  const params = new URLSearchParams({
+    portfolio: portfolioId,
+    days: String(days),
+  });
+
+  if (instrumentId) {
+    params.set("instrumentId", instrumentId);
+  }
+
+  return requestJson<CorporateEventsResponse>(
+    `/api/corporate-events?${params.toString()}`,
+    { signal }
+  );
 };
 
 export const resolveEtfListingPrice = async (listing: EtfListing) => {
@@ -322,6 +351,9 @@ const isUsableAssetQuote = (quote: AssetQuote | null | undefined): quote is Asse
 const getStoredQuoteFetchedAt = (asset: PortfolioAsset) =>
   asset.latestPriceFetchedAt ?? asset.lastUpdatedAt;
 
+const getStoredQuoteMarketTimestamp = (asset: PortfolioAsset) =>
+  asset.latestPriceMarketTimestamp;
+
 const hasUsableStoredUnitPrice = (asset: PortfolioAsset) =>
   typeof asset.latestPrice === "number" &&
   Number.isFinite(asset.latestPrice) &&
@@ -400,13 +432,22 @@ export const applyRefreshedPortfolioAssetSnapshot = (
 
   const refreshedAt = getStoredQuoteFetchedAt(refreshed);
   const currentAt = getStoredQuoteFetchedAt(current);
+  const refreshedMarketAt = getStoredQuoteMarketTimestamp(refreshed);
+  const currentMarketAt = getStoredQuoteMarketTimestamp(current);
+  const refreshedMarketTime = refreshedMarketAt
+    ? Date.parse(refreshedMarketAt)
+    : Number.NaN;
+  const currentMarketTime = currentMarketAt ? Date.parse(currentMarketAt) : Number.NaN;
   const refreshedTime = refreshedAt ? Date.parse(refreshedAt) : Number.NaN;
   const currentTime = currentAt ? Date.parse(currentAt) : Number.NaN;
 
   if (
     hasUsableStoredUnitPrice(current) &&
-    (!Number.isFinite(refreshedTime) ||
-      (Number.isFinite(currentTime) && refreshedTime < currentTime))
+    ((Number.isFinite(currentMarketTime) &&
+      (!Number.isFinite(refreshedMarketTime) || refreshedMarketTime < currentMarketTime)) ||
+      (!Number.isFinite(currentMarketTime) &&
+        (!Number.isFinite(refreshedTime) ||
+          (Number.isFinite(currentTime) && refreshedTime < currentTime))))
   ) {
     return current;
   }
@@ -504,10 +545,17 @@ export const fetchFxRates = async (codes?: string[], date?: string) => {
     params.set("date", date);
   }
 
-  const data = await requestJson<{ rates: FxRates; fetchedAt: string }>(
-    `/api/fx${params.size > 0 ? `?${params.toString()}` : ""}`
-  );
-  return data;
+  const url = `/api/fx${params.size > 0 ? `?${params.toString()}` : ""}`;
+  const existing = fxRequestsInFlight.get(url);
+  if (existing) {
+    return existing;
+  }
+
+  const request = requestJson<{ rates: FxRates; fetchedAt: string }>(url).finally(() => {
+    fxRequestsInFlight.delete(url);
+  });
+  fxRequestsInFlight.set(url, request);
+  return request;
 };
 
 export const saveUserProfile = async (profile: UserProfile) => {
@@ -558,6 +606,27 @@ export const savePortfolioState = async ({
 
   return data;
 };
+
+export const savePortfolioQuoteSnapshots = async (
+  snapshots: Array<{
+    portfolioId: string;
+    assetId: string;
+    latestPrice: number;
+    latestPriceDate?: string;
+    latestPriceMarketTimestamp?: string;
+    latestPriceFetchedAt?: string;
+    previousClose?: number;
+    lastUpdatedAt?: string;
+    marketCurrency?: PortfolioAsset["marketCurrency"];
+    provider?: PortfolioAsset["provider"];
+    providerId?: string;
+    priceScale?: number;
+  }>
+) =>
+  requestJson<{ saved: number }>("/api/portfolio/quotes", {
+    method: "POST",
+    body: JSON.stringify({ snapshots }),
+  });
 
 export const fetchPortfolioCore = async () => {
   return requestJson<{

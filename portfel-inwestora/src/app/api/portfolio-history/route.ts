@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { buildAutomaticBondCouponAdjustments, normalizePortfolioState } from "@/lib/portfolio-state";
-import { getCurrentAccountData } from "@/lib/server/auth";
+import { getCurrentAuthenticatedUser } from "@/lib/server/auth";
 import { buildPortfolioHistory } from "@/lib/server/portfolio-history";
 import { getSortedPortfolioRealizedAdjustments } from "@/lib/portfolio-state";
 import type { PortfolioBenchmarkDefinition, PortfolioState } from "@/types/portfolio";
@@ -8,9 +8,9 @@ import type { PortfolioBenchmarkDefinition, PortfolioState } from "@/types/portf
 export const runtime = "nodejs";
 
 export async function POST(request: Request) {
-  const accountData = await getCurrentAccountData();
+  const user = await getCurrentAuthenticatedUser();
 
-  if (!accountData) {
+  if (!user) {
     return NextResponse.json({ error: "Brak autoryzacji." }, { status: 401 });
   }
 

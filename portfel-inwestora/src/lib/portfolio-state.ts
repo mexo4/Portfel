@@ -38,6 +38,7 @@ import type {
 
 const SUPPORTED_ASSET_KINDS = new Set<AssetKind>(["stock", "etf", "crypto", "bond"]);
 const SUPPORTED_QUOTE_PROVIDERS = new Set<QuoteProvider>([
+  "binance",
   "catalog",
   "coingecko",
   "eodhd",

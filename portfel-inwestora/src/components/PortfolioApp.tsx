@@ -9,6 +9,7 @@ import AppSectionTabs, { type AppSection } from "@/components/AppSectionTabs";
 import AssetTable from "@/components/AssetTable";
 import BrokerImportPanel from "@/components/BrokerImportPanel";
 import ChangePasswordPanel from "@/components/ChangePasswordPanel";
+import CorporateEventsPanel from "@/components/CorporateEventsPanel";
 import DividendCashWorkspace from "@/components/DividendCashWorkspace";
 import PortfolioCharts from "@/components/PortfolioCharts";
 import PortfolioLineCharts from "@/components/PortfolioLineCharts";
@@ -19,6 +20,7 @@ import TreasuryBondForm from "@/components/TreasuryBondForm";
 import WealthWorkspace from "@/components/WealthWorkspace";
 import {
   AUTO_REFRESH_INTERVAL_MS,
+  CRYPTO_AUTO_REFRESH_INTERVAL_MS,
   FALLBACK_FX_RATES,
   FREE_PLAN_ASSET_LIMIT,
   SEARCH_DEBOUNCE_MS,
@@ -36,6 +38,7 @@ import {
   refreshPortfolioQuotesWithProgress,
   requestEmailVerification,
   resolveEtfListingPrice,
+  savePortfolioQuoteSnapshots,
   savePortfolioState,
   saveUserProfile,
   searchAssets,
@@ -156,6 +159,35 @@ const SAVE_DEBOUNCE_MS = 250;
 const ASSET_SORT_MODE_STORAGE_KEY = "portfolio.assetTableSortMode";
 const getPortfolioSaveFingerprint = (book: PortfolioBook) =>
   JSON.stringify(book, (key, value) => (key === "updatedAt" ? undefined : value));
+
+const getQuoteSnapshotPayload = (
+  portfolios: InvestmentPortfolio[],
+  refreshedAssetIds?: ReadonlySet<string>
+) =>
+  portfolios.flatMap((portfolio) =>
+    portfolio.assets
+      .filter(
+        (asset) =>
+          (!refreshedAssetIds || refreshedAssetIds.has(asset.id)) &&
+          typeof asset.latestPrice === "number" &&
+          Number.isFinite(asset.latestPrice) &&
+          asset.latestPrice > 0
+      )
+      .map((asset) => ({
+        portfolioId: portfolio.id,
+        assetId: asset.id,
+        latestPrice: asset.latestPrice!,
+        latestPriceDate: asset.latestPriceDate,
+        latestPriceMarketTimestamp: asset.latestPriceMarketTimestamp,
+        latestPriceFetchedAt: asset.latestPriceFetchedAt,
+        previousClose: asset.previousClose,
+        lastUpdatedAt: asset.lastUpdatedAt,
+        marketCurrency: asset.marketCurrency,
+        provider: asset.provider,
+        providerId: asset.providerId,
+        priceScale: asset.priceScale,
+      }))
+  );
 
 const createDraftFromMode = (mode: AssetSearchMode): AssetDraft => {
   const config = getModeConfig(mode);
@@ -873,11 +905,20 @@ export default function PortfolioApp({
   const pendingPortfolioSaveRef = useRef<PendingPortfolioSave | null>(null);
   const portfolioSavePromiseRef = useRef<Promise<void> | null>(null);
   const inFlightPortfolioSaveFingerprintRef = useRef<string | null>(null);
-  const lastSavedPortfolioFingerprintRef = useRef<string | null>(null);
+  // The server-rendered book is already durable. Without this initial
+  // fingerprint, the first client mount schedules a needless full PUT of the
+  // complete portfolio even when the user has changed nothing.
+  const lastSavedPortfolioFingerprintRef = useRef<string | null>(
+    getPortfolioSaveFingerprint(initialPortfolioBook)
+  );
   const ignoredPortfolioSaveFingerprintRef = useRef<string | null>(null);
+  const quoteOnlyPortfolioFingerprintRef = useRef<string | null>(null);
+  const initialWorkspaceFingerprintRef = useRef<string | null>(null);
+  const hasCommittedInitialWorkspaceRef = useRef(false);
   const hasInitializedPortfolioPersistenceRef = useRef(false);
   const hasSavedProfileRef = useRef(false);
-  const quoteRefreshSeqRef = useRef(0);
+  const quoteRefreshSeqRef = useRef({ all: 0, crypto: 0 });
+  const quoteRefreshPendingRef = useRef(0);
   const quoteRequestSeqRef = useRef(0);
   const lastPreviewRequestKeyRef = useRef("");
   const isManualSymbolRef = useRef(false);
@@ -958,6 +999,10 @@ export default function PortfolioApp({
     [assets, draft, portfolios, profile.wealthItems, realizedAdjustmentDraft]
   );
   const trackedCurrenciesKey = trackedCurrencies.join("|");
+  const trackedCurrenciesForRefresh = useMemo(
+    () => (trackedCurrenciesKey ? trackedCurrenciesKey.split("|") : []),
+    [trackedCurrenciesKey]
+  );
   const draftQuotePreviewRequest = useMemo(
     () => getDraftQuotePreviewRequest(draft, searchMode),
     [draft, searchMode]
@@ -1393,7 +1438,19 @@ export default function PortfolioApp({
       return;
     }
 
-    setPortfolios((currentPortfolios) => commitActivePortfolioSnapshot(currentPortfolios));
+    const commit = (currentPortfolios: InvestmentPortfolio[]) =>
+      commitActivePortfolioSnapshot(currentPortfolios);
+
+    if (!hasCommittedInitialWorkspaceRef.current) {
+      hasCommittedInitialWorkspaceRef.current = true;
+      initialWorkspaceFingerprintRef.current = getPortfolioSaveFingerprint({
+        schemaVersion: 2,
+        portfolios: commit(portfoliosRef.current),
+        activePortfolioId: activePortfolioIdRef.current,
+      });
+    }
+
+    setPortfolios((currentPortfolios) => commit(currentPortfolios));
   }, [assets, commitActivePortfolioSnapshot, realizedAdjustments, sales]);
 
   useEffect(() => {
@@ -1768,14 +1825,27 @@ export default function PortfolioApp({
       return;
     }
 
-    void queuePortfolioSave(
-      {
-        schemaVersion: 2,
-        portfolios,
-        activePortfolioId,
-      },
-      false
-    );
+    const currentBook: PortfolioBook = {
+      schemaVersion: 2,
+      portfolios,
+      activePortfolioId,
+    };
+    const fingerprint = getPortfolioSaveFingerprint(currentBook);
+
+    // A background quote refresh persists only compact derived snapshots. Do
+    // not turn it back into a complete portfolio_json/core-table rewrite.
+    if (quoteOnlyPortfolioFingerprintRef.current === fingerprint) {
+      return;
+    }
+
+    if (initialWorkspaceFingerprintRef.current === fingerprint) {
+      initialWorkspaceFingerprintRef.current = null;
+      lastSavedPortfolioFingerprintRef.current = fingerprint;
+      return;
+    }
+
+    quoteOnlyPortfolioFingerprintRef.current = null;
+    void queuePortfolioSave(currentBook, false);
   }, [activePortfolioId, isPortfolioMutationPending, portfolios, queuePortfolioSave]);
 
   useEffect(
@@ -1850,7 +1920,10 @@ export default function PortfolioApp({
     return nextRates;
   }, []);
 
-  const syncQuotes = useCallback(async () => {
+  const syncQuotes = useCallback(async (
+    scope: "all" | "crypto" = "all",
+    options: { excludeCrypto?: boolean } = {}
+  ) => {
     const now = new Date().toISOString();
     const activeWorkspace = workspaceRef.current;
     const currentPortfolios = portfoliosRef.current.map((portfolio) =>
@@ -1867,17 +1940,24 @@ export default function PortfolioApp({
         : portfolio
     );
     const allAssets = currentPortfolios.flatMap((portfolio) => portfolio.assets);
+    const assetsToRefresh =
+      scope === "crypto"
+        ? allAssets.filter((asset) => asset.kind === "crypto")
+        : options.excludeCrypto
+          ? allAssets.filter((asset) => asset.kind !== "crypto")
+          : allAssets;
 
-    if (allAssets.length === 0) return;
+    if (assetsToRefresh.length === 0) return;
 
-    const refreshSeq = ++quoteRefreshSeqRef.current;
+    const refreshSeq = ++quoteRefreshSeqRef.current[scope];
+    quoteRefreshPendingRef.current += 1;
     setIsRefreshing(true);
 
     try {
-      const quoteRefresh = await refreshPortfolioQuotesWithProgress(allAssets);
+      const quoteRefresh = await refreshPortfolioQuotesWithProgress(assetsToRefresh);
       const refreshedAssets = quoteRefresh.assets;
 
-      if (refreshSeq !== quoteRefreshSeqRef.current) {
+      if (refreshSeq !== quoteRefreshSeqRef.current[scope]) {
         return;
       }
 
@@ -1926,12 +2006,14 @@ export default function PortfolioApp({
         assets: refreshedActiveAssets,
       });
       setPortfolios(nextPortfolios);
-      // Persist the valid snapshot after state is updated. Previously this
-      // fingerprint was ignored, which meant a full reload could start with no
-      // quote even though a successful background refresh had just completed.
-      void queuePortfolioSave(refreshedBook, false);
+      quoteOnlyPortfolioFingerprintRef.current = getPortfolioSaveFingerprint(refreshedBook);
+      // Keep a durable last-known-good quote without rewriting the entire
+      // portfolio book or synchronising all operations after every refresh.
+      void savePortfolioQuoteSnapshots(
+        getQuoteSnapshotPayload(nextPortfolios, new Set(refreshedAssets.map((asset) => asset.id)))
+      ).catch(() => undefined);
 
-      if (refreshSeq === quoteRefreshSeqRef.current) {
+      if (refreshSeq === quoteRefreshSeqRef.current[scope]) {
         setLastSyncAt(new Date().toISOString());
         setSyncError(
           quoteRefresh.missing > 0
@@ -1940,15 +2022,16 @@ export default function PortfolioApp({
         );
       }
     } catch (error) {
-      if (refreshSeq === quoteRefreshSeqRef.current) {
+      if (refreshSeq === quoteRefreshSeqRef.current[scope]) {
         setSyncError(toErrorMessage(error, "Nie udalo sie odswiezyc cen aktywow."));
       }
     } finally {
-      if (refreshSeq === quoteRefreshSeqRef.current) {
+      quoteRefreshPendingRef.current = Math.max(0, quoteRefreshPendingRef.current - 1);
+      if (quoteRefreshPendingRef.current === 0) {
         setIsRefreshing(false);
       }
     }
-  }, [queuePortfolioSave, replaceWorkspace]);
+  }, [replaceWorkspace]);
 
   const handleRefreshPortfolioData = async () => {
     setIsRefreshing(true);
@@ -1965,8 +2048,8 @@ export default function PortfolioApp({
   };
 
   useEffect(() => {
-    void syncFxRates(trackedCurrencies);
-  }, [syncFxRates, trackedCurrencies, trackedCurrenciesKey]);
+    void syncFxRates(trackedCurrenciesForRefresh);
+  }, [syncFxRates, trackedCurrenciesForRefresh]);
 
   useEffect(() => {
     fxRatesRef.current = fxRates;
@@ -1975,14 +2058,32 @@ export default function PortfolioApp({
   useEffect(() => {
     if (assets.length === 0) return;
 
-    void syncQuotes();
+    // Crypto has its own, shorter refresh cadence below. Keeping scheduled
+    // refreshes disjoint avoids fetching and persisting the same crypto quote
+    // twice every 30 seconds while preserving a full manual refresh.
+    void syncQuotes("all", { excludeCrypto: true });
 
     const intervalId = window.setInterval(() => {
-      void syncQuotes();
+      void syncQuotes("all", { excludeCrypto: true });
     }, AUTO_REFRESH_INTERVAL_MS);
 
     return () => window.clearInterval(intervalId);
   }, [activePortfolioId, assets.length, syncQuotes]);
+
+  const hasCryptoAssets = useMemo(
+    () => portfolios.some((portfolio) => portfolio.assets.some((asset) => asset.kind === "crypto")),
+    [portfolios]
+  );
+
+  useEffect(() => {
+    if (!hasCryptoAssets) return;
+
+    const intervalId = window.setInterval(() => {
+      void syncQuotes("crypto");
+    }, CRYPTO_AUTO_REFRESH_INTERVAL_MS);
+
+    return () => window.clearInterval(intervalId);
+  }, [hasCryptoAssets, syncQuotes]);
 
   const applyQuoteToDraftIfCurrent = (
     targetSymbol: string,
@@ -3585,10 +3686,17 @@ export default function PortfolioApp({
         activePortfolioId: activePortfolioIdRef.current,
       };
 
-      quoteRefreshSeqRef.current += 1;
+      quoteRefreshSeqRef.current.all += 1;
+      quoteRefreshSeqRef.current.crypto += 1;
       applyPortfolioBook(refreshedPortfolios, activePortfolioIdRef.current);
       replaceWorkspace(refreshedWorkspace);
-      void queuePortfolioSave(refreshedBook, false);
+      quoteOnlyPortfolioFingerprintRef.current = getPortfolioSaveFingerprint(refreshedBook);
+      void savePortfolioQuoteSnapshots(
+        getQuoteSnapshotPayload(
+          refreshedPortfolios,
+          new Set(quoteRefresh.assets.map((asset) => asset.id))
+        )
+      ).catch(() => undefined);
       setLastSyncAt(new Date().toISOString());
       setRefreshRevision((currentRevision) => currentRevision + 1);
       setSyncError(null);
@@ -4160,6 +4268,8 @@ export default function PortfolioApp({
         </section>
 
         {summaryPanel}
+
+        <CorporateEventsPanel key={activePortfolioId} portfolioId={activePortfolioId} />
 
         <AppSectionTabs activeSection={activeSection} onChange={setActiveSection} />
 

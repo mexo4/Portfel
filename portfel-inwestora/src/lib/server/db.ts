@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { Pool, type PoolClient, type QueryResultRow } from "pg";
 
 type QueryParameter = string | number | boolean | null | string[] | number[];
@@ -17,7 +18,7 @@ const getDatabaseUrl = () => {
   const databaseUrl = process.env.DATABASE_URL;
 
   if (!databaseUrl) {
-    throw new Error("Brakuje zmiennej srodowiskowej DATABASE_URL dla PostgreSQL/Neon.");
+    throw new Error("Brakuje zmiennej srodowiskowej DATABASE_URL dla PostgreSQL.");
   }
 
   return databaseUrl;
@@ -29,13 +30,48 @@ const getConnectionString = () => {
   return databaseUrl.toString();
 };
 
+const getSslConfiguration = () => {
+  const certificateBase64 = process.env.POSTGRES_CA_CERT_BASE64?.trim();
+  const certificatePath = process.env.POSTGRES_CA_CERT_PATH?.trim();
+
+  if (certificateBase64) {
+    const certificate = Buffer.from(certificateBase64, "base64").toString("utf8");
+
+    if (!certificate.includes("-----BEGIN CERTIFICATE-----")) {
+      throw new Error("POSTGRES_CA_CERT_BASE64 nie zawiera prawidlowego certyfikatu CA.");
+    }
+
+    return {
+      ca: certificate,
+      rejectUnauthorized: true,
+    };
+  }
+
+  if (!certificatePath) {
+    return undefined;
+  }
+
+  return {
+    ca: readFileSync(certificatePath, "utf8"),
+    rejectUnauthorized: true,
+  };
+};
+
 const getPool = () => {
   if (!globalThis.portfelPostgresPool) {
+    const ssl = getSslConfiguration();
+
     globalThis.portfelPostgresPool = new Pool({
-      connectionString: getConnectionString(),
-      ssl: {
-        rejectUnauthorized: true,
-      },
+      // When a CA is supplied (Aiven), provide an explicit verified TLS
+      // configuration. Otherwise preserve the TLS policy encoded in an
+      // existing standard PostgreSQL URI (for example sslmode=require).
+      connectionString: ssl ? getConnectionString() : getDatabaseUrl(),
+      ...(ssl ? { ssl } : {}),
+      // A small, shared pool works both on serverless runtimes and Aiven Free,
+      // where each runtime should consume as few database connections as possible.
+      max: 2,
+      idleTimeoutMillis: 10_000,
+      connectionTimeoutMillis: 10_000,
     });
   }
 
@@ -133,6 +169,17 @@ const schemaStatements = [
     )
   `,
   "CREATE INDEX IF NOT EXISTS idx_core_portfolios_user_id ON core_portfolios(user_id)",
+  `
+    CREATE TABLE IF NOT EXISTS portfolio_asset_quotes (
+      portfolio_id TEXT NOT NULL,
+      asset_id TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      quote_timestamp TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (portfolio_id, asset_id),
+      FOREIGN KEY (portfolio_id) REFERENCES core_portfolios(id) ON DELETE CASCADE
+    )
+  `,
   `
     CREATE TABLE IF NOT EXISTS core_sub_portfolios (
       id TEXT PRIMARY KEY,
@@ -257,6 +304,91 @@ const schemaStatements = [
     )
   `,
   "CREATE INDEX IF NOT EXISTS idx_core_benchmarks_portfolio_id ON core_benchmarks(portfolio_id)",
+  `
+    CREATE TABLE IF NOT EXISTS corporate_event_instruments (
+      id TEXT PRIMARY KEY,
+      canonical_key TEXT NOT NULL UNIQUE,
+      market TEXT NOT NULL,
+      isin TEXT,
+      ticker TEXT NOT NULL,
+      company_name TEXT NOT NULL,
+      last_checked_at TEXT,
+      last_source_status TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )
+  `,
+  "CREATE INDEX IF NOT EXISTS idx_corporate_event_instruments_market_ticker ON corporate_event_instruments(market, ticker)",
+  `
+    CREATE TABLE IF NOT EXISTS corporate_events (
+      id TEXT PRIMARY KEY,
+      instrument_id TEXT NOT NULL,
+      event_type TEXT NOT NULL,
+      event_date TEXT NOT NULL,
+      event_time TEXT,
+      fiscal_period TEXT,
+      fiscal_year INTEGER,
+      status TEXT NOT NULL,
+      active BOOLEAN NOT NULL DEFAULT TRUE,
+      source_published_at TEXT,
+      source_type TEXT,
+      source_priority INTEGER NOT NULL DEFAULT 0,
+      discovered_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (instrument_id) REFERENCES corporate_event_instruments(id) ON DELETE CASCADE
+    )
+  `,
+  `
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_corporate_events_active_identity
+    ON corporate_events(
+      instrument_id,
+      event_type,
+      COALESCE(fiscal_period, ''),
+      COALESCE(fiscal_year, 0)
+    )
+    WHERE active = TRUE
+  `,
+  "CREATE INDEX IF NOT EXISTS idx_corporate_events_date ON corporate_events(event_date) WHERE active = TRUE",
+  `
+    CREATE TABLE IF NOT EXISTS corporate_event_sources (
+      id TEXT PRIMARY KEY,
+      corporate_event_id TEXT NOT NULL,
+      source_type TEXT NOT NULL,
+      source_url TEXT NOT NULL,
+      source_published_at TEXT,
+      source_priority INTEGER NOT NULL DEFAULT 0,
+      discovered_at TEXT NOT NULL,
+      FOREIGN KEY (corporate_event_id) REFERENCES corporate_events(id) ON DELETE CASCADE,
+      UNIQUE (corporate_event_id, source_url)
+    )
+  `,
+  "CREATE INDEX IF NOT EXISTS idx_corporate_event_sources_event_id ON corporate_event_sources(corporate_event_id)",
+  `
+    CREATE TABLE IF NOT EXISTS corporate_event_source_checks (
+      id TEXT PRIMARY KEY,
+      instrument_id TEXT NOT NULL,
+      source_type TEXT NOT NULL,
+      source_url TEXT NOT NULL,
+      last_checked_at TEXT NOT NULL,
+      last_status TEXT NOT NULL,
+      last_duration_ms INTEGER,
+      FOREIGN KEY (instrument_id) REFERENCES corporate_event_instruments(id) ON DELETE CASCADE,
+      UNIQUE (instrument_id, source_url)
+    )
+  `,
+  "CREATE INDEX IF NOT EXISTS idx_corporate_event_source_checks_instrument_id ON corporate_event_source_checks(instrument_id)",
+  `
+    CREATE TABLE IF NOT EXISTS corporate_event_history (
+      id TEXT PRIMARY KEY,
+      corporate_event_id TEXT NOT NULL,
+      previous_event_date TEXT NOT NULL,
+      next_event_date TEXT NOT NULL,
+      source_url TEXT,
+      detected_at TEXT NOT NULL,
+      FOREIGN KEY (corporate_event_id) REFERENCES corporate_events(id) ON DELETE CASCADE
+    )
+  `,
+  "CREATE INDEX IF NOT EXISTS idx_corporate_event_history_event_id ON corporate_event_history(corporate_event_id)",
   `
     CREATE TABLE IF NOT EXISTS portfolio_engine_cache (
       "key" TEXT PRIMARY KEY,

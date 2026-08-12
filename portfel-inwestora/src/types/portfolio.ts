@@ -65,6 +65,7 @@ export type SubscriptionPlan = "free" | "pro";
 export type SubscriptionStatus = "active" | "trialing" | "past_due" | "canceled";
 
 export type QuoteProvider =
+  | "binance"
   | "finnhub"
   | "stooq"
   | "yahoo"
@@ -212,7 +213,10 @@ export type AssetQuote = {
   fetchedAt: string;
   /** Date of the market session that produced this price (YYYY-MM-DD). */
   priceDate?: string;
-  /** Provider's market timestamp when it is available. */
+  /**
+   * Timestamp of the market quote supplied by the provider. This is the
+   * price timestamp, not the time at which Mexo received the response.
+   */
   marketTimestamp?: string;
   providerId?: string;
   name?: string;

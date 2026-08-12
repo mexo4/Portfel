@@ -37,15 +37,17 @@ Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/bui
 
 ## Production Database
 
-The app uses Neon PostgreSQL through `DATABASE_URL`.
+The app uses standard PostgreSQL through `DATABASE_URL`.
 
 For local development, create `portfel-inwestora/.env.local` and add:
 
 ```bash
-DATABASE_URL="postgresql://USER:PASSWORD@HOST.neon.tech/DBNAME?sslmode=require"
+DATABASE_URL="postgresql://USER:PASSWORD@HOST/DBNAME?sslmode=require"
+# Optional when the provider uses a private CA chain:
+POSTGRES_CA_CERT_PATH="C:\\path\\to\\postgres-ca.pem"
 ```
 
-On Vercel, add the same `DATABASE_URL` value in Project Settings -> Environment Variables for Production, Preview, and Development as needed. The app creates required tables automatically on first database access.
+On Netlify, add the same `DATABASE_URL` value in Site configuration -> Environment variables for the required deploy contexts. If the provider uses a private CA chain, add `POSTGRES_CA_CERT_BASE64` with the Base64-encoded CA PEM; the application verifies both the certificate and hostname. The app creates required tables automatically on first database access.
 
 ## Google OAuth
 

@@ -531,6 +531,15 @@ export const syncPortfolioCoreTablesInTransaction = async (
     "DELETE FROM portfolio_engine_cache WHERE portfolio_id = ANY($1::text[])",
     [portfolioIds]
   );
+  // Quote snapshots are derived data. Keep only snapshots for positions that
+  // still exist after a real portfolio mutation; background quote refreshes
+  // use UPSERT and never append rows.
+  for (const portfolio of portfolioBook.portfolios) {
+    await transaction.execute(
+      "DELETE FROM portfolio_asset_quotes WHERE portfolio_id = $1 AND NOT (asset_id = ANY($2::text[]))",
+      [portfolio.id, portfolio.assets.map((asset) => asset.id)]
+    );
+  }
 };
 
 export const syncPortfolioCoreTables = async (

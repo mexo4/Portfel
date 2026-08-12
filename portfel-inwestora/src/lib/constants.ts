@@ -15,6 +15,9 @@ export const APP_DESCRIPTION =
 
 export const BASE_CURRENCY: CurrencyCode = "PLN";
 export const AUTO_REFRESH_INTERVAL_MS = 30_000;
+// Continuous markets need a shorter UI revalidation cadence than listed assets,
+// without increasing the refresh traffic for stocks, ETFs or bonds.
+export const CRYPTO_AUTO_REFRESH_INTERVAL_MS = 15_000;
 export const SEARCH_DEBOUNCE_MS = 300;
 export const FREE_PLAN_ASSET_LIMIT = 99;
 export const FREE_PLAN_PORTFOLIO_LIMIT = 1;

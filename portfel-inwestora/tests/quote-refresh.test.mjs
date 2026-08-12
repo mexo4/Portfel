@@ -2,10 +2,15 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   applyRefreshedPortfolioAssetSnapshot,
+  fetchFxRates,
   mergeQuoteIntoPortfolioAsset,
   refreshPortfolioQuotesWithProgress,
 } from "../src/lib/api.ts";
-import { getGpwScopedProviderCandidates } from "../src/lib/server/market-data.ts";
+import {
+  fetchAssetQuoteServer,
+  getGpwScopedProviderCandidates,
+  isFreshCryptoQuote,
+} from "../src/lib/server/market-data.ts";
 
 const originalFetch = globalThis.fetch;
 
@@ -142,6 +147,65 @@ test("keeps the last known good price through malformed refreshes and stale resp
   assert.equal(newer.latestPrice, 22300);
   assert.equal(newer.latestPriceDate, "2026-08-08");
   assert.equal(newer.latestPriceMarketTimestamp, "2026-08-08T17:00:00");
+
+  const olderMarketQuoteArrivingLater = applyRefreshedPortfolioAssetSnapshot(newer, {
+    ...newer,
+    latestPrice: 22000,
+    latestPriceMarketTimestamp: "2026-08-08T16:59:00",
+    latestPriceFetchedAt: "2026-08-10T12:20:00.000Z",
+    lastUpdatedAt: "2026-08-10T12:20:00.000Z",
+  });
+  assert.deepEqual(olderMarketQuoteArrivingLater, newer);
+});
+
+test("uses Binance latest price with its quote timestamp for crypto, never previous close", async () => {
+  let binanceCalls = 0;
+  const quoteTimestamp = Date.now() - 1_000;
+
+  globalThis.fetch = async (url) => {
+    const requestUrl = new URL(String(url));
+    assert.equal(requestUrl.hostname, "api.binance.com");
+    assert.equal(requestUrl.pathname, "/api/v3/ticker/24hr");
+    assert.equal(requestUrl.searchParams.get("symbol"), "BTCUSDT");
+    binanceCalls += 1;
+
+    return new Response(
+      JSON.stringify({
+        lastPrice: "63123.4500",
+        prevClosePrice: "64123.4500",
+        closeTime: quoteTimestamp,
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } }
+    );
+  };
+
+  const input = {
+    symbol: "BTC",
+    kind: "crypto",
+    marketCurrency: "USD",
+    provider: "coingecko",
+    providerId: "bitcoin",
+  };
+  const first = await fetchAssetQuoteServer(input);
+  const second = await fetchAssetQuoteServer(input);
+
+  assert.equal(first?.provider, "binance");
+  assert.equal(first?.price, 63123.45);
+  assert.notEqual(first?.price, 64123.45);
+  assert.equal(first?.marketCurrency, "USD");
+  assert.equal(first?.marketTimestamp, new Date(quoteTimestamp).toISOString());
+  assert.equal(first?.priceDate, new Date(quoteTimestamp).toISOString().slice(0, 10));
+  assert.equal(isFreshCryptoQuote(first), true);
+  assert.equal(second?.price, first?.price);
+  assert.equal(binanceCalls, 1);
+
+  assert.equal(
+    isFreshCryptoQuote({
+      ...first,
+      marketTimestamp: new Date(Date.now() - 20_001).toISOString(),
+    }),
+    false
+  );
 });
 
 test("keeps a GPW identity intact and rejects a global USD ticker collision", () => {
@@ -198,6 +262,29 @@ test("keeps a GPW identity intact and rejects a global USD ticker collision", ()
       latestPriceDate: "2026-08-07",
     }
   );
+});
+
+test("deduplicates identical FX requests in flight", async () => {
+  let calls = 0;
+  globalThis.fetch = async (url) => {
+    const requestUrl = new URL(String(url), "http://localhost");
+    assert.equal(requestUrl.pathname, "/api/fx");
+    assert.equal(requestUrl.searchParams.get("codes"), "USD,EUR");
+    calls += 1;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    return new Response(
+      JSON.stringify({ rates: { PLN: 1, USD: 4, EUR: 4.3 }, fetchedAt: "2026-08-11T12:00:00.000Z" }),
+      { status: 200, headers: { "Content-Type": "application/json" } }
+    );
+  };
+
+  const [first, second] = await Promise.all([
+    fetchFxRates(["USD", "EUR"]),
+    fetchFxRates(["USD", "EUR"]),
+  ]);
+
+  assert.equal(calls, 1);
+  assert.deepEqual(first, second);
 });
 
 test("GPW fallback candidates never contain a bare globally-colliding ticker", () => {

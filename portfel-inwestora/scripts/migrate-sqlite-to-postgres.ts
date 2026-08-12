@@ -258,7 +258,7 @@ const getDatabaseUrl = () => {
   const databaseUrl = process.env.DATABASE_URL;
 
   if (!databaseUrl) {
-    throw new Error("Missing DATABASE_URL for PostgreSQL/Neon.");
+    throw new Error("Missing DATABASE_URL for PostgreSQL.");
   }
 
   return databaseUrl;

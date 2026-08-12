@@ -10,6 +10,10 @@ import { isForcedProEmail } from "@/lib/server/access";
 import { execute, queryOne, withTransaction } from "@/lib/server/db";
 import { sendPasswordResetEmail, sendVerificationEmail } from "@/lib/server/email";
 import { syncPortfolioCoreTablesInTransaction } from "@/lib/server/portfolio-core-sync";
+import {
+  getPortfolioQuoteSnapshots,
+  mergePortfolioBookQuoteSnapshots,
+} from "@/lib/server/portfolio-quote-snapshots";
 import type {
   AuthenticatedUser,
   PortfolioBook,
@@ -318,6 +322,57 @@ const withForcedProSubscription = async <T extends UserRow>(user: T): Promise<T>
 
 const removeSessionByToken = async (token: string) => {
   await execute("DELETE FROM sessions WHERE token_hash = $1", [hashToken(token)]);
+};
+
+const AUTH_RETENTION_INTERVAL_MS = 1000 * 60 * 60 * 12;
+let lastAuthRetentionAt = 0;
+
+const scheduleExpiredAuthRecordCleanup = () => {
+  const now = Date.now();
+  if (now - lastAuthRetentionAt < AUTH_RETENTION_INTERVAL_MS) {
+    return;
+  }
+
+  lastAuthRetentionAt = now;
+  const cutoff = new Date(now).toISOString();
+  // Opportunistic and cooldown-protected: this is never a dashboard-load
+  // maintenance query. Only records that are already expired are removed.
+  void Promise.all([
+    execute("DELETE FROM sessions WHERE expires_at <= $1", [cutoff]),
+    execute("DELETE FROM email_verification_tokens WHERE expires_at <= $1", [cutoff]),
+    execute("DELETE FROM password_reset_tokens WHERE expires_at <= $1", [cutoff]),
+  ]).catch(() => {
+    lastAuthRetentionAt = 0;
+  });
+};
+
+const getCurrentSessionUser = async () => {
+  const cookieStore = await cookies();
+  const sessionToken = cookieStore.get(SESSION_COOKIE_NAME)?.value;
+
+  if (!sessionToken) return null;
+
+  const sessionUser = await getSessionUser(sessionToken);
+
+  if (!sessionUser) return null;
+
+  if (new Date(sessionUser.expires_at).getTime() <= Date.now()) {
+    await removeSessionByToken(sessionToken);
+    return null;
+  }
+
+  scheduleExpiredAuthRecordCleanup();
+  return sessionUser;
+};
+
+/**
+ * Auth-only endpoints must not deserialize a user's complete portfolio just
+ * to validate the session.  Keep this separate from getCurrentAccountData,
+ * which intentionally loads the portfolio read model.
+ */
+export const getCurrentAuthenticatedUser = async () => {
+  const sessionUser = await getCurrentSessionUser();
+  return sessionUser ? toAuthenticatedUser(await withForcedProSubscription(sessionUser)) : null;
 };
 
 const purgeTokensForUser = (
@@ -693,19 +748,9 @@ export const loginAccount = async ({
 };
 
 export const getCurrentAccountData = async () => {
-  const cookieStore = await cookies();
-  const sessionToken = cookieStore.get(SESSION_COOKIE_NAME)?.value;
-
-  if (!sessionToken) return null;
-
-  const sessionUser = await getSessionUser(sessionToken);
+  const sessionUser = await getCurrentSessionUser();
 
   if (!sessionUser) return null;
-
-  if (new Date(sessionUser.expires_at).getTime() <= Date.now()) {
-    await removeSessionByToken(sessionToken);
-    return null;
-  }
 
   const user = await withForcedProSubscription(sessionUser);
   const storedPortfolio = await getStoredPortfolioBook(user.id);
@@ -725,6 +770,11 @@ export const getCurrentAccountData = async () => {
     portfolioBook = persistedPortfolio.portfolioBook;
     portfolioRevision = persistedPortfolio.portfolioRevision;
   }
+
+  portfolioBook = mergePortfolioBookQuoteSnapshots(
+    portfolioBook,
+    await getPortfolioQuoteSnapshots(portfolioBook.portfolios.map((portfolio) => portfolio.id))
+  );
 
   const activePortfolio =
     portfolioBook.portfolios.find(

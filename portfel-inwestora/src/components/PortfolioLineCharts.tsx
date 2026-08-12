@@ -117,6 +117,37 @@ type ChartLineDefinition = {
   detailFormatter?: (row: ChartRow) => string | null;
 };
 
+type HistoryRequestPayload = {
+  assets: PortfolioAsset[];
+  sales: PortfolioSale[];
+  realizedAdjustments: PortfolioRealizedAdjustment[];
+  benchmarks: PortfolioBenchmarkDefinition[];
+};
+
+// React Strict Mode intentionally re-runs effects in development. A history
+// build is expensive and deterministic for one request signature, so share it
+// until it settles instead of asking the server/providers twice.
+const portfolioHistoryRequestsInFlight = new Map<
+  string,
+  Promise<PortfolioHistoryResponse>
+>();
+
+const getPortfolioHistoryOnce = (
+  requestSignature: string,
+  payload: HistoryRequestPayload
+) => {
+  const existing = portfolioHistoryRequestsInFlight.get(requestSignature);
+  if (existing) {
+    return existing;
+  }
+
+  const request = fetchPortfolioHistory(payload).finally(() => {
+    portfolioHistoryRequestsInFlight.delete(requestSignature);
+  });
+  portfolioHistoryRequestsInFlight.set(requestSignature, request);
+  return request;
+};
+
 type ChartStat = {
   label: string;
   value: string;
@@ -1116,19 +1147,50 @@ export default function PortfolioLineCharts({
     [assets, fxRates, realizedAdjustments, sales]
   );
 
+  // Provider history is determined by transactions and selected benchmarks,
+  // not by the latest in-memory quote. Excluding volatile quote fields keeps
+  // the 15/30-second quote refresh from re-fetching a complete chart history.
+  const historyRequestSignature = useMemo(
+    () =>
+      JSON.stringify({
+        assets: assets.map((asset) => {
+          const historyAsset = { ...asset };
+          delete historyAsset.latestPrice;
+          delete historyAsset.latestPriceDate;
+          delete historyAsset.latestPriceMarketTimestamp;
+          delete historyAsset.latestPriceFetchedAt;
+          delete historyAsset.previousClose;
+          delete historyAsset.lastUpdatedAt;
+          return historyAsset;
+        }),
+        sales,
+        realizedAdjustments,
+        benchmarks: selectedBenchmarks,
+        refreshRevision,
+      }),
+    [assets, realizedAdjustments, refreshRevision, sales, selectedBenchmarks]
+  );
+
   useEffect(() => {
     let isCancelled = false;
-    const abortController = new AbortController();
+    const historyRequest = JSON.parse(historyRequestSignature) as {
+      assets: PortfolioAsset[];
+      sales: PortfolioSale[];
+      realizedAdjustments: PortfolioRealizedAdjustment[];
+      benchmarks: PortfolioBenchmarkDefinition[];
+    };
 
-    if (assets.length === 0 && sales.length === 0 && realizedAdjustments.length === 0) {
+    if (
+      historyRequest.assets.length === 0 &&
+      historyRequest.sales.length === 0 &&
+      historyRequest.realizedAdjustments.length === 0
+    ) {
       setServerHistory(EMPTY_HISTORY);
       setWarnings([]);
       setError(null);
       setIsLoading(false);
 
-      return () => {
-        abortController.abort();
-      };
+      return;
     }
 
     setIsLoading(true);
@@ -1136,12 +1198,11 @@ export default function PortfolioLineCharts({
 
     void (async () => {
       try {
-        const response = await fetchPortfolioHistory({
-          assets,
-          sales,
-          realizedAdjustments,
-          benchmarks: selectedBenchmarks,
-          signal: abortController.signal,
+        const response = await getPortfolioHistoryOnce(historyRequestSignature, {
+          assets: historyRequest.assets,
+          sales: historyRequest.sales,
+          realizedAdjustments: historyRequest.realizedAdjustments,
+          benchmarks: historyRequest.benchmarks,
         });
 
         if (isCancelled) {
@@ -1152,10 +1213,6 @@ export default function PortfolioLineCharts({
         setWarnings(response.warnings);
       } catch (fetchError) {
         if (isCancelled) {
-          return;
-        }
-
-        if (fetchError instanceof Error && fetchError.name === "AbortError") {
           return;
         }
 
@@ -1175,9 +1232,8 @@ export default function PortfolioLineCharts({
 
     return () => {
       isCancelled = true;
-      abortController.abort();
     };
-  }, [assets, realizedAdjustments, refreshRevision, sales, selectedBenchmarks]);
+  }, [historyRequestSignature]);
 
   const historyPoints =
     serverHistory.points.length > 0 ? serverHistory.points : fallbackHistory.points;

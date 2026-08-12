@@ -1,12 +1,12 @@
 import { NextResponse } from "next/server";
 import { resolveTreasuryBondSeries, fetchTreasuryBondQuoteServer } from "@/lib/server/treasury-bonds";
-import { getCurrentAccountData } from "@/lib/server/auth";
+import { getCurrentAuthenticatedUser } from "@/lib/server/auth";
 import { toDateInputValue } from "@/lib/utils";
 
 export const runtime = "nodejs";
 
 export async function GET(request: Request) {
-  if (!(await getCurrentAccountData())) {
+  if (!(await getCurrentAuthenticatedUser())) {
     return NextResponse.json({ error: "Brak autoryzacji." }, { status: 401 });
   }
 

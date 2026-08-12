@@ -5,7 +5,7 @@ import {
   mergeSearchResults,
   searchCatalogAssets,
 } from "@/lib/search";
-import { getCurrentAccountData } from "@/lib/server/auth";
+import { getCurrentAuthenticatedUser } from "@/lib/server/auth";
 import type { AssetKind, AssetSearchMode, AssetSearchResult } from "@/types/portfolio";
 
 export const runtime = "nodejs";
@@ -42,7 +42,7 @@ const withTimeout = async <T,>(promise: Promise<T>, timeoutMs: number, fallback:
 };
 
 export async function GET(request: Request) {
-  if (!(await getCurrentAccountData())) {
+  if (!(await getCurrentAuthenticatedUser())) {
     return NextResponse.json({ error: "Brak autoryzacji." }, { status: 401 });
   }
 

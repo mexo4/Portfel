@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getCurrentAccountData } from "@/lib/server/auth";
+import { getCurrentAuthenticatedUser } from "@/lib/server/auth";
 import {
   resolveEtfListingPriceSource,
   sanitiseEtfListing,
@@ -8,7 +8,7 @@ import {
 export const runtime = "nodejs";
 
 export async function POST(request: Request) {
-  if (!(await getCurrentAccountData())) {
+  if (!(await getCurrentAuthenticatedUser())) {
     return NextResponse.json({ error: "Brak autoryzacji." }, { status: 401 });
   }
 

@@ -4203,6 +4203,129 @@ textarea {
   }
 }
 
+.corporate-events-panel {
+  display: grid;
+  gap: 16px;
+}
+
+.corporate-events-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.corporate-events-state {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+.corporate-events-list {
+  display: grid;
+  gap: 8px;
+}
+
+.corporate-event-row {
+  display: grid;
+  grid-template-columns: 54px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 13px;
+  min-width: 0;
+  padding: 11px 12px;
+  border: 1px solid rgba(20, 35, 48, 0.1);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.48);
+}
+
+.corporate-event-date {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  min-height: 52px;
+  border-radius: 11px;
+  color: #0e5651;
+  background: rgba(212, 241, 234, 0.75);
+  font-variant-numeric: tabular-nums;
+}
+
+.corporate-event-date strong {
+  font-size: 1.15rem;
+  line-height: 1;
+}
+
+.corporate-event-date span {
+  margin-top: 3px;
+  font-size: 0.67rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+}
+
+.corporate-event-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.corporate-event-copy > strong,
+.corporate-event-copy > span,
+.corporate-event-copy > small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.corporate-event-copy > strong {
+  color: var(--text);
+  font-size: 0.93rem;
+}
+
+.corporate-event-copy > span {
+  color: var(--text);
+  font-size: 0.86rem;
+}
+
+.corporate-event-copy > small {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.corporate-event-source {
+  color: #0d6762;
+  font-size: 0.82rem;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.corporate-event-source:hover,
+.corporate-event-source:focus-visible {
+  text-decoration: underline;
+}
+
+@media (max-width: 560px) {
+  .corporate-events-head {
+    align-items: center;
+  }
+
+  .corporate-event-row {
+    grid-template-columns: 47px minmax(0, 1fr);
+    gap: 10px;
+    padding: 10px;
+  }
+
+  .corporate-event-date {
+    min-height: 47px;
+  }
+
+  .corporate-event-source {
+    grid-column: 2;
+    justify-self: start;
+    min-height: 28px;
+    display: inline-flex;
+    align-items: center;
+  }
+}
+
 @media (max-width: 1024px) {
   .mode-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getCurrentAccountData } from "@/lib/server/auth";
+import { getCurrentAuthenticatedUser } from "@/lib/server/auth";
 import {
   OpenFigiSearchError,
   searchEtfInstruments,
@@ -35,9 +35,9 @@ const errorResponseFor = (error: OpenFigiSearchError) => {
 };
 
 export async function GET(request: Request) {
-  const account = await getCurrentAccountData();
+  const user = await getCurrentAuthenticatedUser();
 
-  if (!account) {
+  if (!user) {
     return NextResponse.json({ error: "Brak autoryzacji." }, { status: 401 });
   }
 
@@ -49,7 +49,7 @@ export async function GET(request: Request) {
   }
 
   try {
-    const groups = await searchEtfInstruments(query, undefined, account.user.id);
+    const groups = await searchEtfInstruments(query, undefined, user.id);
     return NextResponse.json({ groups });
   } catch (error) {
     if (error instanceof OpenFigiSearchError) {

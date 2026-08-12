@@ -76,10 +76,20 @@ type CoinGeckoCoin = {
   symbol: string;
 };
 
+type CoinGeckoSimplePrice = Record<
+  string,
+  {
+    usd?: number;
+    usd_24h_change?: number;
+    last_updated_at?: number;
+  }
+>;
+
 type BinanceTickerResponse = {
   lastPrice?: string;
   prevClosePrice?: string;
   price?: string;
+  closeTime?: number;
 };
 
 type StooqHistorySnapshot = {
@@ -132,6 +142,12 @@ const logMarketIdentityDiagnostics = (
 ) => {
   if (isMarketIdentityDiagnosticsEnabled()) {
     console.info("[market-data:identity]", { stage, ...details });
+  }
+};
+
+const logCryptoPriceDiagnostics = (details: Record<string, unknown>) => {
+  if (isMarketIdentityDiagnosticsEnabled()) {
+    console.info("[market-data:crypto-quote]", details);
   }
 };
 
@@ -194,6 +210,7 @@ const GPW_SEARCH_FALLBACK_TIMEOUT_MS = 1_500;
 const FINNHUB_SEARCH_TIMEOUT_MS = 3_500;
 const COINGECKO_SEARCH_CACHE_TTL_MS = 60_000;
 const CRYPTO_QUOTE_CACHE_TTL_MS = 5_000;
+const CRYPTO_MAX_QUOTE_AGE_MS = 20_000;
 const COINGECKO_HEADERS = {
   Accept: "application/json",
   "User-Agent": "PortfelInwestora/0.1 price-sync",
@@ -204,7 +221,11 @@ const gpwQuoteCache = new Map<string, { quote: AssetQuote; expiresAt: number }>(
 const gpwQuoteInFlight = new Map<string, Promise<AssetQuote | null>>();
 const coinGeckoSearchCache = new Map<string, { coins: CoinGeckoCoin[]; expiresAt: number }>();
 const coinGeckoResolveCache = new Map<string, { providerId: string; expiresAt: number }>();
-const coinGeckoQuoteCache = new Map<string, { quote: AssetQuote; expiresAt: number }>();
+const coinGeckoQuoteCache = new Map<
+  string,
+  { quote: AssetQuote; createdAt: string; updatedAt: string; expiresAt: number }
+>();
+const coinGeckoQuoteInFlight = new Map<string, Promise<AssetQuote | null>>();
 
 const safeFetch = async (
   url: string,
@@ -350,31 +371,6 @@ const firstNonNull = async <T>(promises: Array<Promise<T | null>>) => {
 
     if (result) {
       return result;
-    }
-  }
-
-  return null;
-};
-
-const safeFetchJson = async <T>(
-  url: string,
-  headers: Record<string, string>,
-  timeoutMs = 7_500
-) => {
-  const response = await safeFetch(
-    url,
-    {
-      headers,
-      cache: "no-store",
-    },
-    timeoutMs
-  );
-
-  if (response?.ok) {
-    try {
-      return (await response.json()) as T;
-    } catch {
-      return null;
     }
   }
 
@@ -1381,6 +1377,50 @@ const fetchGpwStooqQuote = async (symbol: string): Promise<AssetQuote | null> =>
   return null;
 };
 
+const toProviderMarketTimestamp = (value: unknown) => {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return undefined;
+  }
+
+  const timestamp = new Date(value).toISOString();
+  return Number.isFinite(Date.parse(timestamp)) ? timestamp : undefined;
+};
+
+/**
+ * Crypto trades continuously, so its freshness is deliberately independent
+ * from the completed-session policy used for GPW and other listed assets.
+ */
+export const isFreshCryptoQuote = (quote: AssetQuote, now = Date.now()) => {
+  const marketTime = Date.parse(quote.marketTimestamp ?? "");
+
+  return (
+    Number.isFinite(marketTime) &&
+    marketTime <= now + 5_000 &&
+    now - marketTime <= CRYPTO_MAX_QUOTE_AGE_MS
+  );
+};
+
+const getCryptoQuoteAgeMs = (quote: AssetQuote, now = Date.now()) => {
+  const marketTime = Date.parse(quote.marketTimestamp ?? "");
+  return Number.isFinite(marketTime) ? Math.max(0, now - marketTime) : null;
+};
+
+const cacheCryptoQuote = (coinId: string, quote: AssetQuote) => {
+  const now = Date.now();
+  const updatedAt = new Date(now).toISOString();
+  const marketTime = Date.parse(quote.marketTimestamp ?? "");
+  const marketExpiry = Number.isFinite(marketTime)
+    ? marketTime + CRYPTO_MAX_QUOTE_AGE_MS
+    : now;
+
+  coinGeckoQuoteCache.set(coinId, {
+    quote,
+    createdAt: updatedAt,
+    updatedAt,
+    expiresAt: Math.min(now + CRYPTO_QUOTE_CACHE_TTL_MS, marketExpiry),
+  });
+};
+
 const fetchBinanceSpotQuote = async (
   symbol: string,
   providerId: string
@@ -1392,30 +1432,201 @@ const fetchBinanceSpotQuote = async (
     return null;
   }
 
-  const payload = await safeFetchJson<BinanceTickerResponse>(
-    `https://api.binance.com/api/v3/ticker/24hr?symbol=${encodeURIComponent(pair)}`,
-    BINANCE_HEADERS,
+  const endpoint = `https://api.binance.com/api/v3/ticker/24hr?symbol=${encodeURIComponent(pair)}`;
+  const response = await safeFetch(
+    endpoint,
+    { headers: BINANCE_HEADERS, cache: "no-store" },
     7_500
   );
-  const price = Number(payload?.lastPrice ?? payload?.price);
-  const previousClose = Number(payload?.prevClosePrice);
 
-  if (!Number.isFinite(price) || price <= 0) {
+  if (!response) {
+    logCryptoPriceDiagnostics({
+      stage: "provider-error",
+      provider: "binance",
+      endpoint: "/api/v3/ticker/24hr",
+      symbol: pair,
+      errorType: "network_or_timeout",
+    });
     return null;
   }
 
-  return {
+  if (!response.ok) {
+    logCryptoPriceDiagnostics({
+      stage: "provider-error",
+      provider: "binance",
+      endpoint: "/api/v3/ticker/24hr",
+      symbol: pair,
+      status: response.status,
+      errorType: "http",
+    });
+    return null;
+  }
+
+  let payload: BinanceTickerResponse;
+
+  try {
+    payload = (await response.json()) as BinanceTickerResponse;
+  } catch {
+    logCryptoPriceDiagnostics({
+      stage: "provider-error",
+      provider: "binance",
+      endpoint: "/api/v3/ticker/24hr",
+      symbol: pair,
+      status: response.status,
+      errorType: "invalid_json",
+    });
+    return null;
+  }
+
+  const price = Number(payload.lastPrice ?? payload.price);
+  const previousClose = Number(payload.prevClosePrice);
+  const fetchedAt = new Date().toISOString();
+  const marketTimestamp = toProviderMarketTimestamp(payload.closeTime);
+
+  if (!Number.isFinite(price) || price <= 0 || !marketTimestamp) {
+    logCryptoPriceDiagnostics({
+      stage: "provider-error",
+      provider: "binance",
+      endpoint: "/api/v3/ticker/24hr",
+      symbol: pair,
+      status: response.status,
+      price: Number.isFinite(price) ? price : null,
+      hasMarketTimestamp: Boolean(marketTimestamp),
+      errorType: "malformed_quote",
+    });
+    return null;
+  }
+
+  const quote: AssetQuote = {
     symbol: normalizedSymbol,
     price: round(price, 4),
     marketCurrency: "USD",
-    provider: "coingecko",
+    provider: "binance",
     providerId,
-    fetchedAt: new Date().toISOString(),
+    fetchedAt,
+    marketTimestamp,
+    priceDate: marketTimestamp.slice(0, 10),
     previousClose:
       Number.isFinite(previousClose) && previousClose > 0
         ? round(previousClose, 4)
         : undefined,
   };
+
+  const priceAgeMs = getCryptoQuoteAgeMs(quote);
+  const accepted = isFreshCryptoQuote(quote);
+  logCryptoPriceDiagnostics({
+    stage: "provider-response",
+    provider: "binance",
+    endpoint: "/api/v3/ticker/24hr",
+    symbol: pair,
+    status: response.status,
+    price: quote.price,
+    marketTimestamp,
+    fetchedAt,
+    priceAgeMs,
+    accepted,
+  });
+
+  return accepted ? quote : null;
+};
+
+const fetchCoinGeckoFallbackQuote = async (
+  symbol: string,
+  coinId: string
+): Promise<AssetQuote | null> => {
+  const endpoint = `https://api.coingecko.com/api/v3/simple/price?ids=${encodeURIComponent(
+    coinId
+  )}&vs_currencies=usd&include_24hr_change=true&include_last_updated_at=true`;
+  const response = await safeFetch(
+    endpoint,
+    { headers: COINGECKO_HEADERS, cache: "no-store" },
+    7_500
+  );
+
+  if (!response || !response.ok) {
+    logCryptoPriceDiagnostics({
+      stage: "provider-error",
+      provider: "coingecko",
+      endpoint: "/api/v3/simple/price",
+      symbol: coinId,
+      status: response?.status,
+      errorType: response ? "http" : "network_or_timeout",
+    });
+    return null;
+  }
+
+  let payload: CoinGeckoSimplePrice;
+
+  try {
+    payload = (await response.json()) as CoinGeckoSimplePrice;
+  } catch {
+    logCryptoPriceDiagnostics({
+      stage: "provider-error",
+      provider: "coingecko",
+      endpoint: "/api/v3/simple/price",
+      symbol: coinId,
+      status: response.status,
+      errorType: "invalid_json",
+    });
+    return null;
+  }
+
+  const price = payload[coinId]?.usd;
+  const dailyChangePercent = payload[coinId]?.usd_24h_change;
+  const marketTimestamp = toProviderMarketTimestamp(
+    typeof payload[coinId]?.last_updated_at === "number"
+      ? payload[coinId]?.last_updated_at * 1_000
+      : undefined
+  );
+  const fetchedAt = new Date().toISOString();
+
+  if (typeof price !== "number" || price <= 0 || !marketTimestamp) {
+    logCryptoPriceDiagnostics({
+      stage: "provider-error",
+      provider: "coingecko",
+      endpoint: "/api/v3/simple/price",
+      symbol: coinId,
+      status: response.status,
+      price: typeof price === "number" ? price : null,
+      hasMarketTimestamp: Boolean(marketTimestamp),
+      errorType: "malformed_quote",
+    });
+    return null;
+  }
+
+  const quote: AssetQuote = {
+    symbol: normalizeSymbol(symbol),
+    price: round(price, 4),
+    marketCurrency: "USD",
+    provider: "coingecko",
+    providerId: coinId,
+    fetchedAt,
+    marketTimestamp,
+    priceDate: marketTimestamp.slice(0, 10),
+    previousClose:
+      typeof dailyChangePercent === "number" &&
+      Number.isFinite(dailyChangePercent) &&
+      dailyChangePercent > -100
+        ? round(price / (1 + dailyChangePercent / 100), 8)
+        : undefined,
+  };
+
+  const priceAgeMs = getCryptoQuoteAgeMs(quote);
+  const accepted = isFreshCryptoQuote(quote);
+  logCryptoPriceDiagnostics({
+    stage: "provider-response",
+    provider: "coingecko",
+    endpoint: "/api/v3/simple/price",
+    symbol: coinId,
+    status: response.status,
+    price: quote.price,
+    marketTimestamp,
+    fetchedAt,
+    priceAgeMs,
+    accepted,
+  });
+
+  return accepted ? quote : null;
 };
 
 const fetchCoinGeckoQuote = async (
@@ -1429,77 +1640,46 @@ const fetchCoinGeckoQuote = async (
 
   const cachedQuote = coinGeckoQuoteCache.get(coinId);
 
-  if (cachedQuote && cachedQuote.expiresAt > Date.now()) {
-    return {
-      ...cachedQuote.quote,
+  if (cachedQuote && cachedQuote.expiresAt > Date.now() && isFreshCryptoQuote(cachedQuote.quote)) {
+    logCryptoPriceDiagnostics({
+      stage: "cache-hit",
+      provider: cachedQuote.quote.provider,
       symbol: normalizedSymbol,
-    };
-  }
-
-  const exchangeQuote = await fetchBinanceSpotQuote(normalizedSymbol, coinId);
-
-  if (exchangeQuote) {
-    coinGeckoQuoteCache.set(coinId, {
-      quote: exchangeQuote,
-      expiresAt: Date.now() + CRYPTO_QUOTE_CACHE_TTL_MS,
+      price: cachedQuote.quote.price,
+      marketTimestamp: cachedQuote.quote.marketTimestamp,
+      fetchedAt: cachedQuote.quote.fetchedAt,
+      createdAt: cachedQuote.createdAt,
+      updatedAt: cachedQuote.updatedAt,
+      expiresAt: new Date(cachedQuote.expiresAt).toISOString(),
+      ttlMs: CRYPTO_QUOTE_CACHE_TTL_MS,
+      priceAgeMs: getCryptoQuoteAgeMs(cachedQuote.quote),
     });
-
-    return exchangeQuote;
+    return { ...cachedQuote.quote, symbol: normalizedSymbol };
   }
 
-  const payload = await safeFetchJson<
-    Record<
-      string,
-      {
-        usd?: number;
-        usd_24h_change?: number;
-      }
-    >
-  >(
-    `https://api.coingecko.com/api/v3/simple/price?ids=${encodeURIComponent(
-      coinId
-    )}&vs_currencies=usd&include_24hr_change=true`,
-    COINGECKO_HEADERS,
-    7_500
-  );
+  const inFlightQuote = coinGeckoQuoteInFlight.get(coinId);
 
-  if (!payload) {
-    return cachedQuote?.quote
-      ? {
-          ...cachedQuote.quote,
-          symbol: normalizedSymbol,
-        }
-      : null;
+  if (inFlightQuote) {
+    return inFlightQuote.then((quote) =>
+      quote ? { ...quote, symbol: normalizedSymbol } : null
+    );
   }
 
-  const price = payload[coinId]?.usd;
-  const dailyChangePercent = payload[coinId]?.usd_24h_change;
+  const quotePromise = (async () => {
+    const exchangeQuote = await fetchBinanceSpotQuote(normalizedSymbol, coinId);
+    const quote = exchangeQuote ?? (await fetchCoinGeckoFallbackQuote(normalizedSymbol, coinId));
 
-  if (typeof price !== "number" || price <= 0) return null;
+    if (quote) {
+      cacheCryptoQuote(coinId, quote);
+    }
 
-  const previousClose =
-    typeof dailyChangePercent === "number" &&
-    Number.isFinite(dailyChangePercent) &&
-    dailyChangePercent > -100
-      ? round(price / (1 + dailyChangePercent / 100), 8)
-      : undefined;
-
-  const quote: AssetQuote = {
-    symbol: normalizedSymbol,
-    price: round(price, 4),
-    marketCurrency: "USD",
-    provider: "coingecko",
-    providerId: coinId,
-    fetchedAt: new Date().toISOString(),
-    previousClose,
-  };
-
-  coinGeckoQuoteCache.set(coinId, {
-    quote,
-    expiresAt: Date.now() + CRYPTO_QUOTE_CACHE_TTL_MS,
+    return quote;
+  })().finally(() => {
+    coinGeckoQuoteInFlight.delete(coinId);
   });
 
-  return quote;
+  coinGeckoQuoteInFlight.set(coinId, quotePromise);
+  return quotePromise;
 };
 
 export const searchMarketAssets = async (

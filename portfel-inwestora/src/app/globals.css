@@ -1158,6 +1158,52 @@ textarea {
   padding: 18px;
 }
 
+/* A companion to the primary analysis chart, not another line mode. The
+ * compact bar field makes positive/negative daily investment outcomes easy to
+ * scan while retaining the shared Mexo visual language. */
+.line-visual-daily-result-panel {
+  border: 1px solid rgba(15, 118, 110, 0.12);
+  border-radius: 20px;
+  padding: 18px;
+  background:
+    linear-gradient(180deg, rgba(250, 253, 252, 0.9), rgba(255, 255, 255, 0.78)),
+    radial-gradient(circle at top right, rgba(15, 118, 110, 0.08), transparent 40%);
+}
+
+.line-visual-daily-result-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.line-visual-daily-result-head .eyebrow {
+  margin-bottom: 7px;
+}
+
+.line-visual-daily-result-head .section-title {
+  font-size: 1.16rem;
+}
+
+.line-visual-daily-result-range {
+  flex: 0 0 auto;
+  border: 1px solid rgba(20, 35, 48, 0.1);
+  border-radius: 999px;
+  padding: 6px 9px;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  background: rgba(255, 255, 255, 0.76);
+}
+
+.line-visual-daily-result-chart {
+  min-height: 260px;
+  border-top: 1px solid rgba(20, 35, 48, 0.07);
+  padding-top: 12px;
+}
+
 .line-visual-chart-head {
   display: flex;
   flex-wrap: wrap;
@@ -3767,12 +3813,20 @@ textarea {
  * these two values render differently from the rest of the product. */
 .portfolio-positions-table td:nth-child(4) .financial-value,
 .portfolio-positions-table td:nth-child(5) .financial-value {
-  font-family: var(--font-sans), sans-serif;
-  font-variant-numeric: tabular-nums;
+  /* Dividend summaries deliberately use the normal Manrope figure set.
+   * Reuse that exact inherited rendering here instead of forcing tabular
+   * numerals only in current positions. */
+  font-family: inherit;
+  font-variant-numeric: normal;
   font-feature-settings: normal;
   font-kerning: auto;
   letter-spacing: normal;
   word-spacing: normal;
+}
+
+.portfolio-positions-table td:nth-child(4),
+.portfolio-positions-table td:nth-child(5) {
+  font-variant-numeric: normal;
 }
 
 .portfolio-positions-table th,

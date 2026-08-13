@@ -11,7 +11,9 @@ import {
 } from "react";
 import {
   Area,
+  Bar,
   CartesianGrid,
+  Cell,
   ComposedChart,
   Line,
   ReferenceLine,
@@ -25,6 +27,7 @@ import {
 import { createPortal } from "react-dom";
 import TruncatedText from "@/components/TruncatedText";
 import {
+  filterChartPointsByRange,
   getChartRangeViewport,
   getFullChartViewport,
   getSupportedChartRangePresets,
@@ -37,17 +40,19 @@ import {
 import { SEARCH_DEBOUNCE_MS, VISIBLE_SEARCH_MODE_OPTIONS } from "@/lib/constants";
 import { fetchPortfolioHistory, searchAssets, searchEtfInstruments } from "@/lib/api";
 import {
+  createPortfolioBenchmarkDefinition,
+  hasExactCoreBenchmarkMatch,
+  rankBenchmarkSearchResults,
+} from "@/lib/benchmark-search";
+import { buildPortfolioDailyMetricPoints } from "@/lib/portfolio-daily-metrics";
+import {
   convertFromPln,
   convertToPln,
   getAssetPurchaseUnitValuePln,
   getAssetPurchaseValuePln,
 } from "@/lib/pricing";
 import { getMinimumSearchLength, getSearchPlaceholder } from "@/lib/search";
-import {
-  getPortfolioAssetGroupKey,
-  normalizeGpwSymbol,
-  normalizeSymbol,
-} from "@/lib/ticker";
+import { getPortfolioAssetGroupKey } from "@/lib/ticker";
 import {
   formatCurrency,
   formatDate,
@@ -82,6 +87,8 @@ type PortfolioLineChartsProps = {
   /** Real portfolio boundaries for the URL-only all-portfolios view. */
   portfolioScopes?: PortfolioHistoryScope[];
   initialMode?: ChartMode;
+  /** The full daily-result panel belongs to the dedicated Charts route only. */
+  showDailyInvestmentResult?: boolean;
 };
 
 type RangePreset = ChartRangePreset;
@@ -109,6 +116,11 @@ type DrawdownPoint = PortfolioHistoryPoint & {
 type DailyChangePoint = PortfolioHistoryPoint & {
   dailyChangePln: number;
   dailyChangePercent: number;
+};
+
+type DailyInvestmentResultBarPoint = {
+  date: string;
+  investmentResult: number;
 };
 
 type ChartLineDefinition = {
@@ -261,42 +273,6 @@ const EMPTY_HISTORY: PortfolioHistoryResponse = {
   warnings: [],
   assetSeries: [],
   benchmarkSeries: [],
-};
-
-const isGpwMode = (mode: AssetSearchMode) => mode === "stock-gpw";
-
-const normalizeBenchmarkSymbolForMode = (symbol: string, mode: AssetSearchMode) =>
-  isGpwMode(mode) ? normalizeGpwSymbol(symbol) : normalizeSymbol(symbol);
-
-const getBenchmarkKey = ({
-  kind,
-  provider,
-  providerId,
-  symbol,
-}: Pick<PortfolioBenchmarkDefinition, "kind" | "provider" | "providerId" | "symbol">) =>
-  [kind, provider, normalizeSymbol(providerId ?? symbol)].join(":");
-
-const toBenchmarkDefinition = (
-  result: AssetSearchResult,
-  mode: AssetSearchMode
-): PortfolioBenchmarkDefinition => {
-  const symbol = normalizeBenchmarkSymbolForMode(result.symbol, mode);
-
-  return {
-    id: getBenchmarkKey({
-      kind: result.kind,
-      provider: result.provider,
-      providerId: result.providerId,
-      symbol,
-    }),
-    name: result.name,
-    symbol,
-    kind: result.kind,
-    marketCurrency: result.marketCurrency,
-    provider: result.provider,
-    providerId: result.providerId,
-    priceScale: result.priceScale,
-  };
 };
 
 const getPointDate = (value: string) => new Date(`${value}T12:00:00.000Z`);
@@ -901,6 +877,7 @@ export default function PortfolioLineCharts({
   refreshRevision,
   portfolioScopes,
   initialMode = "value",
+  showDailyInvestmentResult = false,
 }: PortfolioLineChartsProps) {
   const [mode, setMode] = useState<ChartMode>(initialMode);
   const [rangePreset, setRangePreset] = useState<RangePreset>("1M");
@@ -1315,6 +1292,18 @@ export default function PortfolioLineCharts({
       return;
     }
 
+    const coreResults = rankBenchmarkSearchResults(trimmedQuery);
+
+    // A complete match for a known index is already a stable benchmark
+    // definition. Avoid asking an ETF provider for dozens of listing variants
+    // merely to offer the user the plain S&P 500 index.
+    if (hasExactCoreBenchmarkMatch(trimmedQuery)) {
+      setBenchmarkResults(coreResults);
+      setBenchmarkSearchError(null);
+      setIsSearchingBenchmarks(false);
+      return;
+    }
+
     let isCancelled = false;
     const controller = new AbortController();
     const timeoutId = window.setTimeout(async () => {
@@ -1339,18 +1328,22 @@ export default function PortfolioLineCharts({
               });
 
         if (!isCancelled) {
-          setBenchmarkResults(nextResults);
+          setBenchmarkResults(rankBenchmarkSearchResults(trimmedQuery, nextResults));
         }
       } catch (searchError) {
         if (isCancelled) {
           return;
         }
 
-        setBenchmarkResults([]);
+        // A local index result remains usable even when the optional provider
+        // search for additional benchmarks has a transient failure.
+        setBenchmarkResults(coreResults);
         setBenchmarkSearchError(
-          searchError instanceof Error
-            ? searchError.message
-            : "Nie udalo sie pobrac benchmarkow."
+          coreResults.length > 0
+            ? null
+            : searchError instanceof Error
+              ? searchError.message
+              : "Nie udalo sie pobrac benchmarkow."
         );
       } finally {
         if (!isCancelled) {
@@ -1399,10 +1392,18 @@ export default function PortfolioLineCharts({
     () => buildDailyChangeSeries(displayPoints),
     [displayPoints]
   );
+  const dailyInvestmentResultPoints = useMemo<DailyInvestmentResultBarPoint[]>(
+    () =>
+      buildPortfolioDailyMetricPoints(displayPoints).map((point) => ({
+        date: point.date,
+        investmentResult: point.cashFlowNeutralResultPln,
+      })),
+    [displayPoints]
+  );
   const visibleDates = visiblePoints.map((point) => point.date);
 
   const handleAddBenchmark = (result: AssetSearchResult) => {
-    const benchmark = toBenchmarkDefinition(result, benchmarkSearchMode);
+    const benchmark = createPortfolioBenchmarkDefinition(result, benchmarkSearchMode);
 
     setSelectedBenchmarks((currentBenchmarks) => {
       if (currentBenchmarks.some((currentBenchmark) => currentBenchmark.id === benchmark.id)) {
@@ -2111,6 +2112,31 @@ export default function PortfolioLineCharts({
 
     return chartModel.data.slice(startIndex, endIndex + 1);
   }, [chartModel.data, effectiveChartViewport]);
+
+  // This panel is deliberately independent from the selected main-chart mode.
+  // It shares the user's chosen time range, while its values are the existing
+  // P/L deltas, so deposits and withdrawals cannot be painted as daily gain.
+  const renderedDailyInvestmentResultPoints = useMemo(
+    () => filterChartPointsByRange(dailyInvestmentResultPoints, rangePreset),
+    [dailyInvestmentResultPoints, rangePreset]
+  );
+  const hasDailyInvestmentResultData = renderedDailyInvestmentResultPoints.length > 0;
+  const dailyInvestmentResultDomain = useMemo(
+    () =>
+      getPaddedNumberDomain(
+        renderedDailyInvestmentResultPoints.map((point) => point.investmentResult)
+      ),
+    [renderedDailyInvestmentResultPoints]
+  );
+  const dailyInvestmentResultLine = useMemo<ChartLineDefinition>(
+    () => ({
+      dataKey: "investmentResult",
+      label: "Wynik dzienny",
+      color: SERIES_COLORS[0],
+      valueFormatter: (value) => formatSignedCurrency(value, baseCurrency),
+    }),
+    [baseCurrency]
+  );
 
   const chartLineKeySignature = chartModel.lines.map((line) => line.dataKey).join("|");
 
@@ -2878,6 +2904,88 @@ export default function PortfolioLineCharts({
     );
   };
 
+  const renderDailyInvestmentResultPanel = () => (
+    <section className="line-visual-daily-result-panel mt-6" aria-labelledby="daily-result-title">
+      <div className="line-visual-daily-result-head">
+        <div>
+          <p className="eyebrow">Wynik dzienny</p>
+          <h3 id="daily-result-title" className="section-title">Inwestycyjny wynik dzień po dniu</h3>
+          <p className="section-copy">
+            Zielony słupek oznacza zysk, czerwony stratę. Wpłaty i wypłaty nie są
+            traktowane jako wynik inwestycyjny.
+          </p>
+        </div>
+        <span className="line-visual-daily-result-range">Zakres: {rangePreset}</span>
+      </div>
+
+      {hasDailyInvestmentResultData ? (
+        <div className="line-visual-daily-result-chart mt-4">
+          <ResponsiveContainer width="100%" height={260}>
+            <ComposedChart
+              data={renderedDailyInvestmentResultPoints}
+              margin={{ top: 12, right: 12, left: 0, bottom: 0 }}
+            >
+              <CartesianGrid
+                stroke="rgba(20, 35, 48, 0.08)"
+                strokeDasharray="3 10"
+                vertical={false}
+              />
+              <XAxis
+                axisLine={false}
+                dataKey="date"
+                minTickGap={40}
+                tick={{ fill: "#7b8895", fontSize: 11, fontWeight: 700 }}
+                tickFormatter={(value) => formatShortDate(String(value))}
+                tickLine={false}
+              />
+              <YAxis
+                axisLine={false}
+                domain={dailyInvestmentResultDomain}
+                orientation="right"
+                tick={{ fill: "#7b8895", fontSize: 11, fontWeight: 700 }}
+                tickFormatter={(value: number) => formatCompactCurrency(value, baseCurrency)}
+                tickLine={false}
+                width={84}
+              />
+              <Tooltip
+                allowEscapeViewBox={{ x: false, y: false }}
+                content={(props) => <ChartTooltip {...props} lines={[dailyInvestmentResultLine]} />}
+                cursor={{ fill: "rgba(15, 118, 110, 0.06)" }}
+                wrapperStyle={{ outline: "none", pointerEvents: "none" }}
+              />
+              <ReferenceLine
+                stroke="rgba(180, 35, 24, 0.36)"
+                strokeDasharray="6 6"
+                strokeWidth={1.1}
+                y={0}
+              />
+              <Bar
+                dataKey="investmentResult"
+                isAnimationActive={!isChartInteracting}
+                maxBarSize={18}
+                radius={[4, 4, 2, 2]}
+              >
+                {renderedDailyInvestmentResultPoints.map((point) => (
+                  <Cell
+                    key={point.date}
+                    fill={point.investmentResult >= 0 ? "#087657" : "#b42318"}
+                  />
+                ))}
+              </Bar>
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
+      ) : (
+        <div className="line-chart-empty mt-4">
+          <p className="table-title">Brakuje danych do wyniku dziennego</p>
+          <p className="table-note mt-2">
+            Wykres pojawi się po zebraniu co najmniej dwóch kolejnych obserwacji historii.
+          </p>
+        </div>
+      )}
+    </section>
+  );
+
   return (
     <>
       <section className="panel chart-card chart-card-wide line-visual-panel">
@@ -2918,7 +3026,8 @@ export default function PortfolioLineCharts({
             <div>
               <p className="table-title">Wyszukaj benchmark</p>
               <p className="table-note">
-                Dodaj akcje lub ETF-y i porownaj ich stopy zwrotu z portfelem.
+                Zacznij od podstawowego indeksu, a następnie — jeśli potrzebujesz —
+                wybierz konkretny instrument referencyjny.
               </p>
             </div>
             {selectedBenchmarks.length > 0 ? (
@@ -2944,7 +3053,7 @@ export default function PortfolioLineCharts({
           </div>
 
           <label className="field line-visual-benchmark-field mt-4">
-            <span>Symbol lub nazwa benchmarku</span>
+            <span>Indeks, symbol lub nazwa benchmarku</span>
             <input
               type="text"
               value={benchmarkQuery}
@@ -3027,7 +3136,7 @@ export default function PortfolioLineCharts({
               {benchmarkResults.length > 0 ? (
                 <div className="search-result-list">
                   {benchmarkResults.map((result) => {
-                    const benchmark = toBenchmarkDefinition(result, benchmarkSearchMode);
+                    const benchmark = createPortfolioBenchmarkDefinition(result, benchmarkSearchMode);
                     const isSelected = selectedBenchmarks.some(
                       (selectedItem) => selectedItem.id === benchmark.id
                     );
@@ -3041,7 +3150,7 @@ export default function PortfolioLineCharts({
                       >
                         <TruncatedText as="p" className="search-result-title" text={result.name} />
                         <p className="search-result-meta">
-                          {result.symbol}
+                          {result.subtitle ?? result.marketCurrency} · {result.symbol}
                           {isSelected ? " | dodany" : ""}
                         </p>
                       </button>
@@ -3104,6 +3213,7 @@ export default function PortfolioLineCharts({
           </div>
         )}
       </div>
+      {showDailyInvestmentResult ? renderDailyInvestmentResultPanel() : null}
       </section>
 
       {isChartModalOpen && hasRenderableData && typeof document !== "undefined"

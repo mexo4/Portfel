@@ -38,7 +38,8 @@ test("average purchase and unit-price cells inherit the same numeric rendering a
   );
 
   assert.ok(selector);
-  assert.match(selector[1], /font-family:\s*var\(--font-sans\), sans-serif/);
+  assert.match(selector[1], /font-family:\s*inherit/);
+  assert.match(selector[1], /font-variant-numeric:\s*normal/);
   assert.match(selector[1], /font-feature-settings:\s*normal/);
   assert.match(selector[1], /letter-spacing: normal/);
   assert.match(selector[1], /word-spacing: normal/);

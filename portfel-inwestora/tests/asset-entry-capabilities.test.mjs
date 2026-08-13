@@ -35,15 +35,15 @@ test("crypto import rows and crypto-only exchanges are gated in UI while histori
   assert.doesNotMatch(lineCharts, /\bSEARCH_MODE_OPTIONS\b/);
 });
 
-test("current-position numeric cells use the compact proportional app font with tabular figures", async () => {
+test("current-position primary values reuse the natural proportional figures from dividend summaries", async () => {
   const styles = await readSource("src/app/globals.css");
   const selector = styles.match(
     /\.portfolio-positions-table td:nth-child\(4\) \.financial-value,[\s\S]*?\.portfolio-positions-table td:nth-child\(5\) \.financial-value \{([\s\S]*?)\n\}/
   );
 
   assert.ok(selector);
-  assert.match(selector[1], /font-family: var\(--font-sans\), sans-serif/);
-  assert.match(selector[1], /font-variant-numeric: tabular-nums/);
+  assert.match(selector[1], /font-family:\s*inherit/);
+  assert.match(selector[1], /font-variant-numeric:\s*normal/);
   assert.match(selector[1], /letter-spacing: normal/);
   assert.match(selector[1], /word-spacing: normal/);
 });

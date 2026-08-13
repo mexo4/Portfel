@@ -98,6 +98,15 @@ const schemaStatements = [
     )
   `,
   `
+    CREATE TABLE IF NOT EXISTS user_dashboard_layouts (
+      user_id TEXT PRIMARY KEY,
+      layout_json TEXT NOT NULL,
+      revision INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+  `,
+  `
     CREATE TABLE IF NOT EXISTS auth_accounts (
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL,

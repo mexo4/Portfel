@@ -89,6 +89,8 @@ type PortfolioLineChartsProps = {
   initialMode?: ChartMode;
   /** The full daily-result panel belongs to the dedicated Charts route only. */
   showDailyInvestmentResult?: boolean;
+  /** A dashboard widget may present the existing cash-flow-neutral bars alone. */
+  dailyInvestmentResultOnly?: boolean;
 };
 
 type RangePreset = ChartRangePreset;
@@ -878,6 +880,7 @@ export default function PortfolioLineCharts({
   portfolioScopes,
   initialMode = "value",
   showDailyInvestmentResult = false,
+  dailyInvestmentResultOnly = false,
 }: PortfolioLineChartsProps) {
   const [mode, setMode] = useState<ChartMode>(initialMode);
   const [rangePreset, setRangePreset] = useState<RangePreset>("1M");
@@ -2985,6 +2988,14 @@ export default function PortfolioLineCharts({
       )}
     </section>
   );
+
+  if (dailyInvestmentResultOnly) {
+    return (
+      <section className="panel chart-card chart-card-wide line-visual-daily-widget">
+        {renderDailyInvestmentResultPanel()}
+      </section>
+    );
+  }
 
   return (
     <>

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import AssetTable from "@/components/AssetTable";
+import ConfigurableDashboard from "@/components/ConfigurableDashboard";
 import CorporateEventsPanel from "@/components/CorporateEventsPanel";
 import UpcomingDividendsPanel from "@/components/UpcomingDividendsPanel";
 import PortfolioCharts from "@/components/PortfolioCharts";
@@ -44,26 +45,7 @@ const workspaceChartProps = (workspace: ReturnType<typeof usePortfolioWorkspace>
 });
 
 export function WorkspaceDashboardPage() {
-  const workspace = usePortfolioWorkspace();
-  const positionsPreview = workspace.groupedAssets.slice(0, 5);
-  const allocationPreview = Array.from(
-    workspace.groupedAssets.reduce((items, group) => {
-      items.set(group.kind, (items.get(group.kind) ?? 0) + group.totalValue);
-      return items;
-    }, new Map<(typeof workspace.groupedAssets)[number]["kind"], number>()).entries()
-  ).sort((left, right) => right[1] - left[1]);
-
-  return <div className="workspace-page workspace-dashboard">
-    <section className="workspace-dashboard-intro"><div><p className="eyebrow">{workspace.isAllPortfoliosSelected ? "Wszystkie portfele" : workspace.activePortfolio?.name ?? "Aktywny portfel"}</p><h2>Najważniejsze informacje, bez przeładowania.</h2></div>{workspace.isAllPortfoliosSelected ? <Link href="/portfolios" className="primary-button">Wybierz portfel do zmian</Link> : <Link href="/portfolio/positions?add=asset" className="primary-button">Dodaj aktywo</Link>}</section>
-    {workspace.summaryPanel}
-    <section className="workspace-dashboard-income" aria-label="Dywidendy portfela"><div><span>Dywidendy YTD</span><strong>{formatCurrency(workspace.activeDividendYtd, workspace.activeBaseCurrency)}</strong></div><div><span>W tym miesiącu</span><strong>{formatCurrency(workspace.activeDividendMonth, workspace.activeBaseCurrency)}</strong></div><div><span>Roczny dochód</span><strong>{formatCurrency(workspace.activeDividendAnnualIncome, workspace.activeBaseCurrency)}</strong></div><Link href={workspace.getReadHref("/portfolio/dividends")}>Dywidendy →</Link></section>
-    <div className="workspace-dashboard-grid">
-      <section className="workspace-dashboard-chart"><PortfolioLineCharts {...workspaceHistoryProps(workspace)} /></section>
-      <section className="panel panel-compact workspace-dashboard-positions"><div className="workspace-section-head"><div><p className="eyebrow">Portfel</p><h2 className="section-title">Największe pozycje</h2></div><Link href={workspace.getReadHref("/portfolio/positions")}>Wszystkie</Link></div>{positionsPreview.length ? <div className="workspace-preview-list">{positionsPreview.map((group) => <div key={group.key}><span><strong>{group.name}</strong><small>{group.symbol} · {group.quantity}{group.portfolioName ? ` · ${group.portfolioName}` : ""}</small></span><span><strong>{formatCurrency(group.totalValue, workspace.activeBaseCurrency)}</strong><small className={group.profitLossBase >= 0 ? "tone-positive" : "tone-negative"}>{formatCurrency(group.profitLossBase, workspace.activeBaseCurrency)}</small></span></div>)}</div> : <p className="workspace-empty-state">Dodaj pierwszy instrument, aby zobaczyć pozycje.</p>}</section>
-      <section className="panel panel-compact workspace-dashboard-allocation"><div className="workspace-section-head"><div><p className="eyebrow">Struktura</p><h2 className="section-title">Klasy aktywów</h2></div><Link href={workspace.getReadHref("/analytics/structure")}>Analizuj</Link></div>{allocationPreview.length ? <div className="workspace-allocation-list">{allocationPreview.map(([kind, value]) => <div key={kind}><span>{kind === "stock" ? "Akcje" : kind === "etf" ? "ETF" : kind === "crypto" ? "Krypto" : "Obligacje"}</span><strong>{workspace.summaryTotalValue > 0 ? `${Math.round((value / workspace.summaryTotalValue) * 100)}%` : "0%"}</strong></div>)}</div> : <p className="workspace-empty-state">Struktura pojawi się po dodaniu aktywów.</p>}</section>
-      <CorporateEventsPanel portfolioId={workspace.isAllPortfoliosSelected ? "all" : workspace.activePortfolioId} />
-    </div>
-  </div>;
+  return <ConfigurableDashboard />;
 }
 
 export function WorkspacePositionsPage() {

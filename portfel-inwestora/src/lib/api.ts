@@ -30,6 +30,7 @@ import type {
 } from "@/types/portfolio";
 import { isGpwSymbol } from "@/lib/ticker";
 import type { CorporateEventsResponse } from "@/lib/corporate-events";
+import type { DashboardLayout } from "@/lib/dashboard-layout";
 
 type SearchParams = {
   query: string;
@@ -217,6 +218,21 @@ export const fetchCorporateEvents = async ({
     { signal }
   );
 };
+
+export type DashboardLayoutResponse = {
+  layout: DashboardLayout;
+  revision: number;
+  updatedAt: string | null;
+};
+
+export const fetchDashboardLayout = async (signal?: AbortSignal) =>
+  requestJson<DashboardLayoutResponse>("/api/dashboard-layout", { signal });
+
+export const saveDashboardLayout = async (layout: DashboardLayout) =>
+  requestJson<DashboardLayoutResponse>("/api/dashboard-layout", {
+    method: "PUT",
+    body: JSON.stringify({ layout }),
+  });
 
 export const resolveEtfListingPrice = async (listing: EtfListing) => {
   const data = await requestJson<{ listing: EtfListing }>(

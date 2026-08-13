@@ -46,12 +46,16 @@ test("each workspace URL has a route-owned view rather than a null page placehol
   }
 });
 
-test("aggregate read routes do not replace data views with unavailable notices", async () => {
-  const source = await readFile("src/components/WorkspaceRouteViews.tsx", "utf8");
-  assert.match(source, /CorporateEventsPanel portfolioId=\{workspace\.isAllPortfoliosSelected \? "all"/);
-  assert.match(source, /PortfolioLineCharts \{\.\.\.workspaceHistoryProps\(workspace\)\}/);
-  assert.match(source, /workspace\.getReadHref\("\/portfolio\/dividends"/);
-  assert.match(source, /workspace\.getReadHref\("\/portfolio\/positions"/);
-  assert.match(source, /workspace\.getReadHref\("\/analytics\/structure"/);
+test("dashboard route delegates aggregate data views to the configurable dashboard", async () => {
+  const [routes, dashboard] = await Promise.all([
+    readFile("src/components/WorkspaceRouteViews.tsx", "utf8"),
+    readFile("src/components/ConfigurableDashboard.tsx", "utf8"),
+  ]);
+  const source = dashboard;
+  assert.match(routes, /import ConfigurableDashboard/);
+  assert.match(routes, /export function WorkspaceDashboardPage\(\) \{\s*return <ConfigurableDashboard \/>;\s*\}/);
+  assert.match(dashboard, /workspace\.isAllPortfoliosSelected[\s\S]*workspace\.portfolios\.map/);
+  assert.match(dashboard, /portfolioScopes: getWorkspaceHistoryScopes\(workspace\)/);
+  assert.match(dashboard, /CorporateEventsPanel portfolioId=\{portfolioId\}/);
   assert.doesNotMatch(source, /Historia łączna wymaga osobnego modelu/);
 });

@@ -2,11 +2,13 @@ export const CORPORATE_EVENT_TYPES = [
   "QUARTERLY_REPORT",
   "HALF_YEAR_REPORT",
   "ANNUAL_REPORT",
+  "UPCOMING_DIVIDEND",
 ] as const;
 
 export type CorporateEventType = (typeof CORPORATE_EVENT_TYPES)[number];
 
 export const CORPORATE_EVENT_STATUSES = [
+  "PROPOSED",
   "CONFIRMED",
   "CHANGED",
   "CANCELLED",
@@ -35,6 +37,18 @@ export type ParsedCorporateEvent = {
   fiscalYear?: number;
   previousEventDate?: string;
   isScheduleChange: boolean;
+  /** A stable source-independent identity, used for events that have no fiscal period. */
+  eventIdentity?: string;
+  /** Read-only corporate-event data. It must never be turned into a DIVIDEND operation. */
+  dividendPerShare?: number;
+  dividendCurrency?: string;
+  exDividendDate?: string;
+  recordDate?: string;
+  paymentDate?: string;
+  dividendInstallment?: number;
+  /** Portfolio-context quantity projected by the read-only API response. */
+  heldQuantity?: number;
+  dividendStatus?: Extract<CorporateEventStatus, "PROPOSED" | "CONFIRMED" | "UNKNOWN">;
 };
 
 export type CorporateEventSourceReference = {
@@ -53,6 +67,14 @@ export type CorporateEvent = {
   eventTime?: string;
   fiscalPeriod?: string;
   fiscalYear?: number;
+  dividendPerShare?: number;
+  dividendCurrency?: string;
+  exDividendDate?: string;
+  recordDate?: string;
+  paymentDate?: string;
+  dividendInstallment?: number;
+  /** Portfolio-context quantity projected by the read-only API response. */
+  heldQuantity?: number;
   status: CorporateEventStatus;
   active: boolean;
   sourcePublishedAt?: string;
@@ -85,8 +107,8 @@ export type CorporateEventsResponse = {
 
 export const getCorporateEventIdentityKey = (event: Pick<
   ParsedCorporateEvent,
-  "eventType" | "fiscalPeriod" | "fiscalYear"
->) => [event.eventType, event.fiscalPeriod ?? "", event.fiscalYear ?? ""].join(":");
+  "eventType" | "fiscalPeriod" | "fiscalYear" | "eventIdentity"
+>) => event.eventIdentity ?? [event.eventType, event.fiscalPeriod ?? "", event.fiscalYear ?? ""].join(":");
 
 const POLISH_MONTHS: Record<string, string> = {
   stycznia: "01",
@@ -108,6 +130,9 @@ const POLISH_MONTHS: Record<string, string> = {
 
 const DATE_PATTERN =
   /\b(\d{1,2})\s*(?:[.\-/]\s*)?([a-zA-ZąćęłńóśźżĄĆĘŁŃÓŚŹŻ]+)\s+(20\d{2})\b|\b(\d{1,2})[.\-/](\d{1,2})[.\-/](20\d{2})\b/g;
+
+const UNICODE_DATE_PATTERN =
+  /\b(\d{1,2})\s*(?:[.\-/]\s*)?([\p{L}]+)\s+(20\d{2})\b|\b(\d{1,2})[.\-/](\d{1,2})[.\-/](20\d{2})\b/gu;
 
 const normalizeDocumentText = (value: string) =>
   value
@@ -150,7 +175,7 @@ const getIsoDateFromMatch = (match: RegExpExecArray) => {
 export const extractPolishDates = (value: string) => {
   const dates: string[] = [];
 
-  for (const match of value.matchAll(DATE_PATTERN)) {
+  for (const match of [...value.matchAll(DATE_PATTERN), ...value.matchAll(UNICODE_DATE_PATTERN)]) {
     const date = getIsoDateFromMatch(match);
 
     if (date && !dates.includes(date)) {
@@ -220,6 +245,171 @@ const getCandidateSegments = (text: string) => {
   return segments;
 };
 
+const toAmount = (value: string) => {
+  const normalized = value.replace(/[\s.](?=\d{3}(?:[,.]|\b))/g, "").replace(",", ".");
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+};
+
+const getDateAfterKeyword = (text: string, keyword: RegExp, maxLength = 180) => {
+  const match = keyword.exec(text);
+  if (!match) return undefined;
+  return extractPolishDates(text.slice(match.index, (match.index ?? 0) + maxLength))[0];
+};
+
+const getDividendStatus = (text: string): Extract<
+  CorporateEventStatus,
+  "PROPOSED" | "CONFIRMED" | "UNKNOWN"
+> => {
+  const normalized = text.toLocaleLowerCase("pl-PL");
+
+  if (
+    /uchwa|zatwierdz|walne(?:go)?\s+zgromadzeni|przeznacz.{0,48}dywidend|postanawia.{0,48}wyplac/.test(
+      normalized
+    )
+  ) {
+    return "CONFIRMED";
+  }
+
+  if (/propozyc|wniosek\s+zarz|rekomend/.test(normalized)) {
+    return "PROPOSED";
+  }
+
+  return "UNKNOWN";
+};
+
+type ParsedDividendAmount = {
+  amount: number;
+  index: number;
+  installment: boolean;
+};
+
+const getDividendAmounts = (text: string): ParsedDividendAmount[] => {
+  const perSharePattern =
+    /(?:^|[^\d])(\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{1,4})?)\s*(?:zł|zl|pln)\s*(?:brutto\s*)?(?:na|\/)\s*(?:(?:jedn[aą]|1)\s*)?akcj/gi;
+  const amountAfterPerSharePattern =
+    /(?:na|dla)\s*(?:(?:jedn[aą]|1)\s*)?akcj[ęe]\s*(?:przypada|wynosi|w\s+wysokości)?\s*(\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{1,4})?)\s*(?:zł|zl|pln)/gi;
+  const unicodePerSharePattern =
+    /(?:^|[^\d])(\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{1,4})?)\s*(?:z\u0142|zl|pln)\s*(?:brutto\s*)?(?:na|\/)\s*(?:(?:jedn(?:a|\u0105)|1)\s*)?akcj/giu;
+  const unicodeAmountAfterPerSharePattern =
+    /(?:na|dla)\s*(?:(?:jedn(?:a|\u0105)|1)\s*)?akcj(?:\u0119|e)\s*(?:przypada|wynosi|w\s+wysoko\u015Bci)?\s*(\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{1,4})?)\s*(?:z\u0142|zl|pln)/giu;
+  const amounts: ParsedDividendAmount[] = [];
+
+  for (const pattern of [
+    perSharePattern,
+    amountAfterPerSharePattern,
+    unicodePerSharePattern,
+    unicodeAmountAfterPerSharePattern,
+  ]) {
+    for (const match of text.matchAll(pattern)) {
+      const amount = toAmount(match[1] ?? "");
+      const index = match.index ?? 0;
+      if (!amount) continue;
+
+      const nearby = text.slice(Math.max(0, index - 96), index + 96);
+      amounts.push({
+        amount,
+        index,
+        installment: /rat[ayęei]/i.test(nearby),
+      });
+    }
+  }
+
+  const uniqueAmounts = amounts.filter(
+    (candidate, index) =>
+      !amounts.slice(0, index).some(
+        (other) => other.amount === candidate.amount && Math.abs(other.index - candidate.index) < 64
+      )
+  );
+
+  const installmentsWithoutTotal = uniqueAmounts.filter((candidate) => {
+    const otherTotal = uniqueAmounts
+      .filter((other) => other !== candidate)
+      .reduce((total, other) => total + other.amount, 0);
+    return uniqueAmounts.length < 3 || Math.abs(candidate.amount - otherTotal) > 0.005;
+  });
+
+  // A multi-rate resolution normally repeats "na akcję" for every rate. If
+  // it does, the total per-share amount is informational only and must not
+  // become a third, invented future payment.
+  const installments = installmentsWithoutTotal.filter((amount) => amount.installment);
+  return installments.length > 0 ? installments : installmentsWithoutTotal;
+};
+
+const getUpcomingDividendEvents = (text: string): ParsedCorporateEvent[] => {
+  if (!/dywidend/i.test(text)) return [];
+
+  const sectionMatches = Array.from(text.matchAll(/dywidenda\s+za[^\n:]{0,96}:/gi));
+  const sections =
+    sectionMatches.length > 0
+      ? sectionMatches.map((match, index) => ({
+          section: text.slice(match.index, sectionMatches[index + 1]?.index),
+          statusContext: text.slice(Math.max(0, (match.index ?? 0) - 220), match.index),
+        }))
+      : [{ section: text, statusContext: "" }];
+
+  return sections.flatMap(({ section, statusContext }) => {
+    const amounts = getDividendAmounts(section);
+    if (amounts.length === 0) return [];
+
+    const recordDate = getDateAfterKeyword(
+      section,
+      /dzie.\s+(?:ustalenia\s+prawa\s+do\s+dywidendy|dywidendy)|record\s*date/i
+    );
+    const exDividendDate = getDateAfterKeyword(
+      section,
+      /ex(?:-|\s)?dividend(?:\s+date)?|ex-date/i
+    );
+    const paymentDate = getDateAfterKeyword(
+      section,
+      /(?:termin\s+)?wyp.laty|dzie.\s+wyp.laty|payment\s*date/i
+    );
+    const sectionStatus = getDividendStatus(section);
+    const dividendStatus =
+      sectionStatus === "UNKNOWN" ? getDividendStatus(statusContext) : sectionStatus;
+
+    return amounts.flatMap((entry, index) => {
+      const localContext = section.slice(entry.index, entry.index + 240);
+      const localPaymentDate = getDateAfterKeyword(
+        localContext,
+        /(?:\d+\.?\s+)?rat[ayęei]|(?:termin\s+)?wyp.laty|dzie.\s+wyp.laty|payment\s*date/i,
+        220
+      );
+      const resolvedPaymentDate =
+        getDateAfterKeyword(localContext, /wyp.{0,6}at(?:y|a)|payment\s*date/i, 220) ??
+        localPaymentDate ??
+        paymentDate;
+      const eventDate = recordDate ?? exDividendDate ?? resolvedPaymentDate;
+
+      // A source that does not publish any date is useful context for a human,
+      // but it is not an upcoming calendar event. Do not invent a technical
+      // date merely to force it into storage or the UI.
+      if (!eventDate) return [];
+
+      const installment = amounts.length > 1 ? index + 1 : undefined;
+      return [{
+        eventType: "UPCOMING_DIVIDEND" as const,
+        eventDate,
+        isScheduleChange: false,
+        eventIdentity: [
+          "dividend",
+          recordDate ?? exDividendDate ?? "",
+          resolvedPaymentDate ?? "",
+          entry.amount.toFixed(6),
+          installment ?? "single",
+        ].join(":"),
+        dividendPerShare: entry.amount,
+        dividendCurrency: "PLN",
+        exDividendDate,
+        recordDate,
+        paymentDate: resolvedPaymentDate,
+        dividendInstallment: installment,
+        dividendStatus,
+      }];
+    });
+  });
+};
+
 export const parseCorporateEventDocument = (document: string): ParsedCorporateEvent[] => {
   const text = normalizeDocumentText(document);
   if (!text) return [];
@@ -278,6 +468,10 @@ export const parseCorporateEventDocument = (document: string): ParsedCorporateEv
     }
   }
 
+  for (const dividend of getUpcomingDividendEvents(text)) {
+    events.set(getCorporateEventIdentityKey(dividend), dividend);
+  }
+
   return Array.from(events.values()).sort((left, right) =>
     left.eventDate.localeCompare(right.eventDate)
   );
@@ -285,6 +479,10 @@ export const parseCorporateEventDocument = (document: string): ParsedCorporateEv
 
 export const getCorporateEventLabel = (event: Pick<CorporateEvent, "eventType" | "fiscalPeriod" | "fiscalYear">) => {
   const period = [event.fiscalPeriod, event.fiscalYear].filter(Boolean).join(" ");
+
+  if (event.eventType === "UPCOMING_DIVIDEND") {
+    return "Nadchodząca dywidenda";
+  }
 
   if (event.eventType === "HALF_YEAR_REPORT") {
     return `Raport półroczny${period ? ` ${period}` : ""}`;
@@ -301,6 +499,45 @@ export const getDaysUntilCorporateEvent = (eventDate: string, now = new Date()) 
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
   const target = new Date(`${eventDate}T00:00:00`).getTime();
   return Math.round((target - today) / 86_400_000);
+};
+
+const getWarsawDate = (now = new Date()) => {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/Warsaw",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(now);
+  const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${value.year}-${value.month}-${value.day}`;
+};
+
+/**
+ * An installment remains upcoming as long as it has a non-past relevant
+ * milestone. Once record/ex has passed, a still-future payment becomes its
+ * only upcoming date. This keeps multi-rate distributions honest after the
+ * entitlement date without discarding a payment that has not happened yet.
+ */
+export const getUpcomingDividendRelevantDate = (
+  event: Pick<CorporateEvent, "eventDate" | "recordDate" | "exDividendDate" | "paymentDate">,
+  now = new Date()
+) => {
+  const today = getWarsawDate(now);
+  return [event.recordDate, event.exDividendDate, event.paymentDate, event.eventDate]
+    .filter((date): date is string => typeof date === "string" && date >= today)
+    .sort((left, right) => left.localeCompare(right))[0];
+};
+
+export const getUpcomingDividendDatesForDisplay = (
+  event: Pick<CorporateEvent, "recordDate" | "exDividendDate" | "paymentDate">,
+  now = new Date()
+) => {
+  const today = getWarsawDate(now);
+  return {
+    exDividendDate: event.exDividendDate && event.exDividendDate >= today ? event.exDividendDate : undefined,
+    recordDate: event.recordDate && event.recordDate >= today ? event.recordDate : undefined,
+    paymentDate: event.paymentDate && event.paymentDate >= today ? event.paymentDate : undefined,
+  };
 };
 
 export const isCorporateEventSourceUnavailable = (status: CorporateEventSourceStatus) =>

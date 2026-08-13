@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import AssetTable from "@/components/AssetTable";
 import CorporateEventsPanel from "@/components/CorporateEventsPanel";
+import UpcomingDividendsPanel from "@/components/UpcomingDividendsPanel";
 import PortfolioCharts from "@/components/PortfolioCharts";
 import PortfolioLineCharts from "@/components/PortfolioLineCharts";
 import PortfolioPerformanceResults from "@/components/PortfolioPerformanceResults";
@@ -79,8 +80,8 @@ export function WorkspaceOperationsPage() {
 
 export function WorkspaceDividendsPage() {
   const workspace = usePortfolioWorkspace();
-  if (!workspace.isAllPortfoliosSelected) return <div className="workspace-page">{workspace.incomeWorkspace}</div>;
-  return <div className="workspace-page"><section className="panel"><p className="eyebrow">Dywidendy</p><h2 className="section-title">Dywidendy wszystkich portfeli</h2><p className="section-copy">Podsumowanie jest agregowane wyłącznie do odczytu; dodawanie i edycja wymagają konkretnego portfela.</p><div className="workspace-performance-metric-grid mt-6"><article><span>Dywidendy YTD</span><strong>{formatCurrency(workspace.activeDividendYtd, workspace.activeBaseCurrency)}</strong></article><article><span>W tym miesiącu</span><strong>{formatCurrency(workspace.activeDividendMonth, workspace.activeBaseCurrency)}</strong></article><article><span>Roczny dochód</span><strong>{formatCurrency(workspace.activeDividendAnnualIncome, workspace.activeBaseCurrency)}</strong></article></div><Link href="/portfolios" className="ghost-button mt-6">Wybierz portfel do zmian</Link></section></div>;
+  if (!workspace.isAllPortfoliosSelected) return <div className="workspace-page"><UpcomingDividendsPanel key={workspace.activePortfolioId} portfolioId={workspace.activePortfolioId} />{workspace.incomeWorkspace}</div>;
+  return <div className="workspace-page"><section className="panel"><p className="eyebrow">Dywidendy</p><h2 className="section-title">Dywidendy wszystkich portfeli</h2><p className="section-copy">Podsumowanie jest agregowane wyłącznie do odczytu; dodawanie i edycja wymagają konkretnego portfela.</p><div className="workspace-performance-metric-grid mt-6"><article><span>Dywidendy YTD</span><strong>{formatCurrency(workspace.activeDividendYtd, workspace.activeBaseCurrency)}</strong></article><article><span>W tym miesiącu</span><strong>{formatCurrency(workspace.activeDividendMonth, workspace.activeBaseCurrency)}</strong></article><article><span>Roczny dochód</span><strong>{formatCurrency(workspace.activeDividendAnnualIncome, workspace.activeBaseCurrency)}</strong></article></div><Link href="/portfolios" className="ghost-button mt-6">Wybierz portfel do zmian</Link></section><UpcomingDividendsPanel key="all" portfolioId="all" /></div>;
 }
 
 export function WorkspaceImportPage() { const workspace = usePortfolioWorkspace(); return <div className="workspace-page workspace-import-page"><section className="workspace-page-actions"><p>{workspace.isAllPortfoliosSelected ? "Import wymaga wskazania jednego portfela docelowego." : "Import tworzy rzeczywiste operacje w aktywnym portfelu. Kurs bieżący nie blokuje zapisu transakcji."}</p><Link href={workspace.isAllPortfoliosSelected ? "/portfolios" : "/portfolio/positions"} className="ghost-button">{workspace.isAllPortfoliosSelected ? "Wybierz portfel" : "Wróć do pozycji"}</Link></section>{workspace.isAllPortfoliosSelected ? null : workspace.importWorkspace}</div>; }

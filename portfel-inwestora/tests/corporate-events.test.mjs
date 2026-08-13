@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import {
   extractPolishDates,
   getCorporateEventIdentityKey,
   getDaysUntilCorporateEvent,
+  getUpcomingDividendDatesForDisplay,
+  getUpcomingDividendRelevantDate,
   isCorporateEventSourceUnavailable,
   parseCorporateEventDocument,
 } from "../src/lib/corporate-events.ts";
@@ -132,6 +135,31 @@ test("uses a market-scoped GPW canonical identity, never a bare global ticker", 
   assert.equal(isGpwCorporateEventInstrument({ ...dinoFirstUser, symbol: "DNP", marketCurrency: "USD" }), false);
 });
 
+test("uses one market-scoped identity when portfolio copies differ only by optional ISIN", () => {
+  const withoutIsin = {
+    id: "portfolio-a:instrument:stock:KPL",
+    assetKind: "stock",
+    symbol: "KPL.PL",
+    name: "Kino Polska TV",
+    marketCurrency: "PLN",
+  };
+  const withIsin = {
+    ...withoutIsin,
+    id: "portfolio-b:instrument:stock:KPL",
+    isin: "PLKNOPL00014",
+  };
+
+  assert.equal(getGpwCorporateEventCanonicalKey(withoutIsin), "gpw:ticker:KPL");
+  assert.equal(
+    getGpwCorporateEventCanonicalKey(withoutIsin),
+    getGpwCorporateEventCanonicalKey(withIsin)
+  );
+  assert.notEqual(
+    getGpwCorporateEventCanonicalKey(withoutIsin),
+    getGpwCorporateEventCanonicalKey({ ...withIsin, symbol: "KTY.PL" })
+  );
+});
+
 test("classifies source failures without confusing them with no event", () => {
   assert.equal(classifyCorporateEventHttpStatus(403), "ACCESS_DENIED");
   assert.equal(classifyCorporateEventHttpStatus(404), "NOT_FOUND");
@@ -217,4 +245,97 @@ test("Dino naturally switches from H1 to Q3 after the H1 date", () => {
     { date: "2026-11-05", period: "Q3" }
   );
   assert.equal(getDaysUntilCorporateEvent("2026-08-20", new Date("2026-08-11T12:00:00")), 9);
+});
+
+test("parses Kino Polska's confirmed future dividend from its official-calendar wording", () => {
+  const events = parseCorporateEventDocument(`
+    Dywidenda za rok obrotowy 2025:
+    Zgodnie z uchwałą podjętą 29 czerwca 2026 r. Zwyczajne Walne Zgromadzenie
+    przeznaczyło na wypłatę dywidendy. Kwota dywidendy przypadająca na jedną akcję wynosi 1,18 zł.
+    Dzień ustalenia prawa do dywidendy – 21 sierpnia 2026 r.
+    Dzień wypłaty dywidendy – 28 sierpnia 2026 r.
+  `).filter((event) => event.eventType === "UPCOMING_DIVIDEND");
+
+  assert.equal(events.length, 1);
+  assert.equal(events[0].dividendPerShare, 1.18);
+  assert.equal(events[0].dividendCurrency, "PLN");
+  assert.equal(events[0].dividendStatus, "CONFIRMED");
+  assert.equal(events[0].recordDate, "2026-08-21");
+  assert.equal(events[0].paymentDate, "2026-08-28");
+  assert.equal(Math.round(events[0].dividendPerShare * 10 * 100) / 100, 11.8);
+});
+
+test("keeps Grupa Kęty dividend installments as separate dated upcoming payments", () => {
+  const events = parseCorporateEventDocument(`
+    Uchwała Zwyczajnego Walnego Zgromadzenia w sprawie wypłaty dywidendy.
+    Dywidenda za rok obrotowy 2025:
+    Łączna dywidenda wynosi 48,97 zł na akcję i jest wypłacana w dwóch ratach:
+    pierwsza rata 16,33 zł na akcję, dzień wypłaty 3 września 2026 r.;
+    druga rata 32,64 zł na akcję, dzień wypłaty 4 listopada 2026 r.
+    Dzień ustalenia prawa do dywidendy – 19 sierpnia 2026 r.
+  `)
+    .filter((event) => event.eventType === "UPCOMING_DIVIDEND")
+    .sort((left, right) => (left.paymentDate ?? "").localeCompare(right.paymentDate ?? ""));
+
+  assert.deepEqual(
+    events.map((event) => ({
+      amount: event.dividendPerShare,
+      recordDate: event.recordDate,
+      paymentDate: event.paymentDate,
+      status: event.dividendStatus,
+    })),
+    [
+      { amount: 16.33, recordDate: "2026-08-19", paymentDate: "2026-09-03", status: "CONFIRMED" },
+      { amount: 32.64, recordDate: "2026-08-19", paymentDate: "2026-11-04", status: "CONFIRMED" },
+    ]
+  );
+});
+
+test("keeps a proposal distinct from a confirmed dividend and leaves absent dates undefined", () => {
+  const [event] = parseCorporateEventDocument(`
+    Propozycja zarządu: dywidenda za rok 2025 w wysokości 0,55 zł na akcję.
+    Dzień ustalenia prawa do dywidendy: 10 września 2026 r.
+  `).filter((candidate) => candidate.eventType === "UPCOMING_DIVIDEND");
+
+  assert.equal(event.dividendStatus, "PROPOSED");
+  assert.equal(event.recordDate, "2026-09-10");
+  assert.equal(event.exDividendDate, undefined);
+  assert.equal(event.paymentDate, undefined);
+});
+
+test("keeps future installments upcoming after their record date and only displays future dates", () => {
+  const afterRecordDate = new Date("2026-08-20T12:00:00+02:00");
+  const septemberInstallment = {
+    eventDate: "2026-08-19",
+    recordDate: "2026-08-19",
+    paymentDate: "2026-09-03",
+  };
+  const novemberInstallment = {
+    eventDate: "2026-08-19",
+    recordDate: "2026-08-19",
+    paymentDate: "2026-11-04",
+  };
+
+  assert.equal(getUpcomingDividendRelevantDate(septemberInstallment, afterRecordDate), "2026-09-03");
+  assert.equal(getUpcomingDividendRelevantDate(novemberInstallment, afterRecordDate), "2026-11-04");
+  assert.deepEqual(
+    getUpcomingDividendDatesForDisplay(septemberInstallment, afterRecordDate),
+    { exDividendDate: undefined, recordDate: undefined, paymentDate: "2026-09-03" }
+  );
+  assert.equal(
+    getUpcomingDividendRelevantDate(
+      { ...septemberInstallment, paymentDate: "2026-08-19" },
+      afterRecordDate
+    ),
+    undefined
+  );
+});
+
+test("corporate-event refresh preserves stored data on unavailable sources and has no dividend or cash mutation path", async () => {
+  const providerSource = await readFile(new URL("../src/lib/server/corporate-events.ts", import.meta.url), "utf8");
+  const routeSource = await readFile(new URL("../src/app/api/corporate-events/route.ts", import.meta.url), "utf8");
+
+  assert.match(providerSource, /for \(const result of successful\) \{\s*await upsertParsedEvents/s);
+  assert.doesNotMatch(providerSource, /buildDividendOperation|operationType:\s*["']DIVIDEND|calculateCashBalances/);
+  assert.doesNotMatch(routeSource, /buildDividendOperation|operationType:\s*["']DIVIDEND|calculateCashBalances/);
 });

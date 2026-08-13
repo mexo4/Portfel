@@ -67,6 +67,9 @@ export default function CorporateEventsPanel({ portfolioId }: CorporateEventsPan
   const allSourcesUnavailable =
     data?.sourceStates.length &&
     data.sourceStates.every((source) => isCorporateEventSourceUnavailable(source.status));
+  const reportEvents = (data?.events ?? []).filter(
+    (event) => event.eventType !== "UPCOMING_DIVIDEND"
+  );
 
   return (
     <section className="panel panel-compact corporate-events-panel" aria-busy={isLoading}>
@@ -87,7 +90,7 @@ export default function CorporateEventsPanel({ portfolioId }: CorporateEventsPan
         <p className="corporate-events-state">Ten portfel nie zawiera obecnie polskich akcji GPW.</p>
       ) : null}
 
-      {!isLoading && !hasError && data?.scope === "OK" && data.events.length === 0 ? (
+      {!isLoading && !hasError && data?.scope === "OK" && reportEvents.length === 0 ? (
         <p className="corporate-events-state">
           {allSourcesUnavailable
             ? "Źródła wydarzeń są chwilowo niedostępne. Zachowamy ostatnie potwierdzone terminy, gdy będą dostępne."
@@ -95,9 +98,9 @@ export default function CorporateEventsPanel({ portfolioId }: CorporateEventsPan
         </p>
       ) : null}
 
-      {data?.events.length ? (
+      {reportEvents.length ? (
         <div className="corporate-events-list" aria-label="Nadchodzące wydarzenia">
-          {data.events.map((event) => {
+          {reportEvents.map((event) => {
             const date = formatEventDateParts(event.eventDate);
             const isConfirmed = event.status === "CONFIRMED" || event.status === "CHANGED";
 

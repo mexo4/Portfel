@@ -328,6 +328,13 @@ const schemaStatements = [
       event_time TEXT,
       fiscal_period TEXT,
       fiscal_year INTEGER,
+      event_identity TEXT NOT NULL DEFAULT '',
+      dividend_per_share DOUBLE PRECISION,
+      dividend_currency TEXT,
+      ex_dividend_date TEXT,
+      record_date TEXT,
+      payment_date TEXT,
+      dividend_installment INTEGER,
       status TEXT NOT NULL,
       active BOOLEAN NOT NULL DEFAULT TRUE,
       source_published_at TEXT,
@@ -338,14 +345,24 @@ const schemaStatements = [
       FOREIGN KEY (instrument_id) REFERENCES corporate_event_instruments(id) ON DELETE CASCADE
     )
   `,
+  "ALTER TABLE corporate_events ADD COLUMN IF NOT EXISTS event_identity TEXT",
+  "ALTER TABLE corporate_events ADD COLUMN IF NOT EXISTS dividend_per_share DOUBLE PRECISION",
+  "ALTER TABLE corporate_events ADD COLUMN IF NOT EXISTS dividend_currency TEXT",
+  "ALTER TABLE corporate_events ADD COLUMN IF NOT EXISTS ex_dividend_date TEXT",
+  "ALTER TABLE corporate_events ADD COLUMN IF NOT EXISTS record_date TEXT",
+  "ALTER TABLE corporate_events ADD COLUMN IF NOT EXISTS payment_date TEXT",
+  "ALTER TABLE corporate_events ADD COLUMN IF NOT EXISTS dividend_installment INTEGER",
+  `
+    UPDATE corporate_events
+    SET event_identity = event_type || ':' || COALESCE(fiscal_period, '') || ':' || COALESCE(fiscal_year::TEXT, '')
+    WHERE event_identity IS NULL OR event_identity = ''
+  `,
+  "ALTER TABLE corporate_events ALTER COLUMN event_identity SET DEFAULT ''",
+  "ALTER TABLE corporate_events ALTER COLUMN event_identity SET NOT NULL",
+  "DROP INDEX IF EXISTS idx_corporate_events_active_identity",
   `
     CREATE UNIQUE INDEX IF NOT EXISTS idx_corporate_events_active_identity
-    ON corporate_events(
-      instrument_id,
-      event_type,
-      COALESCE(fiscal_period, ''),
-      COALESCE(fiscal_year, 0)
-    )
+    ON corporate_events(instrument_id, event_type, event_identity)
     WHERE active = TRUE
   `,
   "CREATE INDEX IF NOT EXISTS idx_corporate_events_date ON corporate_events(event_date) WHERE active = TRUE",

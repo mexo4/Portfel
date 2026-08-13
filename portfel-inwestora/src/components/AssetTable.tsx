@@ -342,7 +342,7 @@ const SortableGroupSection = ({
           ) : (
             <>
               <span className="financial-value">{currentUnitPriceLabel}</span>
-              <div className="table-note">wartosc pozycji: <span className="financial-value">{marketValueBaseLabel}</span></div>
+              <div className="table-note">Wartość: <span className="financial-value">{marketValueBaseLabel}</span></div>
             </>
           )}
         </td>

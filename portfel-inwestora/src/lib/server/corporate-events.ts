@@ -7,6 +7,7 @@ import {
   type CorporateEventStatus,
   type CorporateEventType,
   type CorporateEventsResponse,
+  getCorporateEventIdentityKey,
   isCorporateEventSourceUnavailable,
   parseCorporateEventDocument,
   type ParsedCorporateEvent,
@@ -44,6 +45,12 @@ type EventRow = {
   event_time: string | null;
   fiscal_period: string | null;
   fiscal_year: number | null;
+  dividend_per_share: number | null;
+  dividend_currency: string | null;
+  ex_dividend_date: string | null;
+  record_date: string | null;
+  payment_date: string | null;
+  dividend_installment: number | null;
   status: CorporateEventStatus;
   active: boolean;
   source_published_at: string | null;
@@ -112,6 +119,18 @@ const GPW_ISSUER_SOURCE_REGISTRY: Record<string, IssuerSource[]> = {
     {
       type: "ISSUER_CURRENT_REPORT",
       url: "https://grupadiagnostyka.pl/raporty-biezace/terminy-publikacji-raportow-okresowych-diagnostyka-s-a-w-2026-r/",
+    },
+  ],
+  KPL: [
+    {
+      type: "ISSUER_IR",
+      url: "https://relacjeinwestorskie.kinopolska.pl/kalendarium/",
+    },
+  ],
+  KTY: [
+    {
+      type: "ISSUER_CURRENT_REPORT",
+      url: "https://grupakety.com/raporty_biezace/uchwala-zwyczajnego-walnego-zgromadzenia-grupy-kety-s-a-w-sprawie-wyplaty-dywidendy-7/",
     },
   ],
 };
@@ -301,8 +320,9 @@ const defaultProviders: CorporateEventProvider[] = [
 const refreshInFlight = new Map<string, Promise<void>>();
 
 export const getGpwCorporateEventCanonicalKey = (instrument: GpwCorporateEventInstrumentInput) => {
-  const isin = instrument.isin?.trim().toUpperCase();
-  if (isin) return `gpw:isin:${isin}`;
+  // A GPW ticker is market-scoped by the eligibility check and is therefore a
+  // stable bridge between legacy/imported instruments that differ only in
+  // optional ISIN metadata. Never use a company name to join instruments.
   return `gpw:ticker:${getGpwTickerCore(instrument.symbol)}`;
 };
 
@@ -316,6 +336,43 @@ const getCanonicalInstrument = async (input: GpwCorporateEventInstrumentInput) =
   const ticker = getGpwTickerCore(input.symbol);
   const now = new Date().toISOString();
   const id = `corporate-event-instrument:${canonicalKey}`;
+
+  // Prefer a current ticker-keyed record, but reuse an older ISIN-keyed
+  // record for the same exchange ticker instead of creating a second refresh
+  // target. This is the bounded, market-scoped migration bridge for already
+  // stored Corporate Events; it never merges by issuer name.
+  const existing = await queryOne<CanonicalInstrument>(
+    `
+      SELECT id, canonical_key, ticker, company_name, isin, last_checked_at, last_source_status
+      FROM corporate_event_instruments
+      WHERE market = 'GPW' AND ticker = $1
+      ORDER BY CASE WHEN canonical_key = $2 THEN 0 ELSE 1 END, updated_at DESC
+      LIMIT 1
+    `,
+    [ticker, canonicalKey]
+  );
+
+  if (existing) {
+    await query(
+      `
+        UPDATE corporate_event_instruments
+        SET company_name = $1,
+            isin = COALESCE(isin, $2),
+            updated_at = $3
+        WHERE id = $4
+      `,
+      [input.name, input.isin?.trim().toUpperCase() || null, now, existing.id]
+    );
+
+    return queryOne<CanonicalInstrument>(
+      `
+        SELECT id, canonical_key, ticker, company_name, isin, last_checked_at, last_source_status
+        FROM corporate_event_instruments
+        WHERE id = $1
+      `,
+      [existing.id]
+    );
+  }
 
   await query(
     `
@@ -354,6 +411,13 @@ const isFreshCheck = (instrument: CanonicalInstrument) => {
 const toSourcePriority = (source: CorporateEventSourceReference, parsed: ParsedCorporateEvent) =>
   sourcePriority(source.sourceType, parsed.isScheduleChange);
 
+const getParsedEventStatus = (parsed: ParsedCorporateEvent): CorporateEventStatus =>
+  parsed.eventType === "UPCOMING_DIVIDEND"
+    ? parsed.dividendStatus ?? "UNKNOWN"
+    : parsed.isScheduleChange
+      ? "CHANGED"
+      : "CONFIRMED";
+
 const sourceTimestamp = (value: string | undefined | null) => {
   const timestamp = value ? Date.parse(value) : Number.NaN;
   return Number.isFinite(timestamp) ? timestamp : 0;
@@ -365,6 +429,9 @@ const shouldApplyEvent = (
   parsed: ParsedCorporateEvent
 ) => {
   if (!existing) return true;
+  if (existing.status === "CONFIRMED" && getParsedEventStatus(parsed) === "PROPOSED") {
+    return false;
+  }
   const incomingPriority = toSourcePriority(source, parsed);
   const incomingTimestamp = sourceTimestamp(source.sourcePublishedAt);
   const existingTimestamp = sourceTimestamp(existing.source_published_at);
@@ -391,6 +458,7 @@ const upsertParsedEvents = async (
   if (!result.source || result.events.length === 0) return;
 
   for (const parsed of result.events) {
+    const eventIdentity = getCorporateEventIdentityKey(parsed);
     const existing = (
       await transaction.query<ExistingEventRow>(
         `
@@ -398,12 +466,11 @@ const upsertParsedEvents = async (
           FROM corporate_events
           WHERE instrument_id = $1
             AND event_type = $2
-            AND COALESCE(fiscal_period, '') = COALESCE($3, '')
-            AND COALESCE(fiscal_year, 0) = COALESCE($4, 0)
+            AND event_identity = $3
             AND active = TRUE
           FOR UPDATE
         `,
-        [instrument.id, parsed.eventType, parsed.fiscalPeriod ?? null, parsed.fiscalYear ?? null]
+        [instrument.id, parsed.eventType, eventIdentity]
       )
     )[0];
     const now = new Date().toISOString();
@@ -416,9 +483,11 @@ const upsertParsedEvents = async (
         `
           INSERT INTO corporate_events (
             id, instrument_id, event_type, event_date, event_time, fiscal_period, fiscal_year,
-            status, active, source_published_at, source_type, source_priority, discovered_at, updated_at
+            event_identity, dividend_per_share, dividend_currency, ex_dividend_date, record_date,
+            payment_date, dividend_installment, status, active, source_published_at, source_type,
+            source_priority, discovered_at, updated_at
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, TRUE, $9, $10, $11, $12, $12)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, TRUE, $16, $17, $18, $19, $19)
         `,
         [
           eventId,
@@ -428,7 +497,14 @@ const upsertParsedEvents = async (
           parsed.eventTime ?? null,
           parsed.fiscalPeriod ?? null,
           parsed.fiscalYear ?? null,
-          parsed.isScheduleChange ? "CHANGED" : "CONFIRMED",
+          eventIdentity,
+          parsed.dividendPerShare ?? null,
+          parsed.dividendCurrency ?? null,
+          parsed.exDividendDate ?? null,
+          parsed.recordDate ?? null,
+          parsed.paymentDate ?? null,
+          parsed.dividendInstallment ?? null,
+          getParsedEventStatus(parsed),
           result.source.sourcePublishedAt ?? null,
           result.source.sourceType,
           toSourcePriority(result.source, parsed),
@@ -441,17 +517,29 @@ const upsertParsedEvents = async (
           UPDATE corporate_events
           SET event_date = $1,
               event_time = $2,
-              status = $3,
-              source_published_at = $4,
-              source_type = $5,
-              source_priority = $6,
-              updated_at = $7
-          WHERE id = $8
+              dividend_per_share = $3,
+              dividend_currency = $4,
+              ex_dividend_date = $5,
+              record_date = $6,
+              payment_date = $7,
+              dividend_installment = $8,
+              status = $9,
+              source_published_at = $10,
+              source_type = $11,
+              source_priority = $12,
+              updated_at = $13
+          WHERE id = $14
         `,
         [
           parsed.eventDate,
           parsed.eventTime ?? null,
-          parsed.isScheduleChange ? "CHANGED" : "CONFIRMED",
+          parsed.dividendPerShare ?? null,
+          parsed.dividendCurrency ?? null,
+          parsed.exDividendDate ?? null,
+          parsed.recordDate ?? null,
+          parsed.paymentDate ?? null,
+          parsed.dividendInstallment ?? null,
+          getParsedEventStatus(parsed),
           result.source.sourcePublishedAt ?? null,
           result.source.sourceType,
           toSourcePriority(result.source, parsed),
@@ -597,6 +685,12 @@ const toCorporateEvent = (row: EventRow): CorporateEvent => ({
   eventTime: row.event_time ?? undefined,
   fiscalPeriod: row.fiscal_period ?? undefined,
   fiscalYear: row.fiscal_year ?? undefined,
+  dividendPerShare: row.dividend_per_share ?? undefined,
+  dividendCurrency: row.dividend_currency ?? undefined,
+  exDividendDate: row.ex_dividend_date ?? undefined,
+  recordDate: row.record_date ?? undefined,
+  paymentDate: row.payment_date ?? undefined,
+  dividendInstallment: row.dividend_installment ?? undefined,
   status: row.status,
   active: row.active,
   sourcePublishedAt: row.source_published_at ?? undefined,
@@ -612,13 +706,20 @@ const toCorporateEvent = (row: EventRow): CorporateEvent => ({
       : undefined,
 });
 
-const getStoredEvents = async (instrumentIds: string[], fromDate: string, toDate: string) => {
+const getStoredEvents = async (
+  instrumentIds: string[],
+  fromDate: string,
+  toDate: string,
+  eventTypes?: CorporateEventType[]
+) => {
   if (instrumentIds.length === 0) return [];
   const rows = await query<EventRow>(
     `
       SELECT event.id, event.instrument_id, instrument.ticker, instrument.company_name,
              event.event_type, event.event_date, event.event_time, event.fiscal_period,
-             event.fiscal_year, event.status, event.active, event.source_published_at,
+             event.fiscal_year, event.dividend_per_share, event.dividend_currency,
+             event.ex_dividend_date, event.record_date, event.payment_date,
+             event.dividend_installment, event.status, event.active, event.source_published_at,
              event.discovered_at, event.updated_at,
              source.source_type, source.source_url,
              source.source_published_at AS source_source_published_at
@@ -633,11 +734,18 @@ const getStoredEvents = async (instrumentIds: string[], fromDate: string, toDate
       ) AS source ON TRUE
       WHERE event.instrument_id = ANY($1::text[])
         AND event.active = TRUE
-        AND event.event_date >= $2
-        AND event.event_date <= $3
+        AND ($4::text[] IS NULL OR event.event_type = ANY($4::text[]))
+        AND (
+          (event.event_date >= $2 AND event.event_date <= $3)
+          OR (
+            event.event_type = 'UPCOMING_DIVIDEND'
+            AND event.payment_date >= $2
+            AND event.payment_date <= $3
+          )
+        )
       ORDER BY event.event_date ASC, instrument.company_name ASC
     `,
-    [instrumentIds, fromDate, toDate]
+    [instrumentIds, fromDate, toDate, eventTypes ?? null]
   );
   return rows.map(toCorporateEvent);
 };
@@ -647,11 +755,13 @@ export const getCorporateEventsForGpwPortfolio = async ({
   fromDate,
   toDate,
   forceRefresh = false,
+  eventTypes,
 }: {
   instruments: GpwCorporateEventInstrumentInput[];
   fromDate: string;
   toDate: string;
   forceRefresh?: boolean;
+  eventTypes?: CorporateEventType[];
 }): Promise<CorporateEventsResponse> => {
   const gpwInstruments = instruments.filter(isGpwCorporateEventInstrument);
   if (gpwInstruments.length === 0) {
@@ -699,7 +809,8 @@ export const getCorporateEventsForGpwPortfolio = async ({
     events: await getStoredEvents(
       uniqueCanonical.map((instrument) => instrument.id),
       fromDate,
-      toDate
+      toDate,
+      eventTypes
     ),
     sourceStates: refreshedCanonical
       .filter((instrument): instrument is CanonicalInstrument => Boolean(instrument))

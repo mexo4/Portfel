@@ -5,6 +5,7 @@ import {
 } from "@/lib/server/corporate-events";
 import { getCurrentAccountData } from "@/lib/server/auth";
 import { ensurePortfolioCoreModel, getPortfolioInstrumentId } from "@/lib/operation-engine";
+import { getGpwTickerCore } from "@/lib/ticker";
 
 export const runtime = "nodejs";
 
@@ -61,6 +62,27 @@ export async function GET(request: Request) {
       return getGpwCorporateEventInputs(normalizedPortfolio.instruments ?? [], heldInstrumentIds);
     })
     .filter((instrument) => !requestedInstrumentId || instrument.id === requestedInstrumentId);
+  const heldQuantityByInstrumentId = portfolios.reduce((quantities, portfolio) => {
+    const normalizedPortfolio = ensurePortfolioCoreModel(portfolio);
+
+    for (const asset of normalizedPortfolio.assets) {
+      const instrumentId = getPortfolioInstrumentId(normalizedPortfolio.id, asset);
+      quantities.set(
+        instrumentId,
+        (quantities.get(instrumentId) ?? 0) + asset.quantity
+      );
+    }
+
+    return quantities;
+  }, new Map<string, number>());
+  const heldQuantityByGpwTicker = instruments.reduce((quantities, instrument) => {
+    const key = getGpwTickerCore(instrument.symbol);
+    quantities.set(
+      key,
+      (quantities.get(key) ?? 0) + (heldQuantityByInstrumentId.get(instrument.id) ?? 0)
+    );
+    return quantities;
+  }, new Map<string, number>());
   const fromDate = getWarsawDate();
   const days = getDays(searchParams.get("days"));
 
@@ -73,6 +95,10 @@ export async function GET(request: Request) {
 
     return NextResponse.json({
       ...result,
+      events: result.events.map((event) => ({
+        ...event,
+        heldQuantity: heldQuantityByGpwTicker.get(event.ticker) ?? 0,
+      })),
       portfolioId: isAggregateRequest ? "all" : portfolios[0]!.id,
       fromDate,
       toDate: addDays(fromDate, days),

@@ -31,17 +31,46 @@ test("clean dividend form requires explicit instrument and account selection", a
   assert.match(source, /<option value="">Wybierz konto<\/option>/);
 });
 
-test("average purchase and unit-price cells preserve normal monetary spacing", async () => {
+test("average purchase and unit-price cells inherit the same numeric rendering as dividends", async () => {
   const styles = await readSource("src/app/globals.css");
   const selector = styles.match(
     /\.portfolio-positions-table td:nth-child\(4\) \.financial-value,[\s\S]*?\.portfolio-positions-table td:nth-child\(5\) \.financial-value \{([\s\S]*?)\n\}/
   );
 
   assert.ok(selector);
+  assert.match(selector[1], /font-family:\s*var\(--font-sans\), sans-serif/);
+  assert.match(selector[1], /font-feature-settings:\s*normal/);
   assert.match(selector[1], /letter-spacing: normal/);
   assert.match(selector[1], /word-spacing: normal/);
-  assert.doesNotMatch(selector[1], /letter-spacing:\s*-/);
-  assert.doesNotMatch(selector[1], /word-spacing:\s*-/);
+  assert.doesNotMatch(selector[1], /"tnum"/);
+});
+
+test("current positions omit the quote column and keep desktop-sized column budgets", async () => {
+  const table = await readSource("src/components/AssetTable.tsx");
+  const styles = await readSource("src/app/globals.css");
+
+  assert.doesNotMatch(table, /<th>Notowanie<\/th>/);
+  assert.doesNotMatch(table, /portfolio-column-quote/);
+  assert.match(table, /colSpan=\{8\}/);
+  assert.match(styles, /\.portfolio-positions-table \{[\s\S]*?min-width:\s*1040px;/);
+  assert.doesNotMatch(styles, /\.portfolio-positions-table \.portfolio-column-quote/);
+  assert.match(
+    styles,
+    /@media \(min-width: 861px\) and \(max-width: 1419px\) \{[\s\S]*?\.portfolio-positions-table \{\s*min-width:\s*962px;/
+  );
+  assert.match(
+    styles,
+    /\.portfolio-positions-table th:nth-child\(2\),[\s\S]*?\.portfolio-positions-table td:nth-child\(2\) \{\s*display:\s*none;/
+  );
+});
+
+test("OpenFIGI transport retains TLS verification while including the system trust store", async () => {
+  const source = await readSource("src/lib/server/openfigi.ts");
+
+  assert.match(source, /getCACertificates\?\s*:/);
+  assert.match(source, /readCertificates\("system"\)/);
+  assert.match(source, /fetcher: FetchLike = fetchOpenFigiWithSystemTrust/);
+  assert.doesNotMatch(source, /rejectUnauthorized\s*:\s*false/);
 });
 
 test("a verified ETF can continue with its historical transaction price after quote failure", async () => {

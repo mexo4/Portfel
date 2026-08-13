@@ -30,7 +30,7 @@ import {
   hasAssetLivePrice,
   type PortfolioAssetGroup,
 } from "@/lib/pricing";
-import { formatCurrency, formatDate, formatDateTime, formatNumber } from "@/lib/utils";
+import { formatCurrency, formatDate, formatNumber } from "@/lib/utils";
 import type {
   AssetTableSortMode,
   CurrencyCode,
@@ -61,7 +61,6 @@ type SortableGroupSectionProps = {
   isExpanded: boolean;
   isManualSortMode: boolean;
   isManualReorderLocked: boolean;
-  isRefreshing: boolean;
   onToggleGroup: (groupKey: string) => void;
   onRemove: (assetId: string) => void;
 };
@@ -224,7 +223,6 @@ const SortableGroupSection = ({
   isExpanded,
   isManualSortMode,
   isManualReorderLocked,
-  isRefreshing,
   onToggleGroup,
   onRemove,
 }: SortableGroupSectionProps) => {
@@ -248,11 +246,6 @@ const SortableGroupSection = ({
   const marketValueBaseLabel = group.hasLivePrice
     ? formatCurrency(group.marketValueBase, baseCurrency)
     : "brak kursu";
-  const marketQuoteLabel = group.latestPriceDate
-    ? `cena z ${formatDate(group.latestPriceDate)}`
-    : group.latestPriceFetchedAt
-      ? `pobrano ${formatDateTime(group.latestPriceFetchedAt)}`
-      : "brak daty notowania";
   const style: CSSProperties = {
     transform: CSS.Transform.toString(transform),
     transition,
@@ -388,18 +381,6 @@ const SortableGroupSection = ({
           )}
         </td>
         <td>
-          {isDragging ? (
-            <DragRowPlaceholder />
-          ) : group.hasLivePrice ? (
-            <>
-              {marketQuoteLabel}
-              {isRefreshing ? <div className="table-note">aktualizowanie…</div> : null}
-            </>
-          ) : (
-            "brak"
-          )}
-        </td>
-        <td>
           {isDragging ? null : (
             <div className="table-actions">
               <button
@@ -419,7 +400,7 @@ const SortableGroupSection = ({
 
       {isExpanded && !isDragging ? (
         <tr className="portfolio-detail-row">
-          <td colSpan={9} className="portfolio-detail-cell">
+          <td colSpan={8} className="portfolio-detail-cell">
             <div className="lot-list">
               {group.lots.map((lot, index) => {
                 const lotProfitLoss = getAssetProfitLoss(lot, fxRates, baseCurrency);
@@ -503,7 +484,6 @@ export default function AssetTable({
   baseCurrency,
   filter,
   sortMode,
-  isRefreshing = false,
   onFilterChange,
   onSortModeChange,
   onReorderGroups,
@@ -637,7 +617,6 @@ export default function AssetTable({
               <col className="portfolio-column-unit-price" />
               <col className="portfolio-column-profit-loss" />
               <col className="portfolio-column-profit-percent" />
-              <col className="portfolio-column-quote" />
               <col className="portfolio-column-actions" />
             </colgroup>
             <thead>
@@ -649,7 +628,6 @@ export default function AssetTable({
                 <th>Kurs jednostkowy</th>
                 <th>P/L {baseCurrency}</th>
                 <th>Zysk %</th>
-                <th>Notowanie</th>
                 <th />
               </tr>
             </thead>
@@ -657,7 +635,7 @@ export default function AssetTable({
             {filteredGroups.length === 0 ? (
               <tbody>
                 <tr>
-                  <td className="empty-row" colSpan={9}>
+                  <td className="empty-row" colSpan={8}>
                     Brak pozycji. Dodaj pierwsze aktywo formularzem powyzej.
                   </td>
                 </tr>
@@ -676,7 +654,6 @@ export default function AssetTable({
                     isExpanded={Boolean(expandedGroups[group.key])}
                     isManualSortMode={isManualSortMode}
                     isManualReorderLocked={isManualReorderLocked}
-                    isRefreshing={isRefreshing}
                     onToggleGroup={toggleGroup}
                     onRemove={onRemove}
                   />

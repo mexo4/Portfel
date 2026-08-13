@@ -3693,7 +3693,11 @@ textarea {
  * so financial values are never clipped or allowed to overlap.
  */
 .portfolio-positions-table {
-  min-width: 1470px;
+  /* The application shell leaves roughly 1064px for content at a 1440px
+   * desktop viewport. The explicit column budgets below total 1040px, so the
+   * normal workspace keeps actions reachable without horizontal scrolling.
+   * Narrower viewports still use the existing scroll fallback. */
+  min-width: 1040px;
 }
 
 .portfolio-positions-table th:first-child,
@@ -3702,39 +3706,35 @@ textarea {
 }
 
 .portfolio-positions-table .portfolio-column-asset {
-  width: 250px;
+  width: 212px;
 }
 
 .portfolio-positions-table .portfolio-column-kind {
-  width: 86px;
+  width: 78px;
 }
 
 .portfolio-positions-table .portfolio-column-quantity {
-  width: 100px;
+  width: 82px;
 }
 
 .portfolio-positions-table .portfolio-column-average-price {
-  width: 182px;
+  width: 166px;
 }
 
 .portfolio-positions-table .portfolio-column-unit-price {
-  width: 192px;
+  width: 170px;
 }
 
 .portfolio-positions-table .portfolio-column-profit-loss {
-  width: 180px;
+  width: 158px;
 }
 
 .portfolio-positions-table .portfolio-column-profit-percent {
-  width: 118px;
-}
-
-.portfolio-positions-table .portfolio-column-quote {
-  width: 184px;
+  width: 88px;
 }
 
 .portfolio-positions-table .portfolio-column-actions {
-  width: 96px;
+  width: 86px;
 }
 
 .portfolio-positions-table th:nth-child(3),
@@ -3762,18 +3762,42 @@ textarea {
   white-space: nowrap;
 }
 
-/* These two cells are dense financial readouts, not labels. Manrope keeps
- * regular financial strings visually compact while tabular figures preserve
- * stable column alignment. The table's explicit width budgets continue to
- * handle narrow viewports instead of compressing separators or currencies. */
+/* Match the dividend table's inherited Manrope rendering: tabular figures
+ * are useful for alignment, but forcing low-level OpenType features here made
+ * these two values render differently from the rest of the product. */
 .portfolio-positions-table td:nth-child(4) .financial-value,
 .portfolio-positions-table td:nth-child(5) .financial-value {
   font-family: var(--font-sans), sans-serif;
-  font-feature-settings: "kern" 1, "tnum" 1;
   font-variant-numeric: tabular-nums;
-  font-kerning: normal;
+  font-feature-settings: normal;
+  font-kerning: auto;
   letter-spacing: normal;
   word-spacing: normal;
+}
+
+.portfolio-positions-table th,
+.portfolio-positions-table td {
+  padding-inline: 10px;
+}
+
+/* A 1366px desktop retains the sidebar and leaves about 990px inside the
+ * positions panel.  `Typ` is the only secondary column in this layout; hide
+ * it above the mobile breakpoint while retaining asset, quantity, both price
+ * readouts, P/L and the expand action in the initial frame. */
+@media (min-width: 861px) and (max-width: 1419px) {
+  .portfolio-positions-table {
+    min-width: 962px;
+  }
+
+  .portfolio-positions-table .portfolio-column-kind {
+    display: none;
+    width: 0;
+  }
+
+  .portfolio-positions-table th:nth-child(2),
+  .portfolio-positions-table td:nth-child(2) {
+    display: none;
+  }
 }
 
 .portfolio-table.import-preview-table {
@@ -5138,9 +5162,7 @@ textarea {
   }
 
   .portfolio-positions-table .portfolio-column-kind,
-  .portfolio-positions-table .portfolio-column-unit-price,
-  .portfolio-positions-table .portfolio-column-quote,
-  .portfolio-positions-table .portfolio-column-actions {
+  .portfolio-positions-table .portfolio-column-unit-price {
     display: none;
   }
 
@@ -5165,9 +5187,7 @@ textarea {
   .portfolio-table:not(.sprint-table):not(.import-preview-table) th:nth-child(5),
   .portfolio-table:not(.sprint-table):not(.import-preview-table) td:nth-child(5),
   .portfolio-table:not(.sprint-table):not(.import-preview-table) th:nth-child(7),
-  .portfolio-table:not(.sprint-table):not(.import-preview-table) td:nth-child(7),
-  .portfolio-table:not(.sprint-table):not(.import-preview-table) th:nth-child(8),
-  .portfolio-table:not(.sprint-table):not(.import-preview-table) td:nth-child(8) {
+  .portfolio-table:not(.sprint-table):not(.import-preview-table) td:nth-child(7) {
     display: none;
   }
 

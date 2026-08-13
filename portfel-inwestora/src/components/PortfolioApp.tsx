@@ -86,7 +86,7 @@ import {
   normalizeGpwSymbol,
   normalizeSymbol,
 } from "@/lib/ticker";
-import { ALL_PORTFOLIOS_ID } from "@/lib/portfolio-selection";
+import { ALL_PORTFOLIOS_ID, getWorkspaceReadHref } from "@/lib/portfolio-selection";
 import {
   getTodayDateInputValue,
   formatCurrency,
@@ -117,6 +117,7 @@ import type {
   EtfSearchGroup,
   FxRates,
   InvestmentPortfolio,
+  InstrumentIdentity,
   PortfolioAsset,
   PortfolioAccount,
   PortfolioBook,
@@ -249,6 +250,27 @@ const getResolvedResultSymbolForMode = (
 };
 const shouldRetryQuoteRequest = (mode: AssetSearchMode) => !isGpwMode(mode);
 const doesQuoteProviderRequireProviderId = (kind: AssetDraft["kind"]) => kind === "etf";
+
+/**
+ * ETF discovery and quote resolution are deliberately independent. A selected
+ * listing may be safe to save even when EODHD has no current quote yet, but a
+ * hand-entered bare ticker must not be promoted to an ETF identity.
+ */
+const hasStableEtfListingIdentity = (
+  identity: InstrumentIdentity | undefined,
+  marketCurrencyConfirmed: boolean | undefined
+) => {
+  if (!identity?.ticker || !identity.name || identity.instrumentType !== "ETF") {
+    return false;
+  }
+
+  if (identity.figi) {
+    return true;
+  }
+
+  const hasVenue = Boolean(identity.exchangeCode || identity.exchange || identity.mic);
+  return hasVenue && Boolean(identity.currency || marketCurrencyConfirmed);
+};
 
 const getDraftQuotePreviewRequest = (draft: AssetDraft, mode: AssetSearchMode) => {
   const normalizedSymbol = normalizeSymbolForMode(draft.symbol, mode);
@@ -927,6 +949,7 @@ export default function PortfolioApp({
   const hasSavedProfileRef = useRef(false);
   const quoteRefreshSeqRef = useRef({ all: 0, crypto: 0 });
   const quoteRefreshPendingRef = useRef(0);
+  const quoteRefreshInFlightRef = useRef<Promise<void> | null>(null);
   const quoteRequestSeqRef = useRef(0);
   const lastPreviewRequestKeyRef = useRef("");
   const isManualSymbolRef = useRef(false);
@@ -1991,116 +2014,164 @@ export default function PortfolioApp({
 
   const syncQuotes = useCallback(async (
     scope: "all" | "crypto" = "all",
-    options: { excludeCrypto?: boolean } = {}
+    options: { excludeCrypto?: boolean; background?: boolean } = {}
   ) => {
-    const now = new Date().toISOString();
-    const activeWorkspace = workspaceRef.current;
-    const currentPortfolios = portfoliosRef.current.map((portfolio) =>
-      portfolio.id === activePortfolioIdRef.current
-        ? {
-            ...portfolio,
-            assets: normalizeStoredPortfolioAssets(activeWorkspace.assets),
-            sales: getSortedPortfolioSales(activeWorkspace.sales),
-            realizedAdjustments: getSortedPortfolioRealizedAdjustments(
-              activeWorkspace.realizedAdjustments
-            ),
-            updatedAt: now,
-          }
-        : portfolio
-    );
-    const allAssets = currentPortfolios.flatMap((portfolio) => portfolio.assets);
-    const assetsToRefresh =
-      scope === "crypto"
-        ? allAssets.filter((asset) => asset.kind === "crypto")
-        : options.excludeCrypto
-          ? allAssets.filter((asset) => asset.kind !== "crypto")
-          : allAssets;
-
-    if (assetsToRefresh.length === 0) return;
-
-    const refreshSeq = ++quoteRefreshSeqRef.current[scope];
-    quoteRefreshPendingRef.current += 1;
-    setIsRefreshing(true);
-
-    try {
-      const quoteRefresh = await refreshPortfolioQuotesWithProgress(assetsToRefresh);
-      const refreshedAssets = quoteRefresh.assets;
-
-      if (refreshSeq !== quoteRefreshSeqRef.current[scope]) {
+    // Timers must not start a second refresh while provider calls from the
+    // previous cycle are still pending. A manual refresh waits for it, then
+    // performs its own complete pass; a scheduled refresh simply skips this
+    // tick and keeps the existing last-known-good prices visible.
+    const inFlightRefresh = quoteRefreshInFlightRef.current;
+    if (inFlightRefresh) {
+      if (options.background) {
         return;
       }
 
-      const refreshedById = new Map(refreshedAssets.map((asset) => [asset.id, asset]));
-      const applyRefreshedAssets = (portfolioAssets: PortfolioAsset[]) =>
-        normalizeStoredPortfolioAssets(
-          portfolioAssets.map((asset) => {
-            const refreshed = refreshedById.get(asset.id);
-            if (!refreshed) return asset;
+      await inFlightRefresh;
+    }
 
-            return applyRefreshedPortfolioAssetSnapshot(asset, refreshed);
-          })
-        );
-
-      const latestWorkspace = workspaceRef.current;
-      const latestActivePortfolioId = activePortfolioIdRef.current;
-      const latestPortfolios = portfoliosRef.current.map((portfolio) =>
-        portfolio.id === latestActivePortfolioId
+    const refresh = (async () => {
+      const now = new Date().toISOString();
+      const activeWorkspace = workspaceRef.current;
+      const activePortfolioId = activePortfolioIdRef.current;
+      const currentPortfolios = portfoliosRef.current.map((portfolio) =>
+        portfolio.id === activePortfolioId
           ? {
               ...portfolio,
-              assets: normalizeStoredPortfolioAssets(latestWorkspace.assets),
-              sales: getSortedPortfolioSales(latestWorkspace.sales),
-              realizedAdjustments: getSortedPortfolioRealizedAdjustments(
-                latestWorkspace.realizedAdjustments
-              ),
+              assets: activeWorkspace.assets,
+              sales: activeWorkspace.sales,
+              realizedAdjustments: activeWorkspace.realizedAdjustments,
             }
           : portfolio
       );
-      const nextPortfolios = latestPortfolios.map((portfolio) => ({
-        ...portfolio,
-        assets: applyRefreshedAssets(portfolio.assets),
-        updatedAt: now,
-      }));
-      const refreshedActiveAssets =
-        nextPortfolios.find((portfolio) => portfolio.id === latestActivePortfolioId)
-          ?.assets ?? latestWorkspace.assets;
+      // The background task updates only the currently visible portfolio.
+      // Other portfolios keep their persisted last-known-good snapshots until
+      // the user opens them. The virtual all-portfolios read model is the one
+      // intentional exception, because it displays every position together.
+      const visiblePortfolios = isAllPortfoliosSelected
+        ? currentPortfolios
+        : currentPortfolios.filter((portfolio) => portfolio.id === activePortfolioId);
+      const visibleAssets = visiblePortfolios.flatMap((portfolio) => portfolio.assets);
+      const assetsToRefresh =
+        scope === "crypto"
+          ? visibleAssets.filter((asset) => asset.kind === "crypto")
+          : options.excludeCrypto
+            ? visibleAssets.filter((asset) => asset.kind !== "crypto")
+            : visibleAssets;
 
-      const refreshedBook: PortfolioBook = {
-        schemaVersion: 2,
-        portfolios: nextPortfolios,
-        activePortfolioId: latestActivePortfolioId,
-      };
-      portfoliosRef.current = nextPortfolios;
-      replaceWorkspace({
-        ...latestWorkspace,
-        assets: refreshedActiveAssets,
-      });
-      setPortfolios(nextPortfolios);
-      quoteOnlyPortfolioFingerprintRef.current = getPortfolioSaveFingerprint(refreshedBook);
-      // Keep a durable last-known-good quote without rewriting the entire
-      // portfolio book or synchronising all operations after every refresh.
-      void savePortfolioQuoteSnapshots(
-        getQuoteSnapshotPayload(nextPortfolios, new Set(refreshedAssets.map((asset) => asset.id)))
-      ).catch(() => undefined);
+      if (assetsToRefresh.length === 0) return;
 
-      if (refreshSeq === quoteRefreshSeqRef.current[scope]) {
-        setLastSyncAt(new Date().toISOString());
-        setSyncError(
-          quoteRefresh.missing > 0
-            ? `Nie udalo sie odswiezyc kursu dla ${quoteRefresh.missing} pozycji. Pokazujemy ostatni poprawny kurs.`
-            : null
+      const refreshSeq = ++quoteRefreshSeqRef.current[scope];
+      quoteRefreshPendingRef.current += 1;
+      setIsRefreshing(true);
+
+      try {
+        const quoteRefresh = await refreshPortfolioQuotesWithProgress(assetsToRefresh);
+        const refreshedAssets = quoteRefresh.assets;
+
+        if (refreshSeq !== quoteRefreshSeqRef.current[scope]) {
+          return;
+        }
+
+        const refreshedById = new Map(refreshedAssets.map((asset) => [asset.id, asset]));
+        const changedAssetIds = new Set<string>();
+        const applyRefreshedAssets = (portfolioAssets: PortfolioAsset[]) => {
+          let hasChanges = false;
+          const nextAssets = portfolioAssets.map((asset) => {
+            const refreshed = refreshedById.get(asset.id);
+            if (!refreshed) return asset;
+
+            const nextAsset = applyRefreshedPortfolioAssetSnapshot(asset, refreshed);
+            if (nextAsset !== asset) {
+              hasChanges = true;
+              changedAssetIds.add(asset.id);
+            }
+
+            return nextAsset;
+          });
+
+          return hasChanges ? nextAssets : portfolioAssets;
+        };
+
+        const latestWorkspace = workspaceRef.current;
+        const latestActivePortfolioId = activePortfolioIdRef.current;
+        const latestPortfolios = portfoliosRef.current.map((portfolio) =>
+          portfolio.id === latestActivePortfolioId
+            ? {
+                ...portfolio,
+                assets: latestWorkspace.assets,
+                sales: latestWorkspace.sales,
+                realizedAdjustments: latestWorkspace.realizedAdjustments,
+              }
+            : portfolio
         );
+        let hasQuoteChanges = false;
+        const nextPortfolios = latestPortfolios.map((portfolio) => {
+          const nextAssets = applyRefreshedAssets(portfolio.assets);
+          if (nextAssets === portfolio.assets) {
+            return portfolio;
+          }
+
+          hasQuoteChanges = true;
+          return {
+            ...portfolio,
+            assets: nextAssets,
+            updatedAt: now,
+          };
+        });
+
+        if (hasQuoteChanges) {
+          const refreshedActiveAssets =
+            nextPortfolios.find((portfolio) => portfolio.id === latestActivePortfolioId)
+              ?.assets ?? latestWorkspace.assets;
+          const refreshedBook: PortfolioBook = {
+            schemaVersion: 2,
+            portfolios: nextPortfolios,
+            activePortfolioId: latestActivePortfolioId,
+          };
+          portfoliosRef.current = nextPortfolios;
+          replaceWorkspace({
+            ...latestWorkspace,
+            assets: refreshedActiveAssets,
+          });
+          setPortfolios(nextPortfolios);
+          quoteOnlyPortfolioFingerprintRef.current = getPortfolioSaveFingerprint(refreshedBook);
+          // Persist only market snapshots whose market quote actually changed.
+          // This avoids a database write and a full React tree update for a
+          // provider response that repeats the last valid quote.
+          void savePortfolioQuoteSnapshots(
+            getQuoteSnapshotPayload(nextPortfolios, changedAssetIds)
+          ).catch(() => undefined);
+        }
+
+        if (refreshSeq === quoteRefreshSeqRef.current[scope]) {
+          setLastSyncAt(new Date().toISOString());
+          setSyncError(
+            quoteRefresh.missing > 0
+              ? `Nie udalo sie odswiezyc kursu dla ${quoteRefresh.missing} pozycji. Pokazujemy ostatni poprawny kurs.`
+              : null
+          );
+        }
+      } catch (error) {
+        if (refreshSeq === quoteRefreshSeqRef.current[scope]) {
+          setSyncError(toErrorMessage(error, "Nie udalo sie odswiezyc cen aktywow."));
+        }
+      } finally {
+        quoteRefreshPendingRef.current = Math.max(0, quoteRefreshPendingRef.current - 1);
+        if (quoteRefreshPendingRef.current === 0) {
+          setIsRefreshing(false);
+        }
       }
-    } catch (error) {
-      if (refreshSeq === quoteRefreshSeqRef.current[scope]) {
-        setSyncError(toErrorMessage(error, "Nie udalo sie odswiezyc cen aktywow."));
-      }
+    })();
+
+    quoteRefreshInFlightRef.current = refresh;
+    try {
+      await refresh;
     } finally {
-      quoteRefreshPendingRef.current = Math.max(0, quoteRefreshPendingRef.current - 1);
-      if (quoteRefreshPendingRef.current === 0) {
-        setIsRefreshing(false);
+      if (quoteRefreshInFlightRef.current === refresh) {
+        quoteRefreshInFlightRef.current = null;
       }
     }
-  }, [replaceWorkspace]);
+  }, [isAllPortfoliosSelected, replaceWorkspace]);
 
   const handleRefreshPortfolioData = async () => {
     setIsRefreshing(true);
@@ -2130,25 +2201,29 @@ export default function PortfolioApp({
     // Crypto has its own, shorter refresh cadence below. Keeping scheduled
     // refreshes disjoint avoids fetching and persisting the same crypto quote
     // twice every 30 seconds while preserving a full manual refresh.
-    void syncQuotes("all", { excludeCrypto: true });
+    void syncQuotes("all", { excludeCrypto: true, background: true });
 
     const intervalId = window.setInterval(() => {
-      void syncQuotes("all", { excludeCrypto: true });
+      void syncQuotes("all", { excludeCrypto: true, background: true });
     }, AUTO_REFRESH_INTERVAL_MS);
 
     return () => window.clearInterval(intervalId);
   }, [activePortfolioId, assets.length, syncQuotes]);
 
   const hasCryptoAssets = useMemo(
-    () => portfolios.some((portfolio) => portfolio.assets.some((asset) => asset.kind === "crypto")),
-    [portfolios]
+    () =>
+      (isAllPortfoliosSelected
+        ? portfolios
+        : portfolios.filter((portfolio) => portfolio.id === activePortfolioId)
+      ).some((portfolio) => portfolio.assets.some((asset) => asset.kind === "crypto")),
+    [activePortfolioId, isAllPortfoliosSelected, portfolios]
   );
 
   useEffect(() => {
     if (!hasCryptoAssets) return;
 
     const intervalId = window.setInterval(() => {
-      void syncQuotes("crypto");
+      void syncQuotes("crypto", { background: true });
     }, CRYPTO_AUTO_REFRESH_INTERVAL_MS);
 
     return () => window.clearInterval(intervalId);
@@ -2510,6 +2585,7 @@ export default function PortfolioApp({
       provider: result.provider,
       providerId: result.providerId,
       priceScale: result.priceScale,
+      issuerCountry: result.issuerCountry,
       instrumentIdentity: selectedEtf?.instrumentIdentity,
       marketCurrencyConfirmed: Boolean(selectedEtf?.instrumentIdentity.currency),
       latestPrice: undefined,
@@ -3020,23 +3096,17 @@ export default function PortfolioApp({
       return;
     }
 
-    if (draft.kind === "etf" && !draft.instrumentIdentity) {
-      setSearchError("Wybierz konkretny listing ETF z wynikow wyszukiwania.");
-      return;
-    }
-
     if (
       draft.kind === "etf" &&
-      !draft.instrumentIdentity?.currency &&
-      !draft.marketCurrencyConfirmed
+      !hasStableEtfListingIdentity(draft.instrumentIdentity, draft.marketCurrencyConfirmed)
     ) {
       setSearchError(
-        "Potwierdz walute instrumentu przed dodaniem ETF. OpenFIGI nie zwrocil tej informacji dla wybranego listingu."
+        "Wybierz konkretny, zweryfikowany listing ETF z wynikow wyszukiwania."
       );
       return;
     }
 
-    if (isQuoteLoading) {
+    if (isQuoteLoading && draft.kind !== "etf") {
       setQuoteError("Poczekaj na pobranie kursu przed dodaniem pozycji.");
       return;
     }
@@ -3114,6 +3184,7 @@ export default function PortfolioApp({
       provider: quote?.provider ?? draft.provider,
       providerId: quote?.providerId ?? draft.providerId,
       priceScale: quote?.priceScale ?? draft.priceScale,
+      issuerCountry: draft.issuerCountry,
       instrumentIdentity: draft.instrumentIdentity,
       latestPrice: quote?.price,
       latestPriceDate: quote?.priceDate,
@@ -3137,6 +3208,7 @@ export default function PortfolioApp({
       provider: quote?.provider ?? draft.provider,
       providerId: quote?.providerId ?? draft.providerId,
       priceScale: quote?.priceScale ?? draft.priceScale,
+      issuerCountry: draft.issuerCountry,
       instrumentIdentity: draft.instrumentIdentity,
       source: "catalog",
     });
@@ -4263,7 +4335,7 @@ export default function PortfolioApp({
 
   const assetEntryWorkspace = <>
     <section className="panel panel-compact workspace-entry-head"><div><p className="eyebrow">Nowa operacja</p><h2 className="section-title">Dodaj instrument</h2><p className="section-copy">Wybierz klasę aktywa i dodaj zakup lub sprzedaż do aktywnego portfela.</p></div><AssetModeSelector value={entryMode} onChange={handleEntryModeChange} /></section>
-    {entryMode === "bond" ? <TreasuryBondForm draft={bondDraft} series={bondSeries} quote={bondQuote} redemptionPreview={bondRedemptionPreview} swapPreview={bondSwapPreview} isLoadingSeries={isBondLoading} isLoadingRedemption={isBondRedemptionLoading} isLoadingSwap={isBondSwapLoading} error={bondError} redemptionError={bondRedemptionError} swapError={bondSwapError} onChange={(nextDraft) => { setBondDraft(nextDraft); resetBondInteractionState(); }} onCodeChange={(code) => { setBondDraft((currentDraft) => ({ ...currentDraft, code: normalizeTreasuryBondCode(code) })); setBondError(null); resetBondInteractionState(); }} onBuySubmit={() => { void handleAddBondAsset(); }} onSellSubmit={() => { void handleSellBondAsset(); }} onRedeemSubmit={() => { void handleRedeemBondAsset(); }} onSwapSubmit={() => { void handleSwapBondAsset(); }} /> : <AddAssetForm showModeSelector={false} searchMode={searchMode} draft={draft} results={results} etfResultGroups={etfResultGroups} lastAddedResult={lastAddedResult} isSearching={isSearching} isQuoteLoading={isQuoteLoading} searchError={searchError} quoteError={quoteError} onDraftChange={setDraft} onSearchModeChange={handleSearchModeChange} onQueryChange={(query) => { const trimmedQuery = query.trim(); const minimumSearchLength = getMinimumSearchLength(searchMode); quoteRequestSeqRef.current += 1; lastPreviewRequestKeyRef.current = ""; isManualSymbolRef.current = false; setIsSearching(trimmedQuery.length >= minimumSearchLength); setIsQuoteLoading(false); setResults([]); setEtfResultGroups([]); setSearchError(null); setQuoteError(null); setDraft((currentDraft) => ({ ...currentDraft, query, name: query, symbol: "", providerId: undefined, priceScale: undefined, instrumentIdentity: undefined, marketCurrencyConfirmed: undefined, latestPrice: undefined, latestPriceDate: undefined, previousClose: undefined })); }} onSymbolChange={(symbol) => { quoteRequestSeqRef.current += 1; lastPreviewRequestKeyRef.current = ""; isManualSymbolRef.current = true; setIsSearching(false); setIsQuoteLoading(false); setResults([]); setEtfResultGroups([]); setSearchError(null); setQuoteError(null); setDraft((currentDraft) => ({ ...currentDraft, symbol: symbol.toUpperCase(), query: "", name: "", providerId: undefined, priceScale: undefined, instrumentIdentity: undefined, marketCurrencyConfirmed: undefined, latestPrice: undefined, latestPriceDate: undefined, previousClose: undefined })); }} onPickResult={(result) => { void handlePickResult(result); }} onReuseLastAddedResult={(result) => { void handlePickResult(result); }} onBuySubmit={() => { void handleAddAsset(); }} onSellSubmit={() => { void handleSellAsset(); }} />}
+    {entryMode === "bond" ? <TreasuryBondForm draft={bondDraft} series={bondSeries} quote={bondQuote} redemptionPreview={bondRedemptionPreview} swapPreview={bondSwapPreview} isLoadingSeries={isBondLoading} isLoadingRedemption={isBondRedemptionLoading} isLoadingSwap={isBondSwapLoading} error={bondError} redemptionError={bondRedemptionError} swapError={bondSwapError} onChange={(nextDraft) => { setBondDraft(nextDraft); resetBondInteractionState(); }} onCodeChange={(code) => { setBondDraft((currentDraft) => ({ ...currentDraft, code: normalizeTreasuryBondCode(code) })); setBondError(null); resetBondInteractionState(); }} onBuySubmit={() => { void handleAddBondAsset(); }} onSellSubmit={() => { void handleSellBondAsset(); }} onRedeemSubmit={() => { void handleRedeemBondAsset(); }} onSwapSubmit={() => { void handleSwapBondAsset(); }} /> : <AddAssetForm showModeSelector={false} searchMode={searchMode} draft={draft} results={results} etfResultGroups={etfResultGroups} lastAddedResult={lastAddedResult} isSearching={isSearching} isQuoteLoading={isQuoteLoading} searchError={searchError} quoteError={quoteError} onDraftChange={setDraft} onSearchModeChange={handleSearchModeChange} onQueryChange={(query) => { const trimmedQuery = query.trim(); const minimumSearchLength = getMinimumSearchLength(searchMode); quoteRequestSeqRef.current += 1; lastPreviewRequestKeyRef.current = ""; isManualSymbolRef.current = false; setIsSearching(trimmedQuery.length >= minimumSearchLength); setIsQuoteLoading(false); setResults([]); setEtfResultGroups([]); setSearchError(null); setQuoteError(null); setDraft((currentDraft) => ({ ...currentDraft, query, name: query, symbol: "", providerId: undefined, priceScale: undefined, issuerCountry: undefined, instrumentIdentity: undefined, marketCurrencyConfirmed: undefined, latestPrice: undefined, latestPriceDate: undefined, previousClose: undefined })); }} onSymbolChange={(symbol) => { quoteRequestSeqRef.current += 1; lastPreviewRequestKeyRef.current = ""; isManualSymbolRef.current = true; setIsSearching(false); setIsQuoteLoading(false); setResults([]); setEtfResultGroups([]); setSearchError(null); setQuoteError(null); setDraft((currentDraft) => ({ ...currentDraft, symbol: symbol.toUpperCase(), query: "", name: "", providerId: undefined, priceScale: undefined, issuerCountry: undefined, instrumentIdentity: undefined, marketCurrencyConfirmed: undefined, latestPrice: undefined, latestPriceDate: undefined, previousClose: undefined })); }} onPickResult={(result) => { void handlePickResult(result); }} onReuseLastAddedResult={(result) => { void handlePickResult(result); }} onBuySubmit={() => { void handleAddAsset(); }} onSellSubmit={() => { void handleSellAsset(); }} />}
   </>;
 
   const portfolioManagement = <section className="panel portfolio-hub-panel workspace-portfolio-manager" aria-busy={isSavingPortfolio || isPortfolioMutationPending}><div className="portfolio-hub-head"><div><p className="eyebrow">Portfele</p><h2 className="section-title">Zarządzaj przestrzenią inwestycji</h2><p className="section-copy">Portfele są niezależnymi rachunkami. Aktywny wybierzesz także w górnym pasku.</p></div><div className="portfolio-hub-actions"><button className="ghost-button" type="button" onClick={handleRenamePortfolio} disabled={isPortfolioMutationPending}>Zmień nazwę</button><button className="ghost-button admin-danger-button" type="button" onClick={() => { void handleDeletePortfolio(); }} disabled={portfolios.length <= 1 || isPortfolioMutationPending}>{isPortfolioMutationPending ? "Zapisywanie…" : "Usuń portfel"}</button><button className="primary-button" type="button" onClick={() => { void handleCreatePortfolio(); }} disabled={isPortfolioMutationPending}>{isPortfolioMutationPending ? "Zapisywanie…" : "Dodaj portfel"}</button></div></div><div className="portfolio-card-grid mt-5">{portfolioSummaries.map(({ portfolio, summary: portfolioSummary }) => { const isActive = portfolio.id === activePortfolioId; return <button key={portfolio.id} type="button" className={`portfolio-switch-card${isActive ? " is-active" : ""}`} onClick={() => { void handleSelectPortfolio(portfolio.id); }} disabled={isPortfolioMutationPending} aria-pressed={isActive}><span>{isActive ? "Aktywny portfel" : "Przełącz"}</span><strong>{portfolio.name}</strong><div><span>{formatCurrency(portfolioSummary.totalValue, portfolioSummary.currency)}</span><span className={portfolioSummary.combinedProfitLoss >= 0 ? "tone-positive" : "tone-negative"}>{formatCurrency(portfolioSummary.combinedProfitLoss, portfolioSummary.currency)}</span></div><small>{portfolioSummary.currency} · {portfolioSummary.positionsCount} pozycji / {portfolioSummary.salesCount} sprzedaży</small></button>; })}</div></section>;
@@ -4278,6 +4350,7 @@ export default function PortfolioApp({
     account, isAdmin, portfolios, activePortfolio, activePortfolioId, selectedPortfolioId, isAllPortfoliosSelected, activeBaseCurrency, isPortfolioMutationPending, isLoggingOut,
     onPortfolioChange: (portfolioId) => { void handleSelectPortfolio(portfolioId); },
     onBaseCurrencyChange: (currency) => { void handleBaseCurrencyChange(currency); },
+    getReadHref: (href) => getWorkspaceReadHref(href, selectedPortfolioId, activeBaseCurrency),
     onQuickAdd: () => { if (requireConcretePortfolioSelection()) router.push("/portfolio/positions?add=asset"); else router.push("/portfolios"); },
     onLogout: () => { void handleLogout(); },
     displayedSyncError, assets: displayedAssets, sales: displayedSales, realizedAdjustments: displayedRealizedAdjustments, effectiveRealizedAdjustments, fxRates, groupedAssets, filter, assetSortMode, isRefreshing,

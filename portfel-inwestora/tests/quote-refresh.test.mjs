@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   applyRefreshedPortfolioAssetSnapshot,
   fetchFxRates,
+  hasSameStoredQuoteSnapshot,
   mergeQuoteIntoPortfolioAsset,
   refreshPortfolioQuotesWithProgress,
 } from "../src/lib/api.ts";
@@ -156,6 +157,41 @@ test("keeps the last known good price through malformed refreshes and stale resp
     lastUpdatedAt: "2026-08-10T12:20:00.000Z",
   });
   assert.deepEqual(olderMarketQuoteArrivingLater, newer);
+});
+
+test("does not replace an unchanged quote only because it was fetched again", () => {
+  const current = {
+    id: "btc",
+    kind: "crypto",
+    symbol: "BTC",
+    name: "Bitcoin",
+    marketCurrency: "USD",
+    provider: "binance",
+    providerId: "bitcoin",
+    latestPrice: 63897.6,
+    latestPriceDate: "2026-08-12",
+    latestPriceFetchedAt: "2026-08-12T12:00:00.000Z",
+    lastUpdatedAt: "2026-08-12T12:00:00.000Z",
+  };
+
+  const repeated = applyRefreshedPortfolioAssetSnapshot(current, {
+    ...current,
+    latestPriceFetchedAt: "2026-08-12T12:00:15.000Z",
+    lastUpdatedAt: "2026-08-12T12:00:15.000Z",
+  });
+
+  assert.equal(repeated, current);
+  assert.equal(hasSameStoredQuoteSnapshot(current, repeated), true);
+
+  const newerMarketQuote = applyRefreshedPortfolioAssetSnapshot(current, {
+    ...current,
+    latestPriceMarketTimestamp: "2026-08-12T12:00:14.000Z",
+    latestPriceFetchedAt: "2026-08-12T12:00:15.000Z",
+    lastUpdatedAt: "2026-08-12T12:00:15.000Z",
+  });
+
+  assert.notEqual(newerMarketQuote, current);
+  assert.equal(newerMarketQuote.latestPriceMarketTimestamp, "2026-08-12T12:00:14.000Z");
 });
 
 test("uses Binance latest price with its quote timestamp for crypto, never previous close", async () => {

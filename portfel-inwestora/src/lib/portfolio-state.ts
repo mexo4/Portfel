@@ -348,6 +348,10 @@ export const normalizeStoredPortfolioAssets = (assets: PortfolioAsset[]) => {
         asset.marketCurrency,
         asset.kind === "stock" || asset.kind === "bond" ? "PLN" : "USD"
       );
+      const issuerCountry =
+        typeof asset.issuerCountry === "string" && asset.issuerCountry.trim()
+          ? asset.issuerCountry.trim().slice(0, 80)
+          : undefined;
       const instrumentIdentity =
         asset.kind === "etf"
           ? normalizeEtfInstrumentIdentity(asset.instrumentIdentity, {
@@ -366,6 +370,7 @@ export const normalizeStoredPortfolioAssets = (assets: PortfolioAsset[]) => {
           normalizePortfolioProviderId(asset.providerId, asset.kind) ??
           (instrumentIdentity ? undefined : getFallbackProviderId(asset.kind, provider, symbol)),
         instrumentIdentity,
+        issuerCountry,
         quantity: round(asset.quantity, 6),
         feePln: hasFiniteNumber(asset.feePln) ? round(asset.feePln, 6) : 0,
         purchaseDate: toDateInputValue(asset.purchaseDate, getTodayDateInputValue()),
@@ -646,6 +651,10 @@ const normalizePortfolioAsset = (
     kind === "stock" || kind === "bond" ? "PLN" : "USD"
   );
   const name = typeof asset.name === "string" && asset.name ? asset.name : symbol;
+  const issuerCountry =
+    typeof asset.issuerCountry === "string" && asset.issuerCountry.trim()
+      ? asset.issuerCountry.trim().slice(0, 80)
+      : undefined;
   const instrumentIdentity =
     kind === "etf"
       ? normalizeEtfInstrumentIdentity(asset.instrumentIdentity, {
@@ -690,6 +699,7 @@ const normalizePortfolioAsset = (
       hasFiniteNumber(asset.priceScale) && asset.priceScale > 0
         ? asset.priceScale
         : undefined,
+    issuerCountry,
     instrumentIdentity,
     latestPrice:
       hasFiniteNumber(asset.latestPrice) && asset.latestPrice > 0

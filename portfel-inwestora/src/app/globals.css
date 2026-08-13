@@ -3731,6 +3731,18 @@ textarea {
   font-variant-numeric: tabular-nums;
 }
 
+/* Monetary values are plain inline text, never flex-distributed number and
+ * currency fragments. This keeps long PLN/USD/EUR values compact without
+ * weakening the explicit column budgets above. */
+.portfolio-positions-table .financial-value {
+  display: inline;
+  font-variant-numeric: tabular-nums;
+  font-kerning: normal;
+  letter-spacing: normal;
+  word-spacing: normal;
+  white-space: nowrap;
+}
+
 .portfolio-table.import-preview-table {
   table-layout: auto;
 }
@@ -5887,6 +5899,63 @@ textarea {
   gap: 8px;
 }
 
+.line-visual-presentation-toggle {
+  display: inline-flex;
+  min-height: 40px;
+  overflow: hidden;
+  border: 1px solid rgba(15, 118, 110, 0.22);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.78);
+}
+
+.line-visual-presentation-toggle button {
+  min-height: 38px;
+  border: 0;
+  padding: 0 12px;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 750;
+  background: transparent;
+  cursor: pointer;
+}
+
+.line-visual-presentation-toggle button.is-active {
+  color: #0d5550;
+  background: rgba(218, 245, 238, 0.94);
+}
+
+.line-visual-presentation-toggle button:focus-visible {
+  position: relative;
+  outline: 2px solid rgba(15, 118, 110, 0.55);
+  outline-offset: -2px;
+}
+
+.line-visual-candle-unavailable {
+  display: grid;
+  place-content: center;
+  min-height: inherit;
+  height: 100%;
+  gap: 12px;
+  padding: 28px;
+  text-align: center;
+  color: var(--muted);
+}
+
+.line-visual-candle-unavailable strong {
+  color: var(--text);
+  font-size: 1rem;
+}
+
+.line-visual-candle-unavailable span {
+  max-width: 560px;
+  line-height: 1.5;
+}
+
+.line-visual-candle-unavailable .ghost-button {
+  justify-self: center;
+}
+
 .line-visual-modal-head-actions .line-visual-chart-actions {
   flex-wrap: nowrap;
 }
@@ -6037,6 +6106,15 @@ textarea {
     justify-content: space-between;
     flex-wrap: nowrap;
     min-width: 0;
+  }
+
+  .line-visual-presentation-toggle {
+    flex: 0 0 auto;
+  }
+
+  .line-visual-presentation-toggle button {
+    padding-inline: 10px;
+    font-size: 0.76rem;
   }
 
   .line-visual-modal-head-actions .line-visual-chart-actions {

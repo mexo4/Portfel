@@ -140,6 +140,8 @@ export type AssetCatalogItem = {
   providerId?: string;
   isin?: string;
   priceScale?: number;
+  /** Provider/catalog-confirmed issuer country; never inferred from a suffix. */
+  issuerCountry?: string;
 };
 
 export type AssetSearchResult = {
@@ -153,6 +155,7 @@ export type AssetSearchResult = {
   subtitle?: string;
   isin?: string;
   priceScale?: number;
+  issuerCountry?: string;
   instrumentIdentity?: InstrumentIdentity;
 };
 
@@ -256,6 +259,8 @@ export type PortfolioAsset = {
   provider: QuoteProvider;
   providerId?: string;
   priceScale?: number;
+  /** Persisted only when a trusted discovery source supplied the issuer country. */
+  issuerCountry?: string;
   instrumentIdentity?: InstrumentIdentity;
   latestPrice?: number;
   latestPriceDate?: string;
@@ -286,6 +291,7 @@ export type AssetDraft = {
   provider: QuoteProvider;
   providerId?: string;
   priceScale?: number;
+  issuerCountry?: string;
   instrumentIdentity?: InstrumentIdentity;
   marketCurrencyConfirmed?: boolean;
   latestPrice?: number;
@@ -531,6 +537,18 @@ export type PortfolioHistoryPoint = {
   netInvestedPln: number;
   profitLossPln: number;
   timeWeightedReturnPercent: number | null;
+};
+
+/**
+ * A concrete portfolio payload used exclusively to build a virtual
+ * all-portfolios history. The virtual "all" selection is never persisted and
+ * must not collapse identically named/tickered positions into one portfolio.
+ */
+export type PortfolioHistoryScope = {
+  portfolioId: string;
+  assets: PortfolioAsset[];
+  sales: PortfolioSale[];
+  realizedAdjustments: PortfolioRealizedAdjustment[];
 };
 
 export type PortfolioAssetHistorySeriesPoint = {

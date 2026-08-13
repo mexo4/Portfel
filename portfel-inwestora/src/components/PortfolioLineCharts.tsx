@@ -66,6 +66,7 @@ import type {
   PortfolioBenchmarkHistorySeries,
   PortfolioHistoryPoint,
   PortfolioHistoryResponse,
+  PortfolioHistoryScope,
   PortfolioRealizedAdjustment,
   PortfolioSale,
 } from "@/types/portfolio";
@@ -78,6 +79,8 @@ type PortfolioLineChartsProps = {
   baseCurrency: CurrencyCode;
   combinedProfitLoss: number;
   refreshRevision: number;
+  /** Real portfolio boundaries for the URL-only all-portfolios view. */
+  portfolioScopes?: PortfolioHistoryScope[];
   initialMode?: ChartMode;
 };
 
@@ -88,6 +91,7 @@ type ChartMode =
   | "drawdown"
   | "portfolio-vs-benchmark"
   | "daily-change";
+type ChartPresentation = "line" | "candle";
 type ToneClass = "tone-positive" | "tone-negative" | "tone-neutral";
 
 type ChartRow = {
@@ -124,6 +128,7 @@ type HistoryRequestPayload = {
   sales: PortfolioSale[];
   realizedAdjustments: PortfolioRealizedAdjustment[];
   benchmarks: PortfolioBenchmarkDefinition[];
+  portfolioScopes?: PortfolioHistoryScope[];
 };
 
 // React Strict Mode intentionally re-runs effects in development. A history
@@ -895,6 +900,7 @@ export default function PortfolioLineCharts({
   baseCurrency,
   combinedProfitLoss,
   refreshRevision,
+  portfolioScopes,
   initialMode = "value",
 }: PortfolioLineChartsProps) {
   const [mode, setMode] = useState<ChartMode>(initialMode);
@@ -903,6 +909,7 @@ export default function PortfolioLineCharts({
   const [manualViewport, setManualViewport] = useState<ManualChartViewport>(null);
   const [isRangePickerOpen, setIsRangePickerOpen] = useState(false);
   const [isChartInteracting, setIsChartInteracting] = useState(false);
+  const [chartPresentation, setChartPresentation] = useState<ChartPresentation>("line");
   const [hiddenSeriesKeys, setHiddenSeriesKeys] = useState<string[]>([]);
   const [isChartModalOpen, setIsChartModalOpen] = useState(false);
   const [selectedBenchmarks, setSelectedBenchmarks] = useState<PortfolioBenchmarkDefinition[]>(
@@ -936,6 +943,7 @@ export default function PortfolioLineCharts({
   } | null>(null);
   const crosshairFrameRef = useRef<number | null>(null);
   const nativeFullscreenActiveRef = useRef(false);
+  const didDragChartRef = useRef(false);
 
   const cancelScheduledViewport = useCallback(() => {
     if (viewportFrameRef.current !== null) {
@@ -1139,16 +1147,12 @@ export default function PortfolioLineCharts({
     return () => document.removeEventListener("fullscreenchange", handleFullscreenChange);
   }, []);
 
-  const fallbackHistory = useMemo(
-    () =>
-      buildFallbackHistory({
-        assets,
-        sales,
-        realizedAdjustments,
-        fxRates,
-      }),
-    [assets, fxRates, realizedAdjustments, sales]
-  );
+  const fallbackHistory = useMemo(() => {
+    // Flat assets cannot safely represent the virtual all-portfolios history:
+    // same symbols can belong to different portfolios and base currencies.
+    if (portfolioScopes && portfolioScopes.length > 0) return EMPTY_HISTORY;
+    return buildFallbackHistory({ assets, sales, realizedAdjustments, fxRates });
+  }, [assets, fxRates, portfolioScopes, realizedAdjustments, sales]);
 
   // Provider history is determined by transactions and selected benchmarks,
   // not by the latest in-memory quote. Excluding volatile quote fields keeps
@@ -1156,7 +1160,7 @@ export default function PortfolioLineCharts({
   const historyRequestSignature = useMemo(
     () =>
       JSON.stringify({
-        assets: assets.map((asset) => {
+        assets: (portfolioScopes?.length ? [] : assets).map((asset) => {
           const historyAsset = { ...asset };
           delete historyAsset.latestPrice;
           delete historyAsset.latestPriceDate;
@@ -1169,9 +1173,24 @@ export default function PortfolioLineCharts({
         sales,
         realizedAdjustments,
         benchmarks: selectedBenchmarks,
+        portfolioScopes: portfolioScopes?.map((scope) => ({
+          portfolioId: scope.portfolioId,
+          assets: scope.assets.map((asset) => {
+            const historyAsset = { ...asset };
+            delete historyAsset.latestPrice;
+            delete historyAsset.latestPriceDate;
+            delete historyAsset.latestPriceMarketTimestamp;
+            delete historyAsset.latestPriceFetchedAt;
+            delete historyAsset.previousClose;
+            delete historyAsset.lastUpdatedAt;
+            return historyAsset;
+          }),
+          sales: scope.sales,
+          realizedAdjustments: scope.realizedAdjustments,
+        })),
         refreshRevision,
       }),
-    [assets, realizedAdjustments, refreshRevision, sales, selectedBenchmarks]
+    [assets, portfolioScopes, realizedAdjustments, refreshRevision, sales, selectedBenchmarks]
   );
 
   useEffect(() => {
@@ -1181,12 +1200,16 @@ export default function PortfolioLineCharts({
       sales: PortfolioSale[];
       realizedAdjustments: PortfolioRealizedAdjustment[];
       benchmarks: PortfolioBenchmarkDefinition[];
+      portfolioScopes?: PortfolioHistoryScope[];
     };
 
     if (
       historyRequest.assets.length === 0 &&
       historyRequest.sales.length === 0 &&
-      historyRequest.realizedAdjustments.length === 0
+      historyRequest.realizedAdjustments.length === 0 &&
+      !(historyRequest.portfolioScopes?.some((scope) =>
+        scope.assets.length || scope.sales.length || scope.realizedAdjustments.length
+      ))
     ) {
       setServerHistory(EMPTY_HISTORY);
       setWarnings([]);
@@ -1206,6 +1229,7 @@ export default function PortfolioLineCharts({
           sales: historyRequest.sales,
           realizedAdjustments: historyRequest.realizedAdjustments,
           benchmarks: historyRequest.benchmarks,
+          portfolioScopes: historyRequest.portfolioScopes,
         });
 
         if (isCancelled) {
@@ -2338,6 +2362,7 @@ export default function PortfolioLineCharts({
     const viewport = getChartViewport();
 
     event.currentTarget.setPointerCapture(event.pointerId);
+    didDragChartRef.current = false;
     updateCrosshairPosition(event);
     setIsChartInteracting(true);
     dragStateRef.current = {
@@ -2426,6 +2451,10 @@ export default function PortfolioLineCharts({
       -((event.clientX - dragState.startX) / dragState.width) * span
     );
 
+    if (Math.abs(event.clientX - dragState.startX) > 4) {
+      didDragChartRef.current = true;
+    }
+
     if (deltaPoints === 0) {
       return;
     }
@@ -2454,6 +2483,13 @@ export default function PortfolioLineCharts({
       setIsChartInteracting(false);
     }
   };
+
+  const renderPresentationToggle = () => (
+    <div className="line-visual-presentation-toggle" role="group" aria-label="Typ wykresu">
+      <button type="button" aria-pressed={chartPresentation === "line"} className={chartPresentation === "line" ? "is-active" : ""} onClick={() => setChartPresentation("line")}>Liniowy</button>
+      <button type="button" aria-pressed={chartPresentation === "candle"} className={chartPresentation === "candle" ? "is-active" : ""} onClick={() => setChartPresentation("candle")}>Świecowy</button>
+    </div>
+  );
 
   const renderRangeSelector = (isFullscreen = false) => {
     if (availableRangePresets.length === 0) {
@@ -2689,8 +2725,20 @@ export default function PortfolioLineCharts({
         }}
         onPointerMove={handleChartPointerMove}
         onPointerUp={finishChartPointer}
+        onDoubleClick={() => {
+          if (!didDragChartRef.current) {
+            handleOpenChartModal();
+          }
+        }}
         onWheel={handleChartWheel}
       >
+        {chartPresentation === "candle" ? (
+          <div className="line-visual-candle-unavailable" role="status">
+            <strong>Wykres świecowy jest niedostępny dla wartości portfela.</strong>
+            <span>Historia portfela zawiera wiarygodne wartości dzienne, ale nie pełne dane Open/High/Low/Close. Nie tworzymy sztucznych świec.</span>
+            <button type="button" className="ghost-button" onClick={() => setChartPresentation("line")}>Wróć do wykresu liniowego</button>
+          </div>
+        ) : (
         <ResponsiveContainer width="100%" height={isFullscreen ? "100%" : 420}>
           <ComposedChart data={renderedChartData} margin={chartMargin}>
             {visibleChartLines.some((line) => line.variant === "area") ? (
@@ -2811,6 +2859,7 @@ export default function PortfolioLineCharts({
             )}
           </ComposedChart>
         </ResponsiveContainer>
+        )}
         <div
           aria-hidden="true"
           className="line-visual-crosshair"
@@ -3071,6 +3120,7 @@ export default function PortfolioLineCharts({
               </div>
               <div className="line-visual-modal-head-actions">
                 {renderRangeSelector(true)}
+                {renderPresentationToggle()}
                 {renderChartActions(true)}
               </div>
             </div>

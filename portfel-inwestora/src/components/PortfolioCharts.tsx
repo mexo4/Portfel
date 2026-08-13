@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import TruncatedText from "@/components/TruncatedText";
 import { fetchBenchmarkComparisons } from "@/lib/api";
+import { getGeographicAllocation } from "@/lib/geographic-allocation";
 import { buildPortfolioBenchmarkInvestments } from "@/lib/portfolio-state";
 import { convertFromPln, getGroupedPortfolioAssets } from "@/lib/pricing";
 import { isGpwSymbol } from "@/lib/ticker";
@@ -220,6 +221,11 @@ export default function PortfolioCharts({
       };
     })
     .filter((item) => item.total > 0);
+  const geographicBreakdown = getGeographicAllocation(groupedAssets).map((item, index) => ({
+    ...item,
+    share: toPercent(item.totalValue, totalValue),
+    color: CHART_COLORS[index % CHART_COLORS.length],
+  }));
 
   const performanceRanking = [...groupedAssets].sort(
     (left, right) => right.totalProfitLoss - left.totalProfitLoss
@@ -373,7 +379,7 @@ export default function PortfolioCharts({
         <p className="eyebrow">Dywersyfikacja</p>
         <h2 className="section-title">Udzial klas aktywow</h2>
         <p className="section-copy">
-          Podzial portfela na akcje GPW, akcje amerykanskie, ETF-y, krypto i obligacje.
+          Podzial portfela na akcje, ETF-y, krypto i obligacje.
         </p>
 
         <div className="donut-layout mt-6">
@@ -404,6 +410,25 @@ export default function PortfolioCharts({
             ))}
           </div>
         </div>
+      </section> : null}
+
+      {view !== "benchmarks" ? <section className="panel chart-card">
+        <p className="eyebrow">Geografia</p>
+        <h2 className="section-title">Ekspozycja krajowa</h2>
+        <p className="section-copy">
+          Tylko akcje z potwierdzonym krajem emitenta. ETF-y bez zweryfikowanego look-through nie są tu przypisywane.
+        </p>
+        {geographicBreakdown.length ? <div className="legend-list mt-6">
+          {geographicBreakdown.map((item) => (
+            <div key={item.country} className="legend-item">
+              <span className="legend-swatch" style={{ background: item.color }} />
+              <div>
+                <p className="table-title">{item.country}</p>
+                <p className="table-note">{item.share.toFixed(1)}% · {formatCurrency(item.totalValue, baseCurrency)}</p>
+              </div>
+            </div>
+          ))}
+        </div> : <p className="workspace-empty-state mt-6">Brak potwierdzonych metadanych kraju emitenta dla obecnych akcji.</p>}
       </section> : null}
 
       {view !== "benchmarks" ? <section className="panel chart-card chart-card-wide">

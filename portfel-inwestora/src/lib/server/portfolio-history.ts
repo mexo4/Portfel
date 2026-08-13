@@ -26,6 +26,7 @@ import type {
   PortfolioBenchmarkHistorySeries,
   PortfolioHistoryPoint,
   PortfolioHistoryResponse,
+  PortfolioHistoryScope,
   PortfolioRealizedAdjustment,
   PortfolioSale,
   QuoteProvider,
@@ -1664,5 +1665,103 @@ export const buildPortfolioHistory = async ({
     assetSeries,
     benchmarkSeries,
     warnings: Array.from(warnings).sort((left, right) => left.localeCompare(right, "pl")),
+  };
+};
+
+/**
+ * Combines independently calculated real portfolios into the virtual
+ * all-portfolios view. Each input keeps its own instrument identity and is
+ * valued in PLN first; only the final chart presentation converts currency.
+ * This deliberately does not fake a combined benchmark or asset OHLC series.
+ */
+export const aggregatePortfolioHistoryPoints = (
+  histories: Array<Pick<PortfolioHistoryResponse, "points">>
+): PortfolioHistoryPoint[] => {
+  const pointsByDate = new Map<string, PortfolioHistoryPoint[]>();
+
+  for (const history of histories) {
+    for (const point of history.points) {
+      const points = pointsByDate.get(point.date) ?? [];
+      points.push(point);
+      pointsByDate.set(point.date, points);
+    }
+  }
+
+  const dates = Array.from(pointsByDate.keys()).sort((left, right) => left.localeCompare(right));
+  let previousValuePln: number | null = null;
+  let previousProfitLossPln: number | null = null;
+  let cumulativeTimeWeightedReturnFactor = 1;
+
+  return dates.map((date) => {
+    const scopedPoints = pointsByDate.get(date) ?? [];
+    const portfolioValuePln = round(scopedPoints.reduce((total, point) => total + point.portfolioValuePln, 0));
+    const netInvestedPln = round(scopedPoints.reduce((total, point) => total + point.netInvestedPln, 0));
+    const profitLossPln = round(scopedPoints.reduce((total, point) => total + point.profitLossPln, 0));
+
+    if (previousValuePln !== null && previousValuePln > 0 && previousProfitLossPln !== null) {
+      // P/L delta is exactly the existing daily return numerator: portfolio
+      // value change minus external cash flow plus realized adjustment.
+      const dailyReturn = (profitLossPln - previousProfitLossPln) / previousValuePln;
+      if (Number.isFinite(dailyReturn)) {
+        cumulativeTimeWeightedReturnFactor *= 1 + dailyReturn;
+      }
+    }
+
+    previousValuePln = portfolioValuePln;
+    previousProfitLossPln = profitLossPln;
+    return {
+      date,
+      portfolioValuePln,
+      netInvestedPln,
+      profitLossPln,
+      timeWeightedReturnPercent: round((cumulativeTimeWeightedReturnFactor - 1) * 100, 2),
+    };
+  });
+};
+
+export const buildAggregatePortfolioHistory = async ({
+  portfolioScopes,
+  benchmarks = [],
+}: {
+  portfolioScopes: PortfolioHistoryScope[];
+  benchmarks?: PortfolioBenchmarkDefinition[];
+}): Promise<PortfolioHistoryResponse> => {
+  const uniqueScopes = Array.from(
+    new Map(
+      portfolioScopes
+        .filter((scope) => scope.portfolioId && (scope.assets.length || scope.sales.length || scope.realizedAdjustments.length))
+        .map((scope) => [scope.portfolioId, scope] as const)
+    ).values()
+  );
+
+  if (uniqueScopes.length === 0) {
+    return { points: [], warnings: [], assetSeries: [], benchmarkSeries: [] };
+  }
+
+  const histories = await Promise.all(
+    uniqueScopes.map((scope) =>
+      buildPortfolioHistory({
+        assets: scope.assets,
+        sales: scope.sales,
+        realizedAdjustments: scope.realizedAdjustments,
+        // A user-selected benchmark has no single economically correct
+        // aggregate start/cash-flow basis. Keep the existing per-portfolio
+        // calculation honest rather than producing a synthetic comparison.
+        benchmarks: [],
+      })
+    )
+  );
+  const warnings = new Set(histories.flatMap((history) => history.warnings));
+  const points = aggregatePortfolioHistoryPoints(histories);
+
+  if (benchmarks.length > 0) {
+    warnings.add("Benchmarki są dostępne po wyborze konkretnego portfela; widok łączny nie tworzy syntetycznej serii.");
+  }
+
+  return {
+    points,
+    warnings: Array.from(warnings).sort((left, right) => left.localeCompare(right, "pl")),
+    assetSeries: [],
+    benchmarkSeries: [],
   };
 };

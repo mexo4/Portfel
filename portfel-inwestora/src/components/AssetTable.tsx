@@ -334,9 +334,11 @@ const SortableGroupSection = ({
             <DragRowPlaceholder />
           ) : (
             <>
-              {formatCurrency(group.averagePurchasePrice, group.averagePurchasePriceCurrency)}
+              <span className="financial-value">
+                {formatCurrency(group.averagePurchasePrice, group.averagePurchasePriceCurrency)}
+              </span>
               <div className="table-note">
-                koszt: {formatCurrency(group.costBasisBase, baseCurrency)}
+                koszt: <span className="financial-value">{formatCurrency(group.costBasisBase, baseCurrency)}</span>
               </div>
             </>
           )}
@@ -346,8 +348,8 @@ const SortableGroupSection = ({
             <DragRowPlaceholder />
           ) : (
             <>
-              {currentUnitPriceLabel}
-              <div className="table-note">wartosc pozycji: {marketValueBaseLabel}</div>
+              <span className="financial-value">{currentUnitPriceLabel}</span>
+              <div className="table-note">wartosc pozycji: <span className="financial-value">{marketValueBaseLabel}</span></div>
             </>
           )}
         </td>
@@ -363,7 +365,7 @@ const SortableGroupSection = ({
           {isDragging ? (
             <DragRowPlaceholder />
           ) : group.hasLivePrice ? (
-            formatCurrency(group.profitLossBase, baseCurrency)
+            <span className="financial-value">{formatCurrency(group.profitLossBase, baseCurrency)}</span>
           ) : (
             "brak kursu"
           )}

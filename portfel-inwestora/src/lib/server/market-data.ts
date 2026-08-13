@@ -647,8 +647,16 @@ const fetchStooqHistoryQuoteForRequestSymbol = async (
   timeoutMs = 800
 ): Promise<AssetQuote | null> => {
   const today = new Date().toISOString().slice(0, 10).replaceAll("-", "");
+  // `previousClose` needs only the two latest completed sessions. Fetching
+  // the complete Stooq history since 2000 for every live refresh created
+  // unnecessary multi-year CSV transfers and parsing work per GPW position.
+  // A 35-day window still covers weekends and the longest normal holiday run.
+  const historyStart = shiftUtcDate(
+    `${today.slice(0, 4)}-${today.slice(4, 6)}-${today.slice(6, 8)}`,
+    -35
+  ).replaceAll("-", "");
   const response = await safeFetch(
-    `https://stooq.pl/q/d/l/?s=${encodeURIComponent(requestSymbol)}&d1=20000101&d2=${today}&i=d`,
+    `https://stooq.pl/q/d/l/?s=${encodeURIComponent(requestSymbol)}&d1=${historyStart}&d2=${today}&i=d`,
     {
       headers: {
         "User-Agent": "Mozilla/5.0",
@@ -1209,8 +1217,12 @@ const fetchStooqQuote = async (
       }
 
       const today = new Date().toISOString().slice(0, 10).replaceAll("-", "");
+      const historyStart = shiftUtcDate(
+        `${today.slice(0, 4)}-${today.slice(4, 6)}-${today.slice(6, 8)}`,
+        -35
+      ).replaceAll("-", "");
       const historyResponse = await safeFetch(
-        `${domain}/q/d/l/?s=${encodeURIComponent(requestSymbol)}&d1=20000101&d2=${today}&i=d`,
+        `${domain}/q/d/l/?s=${encodeURIComponent(requestSymbol)}&d1=${historyStart}&d2=${today}&i=d`,
         {
           headers: {
             "User-Agent": "Mozilla/5.0",

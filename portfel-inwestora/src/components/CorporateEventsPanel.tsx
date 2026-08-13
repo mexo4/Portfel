@@ -72,17 +72,15 @@ export default function CorporateEventsPanel({ portfolioId }: CorporateEventsPan
     <section className="panel panel-compact corporate-events-panel" aria-busy={isLoading}>
       <div className="corporate-events-head">
         <div>
-          <p className="eyebrow">Kalendarz portfela</p>
-          <h2 className="section-title">Wydarzenia w Twoim portfelu</h2>
+          <p className="eyebrow">Kalendarz GPW</p>
+          <h2 className="section-title">Wydarzenia GPW</h2>
         </div>
         <span className="tag">najbliższe 60 dni</span>
       </div>
 
       {isLoading ? <p className="corporate-events-state">Sprawdzanie zapisanych terminów…</p> : null}
       {hasError ? (
-        <p className="field-note field-note-error mt-4">
-          Nie udało się pobrać wydarzeń korporacyjnych. Spróbuj ponownie później.
-        </p>
+        <p className="field-note field-note-error mt-4">Nie udało się pobrać wydarzeń GPW. Spróbuj ponownie później.</p>
       ) : null}
 
       {!isLoading && !hasError && data?.scope === "NO_GPW_INSTRUMENTS" ? (

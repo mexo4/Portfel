@@ -45,3 +45,13 @@ test("each workspace URL has a route-owned view rather than a null page placehol
     assert.doesNotMatch(source, /return null/);
   }
 });
+
+test("aggregate read routes do not replace data views with unavailable notices", async () => {
+  const source = await readFile("src/components/WorkspaceRouteViews.tsx", "utf8");
+  assert.match(source, /CorporateEventsPanel portfolioId=\{workspace\.isAllPortfoliosSelected \? "all"/);
+  assert.match(source, /PortfolioLineCharts \{\.\.\.workspaceHistoryProps\(workspace\)\}/);
+  assert.match(source, /workspace\.getReadHref\("\/portfolio\/dividends"/);
+  assert.match(source, /workspace\.getReadHref\("\/portfolio\/positions"/);
+  assert.match(source, /workspace\.getReadHref\("\/analytics\/structure"/);
+  assert.doesNotMatch(source, /Historia łączna wymaga osobnego modelu/);
+});

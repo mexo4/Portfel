@@ -39,22 +39,28 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const requestedPortfolioId = searchParams.get("portfolio")?.trim();
   const requestedInstrumentId = searchParams.get("instrumentId")?.trim();
-  const portfolio = accountData.portfolios.find(
-    (candidate) => candidate.id === (requestedPortfolioId || accountData.activePortfolioId)
-  );
+  const isAggregateRequest = requestedPortfolioId === "all";
+  const portfolios = isAggregateRequest
+    ? accountData.portfolios
+    : accountData.portfolios.filter(
+        (candidate) => candidate.id === (requestedPortfolioId || accountData.activePortfolioId)
+      );
 
-  if (!portfolio) {
+  if (portfolios.length === 0) {
     return NextResponse.json({ error: "Nie znaleziono portfela." }, { status: 404 });
   }
 
-  const normalizedPortfolio = ensurePortfolioCoreModel(portfolio);
-  const heldInstrumentIds = new Set(
-    normalizedPortfolio.assets.map((asset) => getPortfolioInstrumentId(normalizedPortfolio.id, asset))
-  );
-  const instruments = getGpwCorporateEventInputs(
-    normalizedPortfolio.instruments ?? [],
-    heldInstrumentIds
-  ).filter((instrument) => !requestedInstrumentId || instrument.id === requestedInstrumentId);
+  const instruments = portfolios
+    .flatMap((portfolio) => {
+      const normalizedPortfolio = ensurePortfolioCoreModel(portfolio);
+      const heldInstrumentIds = new Set(
+        normalizedPortfolio.assets.map((asset) =>
+          getPortfolioInstrumentId(normalizedPortfolio.id, asset)
+        )
+      );
+      return getGpwCorporateEventInputs(normalizedPortfolio.instruments ?? [], heldInstrumentIds);
+    })
+    .filter((instrument) => !requestedInstrumentId || instrument.id === requestedInstrumentId);
   const fromDate = getWarsawDate();
   const days = getDays(searchParams.get("days"));
 
@@ -67,13 +73,13 @@ export async function GET(request: Request) {
 
     return NextResponse.json({
       ...result,
-      portfolioId: normalizedPortfolio.id,
+      portfolioId: isAggregateRequest ? "all" : portfolios[0]!.id,
       fromDate,
       toDate: addDays(fromDate, days),
     });
   } catch (error) {
     console.error("GET /api/corporate-events failed", {
-      portfolioId: normalizedPortfolio.id,
+      portfolioId: isAggregateRequest ? "all" : portfolios[0]!.id,
       error: error instanceof Error ? error.name : "unknown",
     });
     return NextResponse.json(

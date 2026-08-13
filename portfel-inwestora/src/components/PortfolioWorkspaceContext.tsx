@@ -26,6 +26,7 @@ export type PortfolioWorkspaceValue = {
   isLoggingOut: boolean;
   onPortfolioChange: (portfolioId: string) => void;
   onBaseCurrencyChange: (currency: string) => void;
+  getReadHref: (href: string) => string;
   onQuickAdd: () => void;
   onLogout: () => void;
   displayedSyncError: string | null;

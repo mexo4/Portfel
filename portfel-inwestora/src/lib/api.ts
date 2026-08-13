@@ -20,6 +20,7 @@ import type {
   InvestmentPortfolio,
   PortfolioBenchmarkDefinition,
   PortfolioHistoryResponse,
+  PortfolioHistoryScope,
   PortfolioRealizedAdjustment,
   PortfolioSale,
   SubscriptionPlan,
@@ -360,6 +361,34 @@ const hasUsableStoredUnitPrice = (asset: PortfolioAsset) =>
   asset.latestPrice > 0;
 
 /**
+ * A provider can legitimately return the same market quote again.  Treating
+ * a new HTTP fetch timestamp as a new quote caused the dashboard to rebuild
+ * every portfolio, chart fallback and quote-snapshot payload on each polling
+ * interval.  `fetchedAt` deliberately is not part of this comparison: it is
+ * not a market-data change, and must not make an unchanged quote look newer.
+ */
+export const hasSameStoredQuoteSnapshot = (
+  current: PortfolioAsset,
+  next: PortfolioAsset
+) =>
+  current.symbol === next.symbol &&
+  current.name === next.name &&
+  current.latestPrice === next.latestPrice &&
+  current.latestPriceDate === next.latestPriceDate &&
+  current.latestPriceMarketTimestamp === next.latestPriceMarketTimestamp &&
+  current.previousClose === next.previousClose &&
+  current.marketCurrency === next.marketCurrency &&
+  current.provider === next.provider &&
+  current.providerId === next.providerId &&
+  current.priceScale === next.priceScale &&
+  JSON.stringify(current.bondMeta ?? null) === JSON.stringify(next.bondMeta ?? null);
+
+const keepExistingAssetForUnchangedQuote = (
+  current: PortfolioAsset,
+  next: PortfolioAsset
+) => (hasSameStoredQuoteSnapshot(current, next) ? current : next);
+
+/**
  * Quote refresh updates market data, not the user's stored instrument
  * identity.  Polish equities are particularly sensitive because a bare
  * ticker can collide with an unrelated US listing (for example DIA).
@@ -385,7 +414,7 @@ export const mergeQuoteIntoPortfolioAsset = (
       return asset;
     }
 
-    return {
+    return keepExistingAssetForUnchangedQuote(asset, {
       ...asset,
       latestPrice: quote.price,
       latestPriceDate: quote.priceDate ?? asset.latestPriceDate,
@@ -394,10 +423,10 @@ export const mergeQuoteIntoPortfolioAsset = (
       latestPriceFetchedAt: quote.fetchedAt,
       previousClose: quote.previousClose ?? asset.previousClose,
       lastUpdatedAt: quote.fetchedAt,
-    };
+    });
   }
 
-  return {
+  return keepExistingAssetForUnchangedQuote(asset, {
     ...asset,
     symbol: quote.symbol,
     latestPrice: quote.price,
@@ -413,7 +442,7 @@ export const mergeQuoteIntoPortfolioAsset = (
     bondMeta: quote.bondMeta ?? asset.bondMeta,
     lastUpdatedAt: quote.fetchedAt,
     name: quote.name ?? asset.name,
-  };
+  });
 };
 
 /**
@@ -452,7 +481,7 @@ export const applyRefreshedPortfolioAssetSnapshot = (
     return current;
   }
 
-  return mergeQuoteIntoPortfolioAsset(current, {
+  const merged = mergeQuoteIntoPortfolioAsset(current, {
     symbol: refreshed.symbol,
     price: refreshed.latestPrice!,
     marketCurrency: refreshed.marketCurrency,
@@ -466,6 +495,8 @@ export const applyRefreshedPortfolioAssetSnapshot = (
     previousClose: refreshed.previousClose,
     bondMeta: refreshed.bondMeta,
   });
+
+  return hasSameStoredQuoteSnapshot(current, merged) ? current : merged;
 };
 
 export const refreshPortfolioQuotesWithProgress = async (
@@ -848,12 +879,14 @@ export const fetchPortfolioHistory = async ({
   sales,
   realizedAdjustments,
   benchmarks,
+  portfolioScopes,
   signal,
 }: {
   assets: PortfolioAsset[];
   sales: PortfolioSale[];
   realizedAdjustments: PortfolioRealizedAdjustment[];
   benchmarks?: PortfolioBenchmarkDefinition[];
+  portfolioScopes?: PortfolioHistoryScope[];
   signal?: AbortSignal;
 }) => {
   return requestJson<PortfolioHistoryResponse>("/api/portfolio-history", {
@@ -864,6 +897,7 @@ export const fetchPortfolioHistory = async ({
       sales,
       realizedAdjustments,
       benchmarks,
+      portfolioScopes,
     }),
   });
 };

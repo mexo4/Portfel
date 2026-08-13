@@ -908,6 +908,22 @@ const unavailablePriceListing = (listing: EtfListing): EtfListing => ({
   },
 });
 
+const hasVerifiedEtfProviderMapping = (listing: EtfListing) => {
+  const providerId = text(listing.providerId);
+  const listingPriceSymbol = text(listing.providerPriceSymbol);
+  const identityPriceSymbol = text(listing.instrumentIdentity.providerPriceSymbol);
+  const sameProviderSymbol =
+    Boolean(providerId) &&
+    normalizeSymbol(providerId) === normalizeSymbol(listingPriceSymbol) &&
+    normalizeSymbol(providerId) === normalizeSymbol(identityPriceSymbol);
+  const hasStableInstrumentIdentity = Boolean(
+    listing.instrumentIdentity.figi ||
+      (listing.isin && (listing.exchangeCode || listing.exchange || listing.mic))
+  );
+
+  return sameProviderSymbol && hasStableInstrumentIdentity;
+};
+
 /**
  * Resolves an EODHD price source only for an unambiguous, venue-aware match.
  * A selected ETF without such a match remains a valid historical transaction.
@@ -920,7 +936,7 @@ export const resolveEtfListingPriceSource = async (
   // A controlled ETF-catalog fallback can already provide an exact,
   // provider-specific price symbol (for example a GPW `.WA` listing).  Do not
   // erase that identity merely because EODHD cannot independently resolve it.
-  if (listing.provider !== "eodhd" && listing.providerId) {
+  if (hasVerifiedEtfProviderMapping(listing)) {
     return {
       ...listing,
       providerPriceSymbol: listing.providerId,
@@ -988,6 +1004,25 @@ export const sanitiseEtfListing = (value: unknown): EtfListing | null => {
   const exchangeCode = normalizeSymbol(cleanText("exchangeCode") ?? cleanText("exchange") ?? "");
   const mic = normalizeSymbol(cleanText("mic") ?? "");
   const listingId = normaliseFigi(text(listing.listingId)) || figi || [ticker, exchangeCode, mic, currency].join(":");
+  const providerValue = text(listing.provider);
+  const provider = (["binance", "finnhub", "stooq", "yahoo", "eodhd", "coingecko", "catalog", "obligacjeskarbowe"] as const)
+    .includes(providerValue as "binance")
+    ? providerValue as EtfListing["provider"]
+    : "eodhd";
+  const providerId = text(listing.providerId).slice(0, 160) || undefined;
+  const listingPriceSymbol = text(listing.providerPriceSymbol).slice(0, 160) || undefined;
+  const identityPriceSymbol = text(identity.providerPriceSymbol).slice(0, 160) || undefined;
+  const isin = text(listing.isin).replace(/\s+/g, "").toUpperCase().slice(0, 32) || undefined;
+  const hasConsistentProviderMapping =
+    Boolean(providerId) &&
+    normalizeSymbol(providerId ?? "") === normalizeSymbol(listingPriceSymbol ?? "") &&
+    normalizeSymbol(providerId ?? "") === normalizeSymbol(identityPriceSymbol ?? "") &&
+    Boolean(figi || (isin && (exchangeCode || mic)));
+  // The resolver route receives a browser payload, so retain a price source
+  // only when all three copies of the provider symbol agree and the selected
+  // ETF has a stable FIGI or ISIN+venue identity. This keeps catalog-proven
+  // mappings such as ETFBDIVPL.WA while refusing loose ticker-only input.
+  const trustedProviderId = hasConsistentProviderMapping ? providerId : undefined;
 
   return {
     listingId,
@@ -995,14 +1030,15 @@ export const sanitiseEtfListing = (value: unknown): EtfListing | null => {
     name: name.slice(0, 240),
     kind: "etf",
     marketCurrency: currency,
-    provider: "eodhd",
+    provider,
     source: "api",
+    isin,
     exchange: exchangeCode || undefined,
     exchangeCode: exchangeCode || undefined,
     mic: mic || undefined,
     securityType: cleanText("securityType"),
-    providerId: undefined,
-    providerPriceSymbol: undefined,
+    providerId: trustedProviderId,
+    providerPriceSymbol: trustedProviderId,
     priceStatus: "unchecked",
     instrumentIdentity: {
       figi,
@@ -1017,6 +1053,7 @@ export const sanitiseEtfListing = (value: unknown): EtfListing | null => {
       currency,
       securityType: cleanText("securityType"),
       securityType2: cleanText("securityType2"),
+      providerPriceSymbol: trustedProviderId,
     },
   };
 };

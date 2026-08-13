@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
 import { buildAutomaticBondCouponAdjustments, normalizePortfolioState } from "@/lib/portfolio-state";
 import { getCurrentAuthenticatedUser } from "@/lib/server/auth";
-import { buildPortfolioHistory } from "@/lib/server/portfolio-history";
+import { buildAggregatePortfolioHistory, buildPortfolioHistory } from "@/lib/server/portfolio-history";
 import { getSortedPortfolioRealizedAdjustments } from "@/lib/portfolio-state";
-import type { PortfolioBenchmarkDefinition, PortfolioState } from "@/types/portfolio";
+import type { PortfolioBenchmarkDefinition, PortfolioHistoryScope, PortfolioState } from "@/types/portfolio";
 
 export const runtime = "nodejs";
 
@@ -20,7 +20,35 @@ export async function POST(request: Request) {
       sales?: PortfolioState["sales"];
       realizedAdjustments?: PortfolioState["realizedAdjustments"];
       benchmarks?: PortfolioBenchmarkDefinition[];
+      portfolioScopes?: PortfolioHistoryScope[];
     };
+    const benchmarks = Array.isArray(payload.benchmarks) ? payload.benchmarks : [];
+    const rawScopes = Array.isArray(payload.portfolioScopes) ? payload.portfolioScopes : [];
+
+    if (rawScopes.length > 0) {
+      const portfolioScopes = rawScopes.slice(0, 50).flatMap((scope) => {
+        if (!scope || typeof scope.portfolioId !== "string" || !scope.portfolioId.trim()) {
+          return [];
+        }
+        const state = normalizePortfolioState({
+          assets: Array.isArray(scope.assets) ? scope.assets : [],
+          sales: Array.isArray(scope.sales) ? scope.sales : [],
+          realizedAdjustments: Array.isArray(scope.realizedAdjustments)
+            ? scope.realizedAdjustments
+            : [],
+        });
+        return [{
+          portfolioId: scope.portfolioId,
+          assets: state.assets,
+          sales: state.sales,
+          realizedAdjustments: getSortedPortfolioRealizedAdjustments([
+            ...state.realizedAdjustments,
+            ...buildAutomaticBondCouponAdjustments(state.assets, state.sales),
+          ]),
+        }];
+      });
+      return NextResponse.json(await buildAggregatePortfolioHistory({ portfolioScopes, benchmarks }));
+    }
     const portfolioState = normalizePortfolioState({
       assets: Array.isArray(payload.assets) ? payload.assets : [],
       sales: Array.isArray(payload.sales) ? payload.sales : [],
@@ -36,7 +64,7 @@ export async function POST(request: Request) {
       assets: portfolioState.assets,
       sales: portfolioState.sales,
       realizedAdjustments: effectiveRealizedAdjustments,
-      benchmarks: Array.isArray(payload.benchmarks) ? payload.benchmarks : [],
+      benchmarks,
     });
 
     return NextResponse.json(history);

@@ -8,6 +8,7 @@ import {
   OpenFigiInstrumentSearchProvider,
   OpenFigiSearchError,
   resolveEtfListingPriceSource,
+  sanitiseEtfListing,
   searchEtfInstruments,
 } from "../src/lib/server/openfigi.ts";
 import { searchEtfInstruments as searchEtfInstrumentsApi } from "../src/lib/api.ts";
@@ -551,6 +552,40 @@ test("keeps a pre-verified ETF provider identity when EODHD cannot resolve it", 
   assert.equal(resolved.provider, "yahoo");
   assert.equal(resolved.providerId, "ETFBDIVPL.WA");
   assert.equal(resolved.instrumentIdentity.providerPriceSymbol, "ETFBDIVPL.WA");
+});
+
+test("keeps a verified ETF catalog price mapping through resolver input sanitisation", () => {
+  const trusted = sanitiseEtfListing({
+    listingId: "BBG01WNG89P2",
+    symbol: "ETFBDIVPL",
+    name: "Beta ETF Dywidenda Plus",
+    kind: "etf",
+    marketCurrency: "PLN",
+    provider: "yahoo",
+    providerId: "ETFBDIVPL.WA",
+    providerPriceSymbol: "ETFBDIVPL.WA",
+    isin: "PLBTFDP00015",
+    instrumentIdentity: {
+      figi: "BBG01WNG89P2",
+      ticker: "ETFBDIVPL",
+      name: "Beta ETF Dywidenda Plus",
+      instrumentType: "ETF",
+      exchangeCode: "GPW",
+      currency: "PLN",
+      providerPriceSymbol: "ETFBDIVPL.WA",
+    },
+  });
+
+  assert.equal(trusted?.provider, "yahoo");
+  assert.equal(trusted?.providerId, "ETFBDIVPL.WA");
+  assert.equal(trusted?.instrumentIdentity.providerPriceSymbol, "ETFBDIVPL.WA");
+
+  const mismatched = sanitiseEtfListing({
+    ...trusted,
+    providerPriceSymbol: "SOMETHING-ELSE",
+  });
+  assert.equal(mismatched?.providerId, undefined);
+  assert.equal(mismatched?.providerPriceSymbol, undefined);
 });
 
 test("resolves an ETF price only with exact ticker and validated venue, never a first global match", async () => {

@@ -311,6 +311,7 @@ const toSearchResult = (item: EodhdListing): AssetSearchResult => ({
   source: "api",
   isin: item.isin,
   priceScale: item.priceScale,
+  issuerCountry: item.country,
 });
 
 const fetchSearchListings = async (query: string, kind: EodhdSearchKind) => {

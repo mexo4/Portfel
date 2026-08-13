@@ -154,6 +154,7 @@ export const searchCatalogAssets = (
       provider: item.provider,
       providerId: item.providerId,
       subtitle: item.subtitle,
+      issuerCountry: item.issuerCountry,
       source: "catalog" as const,
     }));
 };

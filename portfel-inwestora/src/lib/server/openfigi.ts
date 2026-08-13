@@ -785,9 +785,16 @@ export const searchEtfInstruments = async (
     enforceOpenFigiSearchRateLimit(actorId);
   }
 
-  const request = provider
-    .searchEtfs(normalizedQuery)
-    .then(async (primaryGroups) => {
+  const request = (async () => {
+      let primaryGroups: EtfSearchGroup[] = [];
+      let primaryError: unknown = null;
+
+      try {
+        primaryGroups = await provider.searchEtfs(normalizedQuery);
+      } catch (error) {
+        primaryError = error;
+      }
+
       const primaryListings = primaryGroups.flatMap((group) => group.listings);
       const fallbackListings = await getEtfFallbackListings(
         normalizedQuery,
@@ -801,6 +808,15 @@ export const searchEtfInstruments = async (
         normalizedQuery,
         uniqueBy([...fallbackListings, ...primaryListings], (listing) => listing.listingId)
       );
+
+      // A trusted ETF-specific fallback keeps discovery working when OpenFIGI
+      // is temporarily unavailable. If it cannot identify any listing, retain
+      // the original provider error so the UI does not misrepresent an outage
+      // as an ordinary empty result.
+      if (groups.length === 0 && primaryError) {
+        throw primaryError;
+      }
+
       logDiagnostics({
         rawQuery: query,
         normalizedQuery,
@@ -808,6 +824,8 @@ export const searchEtfInstruments = async (
         method: "POST",
         fallbackListingCount: fallbackListings.length,
         finalGroupCount: groups.length,
+        errorClassification:
+          primaryError instanceof OpenFigiSearchError ? primaryError.code : undefined,
       });
       localSearchCache.set(cacheKey, {
         groups,
@@ -819,7 +837,7 @@ export const searchEtfInstruments = async (
         // The in-memory cache remains useful for the current runtime instance.
       }
       return groups;
-    })
+    })()
     .finally(() => {
       inFlightSearches.delete(cacheKey);
     });

@@ -11,7 +11,15 @@ import type {
 
 export const APP_NAME = "Portfel inwestora";
 export const APP_DESCRIPTION =
-  "MVP do sledzenia akcji, ETF-ow i krypto z wycena w PLN.";
+  "MVP do sledzenia akcji, ETF-ow i obligacji z wycena w PLN.";
+
+/**
+ * Temporary product capability, deliberately kept in one place.  It gates
+ * only entry/search/import UI for new crypto activity; it never alters
+ * persisted holdings, operations, valuation or historical performance.
+ * Flip to `true` when the crypto workflow is ready to be offered again.
+ */
+export const CRYPTO_UI_ENABLED = false;
 
 export const BASE_CURRENCY: CurrencyCode = "PLN";
 export const AUTO_REFRESH_INTERVAL_MS = 30_000;
@@ -112,6 +120,18 @@ export const ASSET_ENTRY_MODE_OPTIONS: Array<{
     label: "Obligacje",
   },
 ];
+
+/** Options exposed by user-facing add/search controls. */
+export const VISIBLE_SEARCH_MODE_OPTIONS = SEARCH_MODE_OPTIONS.filter(
+  (option) => CRYPTO_UI_ENABLED || option.kind !== "crypto"
+);
+
+export const VISIBLE_ASSET_ENTRY_MODE_OPTIONS = ASSET_ENTRY_MODE_OPTIONS.filter(
+  (option) => CRYPTO_UI_ENABLED || option.value !== "crypto"
+);
+
+export const isAssetEntryModeEnabled = (mode: AssetEntryMode) =>
+  CRYPTO_UI_ENABLED || mode !== "crypto";
 
 export const LOCAL_STOCK_CATALOG: AssetCatalogItem[] = [
   {

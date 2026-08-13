@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { CRYPTO_UI_ENABLED } from "@/lib/constants";
 import type { BrokerImportPreset } from "@/lib/import-operations";
 
 export type ImportPlatformStatus = "full" | "partial" | "planned";
@@ -534,6 +535,27 @@ const IMPORT_PLATFORM_BY_ID = new Map(
   IMPORT_PLATFORMS.map((item) => [item.id, item] as const)
 );
 
+// These exchanges are crypto-only choices in the importer. General brokers
+// such as XTB are deliberately left available for their stock/ETF reports.
+const CRYPTO_IMPORT_PLATFORM_IDS = new Set([
+  "binance",
+  "coinbase",
+  "kraken",
+  "bybit",
+  "okx",
+  "bitget",
+  "kucoin",
+  "crypto-com",
+  "gemini",
+  "bitstamp",
+  "htx",
+  "gate-io",
+  "mexc",
+]);
+
+export const isImportPlatformVisible = (platformId: string) =>
+  CRYPTO_UI_ENABLED || !CRYPTO_IMPORT_PLATFORM_IDS.has(platformId);
+
 const IMPORT_PLATFORM_SECTIONS: ImportPlatformSection[] = [
   {
     id: "popular",
@@ -657,14 +679,21 @@ const STATUS_MARKS: Record<ImportPlatformStatus, string> = {
 
 const normalizeQuery = (value: string) => value.trim().toLowerCase();
 
-export const getImportPlatformById = (platformId: string) =>
-  IMPORT_PLATFORM_BY_ID.get(platformId) ??
-  IMPORT_PLATFORM_BY_ID.get(DEFAULT_IMPORT_PLATFORM_ID)!;
+export const getImportPlatformById = (platformId: string) => {
+  const platform = IMPORT_PLATFORM_BY_ID.get(platformId);
+
+  return platform && isImportPlatformVisible(platform.id)
+    ? platform
+    : IMPORT_PLATFORM_BY_ID.get(DEFAULT_IMPORT_PLATFORM_ID)!;
+};
 
 const getPlatformsByIds = (platformIds: string[]) =>
   platformIds
     .map((platformId) => IMPORT_PLATFORM_BY_ID.get(platformId))
-    .filter((item): item is ImportPlatformDefinition => Boolean(item));
+    .filter(
+      (item): item is ImportPlatformDefinition =>
+        item !== undefined && isImportPlatformVisible(item.id)
+    );
 
 const readRecentPlatformIds = () => {
   try {
@@ -674,7 +703,9 @@ const readRecentPlatformIds = () => {
     return Array.isArray(parsedValue)
       ? parsedValue.filter(
           (item): item is string =>
-            typeof item === "string" && IMPORT_PLATFORM_BY_ID.has(item)
+            typeof item === "string" &&
+            IMPORT_PLATFORM_BY_ID.has(item) &&
+            isImportPlatformVisible(item)
         )
       : [];
   } catch {
@@ -781,7 +812,9 @@ export default function ImportPlatformPicker({
 
   const filteredSections = useMemo(
     () =>
-      IMPORT_PLATFORM_SECTIONS.map((section) => ({
+      IMPORT_PLATFORM_SECTIONS.filter(
+        (section) => CRYPTO_UI_ENABLED || section.id !== "crypto"
+      ).map((section) => ({
         ...section,
         platforms: getPlatformsByIds(section.platformIds).filter((item) =>
           matchesQuery(item, normalizedQuery)

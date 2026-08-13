@@ -34,7 +34,7 @@ import {
   type ChartRangePreset,
   type ChartViewport,
 } from "@/lib/chart-viewport";
-import { SEARCH_DEBOUNCE_MS, SEARCH_MODE_OPTIONS } from "@/lib/constants";
+import { SEARCH_DEBOUNCE_MS, VISIBLE_SEARCH_MODE_OPTIONS } from "@/lib/constants";
 import { fetchPortfolioHistory, searchAssets, searchEtfInstruments } from "@/lib/api";
 import {
   convertFromPln,
@@ -1273,6 +1273,9 @@ export default function PortfolioLineCharts({
   const isUsingFallbackHistory =
     serverHistory.points.length === 0 && fallbackHistory.points.length > 0;
   const displayWarnings = useMemo(() => compactWarnings(warnings), [warnings]);
+  const benchmarkSearchKind = VISIBLE_SEARCH_MODE_OPTIONS.find(
+    (option) => option.value === benchmarkSearchMode
+  )?.kind;
   const benchmarkSearchMinimumLength = getMinimumSearchLength(benchmarkSearchMode);
   const hasActiveBenchmarkQuery = benchmarkQuery.trim().length > 0;
   const hasReachedBenchmarkMinimumLength =
@@ -1301,7 +1304,11 @@ export default function PortfolioLineCharts({
   useEffect(() => {
     const trimmedQuery = benchmarkQuery.trim();
 
-    if (mode !== "portfolio-vs-benchmark" || trimmedQuery.length < benchmarkSearchMinimumLength) {
+    if (
+      !benchmarkSearchKind ||
+      mode !== "portfolio-vs-benchmark" ||
+      trimmedQuery.length < benchmarkSearchMinimumLength
+    ) {
       setBenchmarkResults([]);
       setBenchmarkSearchError(null);
       setIsSearchingBenchmarks(false);
@@ -1326,10 +1333,7 @@ export default function PortfolioLineCharts({
               })).flatMap((group) => group.listings)
             : await searchAssets({
                 query: trimmedQuery,
-                kind:
-                  SEARCH_MODE_OPTIONS.find(
-                    (option) => option.value === benchmarkSearchMode
-                  )?.kind ?? "etf",
+                kind: benchmarkSearchKind,
                 mode: benchmarkSearchMode,
                 signal: controller.signal,
               });
@@ -1360,7 +1364,13 @@ export default function PortfolioLineCharts({
       controller.abort();
       window.clearTimeout(timeoutId);
     };
-  }, [benchmarkQuery, benchmarkSearchMinimumLength, benchmarkSearchMode, mode]);
+  }, [
+    benchmarkQuery,
+    benchmarkSearchKind,
+    benchmarkSearchMinimumLength,
+    benchmarkSearchMode,
+    mode,
+  ]);
 
   const availableRangePresets = useMemo(
     () => getSupportedChartRangePresets(displayPoints),
@@ -2908,7 +2918,7 @@ export default function PortfolioLineCharts({
             <div>
               <p className="table-title">Wyszukaj benchmark</p>
               <p className="table-note">
-                Dodaj akcje, ETF-y lub krypto i porownaj ich stopy zwrotu z portfelem.
+                Dodaj akcje lub ETF-y i porownaj ich stopy zwrotu z portfelem.
               </p>
             </div>
             {selectedBenchmarks.length > 0 ? (
@@ -2917,7 +2927,7 @@ export default function PortfolioLineCharts({
           </div>
 
           <div className="line-chart-range-tabs line-visual-benchmark-search-modes mt-4">
-            {SEARCH_MODE_OPTIONS.map((option) => (
+            {VISIBLE_SEARCH_MODE_OPTIONS.map((option) => (
               <button
                 key={option.value}
                 type="button"

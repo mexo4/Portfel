@@ -59,10 +59,24 @@ export const getConfirmedIssuerCountry = (group: PortfolioAssetGroup) => {
   return getCatalogIssuerCountry(group) ?? UNKNOWN_COUNTRY_LABEL;
 };
 
-const getStockAssetClassLabel = (country: string) => {
-  if (country === "Polska") return "Akcje GPW";
-  if (country === "USA") return "Akcje USA";
-  return `Akcje: ${country}`;
+export const getStockMarketClass = (group: PortfolioAssetGroup) => {
+  // GPW is listing identity, so it takes precedence over issuer metadata.
+  // The stored Stooq + PLN pair is likewise a market-aware legacy identity
+  // in Mexo; neither condition uses a bare ticker or a company name.
+  const isGpwListing = group.lots.some(
+    (asset) =>
+      isGpwSymbol(asset.symbol ?? "") ||
+      isGpwSymbol(asset.providerId ?? "") ||
+      (asset.provider === "stooq" && asset.marketCurrency === "PLN")
+  );
+
+  if (isGpwListing) {
+    return { id: "stock:gpw", label: "Akcje GPW" };
+  }
+
+  return getConfirmedIssuerCountry(group) === "USA"
+    ? { id: "stock:usa", label: "Akcje ameryka\u0144skie" }
+    : { id: "stock:international", label: "Akcje mi\u0119dzynarodowe" };
 };
 
 /**
@@ -75,10 +89,10 @@ export const getAssetClassAllocation = (groups: PortfolioAssetGroup[]) => {
   const allocation = new Map<string, AssetClassAllocationItem>();
 
   for (const group of groups) {
-    const country = group.kind === "stock" ? getConfirmedIssuerCountry(group) : null;
-    const id = country ? `stock:${country}` : group.kind;
-    const label = country
-      ? getStockAssetClassLabel(country)
+    const stockClass = group.kind === "stock" ? getStockMarketClass(group) : null;
+    const id = stockClass?.id ?? group.kind;
+    const label = stockClass
+      ? stockClass.label
       : group.kind === "etf"
         ? "ETF"
         : group.kind === "crypto"

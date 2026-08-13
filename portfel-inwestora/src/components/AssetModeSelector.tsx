@@ -1,6 +1,6 @@
 "use client";
 
-import { ASSET_ENTRY_MODE_OPTIONS } from "@/lib/constants";
+import { VISIBLE_ASSET_ENTRY_MODE_OPTIONS } from "@/lib/constants";
 import type { AssetEntryMode } from "@/types/portfolio";
 
 type AssetModeSelectorProps = {
@@ -14,7 +14,7 @@ export default function AssetModeSelector({
 }: AssetModeSelectorProps) {
   return (
     <div className="mode-grid">
-      {ASSET_ENTRY_MODE_OPTIONS.map((option) => (
+      {VISIBLE_ASSET_ENTRY_MODE_OPTIONS.map((option) => (
         <button
           key={option.value}
           type="button"

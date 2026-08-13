@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import TruncatedText from "@/components/TruncatedText";
+import { CRYPTO_UI_ENABLED } from "@/lib/constants";
 import {
   parseBrokerOperationsCsv,
   parseBrokerOperationsXlsx,
@@ -79,9 +80,17 @@ export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) 
     completed: number;
     total: number;
   } | null>(null);
-  const previewRows = useMemo(
-    () => parseResult?.operations.slice(0, 6) ?? [],
+  const importableOperations = useMemo(
+    () =>
+      parseResult?.operations.filter(
+        (operation) => CRYPTO_UI_ENABLED || operation.kind !== "crypto"
+      ) ?? [],
     [parseResult]
+  );
+  const hiddenCryptoOperations = (parseResult?.operations.length ?? 0) - importableOperations.length;
+  const previewRows = useMemo(
+    () => importableOperations.slice(0, 6),
+    [importableOperations]
   );
   const selectedPlatform = getImportPlatformById(selectedPlatformId);
   const preset = selectedPlatform.preset;
@@ -193,7 +202,7 @@ export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) 
       return;
     }
 
-    if (!parseResult || parseResult.operations.length === 0) {
+    if (!parseResult || importableOperations.length === 0) {
       setError("Najpierw wybierz plik z operacjami.");
       return;
     }
@@ -205,7 +214,7 @@ export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) 
     setSuccess(null);
 
     try {
-      const result = await onImport(parseResult.operations, setQuoteProgress);
+      const result = await onImport(importableOperations, setQuoteProgress);
       const importedDividends = result.importedDividends ?? 0;
       const importedCashOperations = result.importedCashOperations ?? 0;
       const skippedDuplicates = result.skippedDuplicates ?? 0;
@@ -217,8 +226,8 @@ export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) 
         importedDividends +
         importedCashOperations;
       const allRecordsAreDuplicates =
-        parseResult.operations.length > 0 &&
-        skippedDuplicates === parseResult.operations.length;
+        importableOperations.length > 0 &&
+        skippedDuplicates === importableOperations.length;
 
       const resultDetails = [
         `Pominiete sprzedaze bez pozycji: ${result.skippedSells}.`,
@@ -301,7 +310,7 @@ export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) 
         <button
           type="button"
           className="primary-button self-end"
-          disabled={!parseResult?.operations.length || isImporting || isParsing}
+          disabled={!importableOperations.length || isImporting || isParsing}
           onClick={() => {
             void handleImport();
           }}
@@ -320,6 +329,12 @@ export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) 
       {error ? <p className="field-note field-note-error mt-4">{error}</p> : null}
       {success ? <p className="field-note mt-4">{success}</p> : null}
 
+      {hiddenCryptoOperations > 0 ? (
+        <p className="field-note mt-4">
+          Pominieto {hiddenCryptoOperations} {hiddenCryptoOperations === 1 ? "operacje kryptowaluty" : "operacje kryptowalut"}: dodawanie crypto jest tymczasowo ukryte.
+        </p>
+      ) : null}
+
       {parseResult?.warnings?.length ? (
         <div className="import-warning-list mt-4">
           {parseResult.warnings.map((warning) => (
@@ -332,7 +347,7 @@ export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) 
 
       {parseResult ? (
         <div className="import-summary mt-5">
-          <span>Rozpoznane operacje: {parseResult.operations.length}</span>
+          <span>Rozpoznane operacje: {importableOperations.length}</span>
           <span>Pominiete wiersze: {parseResult.skippedRows.length}</span>
         </div>
       ) : null}

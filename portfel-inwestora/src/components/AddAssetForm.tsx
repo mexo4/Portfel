@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import {
-  SEARCH_MODE_OPTIONS,
+  VISIBLE_SEARCH_MODE_OPTIONS,
   SUPPORTED_CURRENCIES,
 } from "@/lib/constants";
 import CurrencyPicker from "@/components/CurrencyPicker";
@@ -156,7 +156,7 @@ export default function AddAssetForm({
 
       {showModeSelector ? (
         <div className="mode-grid mt-6">
-          {SEARCH_MODE_OPTIONS.map((option) => (
+          {VISIBLE_SEARCH_MODE_OPTIONS.map((option) => (
             <button
               key={option.value}
               type="button"
@@ -206,7 +206,7 @@ export default function AddAssetForm({
           <input
             value={draft.symbol}
             onChange={(event) => handleSymbolChange(event.target.value)}
-            placeholder="AAPL / XTB / BTC / VWCE"
+            placeholder="AAPL / XTB / VWCE"
           />
         </label>
 

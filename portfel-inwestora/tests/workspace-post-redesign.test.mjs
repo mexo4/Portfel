@@ -209,25 +209,22 @@ test("geographic allocation uses only confirmed issuer metadata and excludes ETF
   ]);
 });
 
-test("asset-class allocation orders actual value and splits stocks only by confirmed issuer country", () => {
+test("asset-class allocation orders actual value and classifies stocks by their market", () => {
   const allocation = getAssetClassAllocation([
-    { kind: "stock", symbol: "DNP.PL", totalValue: 5_138.26, lots: [{ symbol: "DNP.PL", provider: "stooq" }] },
+    // GPW market identity deliberately wins even over stale country metadata.
+    { kind: "stock", symbol: "DNP.PL", totalValue: 5_138.26, lots: [{ symbol: "DNP.PL", provider: "stooq", marketCurrency: "PLN", issuerCountry: "USA" }] },
     { kind: "etf", symbol: "ETFBDIVPL", totalValue: 300.95, lots: [{}] },
     { kind: "crypto", symbol: "BTC", totalValue: 470.82, lots: [{}] },
     { kind: "stock", symbol: "AAPL", totalValue: 200, lots: [{ issuerCountry: "USA" }] },
-    // A listing suffix is not issuer-country evidence.
+    // Any non-US, non-GPW stock, including incomplete legacy metadata, is international.
     { kind: "stock", symbol: "UNKNOWN.DE", totalValue: 50, lots: [{}] },
   ]);
 
   assert.deepEqual(allocation, [
-    { id: "stock:Polska", label: "Akcje GPW", totalValue: 5_138.26 },
+    { id: "stock:gpw", label: "Akcje GPW", totalValue: 5_138.26 },
     { id: "crypto", label: "Krypto", totalValue: 470.82 },
     { id: "etf", label: "ETF", totalValue: 300.95 },
-    { id: "stock:USA", label: "Akcje USA", totalValue: 200 },
-    {
-      id: `stock:${UNKNOWN_COUNTRY_LABEL}`,
-      label: `Akcje: ${UNKNOWN_COUNTRY_LABEL}`,
-      totalValue: 50,
-    },
+    { id: "stock:usa", label: "Akcje ameryka\u0144skie", totalValue: 200 },
+    { id: "stock:international", label: "Akcje mi\u0119dzynarodowe", totalValue: 50 },
   ]);
 });

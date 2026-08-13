@@ -18,8 +18,10 @@ import { PortfolioWorkspaceProvider, type PortfolioWorkspaceValue } from "@/comp
 import {
   AUTO_REFRESH_INTERVAL_MS,
   CRYPTO_AUTO_REFRESH_INTERVAL_MS,
+  CRYPTO_UI_ENABLED,
   FALLBACK_FX_RATES,
   FREE_PLAN_ASSET_LIMIT,
+  isAssetEntryModeEnabled,
   SEARCH_DEBOUNCE_MS,
 } from "@/lib/constants";
 import {
@@ -2264,6 +2266,10 @@ export default function PortfolioApp({
   };
 
   const handleSearchModeChange = (mode: AssetSearchMode) => {
+    if (!isAssetEntryModeEnabled(mode)) {
+      return;
+    }
+
     quoteRequestSeqRef.current += 1;
     lastPreviewRequestKeyRef.current = "";
     isManualSymbolRef.current = false;
@@ -2292,6 +2298,10 @@ export default function PortfolioApp({
   };
 
   const handleEntryModeChange = (mode: AssetEntryMode) => {
+    if (!isAssetEntryModeEnabled(mode)) {
+      return;
+    }
+
     resetBondInteractionState();
     setEntryMode(mode);
 
@@ -3107,6 +3117,11 @@ export default function PortfolioApp({
     setSearchError(null);
     setQuoteError(null);
 
+    if (!CRYPTO_UI_ENABLED && draft.kind === "crypto") {
+      setSearchError("Dodawanie kryptowalut jest tymczasowo niedostepne.");
+      return;
+    }
+
     if (
       !name ||
       !symbol ||
@@ -3365,6 +3380,10 @@ export default function PortfolioApp({
     }
     if (!activePortfolio) {
       throw new Error("Brakuje aktywnego portfela do importu.");
+    }
+
+    if (!CRYPTO_UI_ENABLED && operations.some((operation) => operation.kind === "crypto")) {
+      throw new Error("Dodawanie kryptowalut przez import jest tymczasowo niedostepne.");
     }
 
     const now = new Date().toISOString();

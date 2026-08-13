@@ -472,6 +472,49 @@ test("caches an ETF-only v4 query and deduplicates simultaneous provider calls",
   assert.deepEqual(thirdResult, firstResult);
 });
 
+test("uses an ETF-only trusted fallback during an OpenFIGI transport failure", async () => {
+  const unavailableProvider = {
+    searchEtfs: async () => {
+      throw new OpenFigiSearchError("network");
+    },
+  };
+
+  // This broker form has not been requested earlier in the suite, so it cannot
+  // be satisfied by an in-memory cache from a successful OpenFIGI fixture.
+  const [group] = await searchEtfInstruments("ETFBDIVPL.PL", unavailableProvider);
+
+  assert.equal(group.name, "Beta ETF Dywidenda Plus");
+  assert.deepEqual(
+    {
+      ticker: group.listings[0].symbol,
+      exchange: group.listings[0].exchange,
+      currency: group.listings[0].marketCurrency,
+      isin: group.listings[0].isin,
+      providerId: group.listings[0].providerId,
+    },
+    {
+      ticker: "ETFBDIVPL",
+      exchange: "GPW",
+      currency: "PLN",
+      isin: "PLBTFDP00015",
+      providerId: "ETFBDIVPL.WA",
+    }
+  );
+});
+
+test("retains an OpenFIGI failure when no ETF-specific fallback can identify a listing", async () => {
+  const unavailableProvider = {
+    searchEtfs: async () => {
+      throw new OpenFigiSearchError("network");
+    },
+  };
+
+  await assert.rejects(
+    () => searchEtfInstruments(`NOETF${Date.now()}`, unavailableProvider),
+    (error) => error instanceof OpenFigiSearchError && error.code === "network"
+  );
+});
+
 test("uses a verified existing ETF catalogue identity when OpenFIGI truncates a GPW ticker", async () => {
   const openFigiMapping = groupEtfListings("PLBTFDP00015", [
     listing({

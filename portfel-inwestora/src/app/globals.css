@@ -3762,13 +3762,15 @@ textarea {
   white-space: nowrap;
 }
 
-/* These two cells are dense financial readouts, not labels. Preserve normal
- * spacing inside the formatted value: the table's explicit column budgets
- * and responsive scroll handle narrow viewports without compressing a
- * grouping separator or the gap before the currency marker. */
+/* These two cells are dense financial readouts, not labels. Manrope keeps
+ * regular financial strings visually compact while tabular figures preserve
+ * stable column alignment. The table's explicit width budgets continue to
+ * handle narrow viewports instead of compressing separators or currencies. */
 .portfolio-positions-table td:nth-child(4) .financial-value,
 .portfolio-positions-table td:nth-child(5) .financial-value {
+  font-family: var(--font-sans), sans-serif;
   font-feature-settings: "kern" 1, "tnum" 1;
+  font-variant-numeric: tabular-nums;
   font-kerning: normal;
   letter-spacing: normal;
   word-spacing: normal;

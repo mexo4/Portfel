@@ -606,7 +606,7 @@ export default function AssetTable({
             <input
               value={filter}
               onChange={(event) => onFilterChange(event.target.value)}
-              placeholder="AAPL, KRUK, BTC..."
+              placeholder="AAPL, KRUK, VWCE..."
             />
           </label>
         </div>

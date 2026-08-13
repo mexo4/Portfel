@@ -9,7 +9,6 @@ import {
   buildDividendForecast,
   buildDividendOperation,
   buildDividendReport,
-  getDefaultDividendInstrument,
   getPortfolioDividends,
 } from "@/lib/dividend-engine";
 import { buildCashHistory, buildCashOperation, type CashOperationKind } from "@/lib/cash-engine";
@@ -152,23 +151,22 @@ const getDefaultDividendAccountForCurrency = (
 const buildManualInstrumentSymbol = (name: string, symbol: string) =>
   normalizeSymbol(symbol || name).replace(/[^A-Z0-9._-]/g, "").slice(0, 18);
 
-const getDefaultDividendDraft = (portfolio: InvestmentPortfolio): DividendDraft => {
-  const instrument = getDefaultDividendInstrument(portfolio);
-  const currency = instrument?.marketCurrency ?? "PLN";
-  const account = getDefaultDividendAccountForCurrency(portfolio.accounts ?? [], currency);
+const getDefaultDividendDraft = (): DividendDraft => {
   const today = getTodayDateInputValue();
   const blankNumericInputs = getBlankDividendNumericInputs();
 
   return {
     editingId: null,
-    instrumentId: instrument?.id ?? "",
+    // A new dividend must never silently target the first portfolio
+    // instrument or account. Selecting both is an explicit user action.
+    instrumentId: "",
     instrumentSearch: "",
     useCustomInstrument: false,
     customInstrumentName: "",
     customInstrumentSymbol: "",
-    accountId: account?.id ?? "",
+    accountId: "",
     newAccountName: "",
-    newAccountCurrency: currency,
+    newAccountCurrency: "PLN",
     // These are intentionally blank in the UI (numeric zero) until the user
     // confirms the values.  A default instrument must not silently become a
     // default number of shares or an FX rate.
@@ -176,12 +174,12 @@ const getDefaultDividendDraft = (portfolio: InvestmentPortfolio): DividendDraft 
     dividendPerShare: 0,
     withholdingTax: 0,
     domesticTax: 0,
-    currency,
+    currency: "PLN",
     exchangeRate: blankNumericInputs.exchangeRate,
     exDividendDate: today,
     recordDate: today,
     paymentDate: today,
-    country: currency === "PLN" ? "PL" : "",
+    country: "PL",
     notes: "",
   };
 };
@@ -240,9 +238,7 @@ export default function DividendCashWorkspace({
   baseCurrency,
   onPortfolioChange,
 }: DividendCashWorkspaceProps) {
-  const [dividendDraft, setDividendDraft] = useState(() =>
-    getDefaultDividendDraft(portfolio)
-  );
+  const [dividendDraft, setDividendDraft] = useState(() => getDefaultDividendDraft());
   const [cashDraft, setCashDraft] = useState(() => getDefaultCashDraft(portfolio));
   const [dividendReportBucket, setDividendReportBucket] =
     useState<DividendReportBucket>("monthly");
@@ -349,7 +345,7 @@ export default function DividendCashWorkspace({
   };
 
   const resetDividendDraft = () => {
-    setDividendDraft(getDefaultDividendDraft(portfolio));
+    setDividendDraft(getDefaultDividendDraft());
     setDividendError(null);
   };
 

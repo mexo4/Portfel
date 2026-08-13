@@ -28,6 +28,10 @@ export const buildPortfolioDailyMetricPoints = (
 
 export const getBestPortfolioDailyMetrics = (points: PortfolioHistoryPoint[]) => {
   const dailyPoints = buildPortfolioDailyMetricPoints(points);
+  // This is deliberately the most recent raw valuation movement, not the
+  // historical maximum and not the cash-flow-neutral performance result.
+  // The results panel presents it as the current day-over-day readout.
+  const latestRaw = dailyPoints.at(-1) ?? null;
   const bestRaw = dailyPoints.reduce<PortfolioDailyMetricPoint | null>(
     (best, point) => (!best || point.rawValueChangePln > best.rawValueChangePln ? point : best),
     null
@@ -38,5 +42,5 @@ export const getBestPortfolioDailyMetrics = (points: PortfolioHistoryPoint[]) =>
     null
   );
 
-  return { dailyPoints, bestRaw, bestCashFlowNeutral };
+  return { dailyPoints, latestRaw, bestRaw, bestCashFlowNeutral };
 };

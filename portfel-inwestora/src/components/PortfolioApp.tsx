@@ -2547,6 +2547,16 @@ export default function PortfolioApp({
           };
         });
         setQuoteError(null);
+      } catch {
+        if (
+          !isCancelled &&
+          requestSeq === quoteRequestSeqRef.current &&
+          draftQuotePreviewRequest.kind === "etf"
+        ) {
+          setQuoteError(
+            "Nie udalo sie pobrac aktualnego kursu. Mozesz dodac ETF z cena transakcji."
+          );
+        }
       } finally {
         if (!isCancelled && requestSeq === quoteRequestSeqRef.current) {
           setIsQuoteLoading(false);
@@ -2688,6 +2698,18 @@ export default function PortfolioApp({
       );
 
       return quote;
+    } catch (error) {
+      // A verified ETF listing remains a valid historical transaction even
+      // when its optional live-quote provider is temporarily unavailable.
+      // Other asset kinds retain their existing strict quote failure path.
+      if (draft.kind === "etf") {
+        setQuoteError(
+          "Nie udalo sie pobrac aktualnego kursu. Mozesz dodac ETF z cena transakcji."
+        );
+        return null;
+      }
+
+      throw error;
     } finally {
       if (requestSeq === quoteRequestSeqRef.current) {
         setIsQuoteLoading(false);

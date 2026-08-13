@@ -35,7 +35,7 @@ import {
   type ChartViewport,
 } from "@/lib/chart-viewport";
 import { SEARCH_DEBOUNCE_MS, SEARCH_MODE_OPTIONS } from "@/lib/constants";
-import { fetchPortfolioHistory, searchAssets } from "@/lib/api";
+import { fetchPortfolioHistory, searchAssets, searchEtfInstruments } from "@/lib/api";
 import {
   convertFromPln,
   convertToPln,
@@ -91,7 +91,6 @@ type ChartMode =
   | "drawdown"
   | "portfolio-vs-benchmark"
   | "daily-change";
-type ChartPresentation = "line" | "candle";
 type ToneClass = "tone-positive" | "tone-negative" | "tone-neutral";
 
 type ChartRow = {
@@ -909,7 +908,6 @@ export default function PortfolioLineCharts({
   const [manualViewport, setManualViewport] = useState<ManualChartViewport>(null);
   const [isRangePickerOpen, setIsRangePickerOpen] = useState(false);
   const [isChartInteracting, setIsChartInteracting] = useState(false);
-  const [chartPresentation, setChartPresentation] = useState<ChartPresentation>("line");
   const [hiddenSeriesKeys, setHiddenSeriesKeys] = useState<string[]>([]);
   const [isChartModalOpen, setIsChartModalOpen] = useState(false);
   const [selectedBenchmarks, setSelectedBenchmarks] = useState<PortfolioBenchmarkDefinition[]>(
@@ -1311,16 +1309,30 @@ export default function PortfolioLineCharts({
     }
 
     let isCancelled = false;
+    const controller = new AbortController();
     const timeoutId = window.setTimeout(async () => {
       setIsSearchingBenchmarks(true);
       setBenchmarkSearchError(null);
 
       try {
-        const nextResults = await searchAssets({
-          query: trimmedQuery,
-          kind: SEARCH_MODE_OPTIONS.find((option) => option.value === benchmarkSearchMode)?.kind ?? "etf",
-          mode: benchmarkSearchMode,
-        });
+        // ETF discovery is intentionally isolated from `/api/search`. The
+        // default benchmark mode is ETF, so using the generic search endpoint
+        // here made that benchmark path unusable.
+        const nextResults: AssetSearchResult[] =
+          benchmarkSearchMode === "etf"
+            ? (await searchEtfInstruments({
+                query: trimmedQuery,
+                signal: controller.signal,
+              })).flatMap((group) => group.listings)
+            : await searchAssets({
+                query: trimmedQuery,
+                kind:
+                  SEARCH_MODE_OPTIONS.find(
+                    (option) => option.value === benchmarkSearchMode
+                  )?.kind ?? "etf",
+                mode: benchmarkSearchMode,
+                signal: controller.signal,
+              });
 
         if (!isCancelled) {
           setBenchmarkResults(nextResults);
@@ -1345,6 +1357,7 @@ export default function PortfolioLineCharts({
 
     return () => {
       isCancelled = true;
+      controller.abort();
       window.clearTimeout(timeoutId);
     };
   }, [benchmarkQuery, benchmarkSearchMinimumLength, benchmarkSearchMode, mode]);
@@ -2484,13 +2497,6 @@ export default function PortfolioLineCharts({
     }
   };
 
-  const renderPresentationToggle = () => (
-    <div className="line-visual-presentation-toggle" role="group" aria-label="Typ wykresu">
-      <button type="button" aria-pressed={chartPresentation === "line"} className={chartPresentation === "line" ? "is-active" : ""} onClick={() => setChartPresentation("line")}>Liniowy</button>
-      <button type="button" aria-pressed={chartPresentation === "candle"} className={chartPresentation === "candle" ? "is-active" : ""} onClick={() => setChartPresentation("candle")}>Świecowy</button>
-    </div>
-  );
-
   const renderRangeSelector = (isFullscreen = false) => {
     if (availableRangePresets.length === 0) {
       return null;
@@ -2732,13 +2738,6 @@ export default function PortfolioLineCharts({
         }}
         onWheel={handleChartWheel}
       >
-        {chartPresentation === "candle" ? (
-          <div className="line-visual-candle-unavailable" role="status">
-            <strong>Wykres świecowy jest niedostępny dla wartości portfela.</strong>
-            <span>Historia portfela zawiera wiarygodne wartości dzienne, ale nie pełne dane Open/High/Low/Close. Nie tworzymy sztucznych świec.</span>
-            <button type="button" className="ghost-button" onClick={() => setChartPresentation("line")}>Wróć do wykresu liniowego</button>
-          </div>
-        ) : (
         <ResponsiveContainer width="100%" height={isFullscreen ? "100%" : 420}>
           <ComposedChart data={renderedChartData} margin={chartMargin}>
             {visibleChartLines.some((line) => line.variant === "area") ? (
@@ -2859,7 +2858,6 @@ export default function PortfolioLineCharts({
             )}
           </ComposedChart>
         </ResponsiveContainer>
-        )}
         <div
           aria-hidden="true"
           className="line-visual-crosshair"
@@ -3120,7 +3118,6 @@ export default function PortfolioLineCharts({
               </div>
               <div className="line-visual-modal-head-actions">
                 {renderRangeSelector(true)}
-                {renderPresentationToggle()}
                 {renderChartActions(true)}
               </div>
             </div>

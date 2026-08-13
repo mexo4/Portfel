@@ -600,6 +600,25 @@ textarea {
   letter-spacing: -0.02em;
 }
 
+/* Grid items otherwise use their long intrinsic title width. Make the title
+ * column shrink before the financial result, so TruncatedText can apply its
+ * accessible ellipsis instead of widening the page. */
+.ranking-card,
+.ranking-row,
+.ranking-row > div {
+  min-width: 0;
+}
+
+.ranking-row .truncate-text {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.ranking-row strong {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
 .chart-bar-track {
   height: 12px;
   border-radius: 999px;
@@ -3743,6 +3762,18 @@ textarea {
   white-space: nowrap;
 }
 
+/* These two cells are dense financial readouts, not labels. Preserve normal
+ * spacing inside the formatted value: the table's explicit column budgets
+ * and responsive scroll handle narrow viewports without compressing a
+ * grouping separator or the gap before the currency marker. */
+.portfolio-positions-table td:nth-child(4) .financial-value,
+.portfolio-positions-table td:nth-child(5) .financial-value {
+  font-feature-settings: "kern" 1, "tnum" 1;
+  font-kerning: normal;
+  letter-spacing: normal;
+  word-spacing: normal;
+}
+
 .portfolio-table.import-preview-table {
   table-layout: auto;
 }
@@ -5899,63 +5930,6 @@ textarea {
   gap: 8px;
 }
 
-.line-visual-presentation-toggle {
-  display: inline-flex;
-  min-height: 40px;
-  overflow: hidden;
-  border: 1px solid rgba(15, 118, 110, 0.22);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.78);
-}
-
-.line-visual-presentation-toggle button {
-  min-height: 38px;
-  border: 0;
-  padding: 0 12px;
-  color: var(--muted);
-  font: inherit;
-  font-size: 0.82rem;
-  font-weight: 750;
-  background: transparent;
-  cursor: pointer;
-}
-
-.line-visual-presentation-toggle button.is-active {
-  color: #0d5550;
-  background: rgba(218, 245, 238, 0.94);
-}
-
-.line-visual-presentation-toggle button:focus-visible {
-  position: relative;
-  outline: 2px solid rgba(15, 118, 110, 0.55);
-  outline-offset: -2px;
-}
-
-.line-visual-candle-unavailable {
-  display: grid;
-  place-content: center;
-  min-height: inherit;
-  height: 100%;
-  gap: 12px;
-  padding: 28px;
-  text-align: center;
-  color: var(--muted);
-}
-
-.line-visual-candle-unavailable strong {
-  color: var(--text);
-  font-size: 1rem;
-}
-
-.line-visual-candle-unavailable span {
-  max-width: 560px;
-  line-height: 1.5;
-}
-
-.line-visual-candle-unavailable .ghost-button {
-  justify-self: center;
-}
-
 .line-visual-modal-head-actions .line-visual-chart-actions {
   flex-wrap: nowrap;
 }
@@ -6106,15 +6080,6 @@ textarea {
     justify-content: space-between;
     flex-wrap: nowrap;
     min-width: 0;
-  }
-
-  .line-visual-presentation-toggle {
-    flex: 0 0 auto;
-  }
-
-  .line-visual-presentation-toggle button {
-    padding-inline: 10px;
-    font-size: 0.76rem;
   }
 
   .line-visual-modal-head-actions .line-visual-chart-actions {

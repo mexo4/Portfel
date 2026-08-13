@@ -18,7 +18,11 @@ import {
 import { getBlankDividendNumericInputs } from "../src/lib/dividend-input-defaults.ts";
 import { getBestPortfolioDailyMetrics } from "../src/lib/portfolio-daily-metrics.ts";
 import { aggregatePortfolioHistoryPoints } from "../src/lib/server/portfolio-history.ts";
-import { getGeographicAllocation, UNKNOWN_COUNTRY_LABEL } from "../src/lib/geographic-allocation.ts";
+import {
+  getAssetClassAllocation,
+  getGeographicAllocation,
+  UNKNOWN_COUNTRY_LABEL,
+} from "../src/lib/geographic-allocation.ts";
 
 const portfolioNames = [
   { id: "one", name: "Portfel długoterminowy" },
@@ -146,13 +150,17 @@ test("virtual aggregate retains same-symbol portfolio identity and sums independ
   assert.equal(aggregate.assetsCount, 2);
 });
 
-test("cash-flow-neutral daily metric is separate from the raw best-day value change", () => {
-  const { bestRaw, bestCashFlowNeutral } = getBestPortfolioDailyMetrics([
+test("current raw daily movement remains distinct from historical best-day and cash-flow-neutral metrics", () => {
+  const { latestRaw, bestRaw, bestCashFlowNeutral } = getBestPortfolioDailyMetrics([
     { date: "2026-01-01", portfolioValuePln: 10_000, netInvestedPln: 10_000, profitLossPln: 0, timeWeightedReturnPercent: 0 },
     // +900 external capital plus +120 investment result.
     { date: "2026-01-02", portfolioValuePln: 11_020, netInvestedPln: 10_900, profitLossPln: 120, timeWeightedReturnPercent: 1.2 },
+    // The newest raw movement is deliberately not the historical maximum.
+    { date: "2026-01-03", portfolioValuePln: 10_970, netInvestedPln: 10_900, profitLossPln: 70, timeWeightedReturnPercent: 0.7 },
   ]);
 
+  assert.equal(latestRaw?.date, "2026-01-03");
+  assert.equal(latestRaw?.rawValueChangePln, -50);
   assert.equal(bestRaw?.rawValueChangePln, 1020);
   assert.equal(bestCashFlowNeutral?.cashFlowNeutralResultPln, 120);
 });
@@ -198,5 +206,28 @@ test("geographic allocation uses only confirmed issuer metadata and excludes ETF
     { country: "USA", totalValue: 200 },
     { country: "Polska", totalValue: 100 },
     { country: UNKNOWN_COUNTRY_LABEL, totalValue: 50 },
+  ]);
+});
+
+test("asset-class allocation orders actual value and splits stocks only by confirmed issuer country", () => {
+  const allocation = getAssetClassAllocation([
+    { kind: "stock", symbol: "DNP.PL", totalValue: 5_138.26, lots: [{ symbol: "DNP.PL", provider: "stooq" }] },
+    { kind: "etf", symbol: "ETFBDIVPL", totalValue: 300.95, lots: [{}] },
+    { kind: "crypto", symbol: "BTC", totalValue: 470.82, lots: [{}] },
+    { kind: "stock", symbol: "AAPL", totalValue: 200, lots: [{ issuerCountry: "USA" }] },
+    // A listing suffix is not issuer-country evidence.
+    { kind: "stock", symbol: "UNKNOWN.DE", totalValue: 50, lots: [{}] },
+  ]);
+
+  assert.deepEqual(allocation, [
+    { id: "stock:Polska", label: "Akcje GPW", totalValue: 5_138.26 },
+    { id: "crypto", label: "Krypto", totalValue: 470.82 },
+    { id: "etf", label: "ETF", totalValue: 300.95 },
+    { id: "stock:USA", label: "Akcje USA", totalValue: 200 },
+    {
+      id: `stock:${UNKNOWN_COUNTRY_LABEL}`,
+      label: `Akcje: ${UNKNOWN_COUNTRY_LABEL}`,
+      totalValue: 50,
+    },
   ]);
 });

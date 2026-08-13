@@ -9,6 +9,12 @@ export type GeographicAllocationItem = {
   totalValue: number;
 };
 
+export type AssetClassAllocationItem = {
+  id: string;
+  label: string;
+  totalValue: number;
+};
+
 const getCanonicalCatalogSymbol = (symbol: string) =>
   isGpwSymbol(symbol) ? getGpwTickerCore(symbol) : normalizeSymbol(symbol);
 
@@ -34,7 +40,7 @@ const getCatalogIssuerCountry = (group: PortfolioAssetGroup) => {
   return matchingCountries.length === 1 ? matchingCountries[0] : undefined;
 };
 
-const getConfirmedIssuerCountry = (group: PortfolioAssetGroup) => {
+export const getConfirmedIssuerCountry = (group: PortfolioAssetGroup) => {
   // Country exposure is intentionally issuer metadata, not exchange metadata.
   // A listing suffix or quote currency is not sufficient evidence of a country.
   const countries = Array.from(
@@ -51,6 +57,50 @@ const getConfirmedIssuerCountry = (group: PortfolioAssetGroup) => {
   // Legacy positions predate issuerCountry. An exact known catalog instrument
   // remains trusted metadata; this does not infer a country from its suffix.
   return getCatalogIssuerCountry(group) ?? UNKNOWN_COUNTRY_LABEL;
+};
+
+const getStockAssetClassLabel = (country: string) => {
+  if (country === "Polska") return "Akcje GPW";
+  if (country === "USA") return "Akcje USA";
+  return `Akcje: ${country}`;
+};
+
+/**
+ * The asset-class card can split stocks only when issuer-country metadata is
+ * confirmed. It never derives a country from a ticker suffix or an exchange.
+ * ETFs intentionally remain a separate class because no look-through
+ * allocation exists yet.
+ */
+export const getAssetClassAllocation = (groups: PortfolioAssetGroup[]) => {
+  const allocation = new Map<string, AssetClassAllocationItem>();
+
+  for (const group of groups) {
+    const country = group.kind === "stock" ? getConfirmedIssuerCountry(group) : null;
+    const id = country ? `stock:${country}` : group.kind;
+    const label = country
+      ? getStockAssetClassLabel(country)
+      : group.kind === "etf"
+        ? "ETF"
+        : group.kind === "crypto"
+          ? "Krypto"
+          : group.kind === "bond"
+            ? "Obligacje"
+            : "Inne";
+    const current = allocation.get(id);
+
+    allocation.set(id, {
+      id,
+      label,
+      totalValue: (current?.totalValue ?? 0) + group.totalValue,
+    });
+  }
+
+  return Array.from(allocation.values())
+    .filter((item) => item.totalValue > 0)
+    .sort(
+      (left, right) =>
+        right.totalValue - left.totalValue || left.label.localeCompare(right.label, "pl")
+    );
 };
 
 /**

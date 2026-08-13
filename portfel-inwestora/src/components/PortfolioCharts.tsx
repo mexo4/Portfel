@@ -3,10 +3,9 @@
 import { useEffect, useMemo, useState } from "react";
 import TruncatedText from "@/components/TruncatedText";
 import { fetchBenchmarkComparisons } from "@/lib/api";
-import { getGeographicAllocation } from "@/lib/geographic-allocation";
+import { getAssetClassAllocation, getGeographicAllocation } from "@/lib/geographic-allocation";
 import { buildPortfolioBenchmarkInvestments } from "@/lib/portfolio-state";
 import { convertFromPln, getGroupedPortfolioAssets } from "@/lib/pricing";
-import { isGpwSymbol } from "@/lib/ticker";
 import { formatCurrency, round } from "@/lib/utils";
 import type {
   BenchmarkComparison,
@@ -27,8 +26,6 @@ type PortfolioChartsProps = {
   view?: "all" | "structure" | "benchmarks";
 };
 
-type AssetClassBreakdownTarget = Pick<PortfolioAsset, "kind" | "symbol">;
-
 const CHART_COLORS = [
   "#0f766e",
   "#d38d38",
@@ -37,41 +34,6 @@ const CHART_COLORS = [
   "#b45309",
   "#3c7a57",
 ];
-
-const ASSET_CLASS_BREAKDOWN = [
-  {
-    id: "stock-gpw",
-    label: "Akcje GPW",
-    color: CHART_COLORS[0],
-    matches: (asset: AssetClassBreakdownTarget) =>
-      asset.kind === "stock" && isGpwSymbol(asset.symbol),
-  },
-  {
-    id: "stock-global",
-    label: "Akcje zagraniczne",
-    color: CHART_COLORS[1],
-    matches: (asset: AssetClassBreakdownTarget) =>
-      asset.kind === "stock" && !isGpwSymbol(asset.symbol),
-  },
-  {
-    id: "etf",
-    label: "ETF",
-    color: CHART_COLORS[2],
-    matches: (asset: AssetClassBreakdownTarget) => asset.kind === "etf",
-  },
-  {
-    id: "crypto",
-    label: "Krypto",
-    color: CHART_COLORS[3],
-    matches: (asset: AssetClassBreakdownTarget) => asset.kind === "crypto",
-  },
-  {
-    id: "bond",
-    label: "Obligacje",
-    color: CHART_COLORS[4],
-    matches: (asset: AssetClassBreakdownTarget) => asset.kind === "bond",
-  },
-] as const;
 
 const COMPARISON_COLORS: Record<string, string> = {
   portfolio: "#13314a",
@@ -206,21 +168,11 @@ export default function PortfolioCharts({
       color: CHART_COLORS[index % CHART_COLORS.length],
     }));
 
-  const kindBreakdown = ASSET_CLASS_BREAKDOWN
-    .map((definition) => {
-      const total = groupedAssets
-        .filter((asset) => definition.matches(asset))
-        .reduce((sum, asset) => sum + asset.totalValue, 0);
-
-      return {
-        id: definition.id,
-        label: definition.label,
-        total,
-        share: toPercent(total, totalValue),
-        color: definition.color,
-      };
-    })
-    .filter((item) => item.total > 0);
+  const kindBreakdown = getAssetClassAllocation(groupedAssets).map((item, index) => ({
+    ...item,
+    share: toPercent(item.totalValue, totalValue),
+    color: CHART_COLORS[index % CHART_COLORS.length],
+  }));
   const geographicBreakdown = getGeographicAllocation(groupedAssets).map((item, index) => ({
     ...item,
     share: toPercent(item.totalValue, totalValue),
@@ -403,7 +355,7 @@ export default function PortfolioCharts({
                 <div>
                   <p className="table-title">{item.label}</p>
                   <p className="table-note">
-                    {item.share.toFixed(1)}% · {formatCurrency(item.total, baseCurrency)}
+                    {item.share.toFixed(1)}% · {formatCurrency(item.totalValue, baseCurrency)}
                   </p>
                 </div>
               </div>

@@ -314,8 +314,6 @@ function DashboardWidgetContent({ widgetId }: { widgetId: DashboardWidgetId }) {
           detail="Otrzymane w bieżącym roku"
         />
       );
-    case "daily-result":
-      return <PortfolioLineCharts {...chartProps} dailyInvestmentResultOnly />;
     case "portfolio-chart":
       return <PortfolioLineCharts {...chartProps} initialMode="value" />;
     case "portfolio-vs-benchmark":
@@ -643,15 +641,10 @@ export default function ConfigurableDashboard() {
     }));
   };
 
-  const portfolioScopeLabel = workspace.isAllPortfoliosSelected
-    ? "Wszystkie portfele"
-    : workspace.activePortfolio?.name ?? "Aktywny portfel";
-
   return (
     <div className="workspace-page dashboard-builder" aria-busy={isLoadingLayout}>
       <section className="workspace-dashboard-intro dashboard-builder-intro">
         <div>
-          <p className="eyebrow">{portfolioScopeLabel}</p>
           <h2>Twój pulpit inwestycyjny.</h2>
           <p className="section-copy">Dane automatycznie reagują na wybrany portfel, a układ pozostaje tylko Twój.</p>
         </div>

@@ -1,6 +1,7 @@
 import { LOCAL_STOCK_CATALOG } from "@/lib/constants";
 import { queryOne } from "@/lib/server/db";
 import { setMarketCachePayload } from "@/lib/server/market-cache";
+import { fetchWithSystemTrust } from "@/lib/server/system-trust-fetch";
 import {
   getGpwTickerCore,
   isGpwSymbol,
@@ -12,6 +13,7 @@ import type { AssetSearchResult } from "@/types/portfolio";
 type PersistedCatalogItem = {
   symbol: string;
   name: string;
+  isin?: string;
 };
 
 type GpwCatalogItem = {
@@ -21,12 +23,13 @@ type GpwCatalogItem = {
   normalizedSymbol: string;
   normalizedName: string;
   normalizedHaystack: string;
+  isin?: string;
 };
 
 type GpwCatalogSnapshot = {
   items: GpwCatalogItem[];
   updatedAt: string;
-  source: "bootstrap" | "cache" | "stooq";
+  source: "bootstrap" | "cache" | "gpw";
 };
 
 type CacheRow = {
@@ -34,15 +37,19 @@ type CacheRow = {
   updated_at: string;
 };
 
-const GPW_CATALOG_CACHE_KEY = "gpw-catalog-v1";
+// v2 invalidates incomplete snapshots produced by the retired Stooq page scraper.
+const GPW_CATALOG_CACHE_KEY = "gpw-catalog-v2";
 const GPW_CATALOG_REFRESH_TTL_MS = 24 * 60 * 60 * 1_000;
-const GPW_CATALOG_PAGE_COUNT = 5;
-const STOOQ_GPW_LIST_URL = "https://stooq.pl/t/?i=513&v=0&n=1&u=1&f=1&l=";
-const STOOQ_GPW_TEXT_FALLBACK_URL = "https://r.jina.ai/http://stooq.pl/t/?i=513&v=0&n=1&u=1&f=1&l=";
-const STOOQ_ROW_MARKDOWN_PATTERN =
-  /\|\s*\*\*\[([A-Z0-9]{1,6})\]\(https?:\/\/stooq\.pl\/q\/\?s=[^)]+\)\*\*\s*\|\s*([^|]+?)\s*\|\s*([^|]*?)\s*\|/gi;
-const STOOQ_ROW_HTML_PATTERN =
-  /href="\/q\/\?s=([a-z0-9]{1,6})"[^>]*>\s*([^<]+?)\s*<\/a>[\s\S]{0,400}?<\/td>[\s\S]{0,120}?<td[^>]*>\s*([^<|]+?)\s*<\/td>/gi;
+const GPW_LIST_URL =
+  "https://www.gpw.pl/ajaxindex.php?action=GPWQuotations&start=showTable&tab=all&lang=PL&type=&full=1&format=html";
+const IGNORED_COMPANY_QUERY_WORDS = new Set([
+  "grupa",
+  "polska",
+  "poland",
+  "spolka",
+  "akcyjna",
+  "holding",
+]);
 
 let memorySnapshot: GpwCatalogSnapshot | null = null;
 let refreshPromise: Promise<GpwCatalogSnapshot | null> | null = null;
@@ -58,7 +65,7 @@ const LOCAL_GPW_ITEM_BY_CORE = new Map(
   ])
 );
 
-const createCatalogItem = (symbol: string, name: string): GpwCatalogItem => {
+const createCatalogItem = (symbol: string, name: string, isin?: string): GpwCatalogItem => {
   const symbolCore = getSymbolCore(symbol);
   const localCatalogItem = LOCAL_GPW_ITEM_BY_CORE.get(symbolCore);
   const displaySymbol = localCatalogItem
@@ -75,23 +82,24 @@ const createCatalogItem = (symbol: string, name: string): GpwCatalogItem => {
     normalizedSymbol,
     normalizedName,
     normalizedHaystack: normalizeText(
-      [displaySymbol, symbolCore, `${symbolCore}.WA`, `${symbolCore}.PL`, displayName, name]
+      [displaySymbol, symbolCore, `${symbolCore}.WA`, `${symbolCore}.PL`, displayName, name, isin]
+        .filter((value): value is string => Boolean(value?.trim()))
         .map((value) => value.trim())
-        .filter(Boolean)
         .join(" ")
     ),
+    isin: isin?.trim().toUpperCase() || undefined,
   };
 };
 
 const createSnapshot = (
-  items: Array<{ symbol: string; name: string }>,
+  items: Array<{ symbol: string; name: string; isin?: string }>,
   updatedAt: string,
   source: GpwCatalogSnapshot["source"]
 ): GpwCatalogSnapshot => ({
   items: uniqueBy(
     items
       .filter((item) => item.symbol.trim() && item.name.trim())
-      .map((item) => createCatalogItem(item.symbol, item.name)),
+      .map((item) => createCatalogItem(item.symbol, item.name, item.isin)),
     (item) => item.symbolCore
   ),
   updatedAt,
@@ -147,6 +155,7 @@ const persistSnapshot = (snapshot: GpwCatalogSnapshot) =>
       items: snapshot.items.map((item) => ({
         symbol: item.symbol,
         name: item.name,
+        isin: item.isin,
       })),
     },
     snapshot.updatedAt
@@ -167,101 +176,73 @@ const getLoadedSnapshot = async () => {
   return null;
 };
 
-const parseMarkdownRows = (content: string) => {
+const decodeHtmlText = (value: string) =>
+  value
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&#(\d+);/g, (_, code) => String.fromCodePoint(Number(code)))
+    .replace(/&#x([\da-f]+);/gi, (_, code) => String.fromCodePoint(Number.parseInt(code, 16)))
+    .replace(/\s+/g, " ")
+    .trim();
+
+export const parseGpwOfficialCatalog = (content: string) => {
   const items: PersistedCatalogItem[] = [];
 
-  for (const match of content.matchAll(STOOQ_ROW_MARKDOWN_PATTERN)) {
-    const symbol = match[1]?.trim().toUpperCase();
-    const name = match[2]?.trim();
-    if (!symbol || !name) {
+  for (const row of content.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)) {
+    const cells = Array.from(row[1]?.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/gi) ?? []).map(
+      (cell) => decodeHtmlText(cell[1] ?? "")
+    );
+    const name = cells[2]?.trim();
+    const isin = cells[3]?.trim().toUpperCase();
+    const symbol = cells[4]?.trim().toUpperCase();
+    const currency = cells[5]?.trim().toUpperCase();
+
+    if (
+      !symbol ||
+      !name ||
+      !/^[A-Z0-9]{1,8}$/.test(symbol) ||
+      currency !== "PLN"
+    ) {
       continue;
     }
 
     items.push({
       symbol: `${symbol}.WA`,
       name,
+      isin: /^[A-Z]{2}[A-Z0-9]{10}$/.test(isin ?? "") ? isin : undefined,
     });
   }
 
   return items;
 };
 
-const parseHtmlRows = (content: string) => {
-  const items: PersistedCatalogItem[] = [];
-
-  for (const match of content.matchAll(STOOQ_ROW_HTML_PATTERN)) {
-    const symbol = match[1]?.trim().toUpperCase();
-    const linkLabel = match[2]?.trim();
-    const name = match[3]?.trim();
-
-    if (!symbol || !name || linkLabel?.toUpperCase() !== symbol) {
-      continue;
-    }
-
-    items.push({
-      symbol: `${symbol}.WA`,
-      name,
-    });
-  }
-
-  return items;
-};
-
-const parseStooqCatalogPage = (content: string) => {
-  const markdownItems = parseMarkdownRows(content);
-  if (markdownItems.length > 0) {
-    return markdownItems;
-  }
-
-  return parseHtmlRows(content);
-};
-
-const fetchCatalogPage = async (pageNumber: number, timeoutMs: number) => {
-  const pageUrl = `${STOOQ_GPW_LIST_URL}${pageNumber}`;
-  const response = await fetch(pageUrl, {
+const fetchOfficialCatalog = async (timeoutMs: number) => {
+  const response = await fetchWithSystemTrust(GPW_LIST_URL, {
+    // GPW closes anonymous HTTP clients before returning the public table.
+    // Identify Mexo truthfully; this is not browser impersonation and does
+    // not bypass any access restriction.
     headers: {
       Accept: "text/html,application/xhtml+xml",
-      "User-Agent": "Mozilla/5.0",
+      "User-Agent": "Mexo/1.0 (+https://mexo.com.pl; GPW catalogue refresh)",
     },
     cache: "no-store",
     signal: AbortSignal.timeout(timeoutMs),
   }).catch(() => null);
 
-  if (response?.ok) {
-    const content = await response.text();
-    const parsedItems = parseStooqCatalogPage(content);
-
-    if (parsedItems.length > 0) {
-      return parsedItems;
-    }
-  }
-
-  const fallbackResponse = await fetch(`${STOOQ_GPW_TEXT_FALLBACK_URL}${pageNumber}`, {
-    headers: {
-      Accept: "text/plain",
-      "User-Agent": "Mozilla/5.0",
-    },
-    cache: "no-store",
-    signal: AbortSignal.timeout(timeoutMs),
-  }).catch(() => null);
-
-  if (!fallbackResponse?.ok) {
-    return [];
-  }
-
-  return parseStooqCatalogPage(await fallbackResponse.text());
+  return response?.ok ? parseGpwOfficialCatalog(await response.text()) : [];
 };
 
 const fetchFreshSnapshot = async () => {
-  const pageNumbers = Array.from({ length: GPW_CATALOG_PAGE_COUNT }, (_, index) => index + 1);
-  const pageResults = await Promise.all(pageNumbers.map((pageNumber) => fetchCatalogPage(pageNumber, 20_000)));
-  const rawItems = uniqueBy(pageResults.flat(), (item) => item.symbol);
+  const rawItems = uniqueBy(await fetchOfficialCatalog(20_000), (item) => item.symbol);
 
   if (rawItems.length === 0) {
     return null;
   }
 
-  return createSnapshot(rawItems, new Date().toISOString(), "stooq");
+  return createSnapshot(rawItems, new Date().toISOString(), "gpw");
 };
 
 const refreshSnapshotInBackground = () => {
@@ -302,36 +283,50 @@ const getAvailableSnapshot = async () => {
     return snapshot;
   }
 
-  void refreshSnapshotInBackground();
-  return bootstrapSnapshot();
+  return (await refreshSnapshotInBackground()) ?? bootstrapSnapshot();
 };
 
 const getMatchScore = (item: GpwCatalogItem, query: string, normalizedQuery: string) => {
   const upperQuery = query.trim().toUpperCase();
   const queryCore = getSymbolCore(query);
+  const compactQuery = normalizedQuery.replace(/\s+/g, "");
+  const compactName = item.normalizedName.replace(/\s+/g, "");
 
   if (item.symbol === normalizeGpwSymbol(query)) return 0;
   if (item.symbolCore === queryCore) return 1;
   if (item.symbolCore === upperQuery) return 1;
   if (item.normalizedSymbol === normalizedQuery) return 2;
   if (item.normalizedName === normalizedQuery) return 3;
-  if (queryCore && item.symbolCore.startsWith(queryCore)) return 4;
-  if (item.name.toUpperCase().startsWith(upperQuery)) return 5;
-  if (item.normalizedName.startsWith(normalizedQuery)) return 6;
-  return 7;
+  if (compactName === compactQuery) return 3;
+  if (compactName.length >= 3 && compactQuery.startsWith(compactName)) return 4;
+  if (queryCore && item.symbolCore.startsWith(queryCore)) return 5;
+  if (item.name.toUpperCase().startsWith(upperQuery)) return 6;
+  if (item.normalizedName.startsWith(normalizedQuery)) return 7;
+  return 8;
 };
 
-export const searchGpwCatalog = async (query: string): Promise<AssetSearchResult[]> => {
+export const searchGpwCatalogItems = (
+  items: Array<{ symbol: string; name: string; isin?: string }>,
+  query: string
+): AssetSearchResult[] => {
   const normalizedQuery = normalizeText(query);
 
   if (!normalizedQuery) {
     return [];
   }
 
-  const snapshot = await getAvailableSnapshot();
+  const catalogItems = createSnapshot(items, new Date(0).toISOString(), "bootstrap").items;
 
-  return snapshot.items
-    .filter((item) => item.normalizedHaystack.includes(normalizedQuery))
+  const queryWords = normalizedQuery
+    .split(" ")
+    .filter((word) => word.length >= 3 && !IGNORED_COMPANY_QUERY_WORDS.has(word));
+
+  return catalogItems
+    .filter(
+      (item) =>
+        item.normalizedHaystack.includes(normalizedQuery) ||
+        queryWords.some((word) => item.normalizedHaystack.includes(word))
+    )
     .sort(
       (left, right) =>
         getMatchScore(left, query, normalizedQuery) - getMatchScore(right, query, normalizedQuery) ||
@@ -344,9 +339,15 @@ export const searchGpwCatalog = async (query: string): Promise<AssetSearchResult
       kind: "stock" as const,
       marketCurrency: "PLN" as const,
       provider: "stooq" as const,
-      subtitle: "GPW / Stooq",
+      subtitle: "GPW",
       source: "catalog" as const,
+      isin: item.isin,
     }));
+};
+
+export const searchGpwCatalog = async (query: string): Promise<AssetSearchResult[]> => {
+  const snapshot = await getAvailableSnapshot();
+  return searchGpwCatalogItems(snapshot.items, query);
 };
 
 export const findGpwCatalogEntry = async (symbol: string) => {

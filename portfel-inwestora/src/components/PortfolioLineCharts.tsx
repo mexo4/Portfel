@@ -87,10 +87,6 @@ type PortfolioLineChartsProps = {
   /** Real portfolio boundaries for the URL-only all-portfolios view. */
   portfolioScopes?: PortfolioHistoryScope[];
   initialMode?: ChartMode;
-  /** The full daily-result panel belongs to the dedicated Charts route only. */
-  showDailyInvestmentResult?: boolean;
-  /** A dashboard widget may present the existing cash-flow-neutral bars alone. */
-  dailyInvestmentResultOnly?: boolean;
 };
 
 type RangePreset = ChartRangePreset;
@@ -99,7 +95,8 @@ type ChartMode =
   | "return"
   | "drawdown"
   | "portfolio-vs-benchmark"
-  | "daily-change";
+  | "daily-change"
+  | "daily-investment-result";
 type ToneClass = "tone-positive" | "tone-negative" | "tone-neutral";
 
 type ChartRow = {
@@ -258,6 +255,11 @@ const MODE_OPTIONS: Array<{
     value: "daily-change",
     label: "Zmiana dzienna",
     copy: "sesja do sesji w walucie bazowej",
+  },
+  {
+    value: "daily-investment-result",
+    label: "Wynik dzienny",
+    copy: "zysk lub strata bez wpłat i wypłat",
   },
 ];
 
@@ -879,8 +881,6 @@ export default function PortfolioLineCharts({
   refreshRevision,
   portfolioScopes,
   initialMode = "value",
-  showDailyInvestmentResult = false,
-  dailyInvestmentResultOnly = false,
 }: PortfolioLineChartsProps) {
   const [mode, setMode] = useState<ChartMode>(initialMode);
   const [rangePreset, setRangePreset] = useState<RangePreset>("1M");
@@ -2907,95 +2907,88 @@ export default function PortfolioLineCharts({
     );
   };
 
-  const renderDailyInvestmentResultPanel = () => (
-    <section className="line-visual-daily-result-panel mt-6" aria-labelledby="daily-result-title">
-      <div className="line-visual-daily-result-head">
+  const renderDailyInvestmentResultChart = () =>
+    hasDailyInvestmentResultData ? (
+      <div className="line-visual-daily-result-chart mt-4">
+        <ResponsiveContainer width="100%" height={260}>
+          <ComposedChart
+            data={renderedDailyInvestmentResultPoints}
+            margin={{ top: 12, right: 12, left: 0, bottom: 0 }}
+          >
+            <CartesianGrid
+              stroke="rgba(20, 35, 48, 0.08)"
+              strokeDasharray="3 10"
+              vertical={false}
+            />
+            <XAxis
+              axisLine={false}
+              dataKey="date"
+              minTickGap={40}
+              tick={{ fill: "#7b8895", fontSize: 11, fontWeight: 700 }}
+              tickFormatter={(value) => formatShortDate(String(value))}
+              tickLine={false}
+            />
+            <YAxis
+              axisLine={false}
+              domain={dailyInvestmentResultDomain}
+              orientation="right"
+              tick={{ fill: "#7b8895", fontSize: 11, fontWeight: 700 }}
+              tickFormatter={(value: number) => formatCompactCurrency(value, baseCurrency)}
+              tickLine={false}
+              width={84}
+            />
+            <Tooltip
+              allowEscapeViewBox={{ x: false, y: false }}
+              content={(props) => <ChartTooltip {...props} lines={[dailyInvestmentResultLine]} />}
+              cursor={{ fill: "rgba(15, 118, 110, 0.06)" }}
+              wrapperStyle={{ outline: "none", pointerEvents: "none" }}
+            />
+            <ReferenceLine
+              stroke="rgba(180, 35, 24, 0.36)"
+              strokeDasharray="6 6"
+              strokeWidth={1.1}
+              y={0}
+            />
+            <Bar
+              dataKey="investmentResult"
+              isAnimationActive={!isChartInteracting}
+              maxBarSize={18}
+              radius={[4, 4, 2, 2]}
+            >
+              {renderedDailyInvestmentResultPoints.map((point) => (
+                <Cell
+                  key={point.date}
+                  fill={point.investmentResult >= 0 ? "#087657" : "#b42318"}
+                />
+              ))}
+            </Bar>
+          </ComposedChart>
+        </ResponsiveContainer>
+      </div>
+    ) : (
+      <div className="line-chart-empty mt-4">
+        <p className="table-title">Brakuje danych do wyniku dziennego</p>
+        <p className="table-note mt-2">
+          Wykres pojawi się po zebraniu co najmniej dwóch kolejnych obserwacji historii.
+        </p>
+      </div>
+    );
+
+  const renderDailyInvestmentResultChartFrame = () => (
+    <div className="line-chart-shell line-visual-chart-shell line-visual-daily-result-frame mt-6">
+      <div className="line-visual-chart-head">
         <div>
-          <p className="eyebrow">Wynik dzienny</p>
-          <h3 id="daily-result-title" className="section-title">Inwestycyjny wynik dzień po dniu</h3>
-          <p className="section-copy">
-            Zielony słupek oznacza zysk, czerwony stratę. Wpłaty i wypłaty nie są
-            traktowane jako wynik inwestycyjny.
+          <p className="table-title">Inwestycyjny wynik dzień po dniu</p>
+          <p className="table-note">
+            Zielony słupek oznacza zysk, czerwony stratę. Wpłaty i wypłaty nie są traktowane
+            jako wynik inwestycyjny.
           </p>
         </div>
         <span className="line-visual-daily-result-range">Zakres: {rangePreset}</span>
       </div>
-
-      {hasDailyInvestmentResultData ? (
-        <div className="line-visual-daily-result-chart mt-4">
-          <ResponsiveContainer width="100%" height={260}>
-            <ComposedChart
-              data={renderedDailyInvestmentResultPoints}
-              margin={{ top: 12, right: 12, left: 0, bottom: 0 }}
-            >
-              <CartesianGrid
-                stroke="rgba(20, 35, 48, 0.08)"
-                strokeDasharray="3 10"
-                vertical={false}
-              />
-              <XAxis
-                axisLine={false}
-                dataKey="date"
-                minTickGap={40}
-                tick={{ fill: "#7b8895", fontSize: 11, fontWeight: 700 }}
-                tickFormatter={(value) => formatShortDate(String(value))}
-                tickLine={false}
-              />
-              <YAxis
-                axisLine={false}
-                domain={dailyInvestmentResultDomain}
-                orientation="right"
-                tick={{ fill: "#7b8895", fontSize: 11, fontWeight: 700 }}
-                tickFormatter={(value: number) => formatCompactCurrency(value, baseCurrency)}
-                tickLine={false}
-                width={84}
-              />
-              <Tooltip
-                allowEscapeViewBox={{ x: false, y: false }}
-                content={(props) => <ChartTooltip {...props} lines={[dailyInvestmentResultLine]} />}
-                cursor={{ fill: "rgba(15, 118, 110, 0.06)" }}
-                wrapperStyle={{ outline: "none", pointerEvents: "none" }}
-              />
-              <ReferenceLine
-                stroke="rgba(180, 35, 24, 0.36)"
-                strokeDasharray="6 6"
-                strokeWidth={1.1}
-                y={0}
-              />
-              <Bar
-                dataKey="investmentResult"
-                isAnimationActive={!isChartInteracting}
-                maxBarSize={18}
-                radius={[4, 4, 2, 2]}
-              >
-                {renderedDailyInvestmentResultPoints.map((point) => (
-                  <Cell
-                    key={point.date}
-                    fill={point.investmentResult >= 0 ? "#087657" : "#b42318"}
-                  />
-                ))}
-              </Bar>
-            </ComposedChart>
-          </ResponsiveContainer>
-        </div>
-      ) : (
-        <div className="line-chart-empty mt-4">
-          <p className="table-title">Brakuje danych do wyniku dziennego</p>
-          <p className="table-note mt-2">
-            Wykres pojawi się po zebraniu co najmniej dwóch kolejnych obserwacji historii.
-          </p>
-        </div>
-      )}
-    </section>
+      {renderDailyInvestmentResultChart()}
+    </div>
   );
-
-  if (dailyInvestmentResultOnly) {
-    return (
-      <section className="panel chart-card chart-card-wide line-visual-daily-widget">
-        {renderDailyInvestmentResultPanel()}
-      </section>
-    );
-  }
 
   return (
     <>
@@ -3003,7 +2996,7 @@ export default function PortfolioLineCharts({
       <div className="line-visual-topbar">
         <div>
           <p className="eyebrow">Wykresy liniowe</p>
-          <h2 className="section-title">Jeden wykres, piec trybow analizy</h2>
+          <h2 className="section-title">Jeden wykres, sześć trybów analizy</h2>
           <p className="section-copy">
             Widok inspirowany TradingView i myfund: mniej szumu, szybszy odczyt,
             te same dane w roznych perspektywach.
@@ -3174,7 +3167,7 @@ export default function PortfolioLineCharts({
         </section>
       ) : null}
 
-      {renderSummary()}
+      {mode === "daily-investment-result" ? null : renderSummary()}
 
       {isUsingFallbackHistory || isLoading || error || displayWarnings.length > 0 ? (
         <div className="line-visual-status mt-6">
@@ -3200,34 +3193,37 @@ export default function PortfolioLineCharts({
         </div>
       ) : null}
 
-      <div className="line-chart-shell line-visual-chart-shell mt-6">
-        {hasRenderableData ? (
-          <>
-            <div className="line-visual-chart-head">
-              <div>
-                <p className="table-title">{chartModel.title}</p>
-                <p className="table-note">{chartModel.copy}</p>
+      {mode === "daily-investment-result" ? (
+        renderDailyInvestmentResultChartFrame()
+      ) : (
+        <div className="line-chart-shell line-visual-chart-shell mt-6">
+          {hasRenderableData ? (
+            <>
+              <div className="line-visual-chart-head">
+                <div>
+                  <p className="table-title">{chartModel.title}</p>
+                  <p className="table-note">{chartModel.copy}</p>
+                </div>
+
+                <div className="line-visual-chart-side">
+                  {renderChartActions()}
+                  {renderLegend()}
+                </div>
               </div>
 
-              <div className="line-visual-chart-side">
-                {renderChartActions()}
-                {renderLegend()}
-              </div>
+              {!isChartModalOpen ? renderChartFrame() : null}
+            </>
+          ) : (
+            <div className="line-chart-empty">
+              <p className="table-title">{chartModel.emptyTitle}</p>
+              <p className="table-note mt-2">{chartModel.emptyCopy}</p>
             </div>
-
-            {!isChartModalOpen ? renderChartFrame() : null}
-          </>
-        ) : (
-          <div className="line-chart-empty">
-            <p className="table-title">{chartModel.emptyTitle}</p>
-            <p className="table-note mt-2">{chartModel.emptyCopy}</p>
-          </div>
-        )}
-      </div>
-      {showDailyInvestmentResult ? renderDailyInvestmentResultPanel() : null}
+          )}
+        </div>
+      )}
       </section>
 
-      {isChartModalOpen && hasRenderableData && typeof document !== "undefined"
+      {mode !== "daily-investment-result" && isChartModalOpen && hasRenderableData && typeof document !== "undefined"
         ? createPortal(
         <div
           className="line-visual-modal-backdrop"

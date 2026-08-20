@@ -4400,5 +4400,5 @@ export default function PortfolioApp({
     onFilterChange: setFilter, onSortModeChange: setAssetSortMode, onReorderGroups: handleReorderAssetGroups, onRemoveAsset: removeAsset,
   };
 
-  return <PortfolioWorkspaceProvider value={workspaceValue}><AppWorkspaceShell account={account} portfolios={portfolios} activePortfolioId={activePortfolioId} selectedPortfolioId={selectedPortfolioId} activeBaseCurrency={activeBaseCurrency} isPortfolioMutationPending={isPortfolioMutationPending} isLoggingOut={isLoggingOut} isAdmin={isAdmin} onPortfolioChange={workspaceValue.onPortfolioChange} onBaseCurrencyChange={workspaceValue.onBaseCurrencyChange} onQuickAdd={workspaceValue.onQuickAdd} onLogout={workspaceValue.onLogout}>{children}</AppWorkspaceShell></PortfolioWorkspaceProvider>;
+  return <PortfolioWorkspaceProvider value={workspaceValue}><AppWorkspaceShell account={account} portfolios={portfolios} selectedPortfolioId={selectedPortfolioId} activeBaseCurrency={activeBaseCurrency} isPortfolioMutationPending={isPortfolioMutationPending} isLoggingOut={isLoggingOut} isAdmin={isAdmin} onPortfolioChange={workspaceValue.onPortfolioChange} onBaseCurrencyChange={workspaceValue.onBaseCurrencyChange} onQuickAdd={workspaceValue.onQuickAdd} onLogout={workspaceValue.onLogout}>{children}</AppWorkspaceShell></PortfolioWorkspaceProvider>;
 }

@@ -43,6 +43,25 @@ test("dashboard layout accepts an intentional empty dashboard but rejects stale 
   );
 });
 
+test("legacy daily-result widget entries are removed without discarding the rest of a saved layout", () => {
+  const layoutWithCurrentWidget = normalizeDashboardLayout({
+    version: DASHBOARD_LAYOUT_VERSION,
+    widgets: [
+      { id: "daily-result", size: "large" },
+      { id: "portfolio-value", size: "small" },
+    ],
+  });
+
+  assert.deepEqual(layoutWithCurrentWidget.widgets, [{ id: "portfolio-value", size: "small" }]);
+  assert.deepEqual(
+    normalizeDashboardLayout({
+      version: DASHBOARD_LAYOUT_VERSION,
+      widgets: [{ id: "daily-result", size: "large" }],
+    }),
+    DEFAULT_DASHBOARD_LAYOUT
+  );
+});
+
 test("dashboard layout preserves safe reorder and size choices without financial data", () => {
   const layout = normalizeDashboardLayout({
     version: 1,
@@ -93,7 +112,7 @@ test("dashboard exposes server persistence, edit controls and non-pointer reorde
   assert.match(component, /Przenieś .* wyżej/);
   assert.match(component, /Przenieś .* niżej/);
   assert.match(component, /PortfolioLineCharts/);
-  assert.match(component, /dailyInvestmentResultOnly/);
+  assert.doesNotMatch(component, /daily-result|dailyInvestmentResultOnly/);
   assert.match(component, /CorporateEventsPanel/);
   assert.match(component, /UpcomingDividendsPanel/);
   assert.match(apiRoute, /getCurrentAuthenticatedUser/);

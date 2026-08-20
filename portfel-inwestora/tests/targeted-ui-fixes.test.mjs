@@ -46,6 +46,41 @@ test("average purchase and unit-price cells inherit the same numeric rendering a
   assert.doesNotMatch(selector[1], /"tnum"/);
 });
 
+test("current-position primary prices reuse the exact dividend-report hierarchy", async () => {
+  const table = await readSource("src/components/AssetTable.tsx");
+  const styles = await readSource("src/app/globals.css");
+
+  assert.match(table, /financial-value portfolio-financial-primary/);
+  const selector = styles.match(
+    /\.portfolio-positions-table \.portfolio-financial-primary \{([\s\S]*?)\n\}/
+  );
+
+  assert.ok(selector);
+  assert.match(selector[1], /font-family:\s*var\(--font-sans\), sans-serif/);
+  assert.match(selector[1], /font-size:\s*0\.9rem/);
+  assert.match(selector[1], /font-weight:\s*700/);
+  assert.match(selector[1], /font-variant-numeric:\s*normal/);
+});
+
+test("the active portfolio selector has one visible selected-portfolio label", async () => {
+  const shell = await readSource("src/components/AppWorkspaceShell.tsx");
+
+  assert.match(shell, /<span>Aktywny portfel<\/span><select/);
+  assert.doesNotMatch(shell, /selectedPortfolioLabel/);
+  assert.doesNotMatch(shell, /<small>\{selectedPortfolioLabel\}<\/small>/);
+});
+
+test("dividend payment columns have a complete fixed-table budget", async () => {
+  const styles = await readSource("src/app/globals.css");
+
+  assert.match(styles, /\.dividend-payments-table \{\s*min-width:\s*1200px;/);
+  assert.match(styles, /\.dividend-payments-column-instrument \{ width: 19%; \}/);
+  assert.match(styles, /\.dividend-payments-column-account \{ width: 13%; \}/);
+  assert.match(styles, /\.dividend-payments-column-dates \{ width: 16%; \}/);
+  assert.match(styles, /\.dividend-payments-column-net \{ width: 13%; \}/);
+  assert.match(styles, /\.dividend-payments-column-actions \{ width: 13%; \}/);
+});
+
 test("current positions omit the quote column and keep desktop-sized column budgets", async () => {
   const table = await readSource("src/components/AssetTable.tsx");
   const styles = await readSource("src/app/globals.css");

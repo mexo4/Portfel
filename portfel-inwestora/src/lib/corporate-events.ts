@@ -251,10 +251,29 @@ const toAmount = (value: string) => {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 };
 
-const getDateAfterKeyword = (text: string, keyword: RegExp, maxLength = 180) => {
-  const match = keyword.exec(text);
-  if (!match) return undefined;
-  return extractPolishDates(text.slice(match.index, (match.index ?? 0) + maxLength))[0];
+const getDateAfterKeyword = (
+  text: string,
+  keyword: RegExp,
+  maxLength = 180,
+  preference: "first" | "last" = "last"
+) => {
+  const flags = keyword.flags.includes("g") ? keyword.flags : `${keyword.flags}g`;
+  const pattern = new RegExp(keyword.source, flags);
+  let resolvedDate: string | undefined;
+
+  // Titles often contain e.g. "wypłata dywidendy" but no actual date. Scan
+  // all bounded occurrences and prefer the final explicit date from the
+  // issuer statement over publication metadata that follows the title.
+  for (const match of text.matchAll(pattern)) {
+    const context = text.slice(match.index, (match.index ?? 0) + maxLength);
+    if (/data publikacji|aktualizacja/iu.test(context)) continue;
+    const date = extractPolishDates(context)[0];
+    if (!date) continue;
+    if (preference === "first") return date;
+    resolvedDate = date;
+  }
+
+  return resolvedDate;
 };
 
 const getDividendStatus = (text: string): Extract<
@@ -264,7 +283,7 @@ const getDividendStatus = (text: string): Extract<
   const normalized = text.toLocaleLowerCase("pl-PL");
 
   if (
-    /uchwa|zatwierdz|walne(?:go)?\s+zgromadzeni|przeznacz.{0,48}dywidend|postanawia.{0,48}wyplac/.test(
+    /uchwa|zatwierdz|walne(?:go)?\s+zgromadzeni|przeznacz.{0,48}dywidend|postanawia.{0,48}(?:wyplac|wypłac)/u.test(
       normalized
     )
   ) {
@@ -362,7 +381,7 @@ const getUpcomingDividendEvents = (text: string): ParsedCorporateEvent[] => {
     );
     const paymentDate = getDateAfterKeyword(
       section,
-      /(?:termin\s+)?wyp.laty|dzie.\s+wyp.laty|payment\s*date/i
+      /(?:(?:termin|dzie.)\s+)?wyp.{0,3}at(?:y|a)|payment\s*date/iu
     );
     const sectionStatus = getDividendStatus(section);
     const dividendStatus =
@@ -372,11 +391,12 @@ const getUpcomingDividendEvents = (text: string): ParsedCorporateEvent[] => {
       const localContext = section.slice(entry.index, entry.index + 240);
       const localPaymentDate = getDateAfterKeyword(
         localContext,
-        /(?:\d+\.?\s+)?rat[ayęei]|(?:termin\s+)?wyp.laty|dzie.\s+wyp.laty|payment\s*date/i,
-        220
+        /(?:\d+\.?\s+)?rat[ayęei]|(?:(?:termin|dzie.)\s+)?wyp.{0,3}at(?:y|a)|payment\s*date/iu,
+        220,
+        "first"
       );
       const resolvedPaymentDate =
-        getDateAfterKeyword(localContext, /wyp.{0,6}at(?:y|a)|payment\s*date/i, 220) ??
+        getDateAfterKeyword(localContext, /wyp.{0,6}at(?:y|a)|payment\s*date/i, 220, "first") ??
         localPaymentDate ??
         paymentDate;
       const eventDate = recordDate ?? exDividendDate ?? resolvedPaymentDate;
@@ -414,18 +434,35 @@ export const parseCorporateEventDocument = (document: string): ParsedCorporateEv
   const text = normalizeDocumentText(document);
   if (!text) return [];
 
-  const changeIndex = text.search(/\bzmian[ayę]\s+terminu\b|\bnowy termin(?: publikacji)?\b/i);
-  if (changeIndex >= 0) {
-    const changeContext = text.slice(changeIndex);
+  const changeMatches = Array.from(
+    text.matchAll(
+      /\bzmian(?:a|y|ie|ę)\s+(?:harmonogramu\s+)?terminu\b|\bnowy termin(?: publikacji)?\b/giu
+    )
+  );
+  for (const changeMatch of changeMatches.reverse()) {
+    const changeContext = text.slice(changeMatch.index ?? 0, (changeMatch.index ?? 0) + 1_200);
     const eventType = getEventType(changeContext) ?? getEventType(text);
-    const dates = extractPolishDates(changeContext);
+    const newTermIndex = changeContext.search(/\bnowy termin(?: publikacji)?\b/iu);
+    const sentence = changeContext.split(/(?<=[.!?])\s/)[0] ?? changeContext;
+    const datesBeforeNew = newTermIndex >= 0
+      ? extractPolishDates(changeContext.slice(0, newTermIndex))
+      : extractPolishDates(sentence);
+    const datesAfterNew = newTermIndex >= 0
+      ? extractPolishDates(changeContext.slice(newTermIndex, newTermIndex + 420))
+      : [];
+    const previousEventDate = newTermIndex >= 0
+      ? datesBeforeNew.at(-1)
+      : datesBeforeNew[0];
+    const eventDate = newTermIndex >= 0
+      ? datesAfterNew[0]
+      : datesBeforeNew.at(-1);
 
-    if (eventType && dates.length >= 2) {
+    if (eventType && previousEventDate && eventDate && previousEventDate !== eventDate) {
       return [
         {
           eventType,
-          eventDate: dates.at(-1) as string,
-          previousEventDate: dates[0],
+          eventDate,
+          previousEventDate,
           fiscalPeriod: getFiscalPeriod(changeContext, eventType),
           fiscalYear: getFiscalYear(changeContext),
           isScheduleChange: true,
@@ -437,6 +474,10 @@ export const parseCorporateEventDocument = (document: string): ParsedCorporateEv
   const events = new Map<string, ParsedCorporateEvent>();
 
   for (const segment of getCandidateSegments(text)) {
+    // Dates naming the legal regulation (for example 6 June 2025) are not
+    // publication dates, even when the same paragraph mentions omitted Q2/Q4
+    // reports. A report date must come from the issuer's schedule segment.
+    if (/rozporządzen/iu.test(segment)) continue;
     const dateMatches = Array.from(segment.matchAll(DATE_PATTERN));
 
     for (const dateMatch of dateMatches) {

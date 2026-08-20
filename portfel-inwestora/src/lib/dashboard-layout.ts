@@ -5,7 +5,6 @@ export const DASHBOARD_WIDGET_IDS = [
   "profit-loss",
   "return-rate",
   "dividends-ytd",
-  "daily-result",
   "portfolio-chart",
   "portfolio-vs-benchmark",
   "current-positions",
@@ -78,14 +77,6 @@ export const DASHBOARD_WIDGET_DEFINITIONS: readonly DashboardWidgetDefinition[] 
     description: "Otrzymane dywidendy w bieżącym roku.",
     sizes: ["small", "medium"],
     defaultSize: "small",
-  },
-  {
-    id: "daily-result",
-    category: "summary",
-    label: "Wynik dzienny",
-    description: "Dzienny wynik inwestycyjny bez wpłat i wypłat.",
-    sizes: ["large", "full"],
-    defaultSize: "large",
   },
   {
     id: "portfolio-chart",

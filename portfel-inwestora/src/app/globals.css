@@ -1158,34 +1158,6 @@ textarea {
   padding: 18px;
 }
 
-/* A companion to the primary analysis chart, not another line mode. The
- * compact bar field makes positive/negative daily investment outcomes easy to
- * scan while retaining the shared Mexo visual language. */
-.line-visual-daily-result-panel {
-  border: 1px solid rgba(15, 118, 110, 0.12);
-  border-radius: 20px;
-  padding: 18px;
-  background:
-    linear-gradient(180deg, rgba(250, 253, 252, 0.9), rgba(255, 255, 255, 0.78)),
-    radial-gradient(circle at top right, rgba(15, 118, 110, 0.08), transparent 40%);
-}
-
-.line-visual-daily-result-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 14px;
-}
-
-.line-visual-daily-result-head .eyebrow {
-  margin-bottom: 7px;
-}
-
-.line-visual-daily-result-head .section-title {
-  font-size: 1.16rem;
-}
-
 .line-visual-daily-result-range {
   flex: 0 0 auto;
   border: 1px solid rgba(20, 35, 48, 0.1);
@@ -3073,17 +3045,17 @@ textarea {
 }
 
 .dividend-payments-table {
-  min-width: 1120px;
+  min-width: 1200px;
   table-layout: fixed;
 }
 
-.dividend-payments-column-instrument { width: 22%; }
-.dividend-payments-column-account { width: 14%; }
-.dividend-payments-column-dates { width: 20%; }
+.dividend-payments-column-instrument { width: 19%; }
+.dividend-payments-column-account { width: 13%; }
+.dividend-payments-column-dates { width: 16%; }
 .dividend-payments-column-gross,
 .dividend-payments-column-taxes,
-.dividend-payments-column-net { width: 12%; }
-.dividend-payments-column-actions { width: 20%; }
+.dividend-payments-column-net { width: 13%; }
+.dividend-payments-column-actions { width: 13%; }
 
 .dividend-payments-table td {
   overflow-wrap: anywhere;
@@ -3095,6 +3067,11 @@ textarea {
 .dividend-payments-table td:nth-child(6) {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+
+.dividend-payments-table th:nth-child(2),
+.dividend-payments-table td:nth-child(2) {
+  padding-left: 10px;
 }
 
 .dividend-payment-cards {
@@ -3827,6 +3804,23 @@ textarea {
 .portfolio-positions-table td:nth-child(4),
 .portfolio-positions-table td:nth-child(5) {
   font-variant-numeric: normal;
+}
+
+/* Primary position prices deliberately use the same Manrope rhythm as the
+ * values in "Raporty dywidend / Podsumowania i prognozy". The table itself
+ * needs its compact secondary notes, but the two headline prices should not
+ * inherit their lighter table treatment. */
+.portfolio-positions-table .portfolio-financial-primary {
+  color: var(--text);
+  font-family: var(--font-sans), sans-serif;
+  font-size: 0.9rem;
+  font-weight: 700;
+  font-variant-numeric: normal;
+  font-feature-settings: normal;
+  font-kerning: auto;
+  letter-spacing: normal;
+  line-height: normal;
+  word-spacing: normal;
 }
 
 .portfolio-positions-table th,
@@ -5395,6 +5389,11 @@ textarea {
   .sprint-table th,
   .sprint-table td {
     padding: 7px 6px;
+    font-size: 0.68rem;
+    line-height: 1.22;
+  }
+
+  .portfolio-positions-table .portfolio-financial-primary {
     font-size: 0.68rem;
     line-height: 1.22;
   }

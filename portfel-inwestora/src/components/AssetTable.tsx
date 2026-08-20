@@ -327,7 +327,7 @@ const SortableGroupSection = ({
             <DragRowPlaceholder />
           ) : (
             <>
-              <span className="financial-value">
+              <span className="financial-value portfolio-financial-primary">
                 {formatCurrency(group.averagePurchasePrice, group.averagePurchasePriceCurrency)}
               </span>
               <div className="table-note">
@@ -341,7 +341,7 @@ const SortableGroupSection = ({
             <DragRowPlaceholder />
           ) : (
             <>
-              <span className="financial-value">{currentUnitPriceLabel}</span>
+              <span className="financial-value portfolio-financial-primary">{currentUnitPriceLabel}</span>
               <div className="table-note">Wartość: <span className="financial-value">{marketValueBaseLabel}</span></div>
             </>
           )}

@@ -19,6 +19,9 @@ const shouldReturnQuickResults = (quickResults: AssetSearchResult[]) => {
 };
 
 const getRemoteSearchTimeoutMs = (mode?: AssetSearchMode) => {
+  // A cold GPW lookup hydrates the shared official issuer catalogue once.
+  // Subsequent lookups use the persisted 24h snapshot and return immediately.
+  if (mode === "stock-gpw") return 8_000;
   if (mode === "stock-international") return 3_200;
   if (mode === "stock-global") return 2_800;
   return 4_000;

@@ -1729,7 +1729,10 @@ export const searchMarketAssets = async (
 
   if (kind === "stock" && mode === "stock-gpw") {
     await warmGpwCatalog();
-    const catalogResults = await searchFirst(searchGpwCatalog);
+    // Preserve spaces and words for issuer-name matching. Ticker lookup
+    // candidates intentionally compact symbols, which previously turned
+    // "Grupa Pracuj" into "GRUPAPRACUJ" before the catalogue saw it.
+    const catalogResults = await searchGpwCatalog(query);
 
     if (catalogResults.length > 0) {
       return catalogResults;

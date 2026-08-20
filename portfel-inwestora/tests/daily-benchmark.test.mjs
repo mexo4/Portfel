@@ -128,22 +128,23 @@ test("all-portfolios PLN aggregate feeds the same cash-flow-neutral daily result
   assert.equal(daily[0]?.rawValueChangePln, 530);
 });
 
-test("charts render an additive daily-result bar visualization without replacing the main chart", async () => {
+test("charts render cash-flow-neutral daily-result bars only inside the shared sixth mode", async () => {
   const source = await readSource("src/components/PortfolioLineCharts.tsx");
 
-  assert.match(source, /line-visual-daily-result-panel/);
   assert.match(source, /buildPortfolioDailyMetricPoints\(displayPoints\)/);
   assert.match(source, /cashFlowNeutralResultPln/);
   assert.match(source, /<Bar[\s\S]*dataKey="investmentResult"/);
   assert.match(source, /investmentResult >= 0 \? "#087657" : "#b42318"/);
   assert.match(source, /<ReferenceLine[\s\S]*y=\{0\}/);
   assert.match(source, /Brakuje danych do wyniku dziennego/);
-  assert.match(source, /renderDailyInvestmentResultPanel\(\)/);
+  assert.match(source, /renderDailyInvestmentResultChartFrame\(\)/);
+  assert.doesNotMatch(source, /dailyInvestmentResultOnly|line-visual-daily-result-panel/);
   assert.match(source, /<Line[\s\S]*dataKey=\{line\.dataKey\}/);
 });
 
-test("daily-result panel is explicitly enabled only by the Wykresy route", async () => {
+test("daily result is the sixth integrated mode on the Wykresy route", async () => {
   const source = await readSource("src/components/WorkspaceRouteViews.tsx");
+  const chartsSource = await readSource("src/components/PortfolioLineCharts.tsx");
   const dashboard = source.slice(
     source.indexOf("export function WorkspaceDashboardPage"),
     source.indexOf("export function WorkspacePositionsPage")
@@ -154,7 +155,14 @@ test("daily-result panel is explicitly enabled only by the Wykresy route", async
   );
 
   assert.doesNotMatch(dashboard, /showDailyInvestmentResult/);
-  assert.match(charts, /showDailyInvestmentResult/);
+  assert.doesNotMatch(charts, /showDailyInvestmentResult/);
+  assert.match(chartsSource, /\| "daily-investment-result"/);
+  assert.match(chartsSource, /value: "daily-investment-result",[\s\S]*?label: "Wynik dzienny"/);
+  assert.match(chartsSource, /Jeden wykres, sześć trybów analizy/);
+  assert.match(
+    chartsSource,
+    /mode === "daily-investment-result" \? \([\s\S]*?renderDailyInvestmentResultChartFrame\(\)/
+  );
 });
 
 test("benchmark UI has a core-index short circuit, abortable provider search, and no global search rewrite", async () => {

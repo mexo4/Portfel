@@ -14,11 +14,19 @@ import {
 } from "@/lib/corporate-events";
 import { getGpwTickerCore, isGpwSymbol, normalizeGpwSymbol } from "@/lib/ticker";
 import { query, queryOne, withTransaction, type DatabaseTransaction } from "@/lib/server/db";
+import { findGpwCatalogEntry } from "@/lib/server/gpw-catalog";
+import { getMarketCachePayload, setMarketCachePayload } from "@/lib/server/market-cache";
+import { fetchWithSystemTrust } from "@/lib/server/system-trust-fetch";
+import { normalizeText, uniqueBy } from "@/lib/utils";
 import type { PortfolioInstrument } from "@/types/portfolio";
 
 const EVENT_REFRESH_TTL_MS = 24 * 60 * 60 * 1_000;
 const UNAVAILABLE_RETRY_TTL_MS = 60 * 60 * 1_000;
 const SOURCE_TIMEOUT_MS = 12_000;
+const PAP_DISCOVERY_CACHE_TTL_MS = 14 * 24 * 60 * 60 * 1_000;
+const PAP_TAXONOMY_CACHE_TTL_MS = 90 * 24 * 60 * 60 * 1_000;
+const PAP_MAX_ISSUER_PAGES = 6;
+const PAP_BASE_URL = "https://pap-mediaroom.pl";
 
 type GpwCorporateEventInstrumentInput = Pick<
   PortfolioInstrument,
@@ -164,6 +172,276 @@ const extractSourcePublishedAt = (text: string) => {
   const event = candidate ? parseCorporateEventDocument(`Raport roczny ${candidate}`)[0] : undefined;
   return event?.eventDate ? `${event.eventDate}T00:00:00.000Z` : undefined;
 };
+
+export type PapEspiSearchCandidate = {
+  title: string;
+  url: string;
+  sourcePublishedAt?: string;
+};
+
+type PapDiscoveryResult = {
+  status: CorporateEventSourceStatus;
+  candidates: PapEspiSearchCandidate[];
+};
+
+type PapDiscoveryCategory = "report-change" | "report-schedule" | "dividend";
+
+const decodePapText = (value: string) =>
+  value
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&#(\d+);/g, (_, code) => String.fromCodePoint(Number(code)))
+    .replace(/&#x([\da-f]+);/gi, (_, code) => String.fromCodePoint(Number.parseInt(code, 16)))
+    .replace(/\s+/g, " ")
+    .trim();
+
+const toPapSourcePublishedAt = (value: string) => {
+  const match = value.match(/(\d{1,2})[.\-/](\d{1,2})[.\-/](20\d{2})(?:,?\s*(\d{1,2}):(\d{2}))?/);
+  if (!match) return undefined;
+  const [, day, month, year, hour = "00", minute = "00"] = match;
+  return `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}T${hour.padStart(2, "0")}:${minute}:00.000Z`;
+};
+
+/** Parse the public PAP search/taxonomy list without depending on page CSS. */
+export const parsePapEspiSearchCandidates = (document: string): PapEspiSearchCandidate[] => {
+  const segments = document.split(/(?=<div\s+role="article")/gi).slice(1);
+
+  return uniqueBy(
+    segments.flatMap((segment) => {
+      if (!/<li\s+class="source">[\s\S]*?>\s*ESPI\s*<\/a>/i.test(segment)) return [];
+      const path = segment.match(/<div\s+role="article"\s+about="([^"]+)"/i)?.[1];
+      const title = segment.match(
+        /<span[^>]*class="[^"]*field--name-title[^"]*"[^>]*>([\s\S]*?)<\/span>/i
+      )?.[1];
+      const published = segment.match(/<li\s+class="date">([\s\S]*?)<\/li>/i)?.[1];
+      if (!path || !title) return [];
+
+      return [{
+        title: decodePapText(title),
+        url: new URL(path, PAP_BASE_URL).toString(),
+        sourcePublishedAt: published
+          ? toPapSourcePublishedAt(decodePapText(published))
+          : undefined,
+      }];
+    }),
+    (candidate) => candidate.url
+  );
+};
+
+const isPapCandidateForCategory = (
+  candidate: PapEspiSearchCandidate,
+  category: PapDiscoveryCategory
+) => {
+  const title = normalizeText(candidate.title);
+  const isChange = /zmian.{0,48}(?:termin|harmonogram).{0,80}raport|zmian.{0,30}terminu publikacji raport/i.test(title);
+  const isSchedule = /termin.{0,60}(?:publik|przekazyw).{0,60}raport|harmonogram.{0,70}raport/i.test(title);
+
+  if (category === "report-change") return isChange;
+  if (category === "report-schedule") return isSchedule && !isChange;
+  return /dywidend/i.test(title);
+};
+
+const fetchPapDocument = async (url: string) => {
+  try {
+    const response = await fetchWithSystemTrust(url, {
+      headers: { Accept: "text/html,application/xhtml+xml" },
+      cache: "no-store",
+      redirect: "follow",
+      signal: AbortSignal.timeout(SOURCE_TIMEOUT_MS),
+    });
+    return response.ok
+      ? { status: "SUCCESS" as const, document: await response.text() }
+      : { status: classifyCorporateEventHttpStatus(response.status), document: "" };
+  } catch {
+    return { status: "TEMPORARILY_UNAVAILABLE" as const, document: "" };
+  }
+};
+
+const extractPapIssuerTaxonomyUrl = (document: string, instrument: CanonicalInstrument) => {
+  const isin = instrument.isin?.toUpperCase();
+  const companyTokens = normalizeText(instrument.company_name)
+    .split(" ")
+    .filter((word) => word.length >= 4 && !["grupa", "polska", "spolka", "akcyjna", "holding"].includes(word));
+
+  for (const anchor of document.matchAll(/<a\s+[^>]*href="([^"]*\/taxonomy\/term\/\d+[^"]*)"[^>]*>([\s\S]*?)<\/a>/gi)) {
+    const label = decodePapText(anchor[2] ?? "");
+    const normalizedLabel = normalizeText(label);
+    if (
+      (isin && label.toUpperCase().includes(isin)) ||
+      (!isin && companyTokens.some((token) => normalizedLabel.includes(token)))
+    ) {
+      return new URL(anchor[1] ?? "", PAP_BASE_URL).toString();
+    }
+  }
+
+  return null;
+};
+
+const papDiscoveryInFlight = new Map<string, Promise<PapDiscoveryResult>>();
+
+const discoverPapTaxonomyUrl = async (instrument: CanonicalInstrument) => {
+  const identity = instrument.isin ?? instrument.ticker;
+  const cacheKey = `pap-espi:taxonomy:${identity}`;
+  const cached = await getMarketCachePayload<{ url?: string }>(
+    cacheKey,
+    PAP_TAXONOMY_CACHE_TTL_MS
+  );
+  if (cached?.url) return { status: "SUCCESS" as const, url: cached.url };
+
+  for (const queryValue of [instrument.isin, instrument.company_name].filter(Boolean) as string[]) {
+    const search = await fetchPapDocument(
+      `${PAP_BASE_URL}/szukaj/${encodeURIComponent(queryValue)}`
+    );
+    if (search.status !== "SUCCESS") {
+      if (search.status !== "NOT_FOUND") return { status: search.status, url: null };
+      continue;
+    }
+
+    for (const candidate of parsePapEspiSearchCandidates(search.document).slice(0, 4)) {
+      const article = await fetchPapDocument(candidate.url);
+      if (article.status !== "SUCCESS") continue;
+      const taxonomyUrl = extractPapIssuerTaxonomyUrl(article.document, instrument);
+      if (!taxonomyUrl) continue;
+      await setMarketCachePayload(cacheKey, { url: taxonomyUrl });
+      return { status: "SUCCESS" as const, url: taxonomyUrl };
+    }
+  }
+
+  return { status: "NOT_FOUND" as const, url: null };
+};
+
+const discoverPapCandidates = async (instrument: CanonicalInstrument): Promise<PapDiscoveryResult> => {
+  const current = papDiscoveryInFlight.get(instrument.id);
+  if (current) return current;
+
+  const discovery: Promise<PapDiscoveryResult> = (async () => {
+    const taxonomy = await discoverPapTaxonomyUrl(instrument);
+    if (!taxonomy.url) return { status: taxonomy.status, candidates: [] };
+
+    const cacheKey = `pap-espi:candidates:${instrument.isin ?? instrument.ticker}`;
+    const cached = await getMarketCachePayload<PapEspiSearchCandidate[]>(
+      cacheKey,
+      PAP_DISCOVERY_CACHE_TTL_MS
+    );
+    const pageZero = await fetchPapDocument(taxonomy.url);
+    if (pageZero.status !== "SUCCESS") {
+      return cached?.length
+        ? { status: "SUCCESS" as const, candidates: cached }
+        : { status: pageZero.status, candidates: [] };
+    }
+
+    let candidates = parsePapEspiSearchCandidates(pageZero.document);
+    const cachedSchedule = cached?.some((candidate) =>
+      isPapCandidateForCategory(candidate, "report-schedule")
+    );
+
+    if (!cachedSchedule && !candidates.some((candidate) =>
+      isPapCandidateForCategory(candidate, "report-schedule")
+    )) {
+      for (let page = 1; page < PAP_MAX_ISSUER_PAGES; page += 1) {
+        const separator = taxonomy.url.includes("?") ? "&" : "?";
+        const response = await fetchPapDocument(`${taxonomy.url}${separator}page=${page}`);
+        if (response.status !== "SUCCESS") break;
+        const pageCandidates = parsePapEspiSearchCandidates(response.document);
+        if (pageCandidates.length === 0) break;
+        candidates.push(...pageCandidates);
+        if (pageCandidates.some((candidate) =>
+          isPapCandidateForCategory(candidate, "report-schedule")
+        )) break;
+      }
+    }
+
+    candidates = uniqueBy([...candidates, ...(cached ?? [])], (candidate) => candidate.url)
+      .filter((candidate) =>
+        (["report-change", "report-schedule", "dividend"] as const).some((category) =>
+          isPapCandidateForCategory(candidate, category)
+        )
+      )
+      .sort((left, right) =>
+        (right.sourcePublishedAt ?? "").localeCompare(left.sourcePublishedAt ?? "")
+      );
+    await setMarketCachePayload(cacheKey, candidates);
+    return {
+      status: candidates.length > 0 ? "SUCCESS" as const : "NOT_FOUND" as const,
+      candidates,
+    };
+  })().finally(() => papDiscoveryInFlight.delete(instrument.id));
+
+  papDiscoveryInFlight.set(instrument.id, discovery);
+  return discovery;
+};
+
+const isPapDocumentForInstrument = (document: string, instrument: CanonicalInstrument) => {
+  if (instrument.isin) return document.toUpperCase().includes(instrument.isin.toUpperCase());
+  const normalizedDocument = normalizeText(document);
+  const tokens = normalizeText(instrument.company_name)
+    .split(" ")
+    .filter((word) => word.length >= 4 && !["grupa", "polska", "spolka", "akcyjna", "holding"].includes(word));
+  return tokens.length > 0
+    ? tokens.some((token) => normalizedDocument.includes(token))
+    : normalizedDocument.includes(normalizeText(instrument.ticker));
+};
+
+export class PapEspiDiscoveryCorporateEventProvider implements CorporateEventProvider {
+  readonly id: string;
+  private readonly category: PapDiscoveryCategory;
+
+  constructor(category: PapDiscoveryCategory) {
+    this.category = category;
+    this.id = `pap-espi-discovery-${category}`;
+  }
+
+  async fetchEvents(instrument: CanonicalInstrument): Promise<ProviderResult> {
+    const startedAt = Date.now();
+    const discovery = await discoverPapCandidates(instrument);
+    if (discovery.status !== "SUCCESS") {
+      return { status: discovery.status, events: [], durationMs: Date.now() - startedAt };
+    }
+
+    const candidates = discovery.candidates.filter((candidate) =>
+      isPapCandidateForCategory(candidate, this.category)
+    );
+    let lastFailure: ProviderResult | null = null;
+
+    for (const candidate of candidates.slice(0, 4)) {
+      const response = await fetchPapDocument(candidate.url);
+      if (response.status !== "SUCCESS") {
+        lastFailure = {
+          status: response.status,
+          events: [],
+          source: { sourceType: "PAP_ESPI", sourceUrl: candidate.url },
+          durationMs: Date.now() - startedAt,
+        };
+        continue;
+      }
+      if (!isPapDocumentForInstrument(response.document, instrument)) continue;
+
+      const events = parseCorporateEventDocument(response.document).filter((event) =>
+        this.category === "dividend"
+          ? event.eventType === "UPCOMING_DIVIDEND"
+          : event.eventType !== "UPCOMING_DIVIDEND" &&
+            (this.category !== "report-change" || event.isScheduleChange)
+      );
+      if (events.length === 0) continue;
+
+      return {
+        status: "SUCCESS",
+        events,
+        source: {
+          sourceType: "PAP_ESPI",
+          sourceUrl: candidate.url,
+          sourcePublishedAt: candidate.sourcePublishedAt,
+        },
+        durationMs: Date.now() - startedAt,
+      };
+    }
+
+    return lastFailure ?? { status: "NOT_FOUND", events: [], durationMs: Date.now() - startedAt };
+  }
+}
 
 export class GpwIssuerIrCorporateEventProvider implements CorporateEventProvider {
   id = "gpw-issuer-ir";
@@ -314,7 +592,9 @@ export class PapEspiCorporateEventProvider implements CorporateEventProvider {
 
 const defaultProviders: CorporateEventProvider[] = [
   new GpwIssuerIrCorporateEventProvider(),
-  new PapEspiCorporateEventProvider(),
+  new PapEspiDiscoveryCorporateEventProvider("report-change"),
+  new PapEspiDiscoveryCorporateEventProvider("report-schedule"),
+  new PapEspiDiscoveryCorporateEventProvider("dividend"),
 ];
 
 const refreshInFlight = new Map<string, Promise<void>>();
@@ -334,6 +614,8 @@ export const isGpwCorporateEventInstrument = (instrument: GpwCorporateEventInstr
 const getCanonicalInstrument = async (input: GpwCorporateEventInstrumentInput) => {
   const canonicalKey = getGpwCorporateEventCanonicalKey(input);
   const ticker = getGpwTickerCore(input.symbol);
+  const catalogEntry = input.isin ? null : await findGpwCatalogEntry(input.symbol);
+  const resolvedIsin = input.isin?.trim().toUpperCase() || catalogEntry?.isin || null;
   const now = new Date().toISOString();
   const id = `corporate-event-instrument:${canonicalKey}`;
 
@@ -361,7 +643,7 @@ const getCanonicalInstrument = async (input: GpwCorporateEventInstrumentInput) =
             updated_at = $3
         WHERE id = $4
       `,
-      [input.name, input.isin?.trim().toUpperCase() || null, now, existing.id]
+      [input.name, resolvedIsin, now, existing.id]
     );
 
     return queryOne<CanonicalInstrument>(
@@ -386,7 +668,7 @@ const getCanonicalInstrument = async (input: GpwCorporateEventInstrumentInput) =
           isin = COALESCE(corporate_event_instruments.isin, EXCLUDED.isin),
           updated_at = EXCLUDED.updated_at
     `,
-    [id, canonicalKey, input.isin?.trim().toUpperCase() || null, ticker, input.name, now]
+    [id, canonicalKey, resolvedIsin, ticker, input.name, now]
   );
 
   return queryOne<CanonicalInstrument>(

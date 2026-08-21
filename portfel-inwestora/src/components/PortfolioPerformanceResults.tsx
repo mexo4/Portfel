@@ -1,88 +1,71 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { fetchPortfolioHistory } from "@/lib/api";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { fetchPerformancePreferences, fetchPortfolioHistory, savePerformancePreferences } from "@/lib/api";
 import { getBestPortfolioDailyMetrics } from "@/lib/portfolio-daily-metrics";
+import { DEFAULT_PERFORMANCE_METRICS, PERFORMANCE_METRIC_IDS, PERFORMANCE_METRIC_LABELS, type PerformanceMetricId } from "@/lib/performance-preferences";
 import { convertFromPln } from "@/lib/pricing";
 import { formatCurrency, formatDate } from "@/lib/utils";
-import type {
-  CurrencyCode,
-  FxRates,
-  PortfolioAsset,
-  PortfolioHistoryPoint,
-  PortfolioHistoryScope,
-  PortfolioRealizedAdjustment,
-  PortfolioSale,
-} from "@/types/portfolio";
+import type { CurrencyCode, FxRates, PortfolioAsset, PortfolioHistoryPoint, PortfolioHistoryScope, PortfolioRealizedAdjustment, PortfolioSale } from "@/types/portfolio";
 
-type PortfolioPerformanceResultsProps = {
-  assets: PortfolioAsset[];
-  sales: PortfolioSale[];
-  realizedAdjustments: PortfolioRealizedAdjustment[];
-  fxRates: FxRates;
-  baseCurrency: CurrencyCode;
-  combinedProfitLoss: number;
-  portfolioScopes?: PortfolioHistoryScope[];
-};
+type Props = { assets: PortfolioAsset[]; sales: PortfolioSale[]; realizedAdjustments: PortfolioRealizedAdjustment[]; fxRates: FxRates; baseCurrency: CurrencyCode; combinedProfitLoss: number; portfolioScopes?: PortfolioHistoryScope[] };
 
-export default function PortfolioPerformanceResults({
-  assets,
-  sales,
-  realizedAdjustments,
-  fxRates,
-  baseCurrency,
-  combinedProfitLoss,
-  portfolioScopes,
-}: PortfolioPerformanceResultsProps) {
-  const [points, setPoints] = useState<PortfolioHistoryPoint[]>([]);
-  const [error, setError] = useState<string | null>(null);
-  const signature = useMemo(
-    () => JSON.stringify({ assets, sales, realizedAdjustments, portfolioScopes }),
-    [assets, portfolioScopes, realizedAdjustments, sales]
-  );
+export default function PortfolioPerformanceResults({ assets, sales, realizedAdjustments, fxRates, baseCurrency, combinedProfitLoss, portfolioScopes }: Props) {
+  const [historyState, setHistoryState] = useState<{ signature: string; points: PortfolioHistoryPoint[]; error: string | null }>({ signature: "", points: [], error: null });
+  const [visibleMetrics, setVisibleMetrics] = useState<PerformanceMetricId[]>(DEFAULT_PERFORMANCE_METRICS);
+  const [draftMetrics, setDraftMetrics] = useState<PerformanceMetricId[]>(DEFAULT_PERFORMANCE_METRICS);
+  const [isEditing, setIsEditing] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [preferencesError, setPreferencesError] = useState<string | null>(null);
+  const signature = useMemo(() => JSON.stringify({ assets, sales, realizedAdjustments, portfolioScopes }), [assets, portfolioScopes, realizedAdjustments, sales]);
 
   useEffect(() => {
     const controller = new AbortController();
-    const payload = JSON.parse(signature) as {
-      assets: PortfolioAsset[];
-      sales: PortfolioSale[];
-      realizedAdjustments: PortfolioRealizedAdjustment[];
-      portfolioScopes?: PortfolioHistoryScope[];
-    };
+    void fetchPerformancePreferences(controller.signal).then((response) => {
+      if (controller.signal.aborted) return;
+      setVisibleMetrics(response.visibleMetrics);
+      setDraftMetrics(response.visibleMetrics);
+    }).catch(() => { if (!controller.signal.aborted) setPreferencesError("Nie udało się pobrać ustawień widoku."); });
+    return () => controller.abort();
+  }, []);
 
-    void fetchPortfolioHistory({ ...payload, signal: controller.signal })
-      .then((response) => {
-        if (!controller.signal.aborted) {
-          setPoints(response.points);
-          setError(null);
-        }
-      })
-      .catch((reason: unknown) => {
-        if (!controller.signal.aborted) {
-          setError(reason instanceof Error ? reason.message : "Nie udało się obliczyć wyników.");
-        }
-      });
-
+  useEffect(() => {
+    const controller = new AbortController();
+    const payload = JSON.parse(signature) as { assets: PortfolioAsset[]; sales: PortfolioSale[]; realizedAdjustments: PortfolioRealizedAdjustment[]; portfolioScopes?: PortfolioHistoryScope[] };
+    void fetchPortfolioHistory({ ...payload, signal: controller.signal }).then((response) => {
+      if (controller.signal.aborted) return;
+      setHistoryState({ signature, points: response.points, error: null });
+    }).catch((reason: unknown) => {
+      if (controller.signal.aborted) return;
+      setHistoryState({ signature, points: [], error: reason instanceof Error ? reason.message : "Nie udało się obliczyć wyników." });
+    });
     return () => controller.abort();
   }, [signature]);
 
-  const metrics = useMemo(() => getBestPortfolioDailyMetrics(points), [points]);
+  const isHistoryLoading = historyState.signature !== signature;
+  const historyError = isHistoryLoading ? null : historyState.error;
+  const metrics = useMemo(() => getBestPortfolioDailyMetrics(isHistoryLoading ? [] : historyState.points), [historyState.points, isHistoryLoading]);
   const formatPln = (value: number) => formatCurrency(convertFromPln(value, baseCurrency, fxRates), baseCurrency);
+  const historyValue = (content: ReactNode) => isHistoryLoading ? <span className="performance-metric-loading">Wczytywanie…</span> : historyError ? <span className="performance-metric-unavailable">Niedostępne</span> : content;
+  const save = async () => {
+    if (!draftMetrics.length || isSaving) return;
+    setIsSaving(true); setPreferencesError(null);
+    try {
+      const response = await savePerformancePreferences(draftMetrics);
+      setVisibleMetrics(response.visibleMetrics); setDraftMetrics(response.visibleMetrics); setIsEditing(false);
+    } catch { setPreferencesError("Nie udało się zapisać ustawień widoku."); }
+    finally { setIsSaving(false); }
+  };
 
-  return (
-    <div className="workspace-page workspace-analysis-page">
-      <section className="panel chart-card chart-card-wide workspace-performance-results">
-        <p className="eyebrow">Wyniki</p>
-        <h2 className="section-title">Wyniki portfela</h2>
-        <p className="section-copy">Liczby podsumowujące pozostają oddzielone od pełnej historii i wykresów.</p>
-        <div className="workspace-performance-metric-grid mt-6">
-          <article><span>Wynik łączny</span><strong className={combinedProfitLoss >= 0 ? "tone-positive" : "tone-negative"}>{formatCurrency(combinedProfitLoss, baseCurrency)}</strong></article>
-          <article><span>Ostatnia zmiana wartości</span><strong className={metrics.latestRaw && metrics.latestRaw.rawValueChangePln >= 0 ? "tone-positive" : "tone-negative"}>{metrics.latestRaw ? formatPln(metrics.latestRaw.rawValueChangePln) : "Brak danych"}</strong><small>{metrics.latestRaw ? `${formatDate(metrics.latestRaw.date)} · względem poprzedniej wyceny` : ""}</small></article>
-          <article><span>Najlepszy dzień</span><strong className={metrics.bestRaw && metrics.bestRaw.rawValueChangePln >= 0 ? "tone-positive" : "tone-negative"}>{metrics.bestRaw ? formatPln(metrics.bestRaw.rawValueChangePln) : "Brak danych"}</strong><small>{metrics.bestRaw ? formatDate(metrics.bestRaw.date) : ""}</small></article>
-          <article><span>Najlepszy wynik dzienny</span><strong className={metrics.bestCashFlowNeutral && metrics.bestCashFlowNeutral.cashFlowNeutralResultPln >= 0 ? "tone-positive" : "tone-negative"}>{metrics.bestCashFlowNeutral ? formatPln(metrics.bestCashFlowNeutral.cashFlowNeutralResultPln) : "Brak danych"}</strong><small>Po wyłączeniu przepływów kapitału{metrics.bestCashFlowNeutral ? ` · ${formatDate(metrics.bestCashFlowNeutral.date)}` : ""}</small></article>
-        </div>
-        {error ? <p className="field-note field-note-error mt-4">{error}</p> : null}
-      </section>
+  return <div className="workspace-page workspace-analysis-page"><section className="panel chart-card chart-card-wide workspace-performance-results">
+    <div className="performance-results-heading"><div><p className="eyebrow">Wyniki</p><h2 className="section-title">Wyniki portfela</h2><p className="section-copy">Wybierz istniejące metryki, które chcesz widzieć. Obliczenia pozostają bez zmian.</p></div><button type="button" className="ghost-button" onClick={() => { setDraftMetrics(visibleMetrics); setIsEditing((value) => !value); }}>{isEditing ? "Zamknij" : "Edytuj wyniki"}</button></div>
+    {isEditing ? <div className="performance-preferences" aria-label="Widoczne wyniki">{PERFORMANCE_METRIC_IDS.map((id) => <label key={id}><input type="checkbox" checked={draftMetrics.includes(id)} onChange={(event) => setDraftMetrics((current) => event.target.checked ? [...current, id] : current.filter((item) => item !== id))} />{PERFORMANCE_METRIC_LABELS[id]}</label>)}<div><button type="button" className="ghost-button" onClick={() => setDraftMetrics([...DEFAULT_PERFORMANCE_METRICS])}>Przywróć domyślne</button><button type="button" className="primary-button" onClick={() => { void save(); }} disabled={!draftMetrics.length || isSaving}>{isSaving ? "Zapisywanie…" : "Zapisz"}</button></div>{!draftMetrics.length ? <p className="field-note field-note-error">Pozostaw co najmniej jedną metrykę.</p> : null}</div> : null}
+    <div className="workspace-performance-metric-grid mt-6">
+      {visibleMetrics.includes("total-result") ? <article><span>Wynik łączny</span><strong className={combinedProfitLoss >= 0 ? "tone-positive" : "tone-negative"}>{formatCurrency(combinedProfitLoss, baseCurrency)}</strong></article> : null}
+      {visibleMetrics.includes("latest-value-change") ? <article><span>Ostatnia zmiana wartości</span>{historyValue(metrics.latestRaw ? <><strong className={metrics.latestRaw.rawValueChangePln >= 0 ? "tone-positive" : "tone-negative"}>{formatPln(metrics.latestRaw.rawValueChangePln)}</strong><small>{formatDate(metrics.latestRaw.date)} · względem poprzedniej wyceny</small></> : <strong>Brak danych</strong>)}</article> : null}
+      {visibleMetrics.includes("best-day") ? <article><span>Najlepszy dzień</span>{historyValue(metrics.bestRaw ? <><strong className={metrics.bestRaw.rawValueChangePln >= 0 ? "tone-positive" : "tone-negative"}>{formatPln(metrics.bestRaw.rawValueChangePln)}</strong><small>{formatDate(metrics.bestRaw.date)}</small></> : <strong>Brak danych</strong>)}</article> : null}
+      {visibleMetrics.includes("best-daily-result") ? <article><span>Najlepszy wynik dzienny</span>{historyValue(metrics.bestCashFlowNeutral ? <><strong className={metrics.bestCashFlowNeutral.cashFlowNeutralResultPln >= 0 ? "tone-positive" : "tone-negative"}>{formatPln(metrics.bestCashFlowNeutral.cashFlowNeutralResultPln)}</strong><small>Po wyłączeniu przepływów kapitału · {formatDate(metrics.bestCashFlowNeutral.date)}</small></> : <><strong>Brak danych</strong><small>Po wyłączeniu przepływów kapitału</small></>)}</article> : null}
     </div>
-  );
+    {historyError ? <p className="field-note field-note-error mt-4">{historyError}</p> : null}{preferencesError ? <p className="field-note field-note-error mt-4">{preferencesError}</p> : null}
+  </section></div>;
 }

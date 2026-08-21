@@ -54,6 +54,8 @@ type EventRow = {
   fiscal_period: string | null;
   fiscal_year: number | null;
   dividend_per_share: number | null;
+  dividend_total_per_share: number | null;
+  dividend_advance_per_share: number | null;
   dividend_currency: string | null;
   ex_dividend_date: string | null;
   record_date: string | null;
@@ -112,6 +114,10 @@ const GPW_ISSUER_SOURCE_REGISTRY: Record<string, IssuerSource[]> = {
     },
   ],
   LPP: [
+    {
+      type: "ISSUER_CURRENT_REPORT",
+      url: "https://www.lpp.com/raporty/rb-16-2026-informacja-na-temat-dywidendy/",
+    },
     {
       type: "ISSUER_IR",
       url: "https://www.lpp.com/relacje-inwestorskie/raporty/raporty-okresowe/",
@@ -772,14 +778,14 @@ const upsertParsedEvents = async (
             WHERE event.instrument_id = $1
               AND event.event_type = 'UPCOMING_DIVIDEND'
               AND event.active = TRUE
-              AND source.source_url = $2
-              AND event.dividend_installment IS NOT DISTINCT FROM $3
-              AND LEFT(COALESCE(event.record_date, event.ex_dividend_date, event.payment_date, event.event_date), 4) = $4
+              AND event.dividend_installment IS NOT DISTINCT FROM $2
+              AND LEFT(COALESCE(event.record_date, event.ex_dividend_date, event.payment_date, event.event_date), 4) = $3
+              AND (event.record_date IS NOT DISTINCT FROM $4 OR event.payment_date IS NOT DISTINCT FROM $5)
             ORDER BY event.updated_at DESC
             LIMIT 1
             FOR UPDATE OF event
           `,
-          [instrument.id, result.source.sourceUrl, parsed.dividendInstallment ?? null, calendarYear]
+          [instrument.id, parsed.dividendInstallment ?? null, calendarYear, parsed.recordDate ?? null, parsed.paymentDate ?? null]
         )
       )[0];
     }
@@ -793,11 +799,11 @@ const upsertParsedEvents = async (
         `
           INSERT INTO corporate_events (
             id, instrument_id, event_type, event_date, event_time, fiscal_period, fiscal_year,
-            event_identity, dividend_per_share, dividend_currency, ex_dividend_date, record_date,
-            payment_date, dividend_installment, status, active, source_published_at, source_type,
+            event_identity, dividend_per_share, dividend_total_per_share, dividend_advance_per_share,
+            dividend_currency, ex_dividend_date, record_date, payment_date, dividend_installment, status, active, source_published_at, source_type,
             source_priority, discovered_at, updated_at
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, TRUE, $16, $17, $18, $19, $19)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, TRUE, $18, $19, $20, $21, $21)
         `,
         [
           eventId,
@@ -809,6 +815,8 @@ const upsertParsedEvents = async (
           parsed.fiscalYear ?? null,
           eventIdentity,
           parsed.dividendPerShare ?? null,
+          parsed.dividendTotalPerShare ?? null,
+          parsed.dividendAdvancePerShare ?? null,
           parsed.dividendCurrency ?? null,
           parsed.exDividendDate ?? null,
           parsed.recordDate ?? null,
@@ -831,17 +839,19 @@ const upsertParsedEvents = async (
               fiscal_year = $4,
               event_identity = $5,
               dividend_per_share = $6,
-              dividend_currency = $7,
-              ex_dividend_date = $8,
-              record_date = $9,
-              payment_date = $10,
-              dividend_installment = $11,
-              status = $12,
-              source_published_at = $13,
-              source_type = $14,
-              source_priority = $15,
-              updated_at = $16
-          WHERE id = $17
+              dividend_total_per_share = $7,
+              dividend_advance_per_share = $8,
+              dividend_currency = $9,
+              ex_dividend_date = $10,
+              record_date = $11,
+              payment_date = $12,
+              dividend_installment = $13,
+              status = $14,
+              source_published_at = $15,
+              source_type = $16,
+              source_priority = $17,
+              updated_at = $18
+          WHERE id = $19
         `,
         [
           parsed.eventDate,
@@ -850,6 +860,8 @@ const upsertParsedEvents = async (
           parsed.fiscalYear ?? null,
           eventIdentity,
           parsed.dividendPerShare ?? null,
+          parsed.dividendTotalPerShare ?? null,
+          parsed.dividendAdvancePerShare ?? null,
           parsed.dividendCurrency ?? null,
           parsed.exDividendDate ?? null,
           parsed.recordDate ?? null,
@@ -1002,6 +1014,8 @@ const toCorporateEvent = (row: EventRow): CorporateEvent => ({
   fiscalPeriod: row.fiscal_period ?? undefined,
   fiscalYear: row.fiscal_year ?? undefined,
   dividendPerShare: row.dividend_per_share ?? undefined,
+  dividendTotalPerShare: row.dividend_total_per_share ?? undefined,
+  dividendAdvancePerShare: row.dividend_advance_per_share ?? undefined,
   dividendCurrency: row.dividend_currency ?? undefined,
   exDividendDate: row.ex_dividend_date ?? undefined,
   recordDate: row.record_date ?? undefined,
@@ -1033,7 +1047,8 @@ const getStoredEvents = async (
     `
       SELECT event.id, event.instrument_id, instrument.ticker, instrument.company_name,
              event.event_type, event.event_date, event.event_time, event.fiscal_period,
-             event.fiscal_year, event.dividend_per_share, event.dividend_currency,
+             event.fiscal_year, event.dividend_per_share, event.dividend_total_per_share,
+             event.dividend_advance_per_share, event.dividend_currency,
              event.ex_dividend_date, event.record_date, event.payment_date,
              event.dividend_installment, event.status, event.active, event.source_published_at,
              event.discovered_at, event.updated_at,

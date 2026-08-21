@@ -11,6 +11,7 @@ import type {
   PortfolioAsset,
   PortfolioRealizedAdjustment,
   PortfolioSale,
+  AssetSearchResult,
 } from "@/types/portfolio";
 
 export type PortfolioWorkspaceValue = {
@@ -41,6 +42,8 @@ export type PortfolioWorkspaceValue = {
   isWatchlistLoading: boolean;
   watchlistReadError: boolean;
   onRemoveWatchlistItem: (canonicalKey: string) => Promise<void>;
+  onToggleWatchlistItem: (result: AssetSearchResult) => Promise<void>;
+  isWatchlistTogglePending: boolean;
   filter: string;
   assetSortMode: "manual" | "value-desc" | "value-asc" | "profit-desc" | "loss-asc" | "profit-percent-desc" | "profit-percent-asc" | "daily-gain-desc" | "daily-loss-asc";
   isRefreshing: boolean;

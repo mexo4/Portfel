@@ -7,10 +7,11 @@ import {
   type CorporateEvent,
   type CorporateEventsResponse,
 } from "@/lib/corporate-events";
-import { fetchCorporateEvents } from "@/lib/api";
-import { getGpwWatchlistCanonicalKey, type WatchlistItem } from "@/lib/watchlist";
+import { fetchCorporateEvents, searchAssets } from "@/lib/api";
+import { getGpwWatchlistCanonicalKey, isWatchlistEligibleGpwResult, type WatchlistItem } from "@/lib/watchlist";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { usePortfolioWorkspace } from "@/components/PortfolioWorkspaceContext";
+import type { AssetSearchResult } from "@/types/portfolio";
 
 const getNextEvent = (events: CorporateEvent[], canonicalKey: string) =>
   events
@@ -41,6 +42,10 @@ export default function WatchlistWorkspace() {
   const [isEventsLoading, setIsEventsLoading] = useState(true);
   const [isRemovingKey, setIsRemovingKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<AssetSearchResult[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -61,6 +66,27 @@ export default function WatchlistWorkspace() {
 
     return () => controller.abort();
   }, []);
+
+  useEffect(() => {
+    const trimmed = query.trim();
+    if (!trimmed) return;
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => {
+      void searchAssets({ query: trimmed, kind: "stock", mode: "stock-gpw", signal: controller.signal })
+        .then((results) => {
+          if (controller.signal.aborted) return;
+          setSearchResults(results.filter(isWatchlistEligibleGpwResult).slice(0, 8));
+          setSearchError(null);
+        })
+        .catch((reason: unknown) => {
+          if (controller.signal.aborted || (reason instanceof DOMException && reason.name === "AbortError")) return;
+          setSearchResults([]);
+          setSearchError("Nie udało się wyszukać spółek GPW.");
+        })
+        .finally(() => { if (!controller.signal.aborted) setIsSearching(false); });
+    }, 300);
+    return () => { window.clearTimeout(timeout); controller.abort(); };
+  }, [query]);
 
   const quotesByKey = useMemo(() => {
     const quotes = new Map<string, { price: number; currency: string; fetchedAt?: string }>();
@@ -108,6 +134,20 @@ export default function WatchlistWorkspace() {
         <p className="section-copy">
           Spółki pozostają w kalendarzu GPW i nadchodzących dywidendach także bez pozycji w portfelu.
         </p>
+      </section>
+
+      <section className="panel watchlist-search-panel">
+        <p className="eyebrow">Dodaj bez kupowania</p>
+        <h2 className="section-title">Znajdź spółkę GPW</h2>
+        <label className="field"><span>Nazwa lub ticker</span><input value={query} onChange={(event) => { const value = event.target.value; setQuery(value); setSearchResults([]); setSearchError(null); setIsSearching(Boolean(value.trim())); }} placeholder="np. Dino albo DNP" /></label>
+        {isSearching ? <p className="field-note">Wyszukiwanie…</p> : null}
+        {searchError ? <p className="field-note field-note-error">{searchError}</p> : null}
+        {query.trim() && !isSearching && !searchError && searchResults.length === 0 ? <p className="field-note">Brak pasujących spółek GPW.</p> : null}
+        {searchResults.length ? <div className="watchlist-search-results" aria-label="Wyniki wyszukiwania spółek GPW">{searchResults.map((result) => {
+          const key = getGpwWatchlistCanonicalKey(result.symbol);
+          const isWatched = workspace.watchlistItems.some((item) => item.canonicalKey === key);
+          return <article key={`${result.provider}:${result.providerId ?? result.symbol}`}><span><strong>{result.name}</strong><small>{result.symbol}</small></span><button type="button" className={isWatched ? "watchlist-toggle is-watched" : "watchlist-toggle"} disabled={workspace.isWatchlistTogglePending} onClick={() => { void workspace.onToggleWatchlistItem(result); }} aria-label={isWatched ? `Usuń ${result.name} z obserwowanych` : `Dodaj ${result.name} do obserwowanych`}><span aria-hidden="true">{isWatched ? "★" : "☆"}</span>{isWatched ? "Obserwowana" : "Obserwuj"}</button></article>;
+        })}</div> : null}
       </section>
 
       {isLoading ? <p className="corporate-events-state">Wczytywanie obserwowanych spółek…</p> : null}

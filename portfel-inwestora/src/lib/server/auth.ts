@@ -2,7 +2,7 @@ import bcrypt from "bcryptjs";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import { FREE_PLAN_ASSET_LIMIT } from "@/lib/constants";
+import { FREE_PLAN_ASSET_LIMIT, MEXO_TESTER_MODE } from "@/lib/constants";
 import { assertUniquePortfolioNames, normalizePortfolioBook, normalizePortfolioState } from "@/lib/portfolio-state";
 import type { NextResponse } from "next/server";
 import { createFreshUserProfile, normalizeUserProfile } from "@/lib/profile";
@@ -107,8 +107,8 @@ const normalizeSubscriptionStatus = (
 };
 
 export const canUseProFeatures = (user: Pick<AuthenticatedUser, "subscriptionPlan" | "subscriptionStatus">) =>
-  user.subscriptionPlan === "pro" &&
-  (user.subscriptionStatus === "active" || user.subscriptionStatus === "trialing");
+  MEXO_TESTER_MODE || (user.subscriptionPlan === "pro" &&
+  (user.subscriptionStatus === "active" || user.subscriptionStatus === "trialing"));
 
 const toAuthenticatedUser = (
   user: Pick<

@@ -13,7 +13,7 @@ test("maps every public workspace URL to one independently mountable view", () =
     ["/analytics/performance", "performance"],
     ["/analytics/charts", "charts"],
     ["/analytics/structure", "structure"],
-    ["/analytics/benchmarks", "benchmarks"],
+    ["/analytics/benchmarks", "charts"],
     ["/market/instruments", "instruments"],
     ["/market/watchlist", "watchlist"],
     ["/market/events", "events"],
@@ -34,7 +34,6 @@ test("each workspace URL has a route-owned view rather than a null page placehol
     ["src/app/(workspace)/analytics/performance/page.tsx", "WorkspacePerformancePage"],
     ["src/app/(workspace)/analytics/charts/page.tsx", "WorkspaceChartsPage"],
     ["src/app/(workspace)/analytics/structure/page.tsx", "WorkspaceStructurePage"],
-    ["src/app/(workspace)/analytics/benchmarks/page.tsx", "WorkspaceBenchmarksPage"],
     ["src/app/(workspace)/market/instruments/page.tsx", "WorkspaceInstrumentsPage"],
     ["src/app/(workspace)/market/watchlist/page.tsx", "WorkspaceWatchlistPage"],
     ["src/app/(workspace)/market/events/page.tsx", "WorkspaceEventsPage"],
@@ -46,6 +45,15 @@ test("each workspace URL has a route-owned view rather than a null page placehol
     assert.match(source, new RegExp(`return <${component} />`));
     assert.doesNotMatch(source, /return null/);
   }
+});
+
+test("the removed benchmark tab redirects to charts and is absent from navigation", async () => {
+  const [page, shell] = await Promise.all([
+    readFile("src/app/(workspace)/analytics/benchmarks/page.tsx", "utf8"),
+    readFile("src/components/AppWorkspaceShell.tsx", "utf8"),
+  ]);
+  assert.match(page, /redirect\(`\/analytics\/charts/);
+  assert.doesNotMatch(shell, /label: "Benchmarki"/);
 });
 
 test("dashboard route delegates aggregate data views to the configurable dashboard", async () => {

@@ -290,6 +290,21 @@ test("posts the same shared event independently to two real portfolios and aggre
   assert.equal(result.portfolioBook.portfolios[1].operations.filter((operation) => operation.operationType === "DIVIDEND").length, 1);
 });
 
+test("LPP final payment posts only the remaining amount after its paid advance", () => {
+  const portfolio = buildPortfolio({
+    ticker: "LPP.PL",
+    operations: [{ operationType: "BUY", quantity: 0.03, date: "2026-09-01" }],
+  });
+  const event = { ...kinoEvent, id: "lpp-final-2026", ticker: "LPP", companyName: "LPP", dividendPerShare: 500, dividendTotalPerShare: 900, dividendAdvancePerShare: 400, recordDate: "2026-10-09", paymentDate: "2026-10-30" };
+  const [projection] = projectDividendEventsForPortfolios({ events: [event], portfolios: [portfolio], today: "2026-10-10" });
+  assert.deepEqual({ gross: projection.estimatedGrossAmount, tax: projection.estimatedTaxAmount, net: projection.estimatedNetAmount }, { gross: 15, tax: 2.85, net: 12.15 });
+  const result = applyAutomaticGpwDividends({ portfolioBook: toBook(portfolio), events: [event], today: "2026-10-30" });
+  const [dividend] = getPortfolioDividends(result.portfolioBook.portfolios[0], { PLN: 1 });
+  assert.equal(result.addedCount, 1);
+  assert.equal(dividend.dividendPerShare, 500);
+  assert.equal(dividend.grossAmount, 15);
+});
+
 test("never auto-posts a proposal or an event without a record date", () => {
   const portfolio = buildPortfolio({
     operations: [{ operationType: "BUY", quantity: 10, date: "2026-08-01" }],
@@ -304,4 +319,3 @@ test("never auto-posts a proposal or an event without a record date", () => {
   });
   assert.equal(result.addedCount, 0);
 });
-

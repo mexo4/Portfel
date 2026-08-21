@@ -7,6 +7,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { getWorkspaceRoute, type WorkspaceRouteKey } from "@/lib/workspace-routes";
 import { ALL_PORTFOLIOS_ID, getWorkspaceReadHref, isAllPortfoliosSelection } from "@/lib/portfolio-selection";
 import type { AuthenticatedUser, CurrencyCode, InvestmentPortfolio } from "@/types/portfolio";
+import { MEXO_TESTER_MODE } from "@/lib/constants";
 
 export type { WorkspaceRouteKey } from "@/lib/workspace-routes";
 
@@ -43,7 +44,6 @@ const navigationGroups: Array<{ label: string; items: NavigationItem[] }> = [
     { key: "performance", href: "/analytics/performance", label: "Wyniki", glyph: "↗" },
     { key: "charts", href: "/analytics/charts", label: "Wykresy", glyph: "⌁" },
     { key: "structure", href: "/analytics/structure", label: "Struktura", glyph: "◒" },
-    { key: "benchmarks", href: "/analytics/benchmarks", label: "Benchmarki", glyph: "⊘" },
   ] },
   { label: "Rynek", items: [
     { key: "instruments", href: "/market/instruments", label: "Instrumenty", glyph: "⌕" },
@@ -61,7 +61,6 @@ const routeMeta: Record<WorkspaceRouteKey, { eyebrow: string; title: string; bre
   performance: { eyebrow: "Analiza", title: "Wyniki portfela", breadcrumb: "Analiza / Wyniki" },
   charts: { eyebrow: "Analiza", title: "Wykresy", breadcrumb: "Analiza / Wykresy" },
   structure: { eyebrow: "Analiza", title: "Struktura portfela", breadcrumb: "Analiza / Struktura" },
-  benchmarks: { eyebrow: "Analiza", title: "Benchmarki", breadcrumb: "Analiza / Benchmarki" },
   instruments: { eyebrow: "Rynek", title: "Znajdź instrument", breadcrumb: "Rynek / Instrumenty" },
   watchlist: { eyebrow: "Rynek", title: "Obserwowane", breadcrumb: "Rynek / Obserwowane" },
   events: { eyebrow: "Rynek", title: "Wydarzenia", breadcrumb: "Rynek / Wydarzenia" },
@@ -150,7 +149,7 @@ export default function AppWorkspaceShell({ account, portfolios, selectedPortfol
       <div className="workspace-sidebar-bottom">
         {isAdmin ? <Link href="/admin" className="workspace-nav-link" title={isSidebarCollapsed ? "Panel admina" : undefined}><span className="workspace-nav-glyph" aria-hidden="true">◇</span><span>Panel admina</span></Link> : null}
         <NavigationLink item={withWorkspaceContext({ key: "settings", href: "/settings", label: "Ustawienia", glyph: "⚙" })} active={route === "settings"} compact={isSidebarCollapsed} />
-        <div className="workspace-user-card"><span className="workspace-user-avatar" aria-hidden="true">{(account.email[0] ?? "M").toUpperCase()}</span><span className="workspace-user-copy"><strong>{account.email.split("@")[0]}</strong><small>{account.subscriptionPlan === "pro" ? "Mexo Pro" : "Mexo Free"}</small></span></div>
+        <div className="workspace-user-card"><span className="workspace-user-avatar" aria-hidden="true">{(account.email[0] ?? "M").toUpperCase()}</span><span className="workspace-user-copy"><strong>{account.email.split("@")[0]}</strong><small>{MEXO_TESTER_MODE ? "Tester" : account.subscriptionPlan === "pro" ? "Mexo Pro" : "Mexo Free"}</small></span></div>
       </div>
     </aside>
 

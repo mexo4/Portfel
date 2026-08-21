@@ -41,6 +41,8 @@ export type ParsedCorporateEvent = {
   eventIdentity?: string;
   /** Normalized issuer data; posting is separately gated by status and payment date. */
   dividendPerShare?: number;
+  dividendTotalPerShare?: number;
+  dividendAdvancePerShare?: number;
   dividendCurrency?: string;
   exDividendDate?: string;
   recordDate?: string;
@@ -68,6 +70,8 @@ export type CorporateEvent = {
   fiscalPeriod?: string;
   fiscalYear?: number;
   dividendPerShare?: number;
+  dividendTotalPerShare?: number;
+  dividendAdvancePerShare?: number;
   dividendCurrency?: string;
   exDividendDate?: string;
   recordDate?: string;
@@ -396,6 +400,27 @@ const getDividendAmounts = (text: string): ParsedDividendAmount[] => {
   return installments.length > 0 ? installments : installmentsWithoutTotal;
 };
 
+const getAdvanceAdjustedDividend = (
+  text: string,
+  amounts: ParsedDividendAmount[]
+): { amount: ParsedDividendAmount; total: number; advance: number } | null => {
+  const normalized = text.toLocaleLowerCase("pl-PL");
+  if (!/zaliczk/u.test(normalized) || !/(?:pomniejsz|wcześniej wypłac|uprzednio wypłac|wypłacon.{0,40}zaliczk)/u.test(normalized)) return null;
+
+  const advanceAmounts = amounts.filter((entry) =>
+    /zaliczk/u.test(normalized.slice(Math.max(0, entry.index - 140), entry.index + 180))
+  );
+  const totalAmounts = amounts.filter((entry) => !advanceAmounts.includes(entry));
+  if (!advanceAmounts.length || !totalAmounts.length) return null;
+
+  const total = Math.max(...totalAmounts.map((entry) => entry.amount));
+  const advance = advanceAmounts.reduce((sum, entry) => sum + entry.amount, 0);
+  const remaining = Math.round((total - advance) * 10_000) / 10_000;
+  if (!(remaining > 0)) return null;
+  const sourceAmount = totalAmounts.find((entry) => entry.amount === total) ?? totalAmounts[0]!;
+  return { amount: { ...sourceAmount, amount: remaining, installment: false }, total, advance };
+};
+
 const getUpcomingDividendEvents = (text: string): ParsedCorporateEvent[] => {
   if (!/dywidend/i.test(text)) return [];
 
@@ -413,8 +438,10 @@ const getUpcomingDividendEvents = (text: string): ParsedCorporateEvent[] => {
       : [{ section: text, statusContext: "" }];
 
   return sections.flatMap(({ section, statusContext }) => {
-    const amounts = getDividendAmounts(section);
-    if (amounts.length === 0) return [];
+    const parsedAmounts = getDividendAmounts(section);
+    if (parsedAmounts.length === 0) return [];
+    const advanceAdjustment = getAdvanceAdjustedDividend(section, parsedAmounts);
+    const amounts = advanceAdjustment ? [advanceAdjustment.amount] : parsedAmounts;
     const fiscalYear = getDividendFiscalYear(section);
 
     const recordDate =
@@ -491,6 +518,8 @@ const getUpcomingDividendEvents = (text: string): ParsedCorporateEvent[] => {
           installment ?? "single",
         ].join(":"),
         dividendPerShare: entry.amount,
+        dividendTotalPerShare: advanceAdjustment?.total,
+        dividendAdvancePerShare: advanceAdjustment?.advance,
         dividendCurrency: "PLN",
         exDividendDate,
         recordDate,

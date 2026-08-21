@@ -133,6 +133,7 @@ export default function UpcomingDividendsPanel({ portfolioId }: UpcomingDividend
                 </div>
                 <div className="upcoming-dividend-rate">
                   <strong>{formatCurrency(event.dividendPerShare ?? 0, currency)} / akcję</strong>
+                  {event.dividendTotalPerShare !== undefined && event.dividendAdvancePerShare !== undefined ? <small>Łącznie: {formatCurrency(event.dividendTotalPerShare, currency)} · wypłacona zaliczka: {formatCurrency(event.dividendAdvancePerShare, currency)} · pozostało: {formatCurrency(event.dividendPerShare ?? 0, currency)}</small> : null}
                   <span className={getStatusClassName(event)}>{getStatusLabel(event)}</span>
                 </div>
                 <div className="upcoming-dividend-position">

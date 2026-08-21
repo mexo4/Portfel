@@ -32,6 +32,7 @@ import { isGpwSymbol } from "@/lib/ticker";
 import type { CorporateEventsResponse } from "@/lib/corporate-events";
 import type { DashboardScopeLayouts } from "@/lib/dashboard-layout";
 import type { WatchlistItem, WatchlistItemInput } from "@/lib/watchlist";
+import type { PerformanceMetricId } from "@/lib/performance-preferences";
 
 type SearchParams = {
   query: string;
@@ -233,6 +234,18 @@ export const removeWatchlistItem = async (canonicalKey: string) =>
   requestJson<{ removed: boolean }>(
     `/api/watchlist?${new URLSearchParams({ key: canonicalKey }).toString()}`,
     { method: "DELETE" }
+  );
+
+export const fetchPerformancePreferences = async (signal?: AbortSignal) =>
+  requestJson<{ visibleMetrics: PerformanceMetricId[]; revision: number; updatedAt: string | null }>(
+    "/api/performance-preferences",
+    { signal }
+  );
+
+export const savePerformancePreferences = async (visibleMetrics: PerformanceMetricId[]) =>
+  requestJson<{ visibleMetrics: PerformanceMetricId[]; revision: number; updatedAt: string | null }>(
+    "/api/performance-preferences",
+    { method: "PUT", body: JSON.stringify({ visibleMetrics }) }
   );
 
 export type DashboardLayoutResponse = {

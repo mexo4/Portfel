@@ -308,6 +308,25 @@ test("keeps Grupa Kęty dividend installments as separate dated upcoming payment
   );
 });
 
+test("subtracts an already paid advance from the confirmed LPP total", () => {
+  const [event] = parseCorporateEventDocument(`
+    Uchwała Zwyczajnego Walnego Zgromadzenia.
+    Dywidenda za rok obrotowy 2025/2026: łączna dywidenda wynosi 900 PLN na jedną akcję.
+    Dzień dywidendy ustalono na 9 października 2026 r., a ostateczny termin wypłaty dywidendy na 30 października 2026 r.
+    Kwota dywidendy faktycznie wypłaconej zostanie pomniejszona o wcześniej wypłaconą zaliczkę
+    w wysokości 400 PLN na jedną akcję.
+  `).filter((candidate) => candidate.eventType === "UPCOMING_DIVIDEND");
+
+  assert.deepEqual({
+    remaining: event.dividendPerShare,
+    total: event.dividendTotalPerShare,
+    advance: event.dividendAdvancePerShare,
+    recordDate: event.recordDate,
+    paymentDate: event.paymentDate,
+    status: event.dividendStatus,
+  }, { remaining: 500, total: 900, advance: 400, recordDate: "2026-10-09", paymentDate: "2026-10-30", status: "CONFIRMED" });
+});
+
 test("associates installment dates that appear before each per-share amount", () => {
   const events = parseCorporateEventDocument(`
     Dywidenda za rok 2025: uchwała Zwyczajnego Walnego Zgromadzenia.

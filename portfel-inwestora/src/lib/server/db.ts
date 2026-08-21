@@ -120,6 +120,15 @@ const schemaStatements = [
   `,
   "CREATE INDEX IF NOT EXISTS idx_dashboard_layout_scopes_user_id ON user_dashboard_layout_scopes(user_id)",
   `
+    CREATE TABLE IF NOT EXISTS user_performance_preferences (
+      user_id TEXT PRIMARY KEY,
+      visible_metrics_json TEXT NOT NULL,
+      revision INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+  `,
+  `
     CREATE TABLE IF NOT EXISTS auth_accounts (
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL,
@@ -372,6 +381,8 @@ const schemaStatements = [
       fiscal_year INTEGER,
       event_identity TEXT NOT NULL DEFAULT '',
       dividend_per_share DOUBLE PRECISION,
+      dividend_total_per_share DOUBLE PRECISION,
+      dividend_advance_per_share DOUBLE PRECISION,
       dividend_currency TEXT,
       ex_dividend_date TEXT,
       record_date TEXT,
@@ -389,6 +400,8 @@ const schemaStatements = [
   `,
   "ALTER TABLE corporate_events ADD COLUMN IF NOT EXISTS event_identity TEXT",
   "ALTER TABLE corporate_events ADD COLUMN IF NOT EXISTS dividend_per_share DOUBLE PRECISION",
+  "ALTER TABLE corporate_events ADD COLUMN IF NOT EXISTS dividend_total_per_share DOUBLE PRECISION",
+  "ALTER TABLE corporate_events ADD COLUMN IF NOT EXISTS dividend_advance_per_share DOUBLE PRECISION",
   "ALTER TABLE corporate_events ADD COLUMN IF NOT EXISTS dividend_currency TEXT",
   "ALTER TABLE corporate_events ADD COLUMN IF NOT EXISTS ex_dividend_date TEXT",
   "ALTER TABLE corporate_events ADD COLUMN IF NOT EXISTS record_date TEXT",

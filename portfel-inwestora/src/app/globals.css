@@ -594,6 +594,20 @@ textarea {
   min-width: 0;
 }
 
+.chart-row-copy > div {
+  flex: 1 1 auto;
+  width: 0;
+}
+
+.chart-row-copy > strong {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.chart-row-copy .truncate-text {
+  max-width: 100%;
+}
+
 .chart-row-copy strong,
 .ranking-row strong {
   font-size: 1rem;
@@ -3658,6 +3672,92 @@ textarea {
   gap: 7px;
 }
 
+.watchlist-search-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.watchlist-search-results {
+  display: grid;
+  gap: 8px;
+}
+
+.watchlist-search-results article {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  min-width: 0;
+  padding: 12px 0;
+  border-top: 1px solid var(--line);
+}
+
+.watchlist-search-results article > span {
+  display: grid;
+  min-width: 0;
+}
+
+.watchlist-search-results article strong,
+.watchlist-search-results article small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.performance-results-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.performance-preferences {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 18px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface-soft);
+}
+
+.performance-preferences label {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.performance-preferences > div {
+  display: flex;
+  grid-column: 1 / -1;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.performance-metric-loading,
+.performance-metric-unavailable {
+  color: var(--muted);
+  font-weight: 650;
+}
+
+@media (max-width: 767px) {
+  .performance-results-heading,
+  .watchlist-search-results article {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .performance-preferences {
+    grid-template-columns: 1fr;
+  }
+
+  .performance-preferences > div {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
+
 .watchlist-list {
   display: grid;
   gap: 10px;
@@ -4548,6 +4648,10 @@ textarea {
   .chart-axis-meta {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .chart-row-copy > div {
+    width: 100%;
   }
 
   .line-chart-range-tabs,

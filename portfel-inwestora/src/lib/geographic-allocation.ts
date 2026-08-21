@@ -15,6 +15,19 @@ export type AssetClassAllocationItem = {
   totalValue: number;
 };
 
+const COUNTRY_ALIASES: Record<string, string> = {
+  pl: "Polska",
+  poland: "Polska",
+  polska: "Polska",
+  us: "USA",
+  usa: "USA",
+  "united states": "USA",
+  "united states of america": "USA",
+};
+
+const normalizeIssuerCountry = (value: string) =>
+  COUNTRY_ALIASES[value.trim().toLocaleLowerCase("en-US")] ?? value.trim();
+
 const getCanonicalCatalogSymbol = (symbol: string) =>
   isGpwSymbol(symbol) ? getGpwTickerCore(symbol) : normalizeSymbol(symbol);
 
@@ -48,6 +61,7 @@ export const getConfirmedIssuerCountry = (group: PortfolioAssetGroup) => {
       group.lots
         .map((asset) => asset.issuerCountry?.trim())
         .filter((country): country is string => Boolean(country))
+        .map(normalizeIssuerCountry)
     )
   );
 
@@ -56,7 +70,19 @@ export const getConfirmedIssuerCountry = (group: PortfolioAssetGroup) => {
 
   // Legacy positions predate issuerCountry. An exact known catalog instrument
   // remains trusted metadata; this does not infer a country from its suffix.
-  return getCatalogIssuerCountry(group) ?? UNKNOWN_COUNTRY_LABEL;
+  const catalogCountry = getCatalogIssuerCountry(group);
+  if (catalogCountry) return normalizeIssuerCountry(catalogCountry);
+
+  // For legacy holdings, a verified GPW listing is enough to use Poland only
+  // when no issuer metadata says otherwise. Explicit issuer country above
+  // always wins, so a foreign company listed on GPW remains foreign.
+  const isConfirmedGpwListing = group.lots.some(
+    (asset) =>
+      isGpwSymbol(asset.symbol ?? "") ||
+      isGpwSymbol(asset.providerId ?? "") ||
+      (asset.provider === "stooq" && asset.marketCurrency === "PLN")
+  );
+  return isConfirmedGpwListing ? "Polska" : UNKNOWN_COUNTRY_LABEL;
 };
 
 export const getStockMarketClass = (group: PortfolioAssetGroup) => {

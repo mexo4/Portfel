@@ -20,6 +20,7 @@ export const APP_DESCRIPTION =
  * Flip to `true` when the crypto workflow is ready to be offered again.
  */
 export const CRYPTO_UI_ENABLED = false;
+export const MEXO_TESTER_MODE = true;
 
 export const BASE_CURRENCY: CurrencyCode = "PLN";
 export const AUTO_REFRESH_INTERVAL_MS = 30_000;

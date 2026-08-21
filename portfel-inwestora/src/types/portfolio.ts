@@ -663,6 +663,9 @@ export type PortfolioDividend = {
   paymentDate: string;
   country: string;
   notes: string;
+  isAutomatic: boolean;
+  corporateEventId?: string;
+  sourceUrl?: string;
   operationId: string;
   createdAt: string;
   updatedAt: string;

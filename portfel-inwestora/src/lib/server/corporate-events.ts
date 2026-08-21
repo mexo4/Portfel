@@ -457,7 +457,8 @@ export class GpwIssuerIrCorporateEventProvider implements CorporateEventProvider
     let response: Response;
 
     try {
-      response = await fetch(source.url, {
+      response = await fetchWithSystemTrust(source.url, {
+        headers: { Accept: "text/html,application/xhtml+xml" },
         cache: "no-store",
         redirect: "follow",
         signal: AbortSignal.timeout(SOURCE_TIMEOUT_MS),
@@ -544,7 +545,8 @@ export class PapEspiCorporateEventProvider implements CorporateEventProvider {
 
     const startedAt = Date.now();
     try {
-      const response = await fetch(url, {
+      const response = await fetchWithSystemTrust(url, {
+        headers: { Accept: "text/html,application/xhtml+xml" },
         cache: "no-store",
         redirect: "follow",
         signal: AbortSignal.timeout(SOURCE_TIMEOUT_MS),
@@ -741,7 +743,7 @@ const upsertParsedEvents = async (
 
   for (const parsed of result.events) {
     const eventIdentity = getCorporateEventIdentityKey(parsed);
-    const existing = (
+    let existing = (
       await transaction.query<ExistingEventRow>(
         `
           SELECT id, event_date, status, source_published_at, source_priority, source_type, updated_at
@@ -755,6 +757,32 @@ const upsertParsedEvents = async (
         [instrument.id, parsed.eventType, eventIdentity]
       )
     )[0];
+    if (!existing && parsed.eventType === "UPCOMING_DIVIDEND") {
+      const calendarYear = (
+        parsed.recordDate ?? parsed.exDividendDate ?? parsed.paymentDate ?? parsed.eventDate
+      ).slice(0, 4);
+      existing = (
+        await transaction.query<ExistingEventRow>(
+          `
+            SELECT event.id, event.event_date, event.status, event.source_published_at,
+                   event.source_priority, event.source_type, event.updated_at
+            FROM corporate_events AS event
+            INNER JOIN corporate_event_sources AS source
+              ON source.corporate_event_id = event.id
+            WHERE event.instrument_id = $1
+              AND event.event_type = 'UPCOMING_DIVIDEND'
+              AND event.active = TRUE
+              AND source.source_url = $2
+              AND event.dividend_installment IS NOT DISTINCT FROM $3
+              AND LEFT(COALESCE(event.record_date, event.ex_dividend_date, event.payment_date, event.event_date), 4) = $4
+            ORDER BY event.updated_at DESC
+            LIMIT 1
+            FOR UPDATE OF event
+          `,
+          [instrument.id, result.source.sourceUrl, parsed.dividendInstallment ?? null, calendarYear]
+        )
+      )[0];
+    }
     const now = new Date().toISOString();
     const eventId = existing?.id ?? randomUUID();
     const apply = shouldApplyEvent(existing, result.source, parsed);
@@ -799,22 +827,28 @@ const upsertParsedEvents = async (
           UPDATE corporate_events
           SET event_date = $1,
               event_time = $2,
-              dividend_per_share = $3,
-              dividend_currency = $4,
-              ex_dividend_date = $5,
-              record_date = $6,
-              payment_date = $7,
-              dividend_installment = $8,
-              status = $9,
-              source_published_at = $10,
-              source_type = $11,
-              source_priority = $12,
-              updated_at = $13
-          WHERE id = $14
+              fiscal_period = $3,
+              fiscal_year = $4,
+              event_identity = $5,
+              dividend_per_share = $6,
+              dividend_currency = $7,
+              ex_dividend_date = $8,
+              record_date = $9,
+              payment_date = $10,
+              dividend_installment = $11,
+              status = $12,
+              source_published_at = $13,
+              source_type = $14,
+              source_priority = $15,
+              updated_at = $16
+          WHERE id = $17
         `,
         [
           parsed.eventDate,
           parsed.eventTime ?? null,
+          parsed.fiscalPeriod ?? null,
+          parsed.fiscalYear ?? null,
+          eventIdentity,
           parsed.dividendPerShare ?? null,
           parsed.dividendCurrency ?? null,
           parsed.exDividendDate ?? null,

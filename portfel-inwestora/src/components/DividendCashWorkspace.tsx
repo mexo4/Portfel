@@ -1244,6 +1244,9 @@ export default function DividendCashWorkspace({
                           className="table-note"
                           text={dividend.instrumentName}
                         />
+                        <span className={dividend.isAutomatic ? "dividend-origin is-automatic" : "dividend-origin"}>
+                          {dividend.isAutomatic ? "Dodano automatycznie przez Mexo" : "Dodano ręcznie"}
+                        </span>
                       </td>
                       <td>{dividend.accountName}</td>
                       <td>
@@ -1272,20 +1275,24 @@ export default function DividendCashWorkspace({
                       <td>
                         <div className="sprint-inline-actions">
                           <span>{formatNumber(dividend.quantity)} szt.</span>
-                          <button
-                            className="ghost-button"
-                            type="button"
-                            onClick={() => editDividend(dividend)}
-                          >
-                            Edytuj
-                          </button>
-                          <button
-                            className="ghost-button admin-danger-button"
-                            type="button"
-                            onClick={() => deleteDividend(dividend)}
-                          >
-                            Usun
-                          </button>
+                          {!dividend.isAutomatic ? (
+                            <>
+                              <button
+                                className="ghost-button"
+                                type="button"
+                                onClick={() => editDividend(dividend)}
+                              >
+                                Edytuj
+                              </button>
+                              <button
+                                className="ghost-button admin-danger-button"
+                                type="button"
+                                onClick={() => deleteDividend(dividend)}
+                              >
+                                Usun
+                              </button>
+                            </>
+                          ) : null}
                         </div>
                       </td>
                     </tr>
@@ -1307,6 +1314,9 @@ export default function DividendCashWorkspace({
                     <span><strong>{dividend.symbol}</strong><TruncatedText as="span" text={dividend.instrumentName} /></span>
                     <strong>{formatCurrency(dividend.netAmount, dividend.currency)}</strong>
                   </div>
+                  <span className={dividend.isAutomatic ? "dividend-origin is-automatic" : "dividend-origin"}>
+                    {dividend.isAutomatic ? "Dodano automatycznie przez Mexo" : "Dodano ręcznie"}
+                  </span>
                   <dl>
                     <div><dt>Konto</dt><dd title={dividend.accountName}>{dividend.accountName}</dd></div>
                     <div><dt>Wypłata</dt><dd>{formatDate(dividend.paymentDate)}</dd></div>
@@ -1315,8 +1325,12 @@ export default function DividendCashWorkspace({
                   </dl>
                   <div className="sprint-inline-actions">
                     <span>{formatNumber(dividend.quantity)} szt.</span>
-                    <button className="ghost-button" type="button" onClick={() => editDividend(dividend)}>Edytuj</button>
-                    <button className="ghost-button admin-danger-button" type="button" onClick={() => deleteDividend(dividend)}>Usuń</button>
+                    {!dividend.isAutomatic ? (
+                      <>
+                        <button className="ghost-button" type="button" onClick={() => editDividend(dividend)}>Edytuj</button>
+                        <button className="ghost-button admin-danger-button" type="button" onClick={() => deleteDividend(dividend)}>Usuń</button>
+                      </>
+                    ) : null}
                   </div>
                 </article>
               ))}

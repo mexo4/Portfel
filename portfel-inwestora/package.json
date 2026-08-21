@@ -3,9 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev --webpack",
+    "dev": "node --use-system-ca ./node_modules/next/dist/bin/next dev --webpack --hostname 127.0.0.1",
     "build": "next build",
-    "start": "next start",
+    "start": "node --use-system-ca ./node_modules/next/dist/bin/next start --hostname 127.0.0.1",
     "test": "node --experimental-default-type=module --experimental-strip-types --import ./tests/register-alias-loader.mjs --test tests/**/*.test.mjs",
     "migrate:sqlite-to-postgres": "node --experimental-strip-types scripts/migrate-sqlite-to-postgres.ts",
     "migrate:sqlite-to-postgres:apply": "node --experimental-strip-types scripts/migrate-sqlite-to-postgres.ts --apply",

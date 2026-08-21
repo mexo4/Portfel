@@ -262,7 +262,24 @@ test("parses Kino Polska's confirmed future dividend from its official-calendar 
   assert.equal(events[0].dividendStatus, "CONFIRMED");
   assert.equal(events[0].recordDate, "2026-08-21");
   assert.equal(events[0].paymentDate, "2026-08-28");
+  assert.equal(events[0].fiscalYear, 2025);
+  assert.equal(events[0].eventIdentity, "dividend:2025:single");
   assert.equal(Math.round(events[0].dividendPerShare * 10 * 100) / 100, 11.8);
+});
+
+test("a dividend proposal and final resolution keep one identity when amount or dates change", () => {
+  const [proposal] = parseCorporateEventDocument(`
+    Dywidenda za rok 2025: rekomendacja zarządu 1,00 zł na akcję.
+    Dzień dywidendy 20 sierpnia 2026 r., wypłata 27 sierpnia 2026 r.
+  `).filter((event) => event.eventType === "UPCOMING_DIVIDEND");
+  const [confirmed] = parseCorporateEventDocument(`
+    Dywidenda za rok 2025: walne zgromadzenie uchwaliło 1,18 zł na akcję.
+    Dzień dywidendy 21 sierpnia 2026 r., wypłata 28 sierpnia 2026 r.
+  `).filter((event) => event.eventType === "UPCOMING_DIVIDEND");
+
+  assert.equal(proposal.dividendStatus, "PROPOSED");
+  assert.equal(confirmed.dividendStatus, "CONFIRMED");
+  assert.equal(getCorporateEventIdentityKey(proposal), getCorporateEventIdentityKey(confirmed));
 });
 
 test("keeps Grupa Kęty dividend installments as separate dated upcoming payments", () => {
@@ -288,6 +305,70 @@ test("keeps Grupa Kęty dividend installments as separate dated upcoming payment
       { amount: 16.33, recordDate: "2026-08-19", paymentDate: "2026-09-03", status: "CONFIRMED" },
       { amount: 32.64, recordDate: "2026-08-19", paymentDate: "2026-11-04", status: "CONFIRMED" },
     ]
+  );
+});
+
+test("associates installment dates that appear before each per-share amount", () => {
+  const events = parseCorporateEventDocument(`
+    Dywidenda za rok 2025: uchwała Zwyczajnego Walnego Zgromadzenia.
+    Dzień dywidendy 19 sierpnia 2026 r. Wysokość dywidendy wynosi 48,97 zł na akcję,
+    w tym w ramach wypłaty w terminie 3 września 2026 r. wynosi 16,33 zł na akcję,
+    natomiast w terminie 4 listopada 2026 r. wynosi 32,64 zł na akcję.
+  `).filter((event) => event.eventType === "UPCOMING_DIVIDEND");
+
+  assert.deepEqual(
+    events.map((event) => [event.dividendPerShare, event.paymentDate]),
+    [[16.33, "2026-09-03"], [32.64, "2026-11-04"]]
+  );
+});
+
+test("decodes official IR HTML entities and ignores the fiscal year-end as a dividend date", () => {
+  const [event] = parseCorporateEventDocument(`
+    <h3>Dywidenda 2024&#x2F;2025 (WZA 2026)</h3>
+    <p>Walne Zgromadzenie Sp&oacute;łki podjęło uchwałę za rok zakończony 31 grudnia 2025 r.
+    i przeznaczyło na wypłatę 4,80 zł na jedną akcję.</p>
+    <p>Dzień, według kt&oacute;rego ustala się listę akcjonariuszy uprawnionych do wypłaty
+    dywidendy, został ustalony na 17 września 2026 roku.</p>
+    <p>Termin wypłaty dywidendy został ustalony na 8 października 2026 roku.</p>
+  `).filter((candidate) => candidate.eventType === "UPCOMING_DIVIDEND");
+
+  assert.deepEqual(
+    {
+      fiscalYear: event.fiscalYear,
+      amount: event.dividendPerShare,
+      recordDate: event.recordDate,
+      paymentDate: event.paymentDate,
+    },
+    { fiscalYear: 2025, amount: 4.8, recordDate: "2026-09-17", paymentDate: "2026-10-08" }
+  );
+});
+
+test("parses the official PAP dividend amount when the numeric amount is followed by words", () => {
+  const [event] = parseCorporateEventDocument(`
+    PZU SA: Decyzja Zwyczajnego Walnego Zgromadzenia PZU SA w sprawie wypłaty dywidendy za 2025 rok.
+    Walne Zgromadzenie postanowiło przeznaczyć na wypłatę dywidendy kwotę
+    4,80 złotych (słownie: cztery złote 80 groszy) na akcję.
+    Dzień, według którego ustala się listę akcjonariuszy uprawnionych do wypłaty dywidendy
+    za rok obrotowy zakończony dnia 31 grudnia 2025 r.,
+    został ustalony na 17 września 2026 roku. Termin wypłaty dywidendy został ustalony
+    na 8 października 2026 roku.
+  `).filter((candidate) => candidate.eventType === "UPCOMING_DIVIDEND");
+
+  assert.deepEqual(
+    {
+      fiscalYear: event.fiscalYear,
+      amount: event.dividendPerShare,
+      recordDate: event.recordDate,
+      paymentDate: event.paymentDate,
+      status: event.dividendStatus,
+    },
+    {
+      fiscalYear: 2025,
+      amount: 4.8,
+      recordDate: "2026-09-17",
+      paymentDate: "2026-10-08",
+      status: "CONFIRMED",
+    }
   );
 });
 
@@ -331,11 +412,15 @@ test("keeps future installments upcoming after their record date and only displa
   );
 });
 
-test("corporate-event refresh preserves stored data on unavailable sources and has no dividend or cash mutation path", async () => {
+test("corporate-event refresh preserves stored data and delegates posting to the guarded dividend module", async () => {
   const providerSource = await readFile(new URL("../src/lib/server/corporate-events.ts", import.meta.url), "utf8");
   const routeSource = await readFile(new URL("../src/app/api/corporate-events/route.ts", import.meta.url), "utf8");
+  const automaticSource = await readFile(new URL("../src/lib/automatic-gpw-dividends.ts", import.meta.url), "utf8");
 
   assert.match(providerSource, /for \(const result of successful\) \{\s*await upsertParsedEvents/s);
   assert.doesNotMatch(providerSource, /buildDividendOperation|operationType:\s*["']DIVIDEND|calculateCashBalances/);
-  assert.doesNotMatch(routeSource, /buildDividendOperation|operationType:\s*["']DIVIDEND|calculateCashBalances/);
+  assert.match(routeSource, /applyAutomaticGpwDividends/);
+  assert.match(automaticSource, /event\.status !== "CONFIRMED"/);
+  assert.match(automaticSource, /event\.paymentDate > today/);
+  assert.match(automaticSource, /automaticDividendEventId/);
 });

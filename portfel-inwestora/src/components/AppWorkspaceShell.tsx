@@ -47,6 +47,7 @@ const navigationGroups: Array<{ label: string; items: NavigationItem[] }> = [
   ] },
   { label: "Rynek", items: [
     { key: "instruments", href: "/market/instruments", label: "Instrumenty", glyph: "⌕" },
+    { key: "watchlist", href: "/market/watchlist", label: "Obserwowane", glyph: "☆" },
     { key: "events", href: "/market/events", label: "Wydarzenia", glyph: "□" },
   ] },
 ];
@@ -62,6 +63,7 @@ const routeMeta: Record<WorkspaceRouteKey, { eyebrow: string; title: string; bre
   structure: { eyebrow: "Analiza", title: "Struktura portfela", breadcrumb: "Analiza / Struktura" },
   benchmarks: { eyebrow: "Analiza", title: "Benchmarki", breadcrumb: "Analiza / Benchmarki" },
   instruments: { eyebrow: "Rynek", title: "Znajdź instrument", breadcrumb: "Rynek / Instrumenty" },
+  watchlist: { eyebrow: "Rynek", title: "Obserwowane", breadcrumb: "Rynek / Obserwowane" },
   events: { eyebrow: "Rynek", title: "Wydarzenia", breadcrumb: "Rynek / Wydarzenia" },
   portfolios: { eyebrow: "Zarządzanie", title: "Portfele", breadcrumb: "Portfele" },
   wealth: { eyebrow: "Zarządzanie", title: "Majątek", breadcrumb: "Majątek" },

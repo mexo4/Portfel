@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   getUpcomingDividendDatesForDisplay,
   getUpcomingDividendRelevantDate,
@@ -32,13 +32,22 @@ export default function UpcomingDividendsPanel({ portfolioId }: UpcomingDividend
   const [data, setData] = useState<CorporateEventsResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [hasError, setHasError] = useState(false);
+  const reloadRequestedRef = useRef(false);
 
   useEffect(() => {
     const controller = new AbortController();
 
-    void fetchCorporateEvents({ portfolioId, days: 365, signal: controller.signal })
+    void fetchCorporateEvents({ portfolioId, days: 183, signal: controller.signal })
       .then((response) => {
         if (!controller.signal.aborted) {
+          if (
+            response.automaticPosting?.requiresPortfolioReload &&
+            !reloadRequestedRef.current
+          ) {
+            reloadRequestedRef.current = true;
+            window.location.reload();
+            return;
+          }
           setData(response);
           setHasError(false);
         }
@@ -63,6 +72,7 @@ export default function UpcomingDividendsPanel({ portfolioId }: UpcomingDividend
             event.eventType === "UPCOMING_DIVIDEND" &&
             typeof event.dividendPerShare === "number" &&
             event.dividendPerShare > 0 &&
+            (event.eligibleQuantity === undefined || event.eligibleQuantity > 0) &&
             Boolean(getUpcomingDividendRelevantDate(event))
         )
         .sort(
@@ -85,7 +95,8 @@ export default function UpcomingDividendsPanel({ portfolioId }: UpcomingDividend
           <p className="eyebrow">Corporate Events GPW</p>
           <h2 className="section-title">Nadchodzące dywidendy</h2>
           <p className="section-copy">
-            Informacja z oficjalnych źródeł GPW. Nie tworzy operacji ani nie zmienia salda gotówki.
+            Najbliższe 6 miesięcy na podstawie oficjalnych źródeł GPW. Potwierdzona wypłata
+            trafia do historii dopiero w dniu płatności.
           </p>
         </div>
         {dividends.length ? <span className="tag">{dividends.length} {dividends.length === 1 ? "wypłata" : "wypłaty"}</span> : null}
@@ -102,17 +113,17 @@ export default function UpcomingDividendsPanel({ portfolioId }: UpcomingDividend
         <p className="corporate-events-state">
           {allSourcesUnavailable
             ? "Oficjalne źródła są chwilowo niedostępne. Zachowamy ostatnie potwierdzone wydarzenia, gdy źródła wrócą."
-            : "Brak potwierdzonych przyszłych dywidend dla posiadanych spółek GPW."}
+            : "Brak potwierdzonych przyszłych dywidend dla śledzonych spółek GPW."}
         </p>
       ) : null}
 
       {dividends.length ? (
         <div className="upcoming-dividends-list" aria-label="Przyszłe dywidendy">
           {dividends.map((event) => {
-            const quantity = event.heldQuantity ?? 0;
+            const quantity = event.eligibleQuantity;
             const currency = event.dividendCurrency ?? "PLN";
-            const estimatedAmount = quantity * (event.dividendPerShare ?? 0);
             const dates = getUpcomingDividendDatesForDisplay(event);
+            const isWatchlistOnly = event.trackingSource === "WATCHLIST";
 
             return (
               <article className="upcoming-dividend-row" key={event.id}>
@@ -125,8 +136,30 @@ export default function UpcomingDividendsPanel({ portfolioId }: UpcomingDividend
                   <span className={getStatusClassName(event)}>{getStatusLabel(event)}</span>
                 </div>
                 <div className="upcoming-dividend-position">
-                  <span>{formatNumber(quantity)} akcji</span>
-                  <strong>Szacowana dywidenda: {formatCurrency(estimatedAmount, currency)}</strong>
+                  {isWatchlistOnly ? (
+                    <span>Obserwowane · bez pozycji w portfelu</span>
+                  ) : quantity !== undefined ? (
+                    <span>
+                      {event.eligibilityStatus === "ENTITLEMENT_CONFIRMED"
+                        ? "Akcje na dzień prawa"
+                        : "Obecna ilość do prognozy"}: {formatNumber(quantity)}
+                    </span>
+                  ) : (
+                    <span>Ilość na dzień prawa: brak danych</span>
+                  )}
+                  {!isWatchlistOnly && event.estimatedGrossAmount !== undefined ? (
+                    <>
+                      <strong>
+                        Szacowana dywidenda brutto: {formatCurrency(event.estimatedGrossAmount, currency)}
+                      </strong>
+                      <span>
+                        Podatek 19%: {formatCurrency(event.estimatedTaxAmount ?? 0, currency)}
+                      </span>
+                      <strong>
+                        Szacowana dywidenda netto: {formatCurrency(event.estimatedNetAmount ?? 0, currency)}
+                      </strong>
+                    </>
+                  ) : null}
                 </div>
                 <div className="upcoming-dividend-dates">
                   {dates.exDividendDate ? <span>Ex-date: <strong>{formatDate(dates.exDividendDate)}</strong></span> : null}

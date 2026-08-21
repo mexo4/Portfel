@@ -31,6 +31,7 @@ import type {
 import { isGpwSymbol } from "@/lib/ticker";
 import type { CorporateEventsResponse } from "@/lib/corporate-events";
 import type { DashboardLayout } from "@/lib/dashboard-layout";
+import type { WatchlistItem, WatchlistItemInput } from "@/lib/watchlist";
 
 type SearchParams = {
   query: string;
@@ -218,6 +219,21 @@ export const fetchCorporateEvents = async ({
     { signal }
   );
 };
+
+export const fetchWatchlist = async (signal?: AbortSignal) =>
+  requestJson<{ items: WatchlistItem[] }>("/api/watchlist", { signal });
+
+export const addWatchlistItem = async (item: WatchlistItemInput) =>
+  requestJson<{ item: WatchlistItem }>("/api/watchlist", {
+    method: "POST",
+    body: JSON.stringify({ item }),
+  });
+
+export const removeWatchlistItem = async (canonicalKey: string) =>
+  requestJson<{ removed: boolean }>(
+    `/api/watchlist?${new URLSearchParams({ key: canonicalKey }).toString()}`,
+    { method: "DELETE" }
+  );
 
 export type DashboardLayoutResponse = {
   layout: DashboardLayout;

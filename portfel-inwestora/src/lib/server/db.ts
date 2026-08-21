@@ -242,6 +242,26 @@ const schemaStatements = [
   "CREATE INDEX IF NOT EXISTS idx_core_instruments_portfolio_id ON core_instruments(portfolio_id)",
   "CREATE INDEX IF NOT EXISTS idx_core_instruments_symbol ON core_instruments(symbol)",
   `
+    CREATE TABLE IF NOT EXISTS user_watchlist_items (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      canonical_key TEXT NOT NULL,
+      symbol TEXT NOT NULL,
+      name TEXT NOT NULL,
+      market_currency TEXT NOT NULL DEFAULT 'PLN',
+      provider TEXT,
+      provider_id TEXT,
+      isin TEXT,
+      core_instrument_id TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (core_instrument_id) REFERENCES core_instruments(id) ON DELETE SET NULL,
+      UNIQUE (user_id, canonical_key)
+    )
+  `,
+  "CREATE INDEX IF NOT EXISTS idx_user_watchlist_items_user_id ON user_watchlist_items(user_id)",
+  `
     CREATE TABLE IF NOT EXISTS core_operations (
       id TEXT PRIMARY KEY,
       portfolio_id TEXT NOT NULL,

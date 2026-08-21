@@ -6,6 +6,7 @@ import AssetTable from "@/components/AssetTable";
 import ConfigurableDashboard from "@/components/ConfigurableDashboard";
 import CorporateEventsPanel from "@/components/CorporateEventsPanel";
 import UpcomingDividendsPanel from "@/components/UpcomingDividendsPanel";
+import WatchlistWorkspace from "@/components/WatchlistWorkspace";
 import PortfolioCharts from "@/components/PortfolioCharts";
 import PortfolioLineCharts from "@/components/PortfolioLineCharts";
 import PortfolioPerformanceResults from "@/components/PortfolioPerformanceResults";
@@ -73,6 +74,7 @@ export function WorkspaceChartsPage() { const workspace = usePortfolioWorkspace(
 export function WorkspaceStructurePage() { const workspace = usePortfolioWorkspace(); return <div className="workspace-page workspace-analysis-page"><PortfolioCharts view="structure" {...workspaceChartProps(workspace)} /></div>; }
 export function WorkspaceBenchmarksPage() { const workspace = usePortfolioWorkspace(); return <div className="workspace-page workspace-analysis-page"><PortfolioCharts view="benchmarks" {...workspaceChartProps(workspace)} /></div>; }
 export function WorkspaceInstrumentsPage() { const workspace = usePortfolioWorkspace(); return <div className="workspace-page workspace-instruments-page">{workspace.isAllPortfoliosSelected ? <section className="panel"><p className="eyebrow">Instrumenty</p><h2 className="section-title">Wybierz portfel docelowy</h2><p className="section-copy">Wyszukiwanie pozostaje dostępne, ale zapis instrumentu wymaga konkretnego portfela.</p><Link href="/portfolios" className="ghost-button">Wybierz portfel</Link></section> : workspace.assetEntryWorkspace}</div>; }
+export function WorkspaceWatchlistPage() { return <WatchlistWorkspace />; }
 export function WorkspaceEventsPage() { const workspace = usePortfolioWorkspace(); return <div className="workspace-page"><CorporateEventsPanel portfolioId={workspace.isAllPortfoliosSelected ? "all" : workspace.activePortfolioId} /></div>; }
 export function WorkspaceSettingsPage() { return <div className="workspace-page workspace-settings-page">{usePortfolioWorkspace().settingsWorkspace}</div>; }
 export function WorkspacePortfoliosPage() { return <div className="workspace-page workspace-portfolios-page">{usePortfolioWorkspace().portfolioManagementWorkspace}</div>; }

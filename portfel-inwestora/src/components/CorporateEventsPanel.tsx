@@ -87,14 +87,14 @@ export default function CorporateEventsPanel({ portfolioId }: CorporateEventsPan
       ) : null}
 
       {!isLoading && !hasError && data?.scope === "NO_GPW_INSTRUMENTS" ? (
-        <p className="corporate-events-state">Ten portfel nie zawiera obecnie polskich akcji GPW.</p>
+        <p className="corporate-events-state">Brak obecnie posiadanych lub obserwowanych spółek GPW.</p>
       ) : null}
 
       {!isLoading && !hasError && data?.scope === "OK" && reportEvents.length === 0 ? (
         <p className="corporate-events-state">
           {allSourcesUnavailable
             ? "Źródła wydarzeń są chwilowo niedostępne. Zachowamy ostatnie potwierdzone terminy, gdy będą dostępne."
-            : "Brak potwierdzonych przyszłych terminów raportów dla posiadanych spółek."}
+            : "Brak potwierdzonych przyszłych terminów raportów dla śledzonych spółek."}
         </p>
       ) : null}
 

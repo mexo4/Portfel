@@ -70,6 +70,7 @@ export const buildDividendOperation = ({
   paymentDate,
   country,
   notes,
+  metadata,
   createdAt,
 }: {
   id: string;
@@ -87,6 +88,7 @@ export const buildDividendOperation = ({
   paymentDate: string;
   country: string;
   notes: string;
+  metadata?: Record<string, unknown>;
   createdAt?: string;
 }): PortfolioOperation => {
   const now = createdAt ?? new Date().toISOString();
@@ -111,6 +113,7 @@ export const buildDividendOperation = ({
     date: toDateInputValue(paymentDate),
     notes: notes.trim(),
     metadata: {
+      ...metadata,
       kind: DIVIDEND_METADATA_KIND,
       grossAmount,
       withholdingTax: round(withholdingTax, 6),
@@ -189,6 +192,9 @@ export const operationToDividend = ({
     paymentDate: getMetadataString(operation.metadata, "paymentDate", operation.date),
     country: getMetadataString(operation.metadata, "country", "Nie ustawiono"),
     notes: operation.notes,
+    isAutomatic: operation.metadata.automaticDividend === true,
+    corporateEventId: getMetadataString(operation.metadata, "automaticDividendEventId") || undefined,
+    sourceUrl: getMetadataString(operation.metadata, "automaticDividendSourceUrl") || undefined,
     operationId: operation.id,
     createdAt: operation.createdAt,
     updatedAt: operation.updatedAt,

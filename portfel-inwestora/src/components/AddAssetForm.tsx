@@ -8,6 +8,7 @@ import {
 import CurrencyPicker from "@/components/CurrencyPicker";
 import TruncatedText from "@/components/TruncatedText";
 import { getMinimumSearchLength, getSearchPlaceholder } from "@/lib/search";
+import { getGpwWatchlistCanonicalKey, isWatchlistEligibleGpwResult } from "@/lib/watchlist";
 import type {
   AssetDraft,
   AssetSearchMode,
@@ -25,6 +26,7 @@ type AddAssetFormProps = {
   lastAddedResult: AssetSearchResult | null;
   isSearching: boolean;
   isQuoteLoading: boolean;
+  isBuyPending: boolean;
   searchError: string | null;
   quoteError?: string | null;
   onDraftChange: (draft: AssetDraft) => void;
@@ -32,6 +34,10 @@ type AddAssetFormProps = {
   onQueryChange: (query: string) => void;
   onSymbolChange: (symbol: string) => void;
   onPickResult: (result: AssetSearchResult) => void;
+  watchlistKeys?: Set<string>;
+  isWatchlistTogglePending?: boolean;
+  watchlistError?: string | null;
+  onToggleWatchlist?: (result: AssetSearchResult) => void;
   onReuseLastAddedResult: (result: AssetSearchResult) => void;
   onBuySubmit: () => void;
   onSellSubmit: () => void;
@@ -71,6 +77,7 @@ export default function AddAssetForm({
   lastAddedResult,
   isSearching,
   isQuoteLoading,
+  isBuyPending,
   searchError,
   quoteError,
   onDraftChange,
@@ -78,6 +85,10 @@ export default function AddAssetForm({
   onQueryChange,
   onSymbolChange,
   onPickResult,
+  watchlistKeys,
+  isWatchlistTogglePending = false,
+  watchlistError,
+  onToggleWatchlist,
   onReuseLastAddedResult,
   onBuySubmit,
   onSellSubmit,
@@ -196,6 +207,9 @@ export default function AddAssetForm({
             ) : null}
             {quoteError ? (
               <small className="field-note field-note-error">{quoteError}</small>
+            ) : null}
+            {watchlistError ? (
+              <small className="field-note field-note-error">{watchlistError}</small>
             ) : null}
           </label>
 
@@ -404,17 +418,42 @@ export default function AddAssetForm({
               </div>
             ) : results.length > 0 ? (
               <div className="search-result-list search-result-list-prominent">
-                {results.map((result) => (
-                  <button
-                    key={`${result.symbol}-${result.providerId ?? "none"}`}
-                    type="button"
-                    className="search-result-card search-result-card-prominent text-left"
-                    onClick={() => onPickResult(result)}
-                  >
-                    <TruncatedText as="p" className="search-result-title" text={result.name} />
-                    <p className="search-result-meta">{result.symbol}</p>
-                  </button>
-                ))}
+                {results.map((result) => {
+                  const isWatchlistEligible = isWatchlistEligibleGpwResult(result);
+                  const watchlistKey = isWatchlistEligible
+                    ? getGpwWatchlistCanonicalKey(result.symbol)
+                    : "";
+                  const isWatchlisted = Boolean(watchlistKey && watchlistKeys?.has(watchlistKey));
+
+                  return (
+                    <div
+                      key={`${result.symbol}-${result.providerId ?? "none"}`}
+                      className="search-result-card search-result-card-prominent search-result-card-with-watch"
+                    >
+                      <button
+                        type="button"
+                        className="search-result-select text-left"
+                        onClick={() => onPickResult(result)}
+                      >
+                        <TruncatedText as="p" className="search-result-title" text={result.name} />
+                        <p className="search-result-meta">{result.symbol}</p>
+                      </button>
+                      {isWatchlistEligible && onToggleWatchlist ? (
+                        <button
+                          type="button"
+                          className={isWatchlisted ? "watchlist-toggle is-watched" : "watchlist-toggle"}
+                          onClick={() => onToggleWatchlist(result)}
+                          disabled={isWatchlistTogglePending}
+                          aria-pressed={isWatchlisted}
+                          aria-label={isWatchlisted ? `Usuń ${result.name} z obserwowanych` : `Dodaj ${result.name} do obserwowanych`}
+                          title={isWatchlisted ? "Usuń z obserwowanych" : "Dodaj do obserwowanych"}
+                        >
+                          <span aria-hidden="true">{isWatchlisted ? "★" : "☆"}</span>
+                        </button>
+                      ) : null}
+                    </div>
+                  );
+                })}
               </div>
             ) : null}
           </div>
@@ -488,9 +527,10 @@ export default function AddAssetForm({
           className="transaction-button transaction-button-compact transaction-button-buy self-end"
           type="button"
           onClick={onBuySubmit}
-          disabled={isQuoteLoading}
+          disabled={isQuoteLoading || isBuyPending}
+          aria-busy={isBuyPending}
         >
-          {isQuoteLoading ? "Pobieram kurs..." : "Kup"}
+          {isBuyPending ? "Dodaję…" : isQuoteLoading ? "Pobieram kurs..." : "Kup"}
         </button>
 
         <button
@@ -500,6 +540,12 @@ export default function AddAssetForm({
         >
           Sprzedaj
         </button>
+
+        {isBuyPending ? (
+          <p className="asset-submit-feedback" role="status" aria-live="polite">
+            Dodaję pozycję do portfela…
+          </p>
+        ) : null}
       </div>
     </section>
   );

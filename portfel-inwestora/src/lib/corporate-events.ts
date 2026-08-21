@@ -39,14 +39,14 @@ export type ParsedCorporateEvent = {
   isScheduleChange: boolean;
   /** A stable source-independent identity, used for events that have no fiscal period. */
   eventIdentity?: string;
-  /** Read-only corporate-event data. It must never be turned into a DIVIDEND operation. */
+  /** Normalized issuer data; posting is separately gated by status and payment date. */
   dividendPerShare?: number;
   dividendCurrency?: string;
   exDividendDate?: string;
   recordDate?: string;
   paymentDate?: string;
   dividendInstallment?: number;
-  /** Portfolio-context quantity projected by the read-only API response. */
+  /** Portfolio-context quantity projected by the API response. */
   heldQuantity?: number;
   dividendStatus?: Extract<CorporateEventStatus, "PROPOSED" | "CONFIRMED" | "UNKNOWN">;
 };
@@ -73,13 +73,23 @@ export type CorporateEvent = {
   recordDate?: string;
   paymentDate?: string;
   dividendInstallment?: number;
-  /** Portfolio-context quantity projected by the read-only API response. */
+  /** Backward-compatible alias for the portfolio-context eligible quantity. */
   heldQuantity?: number;
+  /** Quantity used for the dividend forecast. */
+  eligibleQuantity?: number;
+  eligibilityDate?: string;
+  eligibilityStatus?: "ENTITLEMENT_CONFIRMED" | "CURRENT_ESTIMATE" | "UNAVAILABLE";
+  estimatedGrossAmount?: number;
+  estimatedTaxAmount?: number;
+  estimatedNetAmount?: number;
   status: CorporateEventStatus;
   active: boolean;
   sourcePublishedAt?: string;
   discoveredAt: string;
   updatedAt: string;
+  /** Response-only context: held positions retain entitlement projection; a
+   * watchlist-only company is informational and never represents a claim. */
+  trackingSource?: "HELD" | "WATCHLIST" | "HELD_AND_WATCHLIST";
   source?: CorporateEventSourceReference;
 };
 
@@ -103,6 +113,11 @@ export type CorporateEventsResponse = {
   events: CorporateEvent[];
   sourceStates: CorporateEventSourceState[];
   scope: "OK" | "NO_GPW_INSTRUMENTS";
+  automaticPosting?: {
+    addedCount: number;
+    manualMatchesCount: number;
+    requiresPortfolioReload: boolean;
+  };
 };
 
 export const getCorporateEventIdentityKey = (event: Pick<
@@ -142,6 +157,17 @@ const normalizeDocumentText = (value: string) =>
     .replace(/<[^>]+>/g, " ")
     .replace(/&nbsp;/gi, " ")
     .replace(/&amp;/gi, "&")
+    .replace(/&oacute;/gi, "ó")
+    .replace(/&aogon;/gi, "ą")
+    .replace(/&cacute;/gi, "ć")
+    .replace(/&eogon;/gi, "ę")
+    .replace(/&lstrok;/gi, "ł")
+    .replace(/&nacute;/gi, "ń")
+    .replace(/&sacute;/gi, "ś")
+    .replace(/&zacute;/gi, "ź")
+    .replace(/&zdot;/gi, "ż")
+    .replace(/&quot;/gi, '"')
+    .replace(/&apos;|&#39;/gi, "'")
     .replace(/&ndash;|&mdash;/gi, "–")
     .replace(/&#(\d+);/g, (_, code) => String.fromCodePoint(Number(code)))
     .replace(/&#x([\da-f]+);/gi, (_, code) => String.fromCodePoint(Number.parseInt(code, 16)))
@@ -223,6 +249,19 @@ const getFiscalYear = (value: string) => {
   return year ? Number(year) : undefined;
 };
 
+const getDividendFiscalYear = (value: string) => {
+  const heading = value.match(
+    /dywidenda\s+(?:za\s+)?(?:rok(?:\s+obrotowy)?\s+)?(20\d{2})(?:\s*\/\s*(20\d{2}))?/iu
+  );
+  if (heading?.[2]) return Number(heading[2]);
+  if (heading?.[1]) return Number(heading[1]);
+
+  const completedYear = value.match(
+    /za\s+rok[^.]{0,120}zakończon[^.]{0,80}\b(20\d{2})\b/iu
+  )?.[1];
+  return completedYear ? Number(completedYear) : getFiscalYear(value);
+};
+
 const getCandidateSegments = (text: string) => {
   const lines = text
     .split(/\n+/)
@@ -255,7 +294,8 @@ const getDateAfterKeyword = (
   text: string,
   keyword: RegExp,
   maxLength = 180,
-  preference: "first" | "last" = "last"
+  preference: "first" | "last" = "last",
+  fromMatchEnd = false
 ) => {
   const flags = keyword.flags.includes("g") ? keyword.flags : `${keyword.flags}g`;
   const pattern = new RegExp(keyword.source, flags);
@@ -265,7 +305,8 @@ const getDateAfterKeyword = (
   // all bounded occurrences and prefer the final explicit date from the
   // issuer statement over publication metadata that follows the title.
   for (const match of text.matchAll(pattern)) {
-    const context = text.slice(match.index, (match.index ?? 0) + maxLength);
+    const contextStart = (match.index ?? 0) + (fromMatchEnd ? match[0].length : 0);
+    const context = text.slice(contextStart, contextStart + maxLength);
     if (/data publikacji|aktualizacja/iu.test(context)) continue;
     const date = extractPolishDates(context)[0];
     if (!date) continue;
@@ -305,13 +346,13 @@ type ParsedDividendAmount = {
 
 const getDividendAmounts = (text: string): ParsedDividendAmount[] => {
   const perSharePattern =
-    /(?:^|[^\d])(\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{1,4})?)\s*(?:zł|zl|pln)\s*(?:brutto\s*)?(?:na|\/)\s*(?:(?:jedn[aą]|1)\s*)?akcj/gi;
+    /(?:^|[^\d])(\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{1,4})?)\s*(?:zł(?:ot(?:y|a|ych|e))?|zl(?:otych)?|pln)\s*(?:\([^)]{0,80}\)\s*)?(?:brutto\s*)?(?:na|\/)\s*(?:(?:jedn[aą]|1)\s*)?akcj/gi;
   const amountAfterPerSharePattern =
-    /(?:na|dla)\s*(?:(?:jedn[aą]|1)\s*)?akcj[ęe]\s*(?:przypada|wynosi|w\s+wysokości)?\s*(\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{1,4})?)\s*(?:zł|zl|pln)/gi;
+    /(?:na|dla)\s*(?:(?:jedn[aą]|1)\s*)?akcj[ęe]\s*(?:przypada|wynosi|w\s+wysokości)?\s*(\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{1,4})?)\s*(?:zł(?:ot(?:y|a|ych|e))?|zl(?:otych)?|pln)/gi;
   const unicodePerSharePattern =
-    /(?:^|[^\d])(\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{1,4})?)\s*(?:z\u0142|zl|pln)\s*(?:brutto\s*)?(?:na|\/)\s*(?:(?:jedn(?:a|\u0105)|1)\s*)?akcj/giu;
+    /(?:^|[^\d])(\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{1,4})?)\s*(?:z\u0142(?:ot(?:y|a|ych|e))?|zl(?:otych)?|pln)\s*(?:\([^)]{0,80}\)\s*)?(?:brutto\s*)?(?:na|\/)\s*(?:(?:jedn(?:a|\u0105)|1)\s*)?akcj/giu;
   const unicodeAmountAfterPerSharePattern =
-    /(?:na|dla)\s*(?:(?:jedn(?:a|\u0105)|1)\s*)?akcj(?:\u0119|e)\s*(?:przypada|wynosi|w\s+wysoko\u015Bci)?\s*(\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{1,4})?)\s*(?:z\u0142|zl|pln)/giu;
+    /(?:na|dla)\s*(?:(?:jedn(?:a|\u0105)|1)\s*)?akcj(?:\u0119|e)\s*(?:przypada|wynosi|w\s+wysoko\u015Bci)?\s*(\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{1,4})?)\s*(?:z\u0142(?:ot(?:y|a|ych|e))?|zl(?:otych)?|pln)/giu;
   const amounts: ParsedDividendAmount[] = [];
 
   for (const pattern of [
@@ -358,7 +399,11 @@ const getDividendAmounts = (text: string): ParsedDividendAmount[] => {
 const getUpcomingDividendEvents = (text: string): ParsedCorporateEvent[] => {
   if (!/dywidend/i.test(text)) return [];
 
-  const sectionMatches = Array.from(text.matchAll(/dywidenda\s+za[^\n:]{0,96}:/gi));
+  const sectionMatches = Array.from(
+    text.matchAll(
+      /dywidenda\s+(?:za\s+)?(?:rok(?:\s+obrotowy)?\s+)?20\d{2}(?:\s*\/\s*20\d{2})?[^\n:]{0,64}(?::|\n|\()/giu
+    )
+  );
   const sections =
     sectionMatches.length > 0
       ? sectionMatches.map((match, index) => ({
@@ -370,34 +415,58 @@ const getUpcomingDividendEvents = (text: string): ParsedCorporateEvent[] => {
   return sections.flatMap(({ section, statusContext }) => {
     const amounts = getDividendAmounts(section);
     if (amounts.length === 0) return [];
+    const fiscalYear = getDividendFiscalYear(section);
 
-    const recordDate = getDateAfterKeyword(
-      section,
-      /dzie.\s+(?:ustalenia\s+prawa\s+do\s+dywidendy|dywidendy)|record\s*date/i
-    );
+    const recordDate =
+      getDateAfterKeyword(
+        section,
+        /dzie[\s\S]{0,280}?ustala\s+się\s+listę\s+akcjonariuszy\s+uprawnionych[\s\S]{0,240}?(?:został\s+ustalony|ustalono)\s+na/iu,
+        80,
+        "first",
+        true
+      ) ??
+      getDateAfterKeyword(
+        section,
+        /dzie.\s+(?:ustalenia\s+prawa\s+do\s+dywidendy|dywidendy)|record\s*date/iu,
+        220
+      );
     const exDividendDate = getDateAfterKeyword(
       section,
       /ex(?:-|\s)?dividend(?:\s+date)?|ex-date/i
     );
     const paymentDate = getDateAfterKeyword(
       section,
-      /(?:(?:termin|dzie.)\s+)?wyp.{0,3}at(?:y|a)|payment\s*date/iu
+      /(?:termin|dzie.)\s+wyp.{0,3}at(?:y|a)|wyp.{0,3}at(?:a|y)\s+(?:dywidendy\s+)?(?:nastąpi|zostanie|ustalon|w\s+terminie)|payment\s*date/iu,
+      300
     );
     const sectionStatus = getDividendStatus(section);
     const dividendStatus =
       sectionStatus === "UNKNOWN" ? getDividendStatus(statusContext) : sectionStatus;
 
     return amounts.flatMap((entry, index) => {
-      const localContext = section.slice(entry.index, entry.index + 240);
-      const localPaymentDate = getDateAfterKeyword(
-        localContext,
-        /(?:\d+\.?\s+)?rat[ayęei]|(?:(?:termin|dzie.)\s+)?wyp.{0,3}at(?:y|a)|payment\s*date/iu,
-        220,
+      const localContextAfter = section.slice(entry.index, entry.index + 260);
+      const localContextBefore = section.slice(Math.max(0, entry.index - 240), entry.index);
+      const localPaymentDateAfter = getDateAfterKeyword(
+        localContextAfter,
+        /(?:termin|dzie.)\s+wyp.{0,3}at(?:y|a)|payment\s*date/iu,
+        250,
         "first"
       );
+      const localPaymentDateBefore = getDateAfterKeyword(
+        localContextBefore,
+        /w\s+terminie|(?:termin|dzie.)\s+wyp.{0,3}at(?:y|a)/iu,
+        240,
+        "last"
+      );
       const resolvedPaymentDate =
-        getDateAfterKeyword(localContext, /wyp.{0,6}at(?:y|a)|payment\s*date/i, 220, "first") ??
-        localPaymentDate ??
+        getDateAfterKeyword(
+          localContextAfter,
+          /(?:termin|dzie.)\s+wyp.{0,3}at(?:y|a)|payment\s*date/iu,
+          250,
+          "first"
+        ) ??
+        localPaymentDateAfter ??
+        localPaymentDateBefore ??
         paymentDate;
       const eventDate = recordDate ?? exDividendDate ?? resolvedPaymentDate;
 
@@ -410,12 +479,15 @@ const getUpcomingDividendEvents = (text: string): ParsedCorporateEvent[] => {
       return [{
         eventType: "UPCOMING_DIVIDEND" as const,
         eventDate,
+        fiscalYear,
         isScheduleChange: false,
+        // Amounts and dates can change between a proposal and the final
+        // resolution. The annual distribution + installment is the durable
+        // identity, so a correction updates one pending event instead of
+        // creating another calendar item.
         eventIdentity: [
           "dividend",
-          recordDate ?? exDividendDate ?? "",
-          resolvedPaymentDate ?? "",
-          entry.amount.toFixed(6),
+          fiscalYear ?? (recordDate ?? exDividendDate ?? resolvedPaymentDate)?.slice(0, 4) ?? "unknown",
           installment ?? "single",
         ].join(":"),
         dividendPerShare: entry.amount,

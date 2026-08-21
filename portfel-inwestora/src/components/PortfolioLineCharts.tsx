@@ -45,6 +45,7 @@ import {
   rankBenchmarkSearchResults,
 } from "@/lib/benchmark-search";
 import { buildPortfolioDailyMetricPoints } from "@/lib/portfolio-daily-metrics";
+import { calculateCapitalReturnPercent } from "@/lib/portfolio-performance";
 import {
   convertFromPln,
   convertToPln,
@@ -664,11 +665,6 @@ const buildFallbackHistory = ({
     assetSeries,
   };
 };
-
-const calculateCapitalReturnPercent = (profitLossPln: number, netInvestedPln: number) =>
-  netInvestedPln > 0 && Number.isFinite(profitLossPln) && Number.isFinite(netInvestedPln)
-    ? round((profitLossPln / netInvestedPln) * 100, 2)
-    : null;
 
 const buildReturnSeries = (points: PortfolioHistoryPoint[]): ReturnPoint[] =>
   points.map((point) => ({

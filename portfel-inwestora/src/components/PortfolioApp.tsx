@@ -91,7 +91,7 @@ import {
   normalizeGpwSymbol,
   normalizeSymbol,
 } from "@/lib/ticker";
-import { getGpwWatchlistCanonicalKey } from "@/lib/watchlist";
+import { getGpwWatchlistCanonicalKey, type WatchlistItem } from "@/lib/watchlist";
 import { ALL_PORTFOLIOS_ID, getWorkspaceReadHref } from "@/lib/portfolio-selection";
 import {
   getTodayDateInputValue,
@@ -998,7 +998,7 @@ export default function PortfolioApp({
   const [results, setResults] = useState<AssetSearchResult[]>([]);
   const [etfResultGroups, setEtfResultGroups] = useState<EtfSearchGroup[]>([]);
   const [lastAddedResult, setLastAddedResult] = useState<AssetSearchResult | null>(null);
-  const [watchlistKeys, setWatchlistKeys] = useState<Set<string>>(() => new Set());
+  const [watchlistItems, setWatchlistItems] = useState<WatchlistItem[]>([]);
   const [filter, setFilter] = useState("");
   const [assetSortMode, setAssetSortMode] = useState<AssetTableSortMode>("manual");
   const [hasLoadedSortMode, setHasLoadedSortMode] = useState(false);
@@ -1012,6 +1012,8 @@ export default function PortfolioApp({
   const [isQuoteLoading, setIsQuoteLoading] = useState(false);
   const [isAssetAddPending, setIsAssetAddPending] = useState(false);
   const [isWatchlistTogglePending, setIsWatchlistTogglePending] = useState(false);
+  const [isWatchlistLoading, setIsWatchlistLoading] = useState(true);
+  const [watchlistReadError, setWatchlistReadError] = useState(false);
   const [isBondLoading, setIsBondLoading] = useState(false);
   const [isBondRedemptionLoading, setIsBondRedemptionLoading] = useState(false);
   const [isBondSwapLoading, setIsBondSwapLoading] = useState(false);
@@ -1029,6 +1031,10 @@ export default function PortfolioApp({
   const [lastSyncAt, setLastSyncAt] = useState<string>();
   const [fxUpdatedAt, setFxUpdatedAt] = useState<string>();
   const [refreshRevision, setRefreshRevision] = useState(0);
+  const watchlistKeys = useMemo(
+    () => new Set(watchlistItems.map((item) => item.canonicalKey)),
+    [watchlistItems]
+  );
   const [realizedAdjustments, setRealizedAdjustments] = useState<PortfolioRealizedAdjustment[]>(
     () => getSortedPortfolioRealizedAdjustments(initialActivePortfolio.realizedAdjustments)
   );
@@ -1607,16 +1613,23 @@ export default function PortfolioApp({
   useEffect(() => {
     const controller = new AbortController();
 
+    setIsWatchlistLoading(true);
+    setWatchlistReadError(false);
+
     void fetchWatchlist(controller.signal)
       .then(({ items }) => {
         if (!controller.signal.aborted) {
-          setWatchlistKeys(new Set(items.map((item) => item.canonicalKey)));
+          setWatchlistItems(items);
         }
       })
       .catch(() => {
         // Search and portfolio work normally even when the optional watchlist
         // endpoint is temporarily unavailable. A mutation will show its own
         // actionable error below.
+        if (!controller.signal.aborted) setWatchlistReadError(true);
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setIsWatchlistLoading(false);
       });
 
     return () => controller.abort();
@@ -2331,14 +2344,13 @@ export default function PortfolioApp({
     try {
       if (watchlistKeys.has(canonicalKey)) {
         await removeWatchlistItem(canonicalKey);
-        setWatchlistKeys((current) => {
-          const next = new Set(current);
-          next.delete(canonicalKey);
-          return next;
-        });
+        setWatchlistItems((current) => current.filter((item) => item.canonicalKey !== canonicalKey));
       } else {
         const { item } = await addWatchlistItem(result);
-        setWatchlistKeys((current) => new Set([...current, item.canonicalKey]));
+        setWatchlistItems((current) => [
+          ...current.filter((existing) => existing.canonicalKey !== item.canonicalKey),
+          item,
+        ]);
       }
     } catch (error) {
       setWatchlistError(toErrorMessage(error, "Nie udało się zmienić obserwowanych."));
@@ -4488,8 +4500,15 @@ export default function PortfolioApp({
     getReadHref: (href) => getWorkspaceReadHref(href, selectedPortfolioId, activeBaseCurrency),
     onQuickAdd: () => { if (requireConcretePortfolioSelection()) router.push("/portfolio/positions?add=asset"); else router.push("/portfolios"); },
     onLogout: () => { void handleLogout(); },
-    displayedSyncError, assets: displayedAssets, sales: displayedSales, realizedAdjustments: displayedRealizedAdjustments, effectiveRealizedAdjustments, fxRates, groupedAssets, filter, assetSortMode, isRefreshing,
-    summaryTotalValue: summary.totalValue, summaryCombinedProfitLoss: summary.combinedProfitLoss, refreshRevision,
+    displayedSyncError, assets: displayedAssets, sales: displayedSales, realizedAdjustments: displayedRealizedAdjustments, effectiveRealizedAdjustments, fxRates, groupedAssets,
+    watchlistItems, isWatchlistLoading, watchlistReadError,
+    onRemoveWatchlistItem: async (canonicalKey) => {
+      await removeWatchlistItem(canonicalKey);
+      setWatchlistItems((current) => current.filter((item) => item.canonicalKey !== canonicalKey));
+    },
+    filter, assetSortMode, isRefreshing,
+    summaryTotalValue: summary.totalValue, summaryCombinedProfitLoss: summary.combinedProfitLoss,
+    summaryTotalInvested: summary.totalInvested, summaryCashValue: summary.cashValue, refreshRevision,
     activeDividendYtd, activeDividendMonth, activeDividendAnnualIncome, summaryPanel, assetEntryWorkspace, operationsWorkspace, incomeWorkspace, importWorkspace, settingsWorkspace, portfolioManagementWorkspace: portfolioManagement, wealthWorkspace,
     onFilterChange: setFilter, onSortModeChange: setAssetSortMode, onReorderGroups: handleReorderAssetGroups, onRemoveAsset: removeAsset,
   };

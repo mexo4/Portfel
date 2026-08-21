@@ -107,6 +107,19 @@ const schemaStatements = [
     )
   `,
   `
+    CREATE TABLE IF NOT EXISTS user_dashboard_layout_scopes (
+      user_id TEXT NOT NULL,
+      scope_key TEXT NOT NULL,
+      desktop_layout_json TEXT NOT NULL,
+      mobile_layout_json TEXT NOT NULL,
+      revision INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (user_id, scope_key),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+  `,
+  "CREATE INDEX IF NOT EXISTS idx_dashboard_layout_scopes_user_id ON user_dashboard_layout_scopes(user_id)",
+  `
     CREATE TABLE IF NOT EXISTS auth_accounts (
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL,

@@ -1,9 +1,11 @@
 import { round } from "@/lib/utils";
+import { calculateCashFlowNeutralDailyReturnPercent } from "@/lib/portfolio-performance";
 import type { PortfolioHistoryPoint } from "@/types/portfolio";
 
 export type PortfolioDailyMetricPoint = PortfolioHistoryPoint & {
   rawValueChangePln: number;
   cashFlowNeutralResultPln: number;
+  cashFlowNeutralResultPercent: number | null;
 };
 
 /**
@@ -19,10 +21,15 @@ export const buildPortfolioDailyMetricPoints = (
 ): PortfolioDailyMetricPoint[] =>
   points.slice(1).map((point, index) => {
     const previous = points[index]!;
+    const cashFlowNeutralResultPln = round(point.profitLossPln - previous.profitLossPln);
     return {
       ...point,
       rawValueChangePln: round(point.portfolioValuePln - previous.portfolioValuePln),
-      cashFlowNeutralResultPln: round(point.profitLossPln - previous.profitLossPln),
+      cashFlowNeutralResultPln,
+      cashFlowNeutralResultPercent: calculateCashFlowNeutralDailyReturnPercent(
+        cashFlowNeutralResultPln,
+        previous.portfolioValuePln
+      ),
     };
   });
 

@@ -30,7 +30,7 @@ import type {
 } from "@/types/portfolio";
 import { isGpwSymbol } from "@/lib/ticker";
 import type { CorporateEventsResponse } from "@/lib/corporate-events";
-import type { DashboardLayout } from "@/lib/dashboard-layout";
+import type { DashboardScopeLayouts } from "@/lib/dashboard-layout";
 import type { WatchlistItem, WatchlistItemInput } from "@/lib/watchlist";
 
 type SearchParams = {
@@ -236,19 +236,27 @@ export const removeWatchlistItem = async (canonicalKey: string) =>
   );
 
 export type DashboardLayoutResponse = {
-  layout: DashboardLayout;
+  scopeKey: string;
+  layouts: DashboardScopeLayouts;
   revision: number;
   updatedAt: string | null;
+  inheritedFromLegacy?: boolean;
 };
 
-export const fetchDashboardLayout = async (signal?: AbortSignal) =>
-  requestJson<DashboardLayoutResponse>("/api/dashboard-layout", { signal });
+export const fetchDashboardLayout = async (scopeKey = "all", signal?: AbortSignal) =>
+  requestJson<DashboardLayoutResponse>(
+    `/api/dashboard-layout?${new URLSearchParams({ scope: scopeKey }).toString()}`,
+    { signal }
+  );
 
-export const saveDashboardLayout = async (layout: DashboardLayout) =>
-  requestJson<DashboardLayoutResponse>("/api/dashboard-layout", {
+export const saveDashboardLayout = async (scopeKey: string, layouts: DashboardScopeLayouts) =>
+  requestJson<DashboardLayoutResponse>(
+    `/api/dashboard-layout?${new URLSearchParams({ scope: scopeKey }).toString()}`,
+    {
     method: "PUT",
-    body: JSON.stringify({ layout }),
-  });
+      body: JSON.stringify({ layouts }),
+    }
+  );
 
 export const resolveEtfListingPrice = async (listing: EtfListing) => {
   const data = await requestJson<{ listing: EtfListing }>(

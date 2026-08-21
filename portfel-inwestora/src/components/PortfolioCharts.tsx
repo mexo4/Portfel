@@ -5,6 +5,7 @@ import TruncatedText from "@/components/TruncatedText";
 import { fetchBenchmarkComparisons } from "@/lib/api";
 import { getAssetClassAllocation, getGeographicAllocation } from "@/lib/geographic-allocation";
 import { buildPortfolioBenchmarkInvestments } from "@/lib/portfolio-state";
+import { calculateCapitalReturnPercent } from "@/lib/portfolio-performance";
 import { convertFromPln, getGroupedPortfolioAssets } from "@/lib/pricing";
 import { formatCurrency, round } from "@/lib/utils";
 import type {
@@ -103,11 +104,6 @@ export default function PortfolioCharts({
       ),
     [baseCurrency, benchmarkInvestments, fxRates]
   );
-  const toCapitalReturnPercent = (profitLossPln: number, netInvestedPln: number) =>
-    netInvestedPln > 0 && Number.isFinite(profitLossPln) && Number.isFinite(netInvestedPln)
-      ? round((profitLossPln / netInvestedPln) * 100, 2)
-      : 0;
-
   useEffect(() => {
     if (benchmarkInvestments.length === 0) {
       setBenchmarkComparisons([]);
@@ -196,7 +192,7 @@ export default function PortfolioCharts({
     investedPln: comparisonInvested,
     currentValuePln: round(totalValue),
     profitLossPln: combinedProfitLoss,
-    returnPercent: toCapitalReturnPercent(combinedProfitLoss, comparisonInvested),
+    returnPercent: calculateCapitalReturnPercent(combinedProfitLoss, comparisonInvested) ?? 0,
   };
 
   const comparisonItems = [
@@ -209,7 +205,7 @@ export default function PortfolioCharts({
     })),
   ].map((item) => ({
     ...item,
-    returnPercent: toCapitalReturnPercent(item.profitLossPln, item.investedPln),
+    returnPercent: calculateCapitalReturnPercent(item.profitLossPln, item.investedPln) ?? 0,
   }));
   const maxAbsoluteReturn = Math.max(
     6,

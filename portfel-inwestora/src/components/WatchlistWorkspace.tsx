@@ -7,7 +7,7 @@ import {
   type CorporateEvent,
   type CorporateEventsResponse,
 } from "@/lib/corporate-events";
-import { fetchCorporateEvents, fetchWatchlist, removeWatchlistItem } from "@/lib/api";
+import { fetchCorporateEvents } from "@/lib/api";
 import { getGpwWatchlistCanonicalKey, type WatchlistItem } from "@/lib/watchlist";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { usePortfolioWorkspace } from "@/components/PortfolioWorkspaceContext";
@@ -37,22 +37,17 @@ const getNextDividend = (events: CorporateEvent[], canonicalKey: string) =>
 
 export default function WatchlistWorkspace() {
   const workspace = usePortfolioWorkspace();
-  const [items, setItems] = useState<WatchlistItem[]>([]);
   const [corporateEvents, setCorporateEvents] = useState<CorporateEventsResponse | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isEventsLoading, setIsEventsLoading] = useState(true);
   const [isRemovingKey, setIsRemovingKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
 
-    void Promise.all([
-      fetchWatchlist(controller.signal),
-      fetchCorporateEvents({ portfolioId: "all", days: 183, signal: controller.signal }),
-    ])
-      .then(([watchlist, eventResponse]) => {
+    void fetchCorporateEvents({ portfolioId: "all", days: 183, signal: controller.signal })
+      .then((eventResponse) => {
         if (controller.signal.aborted) return;
-        setItems(watchlist.items);
         setCorporateEvents(eventResponse);
         setError(null);
       })
@@ -61,7 +56,7 @@ export default function WatchlistWorkspace() {
         setError("Nie udało się pobrać obserwowanych spółek. Spróbuj ponownie później.");
       })
       .finally(() => {
-        if (!controller.signal.aborted) setIsLoading(false);
+        if (!controller.signal.aborted) setIsEventsLoading(false);
       });
 
     return () => controller.abort();
@@ -92,14 +87,18 @@ export default function WatchlistWorkspace() {
     setIsRemovingKey(item.canonicalKey);
     setError(null);
     try {
-      await removeWatchlistItem(item.canonicalKey);
-      setItems((current) => current.filter((candidate) => candidate.canonicalKey !== item.canonicalKey));
+      await workspace.onRemoveWatchlistItem(item.canonicalKey);
     } catch {
       setError("Nie udało się usunąć spółki z obserwowanych.");
     } finally {
       setIsRemovingKey(null);
     }
   };
+  const items = workspace.watchlistItems;
+  const isLoading = workspace.isWatchlistLoading || isEventsLoading;
+  const displayedError = error ?? (workspace.watchlistReadError
+    ? "Nie udało się pobrać obserwowanych spółek. Spróbuj ponownie później."
+    : null);
 
   return (
     <div className="workspace-page watchlist-workspace">
@@ -112,9 +111,9 @@ export default function WatchlistWorkspace() {
       </section>
 
       {isLoading ? <p className="corporate-events-state">Wczytywanie obserwowanych spółek…</p> : null}
-      {error ? <p className="field-note field-note-error">{error}</p> : null}
+      {displayedError ? <p className="field-note field-note-error">{displayedError}</p> : null}
 
-      {!isLoading && !error && items.length === 0 ? (
+      {!isLoading && !displayedError && items.length === 0 ? (
         <section className="panel watchlist-empty-state">
           <p className="eyebrow">Lista jest pusta</p>
           <h2 className="section-title">Dodaj spółkę z wyszukiwarki instrumentów</h2>

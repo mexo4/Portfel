@@ -2,6 +2,7 @@
 
 import { createContext, useContext, type ReactNode } from "react";
 import type { PortfolioAssetGroup } from "@/lib/pricing";
+import type { WatchlistItem } from "@/lib/watchlist";
 import type {
   AuthenticatedUser,
   CurrencyCode,
@@ -36,11 +37,17 @@ export type PortfolioWorkspaceValue = {
   effectiveRealizedAdjustments: PortfolioRealizedAdjustment[];
   fxRates: FxRates;
   groupedAssets: PortfolioAssetGroup[];
+  watchlistItems: WatchlistItem[];
+  isWatchlistLoading: boolean;
+  watchlistReadError: boolean;
+  onRemoveWatchlistItem: (canonicalKey: string) => Promise<void>;
   filter: string;
   assetSortMode: "manual" | "value-desc" | "value-asc" | "profit-desc" | "loss-asc" | "profit-percent-desc" | "profit-percent-asc" | "daily-gain-desc" | "daily-loss-asc";
   isRefreshing: boolean;
   summaryTotalValue: number;
   summaryCombinedProfitLoss: number;
+  summaryTotalInvested: number;
+  summaryCashValue: number;
   refreshRevision: number;
   activeDividendYtd: number;
   activeDividendMonth: number;

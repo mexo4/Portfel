@@ -225,6 +225,40 @@ export const createDefaultPortfolioAccounts = (
   ];
 };
 
+export const ensurePortfolioCashAccount = (
+  accounts: PortfolioAccount[],
+  portfolioId: string,
+  currency: CurrencyCode,
+  now = new Date().toISOString()
+) => {
+  const normalizedCurrency = toCurrencyCode(currency, BASE_CURRENCY);
+  const defaultAccountId = getDefaultCashAccountId(portfolioId, normalizedCurrency);
+  const existingAccount = accounts.find(
+    (account) =>
+      account.metadata.archived !== true &&
+      account.id === defaultAccountId
+  );
+
+  if (existingAccount) {
+    return { accounts, account: existingAccount };
+  }
+
+  const account = createDefaultAccount({
+    portfolioId,
+    id: defaultAccountId,
+    name: `Gotowka ${normalizedCurrency}`,
+    kind: normalizedCurrency === BASE_CURRENCY ? "cash" : "currency",
+    broker: normalizedCurrency === BASE_CURRENCY ? "CASH" : "CURRENCY",
+    currency: normalizedCurrency,
+    now,
+  });
+
+  return {
+    accounts: [...accounts, account],
+    account,
+  };
+};
+
 export const normalizePortfolioAccounts = (
   portfolioId: string,
   accounts: unknown,
@@ -605,6 +639,58 @@ const buildSellOperation = (portfolioId: string, sale: PortfolioSale) => {
   });
 };
 
+const removeLegacyOperationMetadata = (metadata: Record<string, unknown>) => {
+  const currentMetadata = { ...metadata };
+  delete currentMetadata.legacySource;
+  delete currentMetadata.legacySourceId;
+  return currentMetadata;
+};
+
+/**
+ * New manual trades receive an explicit cash mirror. Historical lots remain
+ * protected by the legacy `cashImpact: false` marker, so enabling cash does
+ * not invent an opening balance for portfolios whose earlier ledger may be
+ * incomplete.
+ */
+export const buildCashImpactBuyOperation = (
+  portfolioId: string,
+  asset: PortfolioState["assets"][number]
+) => {
+  const operation = buildBuyOperation(portfolioId, asset);
+
+  return {
+    ...operation,
+    id: `op-cash-buy-${asset.id}`,
+    fee: round(Math.abs(asset.feePln), 8),
+    metadata: {
+      ...removeLegacyOperationMetadata(operation.metadata),
+      cashImpact: true,
+      cashMirror: true,
+      lotId: asset.id,
+      feeCurrency: BASE_CURRENCY,
+      feeAccountId: getDefaultCashAccountId(portfolioId, BASE_CURRENCY),
+    },
+  } satisfies PortfolioOperation;
+};
+
+export const buildCashImpactSellOperation = (
+  portfolioId: string,
+  sale: PortfolioSale
+) => {
+  const operation = buildSellOperation(portfolioId, sale);
+
+  return {
+    ...operation,
+    id: `op-cash-sell-${sale.id}`,
+    metadata: {
+      ...removeLegacyOperationMetadata(operation.metadata),
+      cashImpact: true,
+      cashMirror: true,
+      saleId: sale.id,
+    },
+  } satisfies PortfolioOperation;
+};
+
 const buildAdjustmentOperation = (
   portfolioId: string,
   adjustment: PortfolioRealizedAdjustment
@@ -875,26 +961,51 @@ export const normalizePortfolioOperations = (
     (operation) => !isLegacyOperation(operation)
     )
   );
-  const customTradeCounts = new Map<string, number>();
+  const customTradeIndexes = new Map<string, number[]>();
 
-  existingCustomOperations.forEach((operation) => {
+  existingCustomOperations.forEach((operation, index) => {
     const identity = getTradeOperationIdentity(operation);
 
     if (identity) {
-      customTradeCounts.set(identity, (customTradeCounts.get(identity) ?? 0) + 1);
+      customTradeIndexes.set(identity, [
+        ...(customTradeIndexes.get(identity) ?? []),
+        index,
+      ]);
     }
   });
 
   const derivedLegacyOperations = buildOperationsFromLegacyState(portfolioId, state).filter(
     (operation) => {
       const identity = getTradeOperationIdentity(operation);
-      const matchingCustomCount = identity ? customTradeCounts.get(identity) ?? 0 : 0;
+      const matchingCustomIndexes = identity
+        ? customTradeIndexes.get(identity) ?? []
+        : [];
 
-      if (!identity || matchingCustomCount === 0) {
+      if (!identity || matchingCustomIndexes.length === 0) {
         return true;
       }
 
-      customTradeCounts.set(identity, matchingCustomCount - 1);
+      const [matchingCustomIndex, ...remainingIndexes] = matchingCustomIndexes;
+      customTradeIndexes.set(identity, remainingIndexes);
+      const matchingCustomOperation = existingCustomOperations[matchingCustomIndex!];
+      const legacySourceId = getMetadataString(operation.metadata, "legacySourceId");
+
+      if (matchingCustomOperation && legacySourceId) {
+        existingCustomOperations[matchingCustomIndex!] = {
+          ...matchingCustomOperation,
+          metadata: {
+            ...matchingCustomOperation.metadata,
+            ...(operation.operationType === "BUY" &&
+            typeof matchingCustomOperation.metadata.lotId !== "string"
+              ? { lotId: legacySourceId }
+              : {}),
+            ...(operation.operationType === "SELL" &&
+            typeof matchingCustomOperation.metadata.saleId !== "string"
+              ? { saleId: legacySourceId }
+              : {}),
+          },
+        };
+      }
       return false;
     }
   );
@@ -1199,19 +1310,55 @@ export const getOperationCashDeltas = (operation: PortfolioOperation): CashBalan
     const cashAmount =
       getMetadataNumber(operation.metadata, "cashAmount") ?? Math.abs(operation.amount);
     const cashAmountIsNet = operation.metadata.cashAmountIsNet === true;
-    const feesAndTaxes = cashAmountIsNet ? 0 : Math.abs(operation.fee) + Math.abs(operation.tax);
-    const amount =
-      operation.operationType === "BUY"
-        ? -(Math.abs(cashAmount) + feesAndTaxes)
-        : Math.abs(cashAmount) - feesAndTaxes;
-
-    return [
+    const deltas: CashBalance[] = [
       {
         accountId: operation.accountId,
         currency: cashCurrency,
-        amount: round(amount, 8),
+        amount: round(
+          operation.operationType === "BUY"
+            ? -Math.abs(cashAmount)
+            : Math.abs(cashAmount),
+          8
+        ),
       },
     ];
+
+    if (!cashAmountIsNet && Math.abs(operation.fee) > 0) {
+      deltas.push({
+        accountId:
+          getMetadataString(operation.metadata, "feeAccountId") ?? operation.accountId,
+        currency: toCurrencyCode(
+          getMetadataString(operation.metadata, "feeCurrency"),
+          cashCurrency
+        ),
+        amount: round(-Math.abs(operation.fee), 8),
+      });
+    }
+
+    if (!cashAmountIsNet && Math.abs(operation.tax) > 0) {
+      deltas.push({
+        accountId:
+          getMetadataString(operation.metadata, "taxAccountId") ?? operation.accountId,
+        currency: toCurrencyCode(
+          getMetadataString(operation.metadata, "taxCurrency"),
+          cashCurrency
+        ),
+        amount: round(-Math.abs(operation.tax), 8),
+      });
+    }
+
+    const combinedDeltas = new Map<string, CashBalance>();
+    deltas.forEach((delta) => {
+      const key = `${delta.accountId}:${delta.currency}`;
+      const current = combinedDeltas.get(key);
+      combinedDeltas.set(key, {
+        accountId: delta.accountId,
+        currency: delta.currency,
+        amount: round((current?.amount ?? 0) + delta.amount, 8),
+      });
+    });
+
+    return Array.from(combinedDeltas.values()).filter((delta) => delta.amount !== 0);
   }
 
   if (operation.operationType === "TRANSFER") {

@@ -6,7 +6,12 @@ import type { PortfolioAssetGroup } from "@/lib/pricing";
 import { getGpwWatchlistCanonicalKey, type WatchlistItem } from "@/lib/watchlist";
 import type { InvestmentPortfolio, PortfolioHistoryResponse, PortfolioOperation } from "@/types/portfolio";
 
-export type DashboardOperationRow = { operation: PortfolioOperation; portfolioName: string };
+export type DashboardOperationRow = {
+  operation: PortfolioOperation;
+  portfolioName: string;
+  instrumentName?: string;
+  instrumentSymbol?: string;
+};
 
 export const getDashboardRankedGroups = (
   groups: PortfolioAssetGroup[],
@@ -24,10 +29,11 @@ export const getDashboardRankedGroups = (
 const buildDashboardConcentration = (
   groups: PortfolioAssetGroup[],
   classes: ReturnType<typeof getAssetClassAllocation>,
-  geography: ReturnType<typeof getGeographicAllocation>
+  geography: ReturnType<typeof getGeographicAllocation>,
+  totalPortfolioValue = groups.reduce((sum, group) => sum + group.totalValue, 0)
 ) => {
   const sorted = getDashboardRankedGroups(groups, "value", groups.length);
-  const total = sorted.reduce((sum, group) => sum + group.totalValue, 0);
+  const total = totalPortfolioValue;
   const percent = (value: number) => total > 0 ? (value / total) * 100 : 0;
   return {
     largest: sorted[0] ? { label: sorted[0].name, percent: percent(sorted[0].totalValue) } : null,
@@ -41,11 +47,22 @@ export const getDashboardConcentration = (groups: PortfolioAssetGroup[]) =>
   buildDashboardConcentration(groups, getAssetClassAllocation(groups), getGeographicAllocation(groups));
 
 export const getDashboardOperations = (
-  portfolios: Array<Pick<InvestmentPortfolio, "name" | "operations">>,
+  portfolios: Array<Pick<InvestmentPortfolio, "name" | "operations" | "instruments">>,
   predicate: (operation: PortfolioOperation) => boolean = () => true,
   limit = 6
 ): DashboardOperationRow[] => portfolios
-  .flatMap((portfolio) => (portfolio.operations ?? []).map((operation) => ({ operation, portfolioName: portfolio.name })))
+  .flatMap((portfolio) => {
+    const instrumentsById = new Map((portfolio.instruments ?? []).map((instrument) => [instrument.id, instrument]));
+    return (portfolio.operations ?? []).map((operation) => {
+      const instrument = operation.assetId ? instrumentsById.get(operation.assetId) : undefined;
+      return {
+        operation,
+        portfolioName: portfolio.name,
+        instrumentName: instrument?.name,
+        instrumentSymbol: instrument?.symbol,
+      };
+    });
+  })
   .filter(({ operation }) => predicate(operation))
   .sort((left, right) => right.operation.date.localeCompare(left.operation.date))
   .slice(0, limit);
@@ -78,15 +95,18 @@ export const getDashboardHistoryMetrics = (
   const dailyPoints = buildPortfolioDailyMetricPoints(points);
   const latest = dailyPoints.at(-1) ?? null;
   const latestPoint = points.at(-1) ?? null;
+  // Dashboard value and P/L are current snapshot values, so the adjacent
+  // percentage must use the same current capital denominator. A cumulative
+  // TWR point answers a different question and can become extreme around
+  // deposits/withdrawals, making one card internally contradictory.
+  const currentCapitalReturn = calculateCapitalReturnPercent(fallbackProfitLoss, fallbackInvested);
   return {
     points,
     dailyPoints,
     latest,
     benchmark: history?.benchmarkSeries[0] ?? null,
-    returnPercent: latestPoint?.timeWeightedReturnPercent ??
-      (latestPoint
-        ? calculateCapitalReturnPercent(latestPoint.profitLossPln, latestPoint.netInvestedPln)
-        : calculateCapitalReturnPercent(fallbackProfitLoss, fallbackInvested)),
+    returnPercent: currentCapitalReturn ??
+      (latestPoint ? calculateCapitalReturnPercent(latestPoint.profitLossPln, latestPoint.netInvestedPln) : null),
   };
 };
 
@@ -102,19 +122,30 @@ export const buildDashboardReadModel = ({
   portfolios,
   fallbackProfitLoss,
   fallbackInvested,
+  cashValue = 0,
 }: {
   history: PortfolioHistoryResponse | null;
   events: CorporateEventsResponse | null;
   watchlist: WatchlistItem[];
   groups: PortfolioAssetGroup[];
-  portfolios: Array<Pick<InvestmentPortfolio, "name" | "operations">>;
+  portfolios: Array<Pick<InvestmentPortfolio, "name" | "operations" | "instruments">>;
   fallbackProfitLoss: number;
   fallbackInvested: number;
+  cashValue?: number;
 }) => {
   const historyMetrics = getDashboardHistoryMetrics(history, fallbackProfitLoss, fallbackInvested);
-  const classes = getAssetClassAllocation(groups);
+  const classes = [
+    ...getAssetClassAllocation(groups),
+    ...(cashValue !== 0 ? [{ id: "cash", label: "Gotówka", totalValue: cashValue }] : []),
+  ].sort((left, right) => right.totalValue - left.totalValue || left.label.localeCompare(right.label, "pl"));
   const geography = getGeographicAllocation(groups);
-  const concentration = buildDashboardConcentration(groups, classes, geography);
+  const totalPortfolioValue = groups.reduce((sum, group) => sum + group.totalValue, 0) + cashValue;
+  const concentration = buildDashboardConcentration(
+    groups,
+    classes,
+    geography,
+    totalPortfolioValue
+  );
   const current = getDashboardRankedGroups(groups, "value", 6);
   const largest = getDashboardRankedGroups(groups, "value", 5);
   const gains = getDashboardRankedGroups(groups, "gains", 5);
@@ -126,7 +157,7 @@ export const buildDashboardReadModel = ({
   }).slice(0, 5);
   const allOperations = getDashboardOperations(portfolios, undefined, 6);
   const cashOperations = getDashboardOperations(portfolios, (operation) =>
-    ["DEPOSIT", "WITHDRAWAL", "TRANSFER"].includes(operation.operationType), 6);
+    ["DEPOSIT", "WITHDRAW", "TRANSFER", "CONVERSION", "FEE", "TAX", "INTEREST", "CUSTOM"].includes(operation.operationType), 6);
   const dividendOperations = getDashboardOperations(portfolios, (operation) =>
     operation.operationType === "DIVIDEND", 6);
   const allEvents = events?.events ?? [];

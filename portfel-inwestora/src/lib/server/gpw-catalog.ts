@@ -361,6 +361,35 @@ export const findGpwCatalogEntry = async (symbol: string) => {
   return snapshot.items.find((item) => item.symbolCore === symbolCore) ?? null;
 };
 
+/** Resolve an issuer by the exchange-issued identity carried by PAP ESPI. */
+export const findGpwCatalogEntryByIsin = async (isin: string) => {
+  const normalizedIsin = isin.trim().toUpperCase();
+  if (!/^[A-Z]{2}[A-Z0-9]{10}$/.test(normalizedIsin)) return null;
+  const snapshot = await getAvailableSnapshot();
+  return snapshot.items.find((item) => item.isin === normalizedIsin) ?? null;
+};
+
+const normalizeIssuerNameForIdentity = (value: string) =>
+  normalizeText(value)
+    .replace(/\b(?:spolka akcyjna|s a|sa|se)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+/**
+ * Strict fallback for PAP periodic reports that omit the issuer tag entirely.
+ * It accepts only one exact official-catalog name after removing legal suffixes;
+ * it never performs fuzzy or substring issuer matching.
+ */
+export const findGpwCatalogEntryByExactName = async (companyName: string) => {
+  const normalizedName = normalizeIssuerNameForIdentity(companyName);
+  if (!normalizedName) return null;
+  const snapshot = await getAvailableSnapshot();
+  const matches = snapshot.items.filter(
+    (item) => normalizeIssuerNameForIdentity(item.name) === normalizedName
+  );
+  return matches.length === 1 ? matches[0]! : null;
+};
+
 export const warmGpwCatalog = async () => {
   const snapshot = await getLoadedSnapshot();
 

@@ -24,6 +24,11 @@ import {
   resolveTickerIdentity,
 } from "@/lib/ticker-aliases";
 import { normalizeText, round, toCurrencyCode, uniqueBy } from "@/lib/utils";
+import {
+  getLatestCompletedGpwSessionDate,
+  isFreshGpwMarketPrice,
+  shiftCalendarDate,
+} from "@/lib/gpw-market-calendar";
 import type {
   AssetKind,
   AssetQuote,
@@ -205,7 +210,6 @@ const STOOQ_DOMAINS = ["https://stooq.pl", "https://stooq.com"] as const;
 const STOOQ_TEXT_PROXY_URL = "https://r.jina.ai/http://stooq.pl/q/?s=";
 const STOOQ_RATE_LIMIT_PATTERN = /przekroczony\s+dzienny\s+limit\s+wywolan/i;
 const GPW_QUOTE_CACHE_TTL_MS = 30_000;
-const GPW_MARKET_CLOSE_MINUTE = 17 * 60 + 15;
 const GPW_SEARCH_FALLBACK_TIMEOUT_MS = 1_500;
 const FINNHUB_SEARCH_TIMEOUT_MS = 3_500;
 const COINGECKO_SEARCH_CACHE_TTL_MS = 60_000;
@@ -274,87 +278,7 @@ const logStooqDiagnostic = (payload: {
   });
 };
 
-const toWarsawParts = (date: Date) => {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Europe/Warsaw",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  }).formatToParts(date);
-  const valueFor = (type: Intl.DateTimeFormatPartTypes) =>
-    parts.find((part) => part.type === type)?.value ?? "";
-
-  return {
-    date: `${valueFor("year")}-${valueFor("month")}-${valueFor("day")}`,
-    minute: Number(valueFor("hour")) * 60 + Number(valueFor("minute")),
-  };
-};
-
-const shiftUtcDate = (value: string, days: number) => {
-  const date = new Date(`${value}T12:00:00.000Z`);
-  date.setUTCDate(date.getUTCDate() + days);
-  return date.toISOString().slice(0, 10);
-};
-
-const getEasterSunday = (year: number) => {
-  const a = year % 19;
-  const b = Math.floor(year / 100);
-  const c = year % 100;
-  const d = Math.floor(b / 4);
-  const e = b % 4;
-  const f = Math.floor((b + 8) / 25);
-  const g = Math.floor((b - f + 1) / 3);
-  const h = (19 * a + b - d - g + 15) % 30;
-  const i = Math.floor(c / 4);
-  const k = c % 4;
-  const l = (32 + 2 * e + 2 * i - h - k) % 7;
-  const m = Math.floor((a + 11 * h + 22 * l) / 451);
-  const month = Math.floor((h + l - 7 * m + 114) / 31);
-  const day = ((h + l - 7 * m + 114) % 31) + 1;
-  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-};
-
-const getGpwNonTradingDays = (year: number) => {
-  const easter = getEasterSunday(year);
-  const fixed = ["01-01", "01-06", "05-01", "05-03", "08-15", "11-01", "11-11", "12-25", "12-26"];
-  const holidays = new Set(fixed.map((day) => `${year}-${day}`));
-
-  holidays.add(shiftUtcDate(easter, -2)); // Good Friday
-  holidays.add(shiftUtcDate(easter, 1)); // Easter Monday
-  holidays.add(shiftUtcDate(easter, 60)); // Corpus Christi
-
-  if (year >= 2025) {
-    holidays.add(`${year}-12-24`);
-  }
-
-  return holidays;
-};
-
-const isGpwTradingDay = (date: string) => {
-  const dayOfWeek = new Date(`${date}T12:00:00.000Z`).getUTCDay();
-  return dayOfWeek !== 0 && dayOfWeek !== 6 && !getGpwNonTradingDays(Number(date.slice(0, 4))).has(date);
-};
-
-export const getLatestCompletedGpwSessionDate = (now = new Date()) => {
-  const warsaw = toWarsawParts(now);
-  let candidate = warsaw.date;
-
-  if (warsaw.minute < GPW_MARKET_CLOSE_MINUTE) {
-    candidate = shiftUtcDate(candidate, -1);
-  }
-
-  while (!isGpwTradingDay(candidate)) {
-    candidate = shiftUtcDate(candidate, -1);
-  }
-
-  return candidate;
-};
-
-export const isFreshGpwMarketPrice = (priceDate: string | undefined, now = new Date()) =>
-  Boolean(priceDate) && priceDate === getLatestCompletedGpwSessionDate(now);
+export { getLatestCompletedGpwSessionDate, isFreshGpwMarketPrice };
 
 const requiresFreshGpwSession = (symbol: string, fallbackCurrency: CurrencyCode) =>
   fallbackCurrency === "PLN" || isGpwSymbol(symbol);
@@ -651,7 +575,7 @@ const fetchStooqHistoryQuoteForRequestSymbol = async (
   // the complete Stooq history since 2000 for every live refresh created
   // unnecessary multi-year CSV transfers and parsing work per GPW position.
   // A 35-day window still covers weekends and the longest normal holiday run.
-  const historyStart = shiftUtcDate(
+  const historyStart = shiftCalendarDate(
     `${today.slice(0, 4)}-${today.slice(4, 6)}-${today.slice(6, 8)}`,
     -35
   ).replaceAll("-", "");
@@ -1217,7 +1141,7 @@ const fetchStooqQuote = async (
       }
 
       const today = new Date().toISOString().slice(0, 10).replaceAll("-", "");
-      const historyStart = shiftUtcDate(
+      const historyStart = shiftCalendarDate(
         `${today.slice(0, 4)}-${today.slice(4, 6)}-${today.slice(6, 8)}`,
         -35
       ).replaceAll("-", "");

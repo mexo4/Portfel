@@ -3,6 +3,7 @@ import { fetchFxRatesServer } from "@/lib/server/market-data";
 import { fetchTreasuryBondQuoteSeriesServer } from "@/lib/server/treasury-bonds";
 import { normalizeYahooMoneyUnit } from "@/lib/server/yahoo";
 import { FALLBACK_FX_RATES } from "@/lib/constants";
+import { getOperationCashDeltas } from "@/lib/operation-engine";
 import { createHash } from "node:crypto";
 import https from "node:https";
 import {
@@ -21,12 +22,14 @@ import type {
   AssetKind,
   CurrencyCode,
   PortfolioAsset,
+  PortfolioAccount,
   PortfolioAssetHistorySeries,
   PortfolioBenchmarkDefinition,
   PortfolioBenchmarkHistorySeries,
   PortfolioHistoryPoint,
   PortfolioHistoryResponse,
   PortfolioHistoryScope,
+  PortfolioOperation,
   PortfolioRealizedAdjustment,
   PortfolioSale,
   QuoteProvider,
@@ -1108,7 +1111,8 @@ const buildSoldAllocationSegment = (
 const getNeededFxCodes = (
   assets: PortfolioAsset[],
   sales: PortfolioSale[],
-  benchmarks: PortfolioBenchmarkDefinition[] = []
+  benchmarks: PortfolioBenchmarkDefinition[] = [],
+  operations: PortfolioOperation[] = []
 ) => {
   const codes = new Set<CurrencyCode>(["PLN"]);
 
@@ -1130,6 +1134,12 @@ const getNeededFxCodes = (
     codes.add(toCurrencyCode(benchmark.marketCurrency));
   }
 
+  for (const operation of operations) {
+    for (const delta of getOperationCashDeltas(operation)) {
+      codes.add(toCurrencyCode(delta.currency));
+    }
+  }
+
   return Array.from(codes);
 };
 
@@ -1137,15 +1147,20 @@ const getPortfolioHistoryStartDate = ({
   assets,
   sales,
   realizedAdjustments,
+  operations = [],
 }: {
   assets: PortfolioAsset[];
   sales: PortfolioSale[];
   realizedAdjustments: PortfolioRealizedAdjustment[];
+  operations?: PortfolioOperation[];
 }) => {
   const candidateDates = [
     ...assets.map((asset) => asset.purchaseDate),
     ...sales.flatMap((sale) => [sale.saleDate, ...sale.allocations.map((allocation) => allocation.purchaseDate)]),
     ...realizedAdjustments.map((adjustment) => adjustment.date),
+    ...operations
+      .filter((operation) => getOperationCashDeltas(operation).length > 0)
+      .map((operation) => operation.date),
   ]
     .map((date) => toDateInputValue(date, ""))
     .filter(Boolean)
@@ -1218,11 +1233,33 @@ const convertPurchaseValueToPlnOnDate = (
 const buildBuyCashflowEvents = (
   assets: PortfolioAsset[],
   sales: PortfolioSale[],
-  fxSeriesByCode: Map<CurrencyCode, Map<string, number>>
+  fxSeriesByCode: Map<CurrencyCode, Map<string, number>>,
+  operations: PortfolioOperation[] = []
 ) => {
   const events = new Map<string, number>();
+  const cashImpactLotIds = new Set(
+    operations
+      .filter(
+        (operation) =>
+          operation.operationType === "BUY" && operation.metadata.cashImpact === true
+      )
+      .map((operation) => operation.metadata.lotId)
+      .filter((lotId): lotId is string => typeof lotId === "string")
+  );
+  const cashImpactSaleIds = new Set(
+    operations
+      .filter(
+        (operation) =>
+          operation.operationType === "SELL" && operation.metadata.cashImpact === true
+      )
+      .map((operation) => operation.metadata.saleId)
+      .filter((saleId): saleId is string => typeof saleId === "string")
+  );
 
   for (const asset of assets) {
+    if (cashImpactLotIds.has(asset.id)) {
+      continue;
+    }
     const investedPln = round(
       convertPurchaseValueToPlnOnDate(
         asset.purchasePrice * asset.quantity,
@@ -1236,6 +1273,9 @@ const buildBuyCashflowEvents = (
 
   for (const sale of sales) {
     for (const allocation of sale.allocations) {
+      if (cashImpactLotIds.has(allocation.lotId)) {
+        continue;
+      }
       const investedPln = round(
         convertPurchaseValueToPlnOnDate(
           allocation.purchasePrice * allocation.quantity,
@@ -1249,10 +1289,65 @@ const buildBuyCashflowEvents = (
   }
 
   for (const sale of sales) {
+    if (cashImpactSaleIds.has(sale.id)) {
+      continue;
+    }
     addAmountToDateMap(events, sale.saleDate, -round(sale.realizedInvestedPln));
   }
 
   return events;
+};
+
+const buildCashLedgerEvents = (
+  operations: PortfolioOperation[],
+  accounts: PortfolioAccount[],
+  fxSeriesByCode: Map<CurrencyCode, Map<string, number>>
+) => {
+  const activeAccountIds = accounts.length
+    ? new Set(
+        accounts
+          .filter((account) => account.metadata.archived !== true)
+          .map((account) => account.id)
+      )
+    : null;
+  const deltasByDate = new Map<string, Map<CurrencyCode, number>>();
+  const externalFlowsByDate = new Map<string, number>();
+
+  operations.forEach((operation) => {
+    const date = toDateInputValue(operation.date, "");
+    if (!date) return;
+
+    const deltas = getOperationCashDeltas(operation).filter(
+      (delta) => !activeAccountIds || activeAccountIds.has(delta.accountId)
+    );
+    if (!deltas.length) return;
+
+    const currencyDeltas = deltasByDate.get(date) ?? new Map<CurrencyCode, number>();
+    deltas.forEach((delta) => {
+      currencyDeltas.set(
+        delta.currency,
+        round((currencyDeltas.get(delta.currency) ?? 0) + delta.amount, 8)
+      );
+    });
+    deltasByDate.set(date, currencyDeltas);
+
+    const isExternalFlow =
+      operation.operationType === "DEPOSIT" ||
+      operation.operationType === "WITHDRAW" ||
+      (operation.operationType === "CUSTOM" &&
+        operation.metadata.cashEntryKind === "BALANCE_ADJUSTMENT");
+
+    if (isExternalFlow) {
+      const flowPln = deltas.reduce(
+        (total, delta) =>
+          total + convertToPlnOnDate(delta.amount, delta.currency, date, fxSeriesByCode),
+        0
+      );
+      addAmountToDateMap(externalFlowsByDate, date, flowPln);
+    }
+  });
+
+  return { deltasByDate, externalFlowsByDate };
 };
 
 const buildAdjustmentEvents = (realizedAdjustments: PortfolioRealizedAdjustment[]) => {
@@ -1455,11 +1550,15 @@ export const buildPortfolioHistory = async ({
   assets,
   sales,
   realizedAdjustments,
+  operations = [],
+  accounts = [],
   benchmarks = [],
 }: {
   assets: PortfolioAsset[];
   sales: PortfolioSale[];
   realizedAdjustments: PortfolioRealizedAdjustment[];
+  operations?: PortfolioOperation[];
+  accounts?: PortfolioAccount[];
   benchmarks?: PortfolioBenchmarkDefinition[];
 }): Promise<PortfolioHistoryResponse> => {
   const today = toDateInputValue(new Date().toISOString());
@@ -1467,6 +1566,7 @@ export const buildPortfolioHistory = async ({
     assets,
     sales,
     realizedAdjustments,
+    operations,
   });
 
   if (!startDate) {
@@ -1487,7 +1587,7 @@ export const buildPortfolioHistory = async ({
   const warnings = new Set<string>();
 
   const { fxSeriesByCode, warnings: fxWarnings } = await buildFxSeries(
-    getNeededFxCodes(assets, sales, benchmarks),
+    getNeededFxCodes(assets, sales, benchmarks, operations),
     startDate,
     today
   );
@@ -1496,7 +1596,20 @@ export const buildPortfolioHistory = async ({
     warnings.add(warning);
   }
 
-  const netInvestedEvents = buildBuyCashflowEvents(assets, sales, fxSeriesByCode);
+  const netInvestedEvents = buildBuyCashflowEvents(
+    assets,
+    sales,
+    fxSeriesByCode,
+    operations
+  );
+  const cashLedgerEvents = buildCashLedgerEvents(
+    operations,
+    accounts,
+    fxSeriesByCode
+  );
+  cashLedgerEvents.externalFlowsByDate.forEach((amount, date) =>
+    addAmountToDateMap(netInvestedEvents, date, amount)
+  );
   const adjustmentEvents = buildAdjustmentEvents(realizedAdjustments);
   const instrumentDefinitions = Array.from(
     new Map(
@@ -1602,6 +1715,7 @@ export const buildPortfolioHistory = async ({
   let cumulativeAdjustmentsPln = 0;
   let cumulativeTimeWeightedReturnFactor = 1;
   let previousPortfolioValuePln: number | null = null;
+  const cashBalancesByCurrency = new Map<CurrencyCode, number>();
 
   for (const date of dates) {
     const externalFlowPln = netInvestedEvents.get(date) ?? 0;
@@ -1614,7 +1728,20 @@ export const buildPortfolioHistory = async ({
       cumulativeAdjustmentsPln + realizedAdjustmentPln
     );
 
-    const portfolioValuePln = round(portfolioValueByDate.get(date) ?? 0);
+    cashLedgerEvents.deltasByDate.get(date)?.forEach((amount, currency) => {
+      cashBalancesByCurrency.set(
+        currency,
+        round((cashBalancesByCurrency.get(currency) ?? 0) + amount, 8)
+      );
+    });
+    const cashValuePln = Array.from(cashBalancesByCurrency).reduce(
+      (total, [currency, amount]) =>
+        total + convertToPlnOnDate(amount, currency, date, fxSeriesByCode),
+      0
+    );
+    const portfolioValuePln = round(
+      (portfolioValueByDate.get(date) ?? 0) + cashValuePln
+    );
     const netInvestedPln = round(cumulativeNetInvestedPln);
     const profitLossPln = round(
       portfolioValuePln - netInvestedPln + cumulativeAdjustmentsPln
@@ -1729,7 +1856,14 @@ export const buildAggregatePortfolioHistory = async ({
   const uniqueScopes = Array.from(
     new Map(
       portfolioScopes
-        .filter((scope) => scope.portfolioId && (scope.assets.length || scope.sales.length || scope.realizedAdjustments.length))
+        .filter(
+          (scope) =>
+            scope.portfolioId &&
+            (scope.assets.length ||
+              scope.sales.length ||
+              scope.realizedAdjustments.length ||
+              (scope.operations?.length ?? 0))
+        )
         .map((scope) => [scope.portfolioId, scope] as const)
     ).values()
   );
@@ -1744,6 +1878,8 @@ export const buildAggregatePortfolioHistory = async ({
         assets: scope.assets,
         sales: scope.sales,
         realizedAdjustments: scope.realizedAdjustments,
+        operations: scope.operations ?? [],
+        accounts: scope.accounts ?? [],
         // A user-selected benchmark has no single economically correct
         // aggregate start/cash-flow basis. Keep the existing per-portfolio
         // calculation honest rather than producing a synthetic comparison.

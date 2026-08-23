@@ -10,7 +10,7 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import {
   Area, AreaChart, Bar, BarChart, CartesianGrid, Line, LineChart,
-  ResponsiveContainer, Tooltip, XAxis, YAxis,
+  ResponsiveContainer, Tooltip, XAxis, YAxis, type TooltipContentProps,
 } from "recharts";
 import {
   createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode,
@@ -26,16 +26,18 @@ import {
 } from "@/lib/dashboard-layout";
 import { createDashboardMutationCoordinator } from "@/lib/dashboard-mutations";
 import {
-  buildDashboardReadModel, type DashboardReadModel,
+  buildDashboardReadModel, type DashboardOperationRow, type DashboardReadModel,
 } from "@/lib/dashboard-read-model";
 import { filterChartPointsByRange, type ChartRangePreset } from "@/lib/chart-viewport";
 import { convertFromPln } from "@/lib/pricing";
-import { fetchCorporateEvents, fetchDashboardLayout, fetchPortfolioHistory, saveDashboardLayout } from "@/lib/api";
+import { fetchCorporateEvents, fetchDashboardLayout, fetchEspiFeed, fetchPortfolioHistory, saveDashboardLayout } from "@/lib/api";
 import {
   getCorporateEventLabel, getUpcomingDividendRelevantDate, type CorporateEvent,
   type CorporateEventsResponse,
 } from "@/lib/corporate-events";
 import { formatCurrency, formatDate } from "@/lib/utils";
+import { ESPI_CATEGORY_LABELS, type EspiReportSummary } from "@/lib/espi";
+import { isCurrentWarsawDayGpwSession } from "@/lib/gpw-market-calendar";
 import type { PortfolioHistoryResponse, PortfolioOperation } from "@/types/portfolio";
 
 const CATEGORY_LABELS: Record<DashboardWidgetCategory, string> = {
@@ -51,9 +53,11 @@ const SIZE_LABELS = { small: "S", medium: "M", large: "L", full: "XL" } as const
 const RANGE_OPTIONS: ChartRangePreset[] = ["1D", "1M", "YTD", "1Y", "MAX"];
 const EMPTY_HISTORY: PortfolioHistoryResponse = { points: [], assetSeries: [], warnings: [], benchmarkSeries: [] };
 
-const OPERATION_LABELS: Record<string, string> = {
+const OPERATION_LABELS: Record<PortfolioOperation["operationType"], string> = {
   BUY: "Zakup", SELL: "Sprzedaż", DIVIDEND: "Dywidenda", DEPOSIT: "Wpłata",
-  WITHDRAWAL: "Wypłata", TRANSFER: "Transfer", FEE: "Opłata",
+  WITHDRAW: "Wypłata", TRANSFER: "Przelew", CONVERSION: "Przewalutowanie",
+  COUPON: "Kupon obligacji", INTEREST: "Odsetki", FEE: "Opłata", TAX: "Podatek",
+  SPLIT: "Split", REVERSE_SPLIT: "Scalenie akcji", BONUS: "Bonus", CUSTOM: "Korekta",
 };
 
 const getHistoryScopes = (workspace: ReturnType<typeof usePortfolioWorkspace>) =>
@@ -62,6 +66,8 @@ const getHistoryScopes = (workspace: ReturnType<typeof usePortfolioWorkspace>) =
     assets: portfolio.assets,
     sales: portfolio.sales,
     realizedAdjustments: portfolio.realizedAdjustments,
+    operations: portfolio.operations ?? [],
+    accounts: portfolio.accounts ?? [],
   })) : undefined;
 
 const getHistoryAssetSignature = (asset: ReturnType<typeof usePortfolioWorkspace>["assets"][number]) => ({
@@ -76,6 +82,12 @@ const getHistorySignature = (workspace: ReturnType<typeof usePortfolioWorkspace>
   assets: workspace.isAllPortfoliosSelected ? [] : workspace.assets.map(getHistoryAssetSignature),
   sales: workspace.sales,
   adjustments: workspace.effectiveRealizedAdjustments,
+  operations: workspace.isAllPortfoliosSelected
+    ? []
+    : workspace.activePortfolio?.operations ?? [],
+  accounts: workspace.isAllPortfoliosSelected
+    ? []
+    : workspace.activePortfolio?.accounts ?? [],
   scopes: getHistoryScopes(workspace)?.map((scope) => ({
     ...scope,
     assets: scope.assets.map(getHistoryAssetSignature),
@@ -120,14 +132,20 @@ function DashboardDataProvider({ children, scopeKey }: { children: ReactNode; sc
     setStatus({ history: true, events: true });
     setErrors({ history: false, events: false });
 
-    const hasHistoryInput = parsed.assets.length || parsed.sales.length || parsed.adjustments.length ||
-      parsed.scopes?.some((item: { assets: unknown[]; sales: unknown[]; realizedAdjustments: unknown[] }) =>
-        item.assets.length || item.sales.length || item.realizedAdjustments.length);
+    const hasHistoryInput = parsed.assets.length || parsed.sales.length || parsed.adjustments.length || parsed.operations.length ||
+      parsed.scopes?.some((item: { assets: unknown[]; sales: unknown[]; realizedAdjustments: unknown[]; operations?: unknown[] }) =>
+        item.assets.length || item.sales.length || item.realizedAdjustments.length || (item.operations?.length ?? 0));
     const historyRequest = hasHistoryInput
       ? fetchPortfolioHistory({
           assets: workspace.isAllPortfoliosSelected ? [] : workspace.assets,
           sales: workspace.sales,
           realizedAdjustments: workspace.effectiveRealizedAdjustments,
+          operations: workspace.isAllPortfoliosSelected
+            ? []
+            : workspace.activePortfolio?.operations ?? [],
+          accounts: workspace.isAllPortfoliosSelected
+            ? []
+            : workspace.activePortfolio?.accounts ?? [],
           benchmarks: workspace.isAllPortfoliosSelected ? [] : (workspace.activePortfolio?.benchmarks ?? []),
           portfolioScopes: getHistoryScopes(workspace),
           signal: controller.signal,
@@ -160,6 +178,7 @@ function DashboardDataProvider({ children, scopeKey }: { children: ReactNode; sc
       : workspace.activePortfolio ? [workspace.activePortfolio] : [],
     fallbackProfitLoss: workspace.summaryCombinedProfitLoss,
     fallbackInvested: workspace.summaryTotalInvested,
+    cashValue: workspace.summaryCashValue,
   }), [
     events,
     history,
@@ -168,6 +187,7 @@ function DashboardDataProvider({ children, scopeKey }: { children: ReactNode; sc
     workspace.isAllPortfoliosSelected,
     workspace.portfolios,
     workspace.summaryCombinedProfitLoss,
+    workspace.summaryCashValue,
     workspace.summaryTotalInvested,
     workspace.watchlistItems,
   ]);
@@ -250,17 +270,51 @@ function DashboardMetricWidget({ id }: { id: DashboardWidgetId }) {
 }
 
 type DashboardChartMode = "value" | "result" | "daily" | "benchmark";
+
+type DashboardChartRow = { date: string; value: number; benchmark?: number | null };
+
+function DashboardChartTooltip({
+  active,
+  label,
+  payload,
+  mode,
+  currency,
+}: TooltipContentProps & { mode: DashboardChartMode; currency: string }) {
+  if (!active || !label || !payload?.length) return null;
+
+  const labels = mode === "benchmark"
+    ? { value: "Portfel", benchmark: "Benchmark" }
+    : { value: mode === "value" ? "Wartość portfela" : mode === "daily" ? "Wynik dzienny" : "Wynik portfela" };
+
+  return <div className="line-chart-tooltip line-visual-tooltip dashboard-chart-tooltip">
+    <p className="table-title">{formatDate(String(label))}</p>
+    <div className="line-chart-tooltip-list">
+      {payload.map((entry) => {
+        const key = String(entry.dataKey ?? "value") as "value" | "benchmark";
+        if (entry.value === null || entry.value === undefined) return null;
+        const value = Number(entry.value);
+        if (!Number.isFinite(value)) return null;
+        return <div key={key} className="line-chart-tooltip-row">
+          <span className="line-chart-tooltip-key"><span className="line-chart-tooltip-dot" style={{ background: entry.color }} /><span className="line-chart-tooltip-label">{labels[key] ?? key}</span></span>
+          <strong className="line-chart-tooltip-value">{mode === "benchmark" ? `${value >= 0 ? "+" : ""}${value.toFixed(2)}%` : formatCurrency(value, currency)}</strong>
+        </div>;
+      })}
+    </div>
+  </div>;
+}
+
 function DashboardChart({ mode }: { mode: DashboardChartMode }) {
   const workspace = usePortfolioWorkspace();
   const data = useDashboardData();
   const [range, setRange] = useState<ChartRangePreset>("1M");
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const href = workspace.getReadHref("/analytics/charts");
   const history = data.model.history;
   const points = filterChartPointsByRange(history.points, range);
   const dailyPoints = filterChartPointsByRange(history.dailyPoints, range);
   const benchmark = history.benchmark;
   const benchmarkByDate = new Map(benchmark?.points.map((point) => [point.date, point.returnPercent]) ?? []);
-  const chartData: Array<{ date: string; value: number; benchmark?: number | null }> = mode === "daily" ? dailyPoints.map((point) => ({
+  const chartData: DashboardChartRow[] = mode === "daily" ? dailyPoints.map((point) => ({
     date: point.date,
     value: convertFromPln(point.cashFlowNeutralResultPln, workspace.activeBaseCurrency, workspace.fxRates),
   })) : points.filter((point) => mode !== "benchmark" || point.timeWeightedReturnPercent !== null).map((point) => ({
@@ -274,17 +328,30 @@ function DashboardChart({ mode }: { mode: DashboardChartMode }) {
   }));
   const title = mode === "value" ? "Wartość portfela" : mode === "result" ? "Wynik portfela" : mode === "daily" ? "Wynik dzienny" : "Portfel vs benchmark";
   const noBenchmark = mode === "benchmark" && (!benchmark || workspace.isAllPortfoliosSelected);
+
+  useEffect(() => {
+    if (!isFullscreen) return;
+    const onKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape") setIsFullscreen(false); };
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", onKeyDown);
+    return () => { document.body.style.overflow = previousOverflow; window.removeEventListener("keydown", onKeyDown); };
+  }, [isFullscreen]);
+
+  const renderChart = (fullscreen = false) => <ResponsiveContainer width="100%" height="100%">
+    {mode === "daily" ? <BarChart data={chartData}><CartesianGrid strokeDasharray="3 3" vertical={false} /><XAxis dataKey="date" hide={!fullscreen} tickFormatter={(value) => formatDate(String(value))} /><YAxis hide /><Tooltip content={(props) => <DashboardChartTooltip {...props} mode={mode} currency={workspace.activeBaseCurrency} />} /><Bar dataKey="value" fill="#0f766e" radius={[4, 4, 0, 0]} /></BarChart>
+      : mode === "benchmark" ? <LineChart data={chartData}><CartesianGrid strokeDasharray="3 3" vertical={false} /><XAxis dataKey="date" hide={!fullscreen} tickFormatter={(value) => formatDate(String(value))} /><YAxis hide /><Tooltip content={(props) => <DashboardChartTooltip {...props} mode={mode} currency={workspace.activeBaseCurrency} />} /><Line type="monotone" dataKey="value" stroke="#0f766e" dot={false} strokeWidth={2.5} /><Line type="monotone" dataKey="benchmark" stroke="#c47c2b" dot={false} strokeWidth={2} /></LineChart>
+      : <AreaChart data={chartData}><defs><linearGradient id={`dashboard-${mode}${fullscreen ? "-fullscreen" : ""}`} x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#0f766e" stopOpacity={0.28} /><stop offset="1" stopColor="#0f766e" stopOpacity={0.02} /></linearGradient></defs><CartesianGrid strokeDasharray="3 3" vertical={false} /><XAxis dataKey="date" hide={!fullscreen} tickFormatter={(value) => formatDate(String(value))} /><YAxis hide /><Tooltip content={(props) => <DashboardChartTooltip {...props} mode={mode} currency={workspace.activeBaseCurrency} />} /><Area type="monotone" dataKey="value" stroke="#0f766e" fill={`url(#dashboard-${mode}${fullscreen ? "-fullscreen" : ""})`} strokeWidth={2.5} dot={false} /></AreaChart>}
+  </ResponsiveContainer>;
+
   return <WidgetShell eyebrow="Wykresy" title={title} href={href}>
     <div className="dashboard-mini-chart-toolbar" aria-label="Zakres wykresu">
       {RANGE_OPTIONS.map((item) => <button key={item} type="button" className={range === item ? "is-active" : ""} onClick={() => setRange(item)}>{item}</button>)}
     </div>
-    {data.isHistoryLoading ? <EmptyState>Wczytywanie wspólnej historii…</EmptyState> : data.historyError ? <EmptyState>Historia jest chwilowo niedostępna.</EmptyState> : noBenchmark ? <EmptyState>{workspace.isAllPortfoliosSelected ? "Benchmark nie jest syntetyzowany dla Wszystkich portfeli." : "Najpierw ustaw benchmark na stronie Wykresy."}</EmptyState> : chartData.length < 2 ? <EmptyState>Za mało danych do wyświetlenia wykresu.</EmptyState> : <div className="dashboard-mini-chart" aria-label={title}>
-      <ResponsiveContainer width="100%" height="100%">
-        {mode === "daily" ? <BarChart data={chartData}><CartesianGrid strokeDasharray="3 3" vertical={false} /><XAxis dataKey="date" hide /><YAxis hide /><Tooltip formatter={(value) => formatCurrency(Number(value), workspace.activeBaseCurrency)} /><Bar dataKey="value" fill="#0f766e" radius={[4, 4, 0, 0]} /></BarChart>
-          : mode === "benchmark" ? <LineChart data={chartData}><CartesianGrid strokeDasharray="3 3" vertical={false} /><XAxis dataKey="date" hide /><YAxis hide /><Tooltip formatter={(value) => `${Number(value).toFixed(2)}%`} /><Line type="monotone" dataKey="value" stroke="#0f766e" dot={false} strokeWidth={2.5} /><Line type="monotone" dataKey="benchmark" stroke="#c47c2b" dot={false} strokeWidth={2} /></LineChart>
-          : <AreaChart data={chartData}><defs><linearGradient id={`dashboard-${mode}`} x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#0f766e" stopOpacity={0.28} /><stop offset="1" stopColor="#0f766e" stopOpacity={0.02} /></linearGradient></defs><CartesianGrid strokeDasharray="3 3" vertical={false} /><XAxis dataKey="date" hide /><YAxis hide /><Tooltip formatter={(value) => formatCurrency(Number(value), workspace.activeBaseCurrency)} /><Area type="monotone" dataKey="value" stroke="#0f766e" fill={`url(#dashboard-${mode})`} strokeWidth={2.5} dot={false} /></AreaChart>}
-      </ResponsiveContainer>
-    </div>}
+    {data.isHistoryLoading ? <EmptyState>Wczytywanie wspólnej historii…</EmptyState> : data.historyError ? <EmptyState>Historia jest chwilowo niedostępna.</EmptyState> : noBenchmark ? <EmptyState>{workspace.isAllPortfoliosSelected ? "Benchmark nie jest syntetyzowany dla Wszystkich portfeli." : "Najpierw ustaw benchmark na stronie Wykresy."}</EmptyState> : chartData.length < 2 ? <EmptyState>Za mało danych do wyświetlenia wykresu.</EmptyState> : <>
+      <div className="dashboard-mini-chart" aria-label={`${title}. Dwuklik otwiera pełny ekran.`} onDoubleClick={() => { if (window.matchMedia("(min-width: 861px)").matches) setIsFullscreen(true); }}>{renderChart()}</div>
+      {isFullscreen ? <div className="dashboard-chart-modal" role="dialog" aria-modal="true" aria-label={`${title} — pełny ekran`}><div className="dashboard-chart-modal-head"><div><p className="eyebrow">Wykresy</p><h2 className="section-title">{title}</h2></div><button type="button" className="dashboard-widget-icon-button" onClick={() => setIsFullscreen(false)} aria-label="Zamknij pełny ekran">×</button></div><div className="dashboard-chart-modal-canvas">{renderChart(true)}</div></div> : null}
+    </>}
   </WidgetShell>;
 }
 
@@ -328,9 +395,48 @@ function PositionList({ mode }: { mode: "current" | "largest" | "gains" | "losse
   </WidgetShell>;
 }
 
-const getOperationSymbol = (operation: PortfolioOperation) => {
+const getOperationSymbol = (row: DashboardOperationRow) => {
+  if (row.instrumentSymbol) return row.instrumentSymbol;
+  const { operation } = row;
   const metadata = operation.metadata as { symbol?: unknown } | undefined;
-  return typeof metadata?.symbol === "string" && metadata.symbol.trim() ? metadata.symbol : OPERATION_LABELS[operation.operationType] ?? operation.operationType;
+  return typeof metadata?.symbol === "string" && metadata.symbol.trim()
+    ? metadata.symbol
+    : OPERATION_LABELS[operation.operationType];
+};
+
+const getMetadataNumber = (operation: PortfolioOperation, key: string) => {
+  const value = operation.metadata?.[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+};
+
+const getMetadataString = (operation: PortfolioOperation, key: string) => {
+  const value = operation.metadata?.[key];
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+};
+
+const formatOperationDetail = (row: DashboardOperationRow) => {
+  const { operation } = row;
+  const symbol = getOperationSymbol(row);
+  if ((operation.operationType === "BUY" || operation.operationType === "SELL") && operation.quantity) {
+    return `${symbol} · ${new Intl.NumberFormat("pl-PL", { maximumFractionDigits: 8 }).format(operation.quantity)} szt.`;
+  }
+  if (operation.operationType === "DIVIDEND") {
+    const net = getMetadataNumber(operation, "netAmount") ?? operation.amount;
+    return `${symbol} · +${formatCurrency(Math.abs(net), operation.currency)} netto`;
+  }
+  if (operation.operationType === "CONVERSION") {
+    const targetAmount = getMetadataNumber(operation, "targetAmount");
+    const targetCurrency = getMetadataString(operation, "targetCurrency");
+    if (targetAmount !== null && targetCurrency) {
+      return `${formatCurrency(Math.abs(operation.amount), operation.currency)} → ${formatCurrency(Math.abs(targetAmount), targetCurrency)}`;
+    }
+  }
+  if (operation.operationType === "TRANSFER") {
+    const targetAmount = getMetadataNumber(operation, "targetAmount") ?? operation.amount;
+    const targetCurrency = getMetadataString(operation, "targetCurrency") ?? operation.currency;
+    return `${formatCurrency(Math.abs(operation.amount), operation.currency)} → ${formatCurrency(Math.abs(targetAmount), targetCurrency)}`;
+  }
+  return `${operation.operationType === "DEPOSIT" || operation.operationType === "INTEREST" || operation.operationType === "BONUS" ? "+" : operation.operationType === "WITHDRAW" || operation.operationType === "FEE" || operation.operationType === "TAX" ? "−" : ""}${formatCurrency(Math.abs(operation.amount), operation.currency)}`;
 };
 
 function OperationsWidget({ mode }: { mode: "all" | "cash" | "dividends" }) {
@@ -338,9 +444,9 @@ function OperationsWidget({ mode }: { mode: "all" | "cash" | "dividends" }) {
   const operations = useDashboardData().model.operations[mode];
   const title = mode === "all" ? "Ostatnie operacje" : mode === "cash" ? "Ostatnie wpłaty i wypłaty" : "Ostatnie dywidendy";
   return <WidgetShell eyebrow="Aktywność" title={title} href={workspace.getReadHref(mode === "dividends" ? "/portfolio/dividends" : "/portfolio/operations")}>
-    {operations.length ? <div className="dashboard-compact-list">{operations.map(({ operation, portfolioName }) => <div key={`${portfolioName}:${operation.id}`}>
-      <span><strong>{getOperationSymbol(operation)}</strong><small>{OPERATION_LABELS[operation.operationType] ?? operation.operationType}{workspace.isAllPortfoliosSelected ? ` · ${portfolioName}` : ""}</small></span>
-      <span><strong>{formatDate(operation.date)}</strong><small>{formatCurrency(operation.amount, operation.currency)}</small></span>
+    {operations.length ? <div className="dashboard-compact-list dashboard-operation-list">{operations.map((row) => <div key={`${row.portfolioName}:${row.operation.id}`}>
+      <span><strong>{OPERATION_LABELS[row.operation.operationType]}</strong><small>{formatOperationDetail(row)}</small></span>
+      <span><strong>{formatDate(row.operation.date)}</strong><small>{workspace.isAllPortfoliosSelected ? row.portfolioName : row.operation.notes || ""}</small></span>
     </div>)}</div> : <EmptyState>Brak zapisanych operacji tego typu.</EmptyState>}
   </WidgetShell>;
 }
@@ -357,6 +463,43 @@ function EventsWidget({ mode }: { mode: "reports" | "dividends" | "timeline" | "
       const date = event.eventType === "UPCOMING_DIVIDEND" ? getUpcomingDividendRelevantDate(event) ?? event.eventDate : event.eventDate;
       return <article key={event.id}><time dateTime={date}><strong>{new Date(`${date}T00:00:00`).getDate()}</strong><span>{new Intl.DateTimeFormat("pl-PL", { month: "short" }).format(new Date(`${date}T00:00:00`)).replace(".", "")}</span></time><div><strong>{event.companyName}</strong><span>{event.eventType === "UPCOMING_DIVIDEND" ? `${formatCurrency(event.dividendPerShare ?? 0, event.dividendCurrency ?? "PLN")} / akcję` : getCorporateEventLabel(event)}</span><small>{trackingLabel(event)}</small></div></article>;
     })}</div> : <EmptyState>Brak przyszłych wydarzeń w tym zakresie.</EmptyState>}
+  </WidgetShell>;
+}
+
+function LatestEspiWidget() {
+  const workspace = usePortfolioWorkspace();
+  const [items, setItems] = useState<EspiReportSummary[]>([]);
+  const [state, setState] = useState<"loading" | "ready" | "error">("loading");
+  const trackedSignature = JSON.stringify({
+    portfolios: workspace.portfolios.map((portfolio) => ({
+      id: portfolio.id,
+      assets: portfolio.assets.map((asset) => [asset.id, asset.symbol, asset.quantity]),
+    })),
+    watchlist: workspace.watchlistItems.map((item) => item.canonicalKey),
+  });
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void fetchEspiFeed({ scope: "mine", limit: 5, signal: controller.signal })
+      .then((response) => {
+        if (!controller.signal.aborted) {
+          setItems(response.items);
+          setState("ready");
+        }
+      })
+      .catch((error) => {
+        if (!controller.signal.aborted && !(error instanceof DOMException && error.name === "AbortError")) {
+          setState("error");
+        }
+      });
+    return () => controller.abort();
+  }, [trackedSignature]);
+
+  return <WidgetShell eyebrow="Rynek" title="Najnowsze ESPI" href={workspace.getReadHref("/market/espi")}>
+    {state === "loading" ? <EmptyState>Wczytywanie raportów ESPI…</EmptyState>
+      : state === "error" ? <EmptyState>Raporty ESPI są chwilowo niedostępne.</EmptyState>
+        : items.length ? <div className="dashboard-espi-list">{items.map((report) => <Link key={report.id} href={workspace.getReadHref(`/market/espi/${report.id}`)}><span><strong>{report.issuerName}</strong><small>{new Intl.DateTimeFormat("pl-PL", { timeZone: "Europe/Warsaw", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }).format(new Date(report.publishedAt))}</small></span><b>{report.title}</b><em>{ESPI_CATEGORY_LABELS[report.category]}</em></Link>)}</div>
+          : <EmptyState>Brak nowych raportów posiadanych lub obserwowanych spółek.</EmptyState>}
   </WidgetShell>;
 }
 
@@ -381,7 +524,9 @@ function DailySnapshotWidget() {
   const dailyResult = latest ? convertFromPln(latest.cashFlowNeutralResultPln, workspace.activeBaseCurrency, workspace.fxRates) : null;
   const raw = latest ? convertFromPln(latest.rawValueChangePln, workspace.activeBaseCurrency, workspace.fxRates) : null;
   const { best, worst, benchmarkPercent: benchmark } = snapshot;
-  return <WidgetShell eyebrow="Dzisiaj" title="Co się zmieniło?" href={workspace.getReadHref("/analytics/performance")}>
+  const isSessionDay = isCurrentWarsawDayGpwSession();
+  return <WidgetShell eyebrow={isSessionDay ? "Dzisiaj" : "Dzień wolny od sesji"} title="Co się zmieniło?" href={workspace.getReadHref("/analytics/performance")}>
+    {!isSessionDay ? <p className="dashboard-session-note">Najnowsze zmiany pochodzą z ostatniej zakończonej sesji.</p> : null}
     {data.isHistoryLoading ? <EmptyState>Wczytywanie dziennego snapshotu…</EmptyState> : latest ? <div className="dashboard-snapshot-grid">
       <div><span>Zmiana wartości</span><strong className={raw !== null && raw >= 0 ? "tone-positive" : "tone-negative"}>{formatCurrency(raw ?? 0, workspace.activeBaseCurrency)}</strong></div>
       <div><span>Wynik inwestycyjny</span><strong className={dailyResult !== null && dailyResult >= 0 ? "tone-positive" : "tone-negative"}>{formatCurrency(dailyResult ?? 0, workspace.activeBaseCurrency)}</strong><small>{latest.cashFlowNeutralResultPercent === null ? "bez przepływów" : `${formatPercent(latest.cashFlowNeutralResultPercent)} · bez przepływów`}</small></div>
@@ -417,11 +562,12 @@ function DashboardWidgetContent({ widgetId }: { widgetId: DashboardWidgetId }) {
   if (widgetId === "upcoming-timeline") return <EventsWidget mode="timeline" />;
   if (widgetId === "watchlist-events") return <EventsWidget mode="watched" />;
   if (widgetId === "watchlist-daily-changes") return <WatchlistWidget changesOnly />;
+  if (widgetId === "latest-espi") return <LatestEspiWidget />;
   return <WatchlistWidget />;
 }
 
-function SortableWidget({ widget, isEditing, index, total, onRemove, onResize, onMove }: {
-  widget: DashboardWidgetLayout; isEditing: boolean; index: number; total: number;
+function SortableWidget({ widget, isEditing, device, index, total, onRemove, onResize, onMove }: {
+  widget: DashboardWidgetLayout; isEditing: boolean; device: DashboardDevice; index: number; total: number;
   onRemove: (id: DashboardWidgetId) => void;
   onResize: (id: DashboardWidgetId, size: DashboardWidgetLayout["size"]) => void;
   onMove: (id: DashboardWidgetId, direction: -1 | 1) => void;
@@ -440,7 +586,7 @@ function SortableWidget({ widget, isEditing, index, total, onRemove, onResize, o
     {isEditing ? <div className="dashboard-widget-editor" aria-label={`Edytuj widget ${definition.label}`}>
       <button type="button" className="dashboard-widget-drag-handle" aria-label={`Przeciągnij ${definition.label}`} {...attributes} {...listeners}>⠿</button>
       <strong>{definition.label}</strong>
-      <label><span className="sr-only">Rozmiar {definition.label}</span><select value={widget.size} onChange={(event) => onResize(widget.id, event.target.value as DashboardWidgetLayout["size"])}>{definition.sizes.map((size) => <option key={size} value={size}>{SIZE_LABELS[size]}</option>)}</select></label>
+      {device === "desktop" ? <label><span className="sr-only">Rozmiar {definition.label}</span><select value={widget.size} onChange={(event) => onResize(widget.id, event.target.value as DashboardWidgetLayout["size"])}>{definition.sizes.map((size) => <option key={size} value={size}>{SIZE_LABELS[size]}</option>)}</select></label> : <span className="dashboard-mobile-size-label">1 kolumna</span>}
       <div className="dashboard-widget-move-actions">
         <button type="button" className="dashboard-widget-icon-button" onClick={() => onMove(widget.id, -1)} disabled={index === 0} aria-label={`Przenieś ${definition.label} wyżej`}>↑</button>
         <button type="button" className="dashboard-widget-icon-button" onClick={() => onMove(widget.id, 1)} disabled={index === total - 1} aria-label={`Przenieś ${definition.label} niżej`}>↓</button>
@@ -451,6 +597,14 @@ function SortableWidget({ widget, isEditing, index, total, onRemove, onResize, o
   </div>;
 }
 
+function DashboardCategoryIcon({ category }: { category: DashboardWidgetCategory }) {
+  if (category === "charts") return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 18 9 12l4 3 7-9" /></svg>;
+  if (category === "portfolio") return <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="18" height="13" rx="2" /><path d="M8 6V4h8v2M3 11h18" /></svg>;
+  if (category === "activity") return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M15 3l4 4-4 4M19 17H5M9 13l-4 4 4 4" /></svg>;
+  if (category === "calendar") return <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2" /><path d="M7 3v4M17 3v4M3 10h18" /></svg>;
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="13" width="3" height="7" rx="1" /><rect x="10.5" y="8" width="3" height="12" rx="1" /><rect x="17" y="4" width="3" height="16" rx="1" /></svg>;
+}
+
 export default function ConfigurableDashboard() {
   const workspace = usePortfolioWorkspace();
   const scopeKey = getDashboardScopeKey(workspace.activePortfolioId, workspace.isAllPortfoliosSelected);
@@ -458,7 +612,6 @@ export default function ConfigurableDashboard() {
   const [layouts, setLayouts] = useState<DashboardScopeLayouts>(() => normalizeDashboardScopeLayouts(null));
   const [draft, setDraft] = useState<DashboardScopeLayouts>(() => normalizeDashboardScopeLayouts(null));
   const [displayDevice, setDisplayDevice] = useState<DashboardDevice>("desktop");
-  const [editDevice, setEditDevice] = useState<DashboardDevice>("desktop");
   const [isEditing, setIsEditing] = useState(false);
   const [isLibraryOpen, setIsLibraryOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -467,6 +620,7 @@ export default function ConfigurableDashboard() {
   const [error, setError] = useState<string | null>(null);
   const [copySource, setCopySource] = useState("");
   const [preset, setPreset] = useState<DashboardPresetId>("default");
+  const [libraryQuery, setLibraryQuery] = useState("");
   const loadGenerationRef = useRef(0);
   const mutationCoordinatorRef = useRef(createDashboardMutationCoordinator());
   const copyAbortRef = useRef<AbortController | null>(null);
@@ -476,7 +630,7 @@ export default function ConfigurableDashboard() {
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }), useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }));
 
   useEffect(() => {
-    const query = window.matchMedia("(max-width: 760px)");
+    const query = window.matchMedia("(max-width: 860px)");
     const update = () => setDisplayDevice(query.matches ? "mobile" : "desktop");
     update(); query.addEventListener("change", update); return () => query.removeEventListener("change", update);
   }, []);
@@ -499,12 +653,21 @@ export default function ConfigurableDashboard() {
     return () => { controller.abort(); copyAbortRef.current?.abort(); };
   }, [scopeKey]);
 
-  const currentDevice = isEditing ? editDevice : displayDevice;
-  const displayed = (isEditing ? draft : layouts)[currentDevice];
-  const existing = useMemo(() => new Set(draft[editDevice].widgets.map((item) => item.id)), [draft, editDevice]);
+  const displayed = (isEditing ? draft : layouts)[displayDevice];
+  const existing = useMemo(() => new Set(draft[displayDevice].widgets.map((item) => item.id)), [draft, displayDevice]);
   const updateDeviceDraft = useCallback((updater: (layout: DashboardLayout) => DashboardLayout) => {
-    setDraft((current) => ({ ...current, [editDevice]: normalizeDashboardLayout(updater(current[editDevice]), editDevice === "desktop" ? DEFAULT_DASHBOARD_LAYOUT : DEFAULT_MOBILE_DASHBOARD_LAYOUT) }));
-  }, [editDevice]);
+    setDraft((current) => ({ ...current, [displayDevice]: normalizeDashboardLayout(updater(current[displayDevice]), displayDevice === "desktop" ? DEFAULT_DASHBOARD_LAYOUT : DEFAULT_MOBILE_DASHBOARD_LAYOUT) }));
+  }, [displayDevice]);
+
+  const visibleDefinitions = useMemo(() => {
+    const normalized = libraryQuery.trim().toLocaleLowerCase("pl-PL");
+    if (!normalized) return DASHBOARD_WIDGET_DEFINITIONS;
+    return DASHBOARD_WIDGET_DEFINITIONS.filter((definition) =>
+      `${definition.label} ${definition.description} ${CATEGORY_LABELS[definition.category]}`
+        .toLocaleLowerCase("pl-PL")
+        .includes(normalized)
+    );
+  }, [libraryQuery]);
 
   const persist = useCallback((next: DashboardScopeLayouts, close = false) => {
     const coordinator = mutationCoordinatorRef.current;
@@ -578,14 +741,14 @@ export default function ConfigurableDashboard() {
 
   return <DashboardDataProvider scopeKey={scopeKey}><div className="workspace-page dashboard-builder" aria-busy={isLoading}>
     <section className="workspace-dashboard-intro dashboard-builder-intro"><div><p className="eyebrow">Centrum dowodzenia · {scopeName}</p><h2>Twój pulpit inwestycyjny.</h2><p className="section-copy">Najważniejsze odczyty, koncentracja i kalendarz w układzie zapisanym osobno dla tego zakresu.</p></div><div className="dashboard-builder-actions">
-      {isEditing ? <><button type="button" className="ghost-button" onClick={(event) => { triggerRef.current = event.currentTarget; setIsLibraryOpen(true); }}>Dodaj widget</button><button type="button" className="ghost-button" disabled={isSaving || isCopying} onClick={() => { setDraft(layouts); setIsEditing(false); }}>Anuluj</button><button type="button" className="primary-button" disabled={isSaving || isCopying} onClick={() => void persist(draft, true)}>{isSaving ? "Zapisywanie…" : isCopying ? "Kopiowanie…" : "Zapisz pulpit"}</button></> : <button type="button" className="primary-button" onClick={() => { setDraft(layouts); setEditDevice(displayDevice); setError(null); setIsEditing(true); }}>Edytuj pulpit</button>}
+      {isEditing ? <><button type="button" className="ghost-button" onClick={(event) => { triggerRef.current = event.currentTarget; setLibraryQuery(""); setIsLibraryOpen(true); }}>Dodaj widget</button><button type="button" className="ghost-button" disabled={isSaving || isCopying} onClick={() => { setDraft(layouts); setIsEditing(false); }}>Anuluj</button><button type="button" className="primary-button" disabled={isSaving || isCopying} onClick={() => void persist(draft, true)}>{isSaving ? "Zapisywanie…" : isCopying ? "Kopiowanie…" : "Zapisz pulpit"}</button></> : <button type="button" className="primary-button" onClick={() => { setDraft(layouts); setError(null); setIsEditing(true); }}>Edytuj pulpit</button>}
     </div></section>
 
-    {isEditing ? <section className="dashboard-command-workbench" aria-label="Warsztat edycji pulpitu"><div><span>Edytujesz</span><strong>{scopeName}</strong></div><div className="dashboard-device-switch" aria-label="Wariant urządzenia"><button type="button" className={editDevice === "desktop" ? "is-active" : ""} onClick={() => setEditDevice("desktop")}>Desktop</button><button type="button" className={editDevice === "mobile" ? "is-active" : ""} onClick={() => setEditDevice("mobile")}>Mobile</button></div><label>Preset<select value={preset} onChange={(event) => setPreset(event.target.value as DashboardPresetId)}>{Object.entries(PRESET_LABELS).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label><button type="button" className="ghost-button" disabled={isSaving || isCopying} onClick={() => { const next = getDashboardPresetLayouts(preset); setDraft((current) => ({ ...current, [editDevice]: next[editDevice] })); }}>Zastosuj</button><label>Skopiuj układ z<select value={copySource} disabled={isSaving || isCopying} onChange={(event) => setCopySource(event.target.value)}><option value="">Wybierz zakres</option>{portfolioScopes.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}</select></label><button type="button" className="ghost-button" disabled={!copySource || isSaving || isCopying} onClick={() => void copyLayout()}>{isCopying ? "Kopiowanie…" : "Skopiuj desktop + mobile"}</button><button type="button" className="ghost-button" disabled={isSaving || isCopying} onClick={() => updateDeviceDraft(() => editDevice === "desktop" ? DEFAULT_DASHBOARD_LAYOUT : DEFAULT_MOBILE_DASHBOARD_LAYOUT)}>Przywróć domyślny: {editDevice === "desktop" ? "desktop" : "mobile"}</button></section> : null}
+    {isEditing ? <section className="dashboard-command-workbench" aria-label="Warsztat edycji pulpitu"><div><span>Edytujesz automatycznie</span><strong>{scopeName} · {displayDevice === "desktop" ? "Desktop" : "Mobile"}</strong></div><label>Preset<select value={preset} onChange={(event) => { const nextPreset = event.target.value as DashboardPresetId; const next = getDashboardPresetLayouts(nextPreset); setPreset(nextPreset); setDraft((current) => ({ ...current, [displayDevice]: next[displayDevice] })); }}>{Object.entries(PRESET_LABELS).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label><label>Skopiuj układ z<select value={copySource} disabled={isSaving || isCopying} onChange={(event) => setCopySource(event.target.value)}><option value="">Wybierz zakres</option>{portfolioScopes.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}</select></label><button type="button" className="ghost-button" disabled={!copySource || isSaving || isCopying} onClick={() => void copyLayout()}>{isCopying ? "Kopiowanie…" : "Skopiuj desktop + mobile"}</button><button type="button" className="ghost-button" disabled={isSaving || isCopying} onClick={() => updateDeviceDraft(() => displayDevice === "desktop" ? DEFAULT_DASHBOARD_LAYOUT : DEFAULT_MOBILE_DASHBOARD_LAYOUT)}>Przywróć domyślny: {displayDevice === "desktop" ? "desktop" : "mobile"}</button></section> : null}
     {error ? <p className="field-note field-note-error">{error}</p> : null}
-    {isLoading ? <section className="panel dashboard-empty-layout"><p>Wczytywanie układu pulpitu…</p></section> : isEditing ? <DndContext sensors={sensors} onDragEnd={handleDragEnd}><SortableContext items={displayed.widgets.map((item) => item.id)} strategy={rectSortingStrategy}><div className={`dashboard-widget-grid dashboard-widget-grid--${editDevice}`} aria-label={`Układ ${editDevice}`}>{displayed.widgets.map((item, index) => <SortableWidget key={item.id} widget={item} isEditing index={index} total={displayed.widgets.length} onRemove={(id) => updateDeviceDraft((current) => ({ ...current, widgets: current.widgets.filter((entry) => entry.id !== id) }))} onResize={(id, size) => updateDeviceDraft((current) => ({ ...current, widgets: current.widgets.map((entry) => entry.id === id ? { ...entry, size } : entry) }))} onMove={move} />)}</div></SortableContext></DndContext> : <div className={`dashboard-widget-grid dashboard-widget-grid--${displayDevice}`} aria-label="Pulpit inwestycyjny">{displayed.widgets.map((item, index) => <SortableWidget key={item.id} widget={item} isEditing={false} index={index} total={displayed.widgets.length} onRemove={() => undefined} onResize={() => undefined} onMove={() => undefined} />)}</div>}
+    {isLoading ? <section className="panel dashboard-empty-layout"><p>Wczytywanie układu pulpitu…</p></section> : isEditing ? <DndContext sensors={sensors} onDragEnd={handleDragEnd}><SortableContext items={displayed.widgets.map((item) => item.id)} strategy={rectSortingStrategy}><div className={`dashboard-widget-grid dashboard-widget-grid--${displayDevice}`} aria-label={`Układ ${displayDevice}`}>{displayed.widgets.map((item, index) => <SortableWidget key={item.id} widget={item} isEditing device={displayDevice} index={index} total={displayed.widgets.length} onRemove={(id) => updateDeviceDraft((current) => ({ ...current, widgets: current.widgets.filter((entry) => entry.id !== id) }))} onResize={(id, size) => updateDeviceDraft((current) => ({ ...current, widgets: current.widgets.map((entry) => entry.id === id ? { ...entry, size } : entry) }))} onMove={move} />)}</div></SortableContext></DndContext> : <div className={`dashboard-widget-grid dashboard-widget-grid--${displayDevice}`} aria-label="Pulpit inwestycyjny">{displayed.widgets.map((item, index) => <SortableWidget key={item.id} widget={item} isEditing={false} device={displayDevice} index={index} total={displayed.widgets.length} onRemove={() => undefined} onResize={() => undefined} onMove={() => undefined} />)}</div>}
     {!isLoading && displayed.widgets.length === 0 ? <section className="panel dashboard-empty-layout"><p className="eyebrow">Pusty pulpit</p><h2 className="section-title">Dodaj pierwszy widget</h2><p className="section-copy">Dane portfela pozostały bez zmian. Otwórz bibliotekę albo przywróć domyślny układ.</p></section> : null}
 
-    {isLibraryOpen ? <div className="dashboard-library-backdrop" role="presentation" onMouseDown={closeLibrary}><section ref={libraryRef} className="dashboard-widget-library" role="dialog" aria-modal="true" aria-labelledby="dashboard-library-title" onMouseDown={(event) => event.stopPropagation()}><div className="dashboard-widget-library-head"><div><p className="eyebrow">Biblioteka · {editDevice === "desktop" ? "Desktop" : "Mobile"}</p><h2 id="dashboard-library-title" className="section-title" ref={libraryTitleRef} tabIndex={-1}>Dodaj do pulpitu</h2><p className="section-copy">Kompaktowe podglądy istniejących danych. Każdy widget może wystąpić raz.</p></div><button type="button" className="dashboard-widget-icon-button" onClick={closeLibrary} aria-label="Zamknij bibliotekę">×</button></div>{(Object.keys(CATEGORY_LABELS) as DashboardWidgetCategory[]).map((category) => <section className="dashboard-library-group" key={category}><h3>{CATEGORY_LABELS[category]}</h3><div className="dashboard-library-items">{DASHBOARD_WIDGET_DEFINITIONS.filter((definition) => definition.category === category).map((definition) => { const added = existing.has(definition.id); return <button key={definition.id} type="button" className={added ? "dashboard-library-item is-added" : "dashboard-library-item"} disabled={added} onClick={() => updateDeviceDraft((current) => ({ ...current, widgets: [...current.widgets, { id: definition.id, size: definition.defaultSize }] }))}><span><strong>{definition.label}</strong><small>{definition.description}</small></span><em>{added ? "Dodano" : "Dodaj"}</em></button>; })}</div></section>)}</section></div> : null}
+    {isLibraryOpen ? <div className="dashboard-library-backdrop" role="presentation" onMouseDown={closeLibrary}><section ref={libraryRef} className="dashboard-widget-library" role="dialog" aria-modal="true" aria-labelledby="dashboard-library-title" onMouseDown={(event) => event.stopPropagation()}><div className="dashboard-widget-library-head"><div><p className="eyebrow">Biblioteka · {displayDevice === "desktop" ? "Desktop" : "Mobile"}</p><h2 id="dashboard-library-title" className="section-title" ref={libraryTitleRef} tabIndex={-1}>Dodaj do pulpitu</h2><p className="section-copy">Kompaktowe podglądy istniejących danych. Każdy widget może wystąpić raz.</p></div><button type="button" className="dashboard-widget-icon-button" onClick={closeLibrary} aria-label="Zamknij bibliotekę">×</button></div><label className="dashboard-library-search"><span>Wyszukaj widget</span><input type="search" value={libraryQuery} onChange={(event) => setLibraryQuery(event.target.value)} placeholder="Np. dywidendy, wykres, gotówka" autoComplete="off" /></label>{visibleDefinitions.length ? (Object.keys(CATEGORY_LABELS) as DashboardWidgetCategory[]).map((category) => { const definitions = visibleDefinitions.filter((definition) => definition.category === category); return definitions.length ? <section className="dashboard-library-group" key={category}><h3><DashboardCategoryIcon category={category} />{CATEGORY_LABELS[category]}</h3><div className="dashboard-library-items">{definitions.map((definition) => { const added = existing.has(definition.id); return <button key={definition.id} type="button" className={added ? "dashboard-library-item is-added" : "dashboard-library-item"} disabled={added} onClick={() => updateDeviceDraft((current) => ({ ...current, widgets: [...current.widgets, { id: definition.id, size: displayDevice === "mobile" ? "full" : definition.defaultSize }] }))}><span><strong>{definition.label}</strong><small>{definition.description}</small></span><em>{added ? "Dodano" : "Dodaj"}</em></button>; })}</div></section> : null; }) : <p className="dashboard-library-empty">Nie znaleziono widgetu pasującego do wyszukiwania.</p>}</section></div> : null}
   </div></DashboardDataProvider>;
 }

@@ -33,9 +33,12 @@ test("results distinguish loading, errors and empty data and persist preferences
   assert.match(route, /getCurrentAuthenticatedUser/); assert.match(store, /ON CONFLICT \(user_id\)/); assert.match(db, /CREATE TABLE IF NOT EXISTS user_performance_preferences/);
 });
 
-test("cash stays behind the admin role and Tester bypass is centralized", async () => {
+test("cash is available to Tester and Admin while Tester bypass remains centralized", async () => {
   const [income, client, server, constants] = await Promise.all([readFile(new URL("../src/components/PortfolioIncomeWorkspace.tsx", import.meta.url), "utf8"), readFile(new URL("../src/components/PortfolioApp.tsx", import.meta.url), "utf8"), readFile(new URL("../src/lib/server/auth.ts", import.meta.url), "utf8"), readFile(new URL("../src/lib/constants.ts", import.meta.url), "utf8")]);
-  assert.match(income, /props\.isAdmin \? <button[\s\S]*Gotówka/); assert.match(income, /const activeView = props\.isAdmin \? view : "dividends"/);
+  assert.match(income, /<button[^>]*className=\{activeView === "cash"[\s\S]*Gotowka/);
+  assert.doesNotMatch(income, /props\.isAdmin \?/);
+  assert.match(income, /<CashWorkspace/);
+  assert.match(income, /if \(props\.isAllPortfoliosSelected\)[\s\S]*<CashWorkspace/);
   assert.match(constants, /MEXO_TESTER_MODE = true/); assert.match(client, /MEXO_TESTER_MODE \|\|/); assert.match(server, /MEXO_TESTER_MODE \|\|/);
 });
 

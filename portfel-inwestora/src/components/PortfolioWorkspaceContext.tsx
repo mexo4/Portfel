@@ -30,6 +30,7 @@ export type PortfolioWorkspaceValue = {
   onBaseCurrencyChange: (currency: string) => void;
   getReadHref: (href: string) => string;
   onQuickAdd: () => void;
+  resetAssetEntryForm: () => void;
   onLogout: () => void;
   displayedSyncError: string | null;
   assets: PortfolioAsset[];

@@ -24,6 +24,7 @@ type PortfolioChartsProps = {
   fxRates: FxRates;
   baseCurrency: CurrencyCode;
   combinedProfitLoss: number;
+  cashValue?: number;
   view?: "all" | "structure" | "benchmarks";
 };
 
@@ -77,6 +78,7 @@ export default function PortfolioCharts({
   fxRates,
   baseCurrency,
   combinedProfitLoss,
+  cashValue = 0,
   view = "all",
 }: PortfolioChartsProps) {
   const [benchmarkComparisons, setBenchmarkComparisons] = useState<BenchmarkComparison[]>([]);
@@ -87,10 +89,11 @@ export default function PortfolioCharts({
     () => getGroupedPortfolioAssets(assets, fxRates, baseCurrency),
     [assets, baseCurrency, fxRates]
   );
-  const totalValue = groupedAssets.reduce(
+  const marketValue = groupedAssets.reduce(
     (total, asset) => total + asset.totalValue,
     0
   );
+  const totalValue = marketValue + cashValue;
   const benchmarkInvestments = useMemo(
     () => buildPortfolioBenchmarkInvestments(assets, sales, fxRates),
     [assets, sales, fxRates]
@@ -142,7 +145,7 @@ export default function PortfolioCharts({
     };
   }, [benchmarkInvestments]);
 
-  if (groupedAssets.length === 0 && benchmarkInvestments.length === 0) {
+  if (groupedAssets.length === 0 && benchmarkInvestments.length === 0 && cashValue === 0) {
     return (
       <section className="panel chart-card">
         <p className="eyebrow">Wykresy</p>
@@ -164,14 +167,29 @@ export default function PortfolioCharts({
       color: CHART_COLORS[index % CHART_COLORS.length],
     }));
 
-  const kindBreakdown = getAssetClassAllocation(groupedAssets).map((item, index) => ({
-    ...item,
-    share: toPercent(item.totalValue, totalValue),
-    color: CHART_COLORS[index % CHART_COLORS.length],
-  }));
+  const kindBreakdown = [
+    ...getAssetClassAllocation(groupedAssets),
+    ...(cashValue !== 0
+      ? [{ id: "cash", label: "Gotówka", totalValue: cashValue }]
+      : []),
+  ]
+    .sort(
+      (left, right) =>
+        right.totalValue - left.totalValue ||
+        left.label.localeCompare(right.label, "pl")
+    )
+    .map((item, index) => ({
+      ...item,
+      share: toPercent(item.totalValue, totalValue),
+      color: CHART_COLORS[index % CHART_COLORS.length],
+    }));
+  const geographicTotal = getGeographicAllocation(groupedAssets).reduce(
+    (sum, item) => sum + item.totalValue,
+    0
+  );
   const geographicBreakdown = getGeographicAllocation(groupedAssets).map((item, index) => ({
     ...item,
-    share: toPercent(item.totalValue, totalValue),
+    share: toPercent(item.totalValue, geographicTotal),
     color: CHART_COLORS[index % CHART_COLORS.length],
   }));
 
@@ -327,7 +345,7 @@ export default function PortfolioCharts({
         <p className="eyebrow">Dywersyfikacja</p>
         <h2 className="section-title">Udzial klas aktywow</h2>
         <p className="section-copy">
-          Podzial portfela na akcje, ETF-y, krypto i obligacje.
+          Podzial portfela na aktywa inwestycyjne i gotowke.
         </p>
 
         <div className="donut-layout mt-6">

@@ -12,6 +12,7 @@ import type {
   BondSwapQuote,
   FxRates,
   CashHistoryEntry,
+  PortfolioAccount,
   PortfolioAsset,
   PortfolioBook,
   PortfolioDividend,
@@ -33,6 +34,7 @@ import type { CorporateEventsResponse } from "@/lib/corporate-events";
 import type { DashboardScopeLayouts } from "@/lib/dashboard-layout";
 import type { WatchlistItem, WatchlistItemInput } from "@/lib/watchlist";
 import type { PerformanceMetricId } from "@/lib/performance-preferences";
+import type { EspiFeedResponse, EspiReport } from "@/lib/espi";
 
 type SearchParams = {
   query: string;
@@ -412,6 +414,9 @@ const hasUsableStoredUnitPrice = (asset: PortfolioAsset) =>
   typeof asset.latestPrice === "number" &&
   Number.isFinite(asset.latestPrice) &&
   asset.latestPrice > 0;
+
+export const countAssetsWithoutUsableQuote = (assets: PortfolioAsset[]) =>
+  assets.filter((asset) => !hasUsableStoredUnitPrice(asset)).length;
 
 /**
  * A provider can legitimately return the same market quote again.  Treating
@@ -931,6 +936,8 @@ export const fetchPortfolioHistory = async ({
   assets,
   sales,
   realizedAdjustments,
+  operations,
+  accounts,
   benchmarks,
   portfolioScopes,
   signal,
@@ -938,6 +945,8 @@ export const fetchPortfolioHistory = async ({
   assets: PortfolioAsset[];
   sales: PortfolioSale[];
   realizedAdjustments: PortfolioRealizedAdjustment[];
+  operations?: PortfolioOperation[];
+  accounts?: PortfolioAccount[];
   benchmarks?: PortfolioBenchmarkDefinition[];
   portfolioScopes?: PortfolioHistoryScope[];
   signal?: AbortSignal;
@@ -949,8 +958,63 @@ export const fetchPortfolioHistory = async ({
       assets,
       sales,
       realizedAdjustments,
+      operations,
+      accounts,
       benchmarks,
       portfolioScopes,
     }),
   });
 };
+
+export const fetchEspiFeed = async ({
+  scope = "mine",
+  cursor,
+  limit = 20,
+  query,
+  company,
+  ticker,
+  category,
+  reportType,
+  dateFrom,
+  dateTo,
+  signal,
+}: {
+  scope?: "mine" | "all";
+  cursor?: string;
+  limit?: number;
+  query?: string;
+  company?: string;
+  ticker?: string;
+  category?: string;
+  reportType?: string;
+  dateFrom?: string;
+  dateTo?: string;
+  signal?: AbortSignal;
+}) => {
+  const params = new URLSearchParams({ scope, limit: String(limit) });
+  for (const [key, value] of Object.entries({ cursor, query, company, ticker, category, reportType, dateFrom, dateTo })) {
+    if (value) params.set(key, value);
+  }
+  return requestJson<EspiFeedResponse>(`/api/espi?${params.toString()}`, { signal });
+};
+
+export const fetchEspiReport = async (reportId: string, signal?: AbortSignal) => {
+  const response = await requestJson<{ report: EspiReport }>(
+    `/api/espi/${encodeURIComponent(reportId)}`,
+    { signal }
+  );
+  return response.report;
+};
+
+export const refreshEspi = async (backfillPages = 1) =>
+  requestJson<{
+    status: string;
+    insertedOrUpdated: number;
+    skippedExisting: number;
+    parsed: number;
+    pagesRead: number;
+    locked: boolean;
+  }>("/api/espi", {
+    method: "POST",
+    body: JSON.stringify({ backfillPages }),
+  });

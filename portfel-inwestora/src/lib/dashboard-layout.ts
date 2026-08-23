@@ -8,6 +8,7 @@ export const DASHBOARD_WIDGET_IDS = [
   "biggest-gains", "biggest-losses", "current-positions", "recently-added",
   "recent-operations", "recent-cash-flows", "recent-dividends", "upcoming-dividends",
   "gpw-events", "upcoming-timeline", "watchlist", "watchlist-events", "watchlist-daily-changes",
+  "latest-espi",
 ] as const;
 
 export const DASHBOARD_WIDGET_SIZES = ["small", "medium", "large", "full"] as const;
@@ -74,6 +75,7 @@ export const DASHBOARD_WIDGET_DEFINITIONS: readonly DashboardWidgetDefinition[] 
   widget("watchlist", "calendar", "Watchlista", "Obserwowane spółki i dostępne kursy.", ["medium", "large"], "medium"),
   widget("watchlist-events", "calendar", "Najbliższe wydarzenia obserwowanych", "Wydarzenia spółek dodanych do obserwowanych.", ["medium", "large"], "medium"),
   widget("watchlist-daily-changes", "calendar", "Dzisiejsze zmiany obserwowanych", "Zmiany tylko wtedy, gdy istniejący snapshot je dostarcza.", ["medium", "large"], "medium"),
+  widget("latest-espi", "calendar", "Najnowsze ESPI", "Najnowsze oficjalne raporty posiadanych i obserwowanych spółek.", ["medium", "large", "full"], "medium"),
 ] as const;
 
 const definitionsById = new Map(DASHBOARD_WIDGET_DEFINITIONS.map((definition) => [definition.id, definition]));

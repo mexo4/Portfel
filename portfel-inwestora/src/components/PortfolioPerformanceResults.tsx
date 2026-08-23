@@ -16,7 +16,7 @@ export default function PortfolioPerformanceResults({ assets, sales, realizedAdj
   const [draftMetrics, setDraftMetrics] = useState<PerformanceMetricId[]>(DEFAULT_PERFORMANCE_METRICS);
   const [isEditing, setIsEditing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
-  const [preferencesError, setPreferencesError] = useState<string | null>(null);
+  const [preferencesNotice, setPreferencesNotice] = useState<{ message: string; isError: boolean } | null>(null);
   const signature = useMemo(() => JSON.stringify({ assets, sales, realizedAdjustments, portfolioScopes }), [assets, portfolioScopes, realizedAdjustments, sales]);
 
   useEffect(() => {
@@ -25,7 +25,13 @@ export default function PortfolioPerformanceResults({ assets, sales, realizedAdj
       if (controller.signal.aborted) return;
       setVisibleMetrics(response.visibleMetrics);
       setDraftMetrics(response.visibleMetrics);
-    }).catch(() => { if (!controller.signal.aborted) setPreferencesError("Nie udało się pobrać ustawień widoku."); });
+      setPreferencesNotice(null);
+    }).catch(() => {
+      if (controller.signal.aborted) return;
+      setVisibleMetrics([...DEFAULT_PERFORMANCE_METRICS]);
+      setDraftMetrics([...DEFAULT_PERFORMANCE_METRICS]);
+      setPreferencesNotice({ message: "Używamy domyślnego układu wyników. Twoje dane finansowe pozostają dostępne.", isError: false });
+    });
     return () => controller.abort();
   }, []);
 
@@ -35,9 +41,9 @@ export default function PortfolioPerformanceResults({ assets, sales, realizedAdj
     void fetchPortfolioHistory({ ...payload, signal: controller.signal }).then((response) => {
       if (controller.signal.aborted) return;
       setHistoryState({ signature, points: response.points, error: null });
-    }).catch((reason: unknown) => {
+    }).catch(() => {
       if (controller.signal.aborted) return;
-      setHistoryState({ signature, points: [], error: reason instanceof Error ? reason.message : "Nie udało się obliczyć wyników." });
+      setHistoryState({ signature, points: [], error: "Nie udało się pobrać historii potrzebnej do metryk dziennych. Wynik łączny nadal jest dostępny." });
     });
     return () => controller.abort();
   }, [signature]);
@@ -49,11 +55,11 @@ export default function PortfolioPerformanceResults({ assets, sales, realizedAdj
   const historyValue = (content: ReactNode) => isHistoryLoading ? <span className="performance-metric-loading">Wczytywanie…</span> : historyError ? <span className="performance-metric-unavailable">Niedostępne</span> : content;
   const save = async () => {
     if (!draftMetrics.length || isSaving) return;
-    setIsSaving(true); setPreferencesError(null);
+    setIsSaving(true); setPreferencesNotice(null);
     try {
       const response = await savePerformancePreferences(draftMetrics);
       setVisibleMetrics(response.visibleMetrics); setDraftMetrics(response.visibleMetrics); setIsEditing(false);
-    } catch { setPreferencesError("Nie udało się zapisać ustawień widoku."); }
+    } catch { setPreferencesNotice({ message: "Nie udało się zapisać ustawień widoku. Wyniki nadal działają z bieżącym układem.", isError: true }); }
     finally { setIsSaving(false); }
   };
 
@@ -66,6 +72,6 @@ export default function PortfolioPerformanceResults({ assets, sales, realizedAdj
       {visibleMetrics.includes("best-day") ? <article><span>Najlepszy dzień</span>{historyValue(metrics.bestRaw ? <><strong className={metrics.bestRaw.rawValueChangePln >= 0 ? "tone-positive" : "tone-negative"}>{formatPln(metrics.bestRaw.rawValueChangePln)}</strong><small>{formatDate(metrics.bestRaw.date)}</small></> : <strong>Brak danych</strong>)}</article> : null}
       {visibleMetrics.includes("best-daily-result") ? <article><span>Najlepszy wynik dzienny</span>{historyValue(metrics.bestCashFlowNeutral ? <><strong className={metrics.bestCashFlowNeutral.cashFlowNeutralResultPln >= 0 ? "tone-positive" : "tone-negative"}>{formatPln(metrics.bestCashFlowNeutral.cashFlowNeutralResultPln)}</strong><small>Po wyłączeniu przepływów kapitału · {formatDate(metrics.bestCashFlowNeutral.date)}</small></> : <><strong>Brak danych</strong><small>Po wyłączeniu przepływów kapitału</small></>)}</article> : null}
     </div>
-    {historyError ? <p className="field-note field-note-error mt-4">{historyError}</p> : null}{preferencesError ? <p className="field-note field-note-error mt-4">{preferencesError}</p> : null}
+    {historyError ? <p className="field-note field-note-error mt-4">{historyError}</p> : null}{preferencesNotice ? <p className={`field-note mt-4${preferencesNotice.isError ? " field-note-error" : ""}`}>{preferencesNotice.message}</p> : null}
   </section></div>;
 }

@@ -13,9 +13,15 @@ export type CashOperationKind =
   | "DEPOSIT"
   | "WITHDRAW"
   | "TRANSFER"
+  | "CONVERSION"
   | "INTEREST"
   | "FEE"
   | "CUSTOM";
+
+export type CashEntryKind =
+  | "STANDARD"
+  | "INITIAL_BALANCE"
+  | "BALANCE_ADJUSTMENT";
 
 const CASH_OPERATION_TYPES = new Set<OperationType>([
   "DEPOSIT",
@@ -37,27 +43,47 @@ export const buildCashOperation = ({
   portfolioId,
   accountId,
   targetAccountId,
+  targetCurrency,
+  targetAmount,
   operationType,
   amount,
   currency,
   date,
   notes,
+  entryKind = "STANDARD",
   createdAt,
+  updatedAt,
 }: {
   id: string;
   portfolioId: string;
   accountId: string;
   targetAccountId?: string;
+  targetCurrency?: CurrencyCode;
+  targetAmount?: number;
   operationType: CashOperationKind;
   amount: number;
   currency: CurrencyCode;
   date: string;
   notes: string;
+  entryKind?: CashEntryKind;
   createdAt?: string;
+  updatedAt?: string;
 }): PortfolioOperation => {
-  const now = createdAt ?? new Date().toISOString();
+  const currentTimestamp = new Date().toISOString();
+  const normalizedCreatedAt = createdAt ?? currentTimestamp;
   const normalizedCurrency = toCurrencyCode(currency, BASE_CURRENCY);
-  const normalizedAmount = round(Math.abs(amount), 6);
+  const normalizedAmount = round(
+    operationType === "CUSTOM" ? amount : Math.abs(amount),
+    8
+  );
+  const normalizedTargetAmount = round(
+    Math.abs(targetAmount ?? normalizedAmount),
+    8
+  );
+  const normalizedTargetCurrency = toCurrencyCode(
+    targetCurrency,
+    normalizedCurrency
+  );
 
   return {
     id,
@@ -76,10 +102,18 @@ export const buildCashOperation = ({
     notes: notes.trim(),
     metadata: {
       kind: "cash",
-      ...(targetAccountId ? { targetAccountId, targetAmount: normalizedAmount } : {}),
+      cashEntryKind: entryKind,
+      cashImpact: true,
+      ...(targetAccountId
+        ? {
+            targetAccountId,
+            targetAmount: normalizedTargetAmount,
+            targetCurrency: normalizedTargetCurrency,
+          }
+        : {}),
     },
-    createdAt: now,
-    updatedAt: now,
+    createdAt: normalizedCreatedAt,
+    updatedAt: updatedAt ?? currentTimestamp,
   };
 };
 

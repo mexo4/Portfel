@@ -243,7 +243,7 @@ export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) 
 
       setSuccess(
         importedTotal > 0
-          ? `Zaimportowano ${importedTotal} operacji: ${result.importedBuys} kupna, ${result.importedSells} sprzedazy i ${importedDividends} dywidend. ${resultDetails}`
+          ? `Zaimportowano ${importedTotal} operacji: ${result.importedBuys} kupna, ${result.importedSells} sprzedazy, ${importedDividends} dywidend i ${importedCashOperations} operacji gotowkowych. ${resultDetails}`
           : allRecordsAreDuplicates
             ? `Ten raport zostal juz zaimportowany do aktywnego portfela. ${resultDetails}`
             : `Nie dodano nowych operacji, bo wszystkie rekordy zostaly odrzucone. ${resultDetails}`

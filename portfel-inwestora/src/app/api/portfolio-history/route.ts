@@ -3,7 +3,13 @@ import { buildAutomaticBondCouponAdjustments, normalizePortfolioState } from "@/
 import { getCurrentAuthenticatedUser } from "@/lib/server/auth";
 import { buildAggregatePortfolioHistory, buildPortfolioHistory } from "@/lib/server/portfolio-history";
 import { getSortedPortfolioRealizedAdjustments } from "@/lib/portfolio-state";
-import type { PortfolioBenchmarkDefinition, PortfolioHistoryScope, PortfolioState } from "@/types/portfolio";
+import type {
+  PortfolioAccount,
+  PortfolioBenchmarkDefinition,
+  PortfolioHistoryScope,
+  PortfolioOperation,
+  PortfolioState,
+} from "@/types/portfolio";
 
 export const runtime = "nodejs";
 
@@ -19,6 +25,8 @@ export async function POST(request: Request) {
       assets?: PortfolioState["assets"];
       sales?: PortfolioState["sales"];
       realizedAdjustments?: PortfolioState["realizedAdjustments"];
+      operations?: PortfolioOperation[];
+      accounts?: PortfolioAccount[];
       benchmarks?: PortfolioBenchmarkDefinition[];
       portfolioScopes?: PortfolioHistoryScope[];
     };
@@ -45,6 +53,8 @@ export async function POST(request: Request) {
             ...state.realizedAdjustments,
             ...buildAutomaticBondCouponAdjustments(state.assets, state.sales),
           ]),
+          operations: Array.isArray(scope.operations) ? scope.operations : [],
+          accounts: Array.isArray(scope.accounts) ? scope.accounts : [],
         }];
       });
       return NextResponse.json(await buildAggregatePortfolioHistory({ portfolioScopes, benchmarks }));
@@ -64,6 +74,8 @@ export async function POST(request: Request) {
       assets: portfolioState.assets,
       sales: portfolioState.sales,
       realizedAdjustments: effectiveRealizedAdjustments,
+      operations: Array.isArray(payload.operations) ? payload.operations : [],
+      accounts: Array.isArray(payload.accounts) ? payload.accounts : [],
       benchmarks,
     });
 

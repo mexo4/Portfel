@@ -48,6 +48,7 @@ const navigationGroups: Array<{ label: string; items: NavigationItem[] }> = [
   { label: "Rynek", items: [
     { key: "instruments", href: "/market/instruments", label: "Instrumenty", glyph: "⌕" },
     { key: "watchlist", href: "/market/watchlist", label: "Obserwowane", glyph: "☆" },
+    ...(MEXO_TESTER_MODE ? [{ key: "espi" as const, href: "/market/espi", label: "Raporty ESPI", glyph: "▤" }] : []),
     { key: "events", href: "/market/events", label: "Wydarzenia", glyph: "□" },
   ] },
 ];
@@ -63,6 +64,7 @@ const routeMeta: Record<WorkspaceRouteKey, { eyebrow: string; title: string; bre
   structure: { eyebrow: "Analiza", title: "Struktura portfela", breadcrumb: "Analiza / Struktura" },
   instruments: { eyebrow: "Rynek", title: "Znajdź instrument", breadcrumb: "Rynek / Instrumenty" },
   watchlist: { eyebrow: "Rynek", title: "Obserwowane", breadcrumb: "Rynek / Obserwowane" },
+  espi: { eyebrow: "Rynek", title: "Raporty ESPI", breadcrumb: "Rynek / Raporty ESPI" },
   events: { eyebrow: "Rynek", title: "Wydarzenia", breadcrumb: "Rynek / Wydarzenia" },
   portfolios: { eyebrow: "Zarządzanie", title: "Portfele", breadcrumb: "Portfele" },
   wealth: { eyebrow: "Zarządzanie", title: "Majątek", breadcrumb: "Majątek" },

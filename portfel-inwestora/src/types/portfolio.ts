@@ -549,6 +549,8 @@ export type PortfolioHistoryScope = {
   assets: PortfolioAsset[];
   sales: PortfolioSale[];
   realizedAdjustments: PortfolioRealizedAdjustment[];
+  operations?: PortfolioOperation[];
+  accounts?: PortfolioAccount[];
 };
 
 export type PortfolioAssetHistorySeriesPoint = {

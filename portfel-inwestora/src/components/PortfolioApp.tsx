@@ -29,6 +29,7 @@ import {
   ApiError,
   addWatchlistItem,
   applyRefreshedPortfolioAssetSnapshot,
+  countAssetsWithoutUsableQuote,
   fetchWatchlist,
   fetchFxRates,
   fetchQuotePreview,
@@ -71,6 +72,10 @@ import {
   hasAssetLivePrice,
 } from "@/lib/pricing";
 import {
+  buildCashImpactBuyOperation,
+  buildCashImpactSellOperation,
+  calculateCashBalances,
+  ensurePortfolioCashAccount,
   ensurePortfolioCoreModel,
   getInstrumentTypeForAssetKind,
   getPortfolioInstrumentId,
@@ -1203,15 +1208,16 @@ export default function PortfolioApp({
     return false;
   }, [isAllPortfoliosSelected]);
 
-  const handleActivePortfolioCoreModelChange = useCallback(
+  const handlePortfolioCoreModelChange = useCallback(
     (nextPortfolio: InvestmentPortfolio) => {
-      if (!requireConcretePortfolioSelection()) {
+      if (!portfoliosRef.current.some((portfolio) => portfolio.id === nextPortfolio.id)) {
+        setSyncError("Nie znaleziono portfela docelowego dla operacji gotowkowej.");
         return;
       }
       const now = new Date().toISOString();
       setSyncError(null);
       const nextPortfolios = portfoliosRef.current.map((portfolio) =>
-          portfolio.id === activePortfolioIdRef.current
+          portfolio.id === nextPortfolio.id
             ? {
                 ...portfolio,
                 accounts: nextPortfolio.accounts,
@@ -1224,7 +1230,7 @@ export default function PortfolioApp({
       portfoliosRef.current = nextPortfolios;
       setPortfolios(nextPortfolios);
     },
-    [requireConcretePortfolioSelection]
+    []
   );
 
   const applyPortfolioBook = useCallback(
@@ -1344,7 +1350,11 @@ export default function PortfolioApp({
             corePortfolio.sales,
             portfolioEffectiveAdjustments,
             fxRates,
-            toCurrencyCode(corePortfolio.baseCurrency, "PLN")
+            toCurrencyCode(corePortfolio.baseCurrency, "PLN"),
+            calculateCashBalances(
+              corePortfolio.operations ?? [],
+              corePortfolio.accounts ?? []
+            )
           ),
         };
       }),
@@ -1486,6 +1496,55 @@ export default function PortfolioApp({
       return Promise.resolve();
     },
     [flushPortfolioSave]
+  );
+
+  const persistPortfolioCoreModelChange = useCallback(
+    async (nextPortfolio: InvestmentPortfolio) => {
+      if (!portfoliosRef.current.some((portfolio) => portfolio.id === nextPortfolio.id)) {
+        const message = "Nie znaleziono portfela docelowego dla operacji gotowkowej.";
+        setSyncError(message);
+        throw new Error(message);
+      }
+
+      const previousPortfolios = portfoliosRef.current;
+      const now = new Date().toISOString();
+      const nextPortfolios = previousPortfolios.map((portfolio) =>
+        portfolio.id === nextPortfolio.id
+          ? {
+              ...portfolio,
+              accounts: nextPortfolio.accounts,
+              instruments: nextPortfolio.instruments,
+              operations: nextPortfolio.operations,
+              updatedAt: now,
+            }
+          : portfolio
+      );
+
+      portfoliosRef.current = nextPortfolios;
+      setPortfolios(nextPortfolios);
+      setSyncError(null);
+
+      try {
+        await queuePortfolioSave(
+          {
+            schemaVersion: 2,
+            portfolios: nextPortfolios,
+            activePortfolioId: activePortfolioIdRef.current,
+          },
+          true
+        );
+      } catch (error) {
+        portfoliosRef.current = previousPortfolios;
+        setPortfolios(previousPortfolios);
+        const message = toErrorMessage(
+          error,
+          "Nie udalo sie zapisac zmian w gotowce."
+        );
+        setSyncError(message);
+        throw error instanceof Error ? error : new Error(message);
+      }
+    },
+    [queuePortfolioSave]
   );
 
   const restoreLastPersistedPortfolioBook = useCallback(() => {
@@ -2197,16 +2256,24 @@ export default function PortfolioApp({
         }
 
         if (refreshSeq === quoteRefreshSeqRef.current[scope]) {
+          const missingWithoutFallback = countAssetsWithoutUsableQuote(quoteRefresh.assets);
           setLastSyncAt(new Date().toISOString());
           setSyncError(
-            quoteRefresh.missing > 0
-              ? `Nie udalo sie odswiezyc kursu dla ${quoteRefresh.missing} pozycji. Pokazujemy ostatni poprawny kurs.`
+            missingWithoutFallback > 0
+              ? `Brakuje aktualnego kursu dla ${missingWithoutFallback} pozycji.`
               : null
           );
         }
       } catch (error) {
         if (refreshSeq === quoteRefreshSeqRef.current[scope]) {
-          setSyncError(toErrorMessage(error, "Nie udalo sie odswiezyc cen aktywow."));
+          const missingWithoutFallback = countAssetsWithoutUsableQuote(assetsToRefresh);
+          console.warn("[quotes] Odswiezenie nie powiodlo sie; zachowano ostatnie poprawne kursy.", {
+            scope,
+            positions: assetsToRefresh.length,
+            missingWithoutFallback,
+            error,
+          });
+          setSyncError(missingWithoutFallback > 0 ? `Brakuje aktualnego kursu dla ${missingWithoutFallback} pozycji.` : null);
         }
       } finally {
         quoteRefreshPendingRef.current = Math.max(0, quoteRefreshPendingRef.current - 1);
@@ -2234,7 +2301,6 @@ export default function PortfolioApp({
       await syncQuotes();
       setLastSyncAt(new Date().toISOString());
       setRefreshRevision((currentRevision) => currentRevision + 1);
-      setSyncError(null);
     } finally {
       setIsRefreshing(false);
     }
@@ -2334,6 +2400,31 @@ export default function PortfolioApp({
     setEtfResultGroups([]);
     setSearchError(null);
   };
+
+  const resetAssetEntryForm = useCallback(() => {
+    quoteRequestSeqRef.current += 1;
+    lastPreviewRequestKeyRef.current = "";
+    isManualSymbolRef.current = false;
+    setEntryMode("stock-global");
+    setSearchMode("stock-global");
+    setDraft(createDraftFromMode("stock-global"));
+    setBondDraft(createEmptyTreasuryBondDraft());
+    setBondSeries(null);
+    setBondQuote(null);
+    setBondRedemptionPreview(null);
+    setBondSwapPreview(null);
+    setResults([]);
+    setEtfResultGroups([]);
+    setLastAddedResult(null);
+    setIsSearching(false);
+    setIsQuoteLoading(false);
+    setSearchError(null);
+    setQuoteError(null);
+    setWatchlistError(null);
+    setBondError(null);
+    setBondRedemptionError(null);
+    setBondSwapError(null);
+  }, []);
 
   const handleToggleWatchlist = async (result: AssetSearchResult) => {
     const canonicalKey = getGpwWatchlistCanonicalKey(result.symbol);
@@ -2904,10 +2995,7 @@ export default function PortfolioApp({
       updateWorkspaceAssets((currentAssets) =>
         normalizeStoredPortfolioAssets([nextAsset, ...currentAssets])
       );
-      setBondDraft(createEmptyTreasuryBondDraft());
-      setBondSeries(null);
-      setBondQuote(null);
-      setBondError(null);
+      resetAssetEntryForm();
     } catch (error) {
       setBondError(toErrorMessage(error, "Nie udalo sie dodac obligacji."));
     }
@@ -3335,26 +3423,47 @@ export default function PortfolioApp({
       };
 
       isManualSymbolRef.current = false;
-      updateWorkspaceAssets((currentAssets) =>
-        normalizeStoredPortfolioAssets([nextAsset, ...currentAssets])
-      );
-      setLastAddedResult({
-        symbol: storedSymbol,
-        name: storedName,
-        kind: draft.kind,
-        marketCurrency,
-        provider: quote?.provider ?? draft.provider,
-        providerId: quote?.providerId ?? draft.providerId,
-        priceScale: quote?.priceScale ?? draft.priceScale,
-        issuerCountry: draft.issuerCountry,
-        instrumentIdentity: draft.instrumentIdentity,
-        source: "catalog",
+      const nextAssets = normalizeStoredPortfolioAssets([nextAsset, ...assets]);
+      const portfolioWithInstrument = ensurePortfolioCoreModel({
+        ...(activePortfolioForEngine ?? activePortfolio!),
+        assets: nextAssets,
+        sales,
+        realizedAdjustments,
       });
-      setDraft(createDraftFromMode(searchMode));
-      setResults([]);
-      setEtfResultGroups([]);
-      setSearchError(null);
-      setQuoteError(null);
+      let nextAccounts = portfolioWithInstrument.accounts ?? [];
+
+      nextAccounts = ensurePortfolioCashAccount(
+        nextAccounts,
+        portfolioWithInstrument.id,
+        purchaseCurrency
+      ).accounts;
+      if (draft.feePln > 0) {
+        nextAccounts = ensurePortfolioCashAccount(
+          nextAccounts,
+          portfolioWithInstrument.id,
+          "PLN"
+        ).accounts;
+      }
+
+      const cashOperation = buildCashImpactBuyOperation(
+        portfolioWithInstrument.id,
+        nextAsset
+      );
+      const nextPortfolio = ensurePortfolioCoreModel({
+        ...portfolioWithInstrument,
+        assets: nextAssets,
+        accounts: nextAccounts,
+        operations: [
+          ...(portfolioWithInstrument.operations ?? []).filter(
+            (operation) => operation.id !== cashOperation.id
+          ),
+          cashOperation,
+        ],
+      });
+
+      updateWorkspaceAssets(() => nextAssets);
+      handlePortfolioCoreModelChange(nextPortfolio);
+      resetAssetEntryForm();
     } catch (error) {
       setSearchError(toErrorMessage(error, "Nie udało się dodać pozycji."));
     } finally {
@@ -3464,14 +3573,46 @@ export default function PortfolioApp({
       });
 
       isManualSymbolRef.current = false;
-      updateWorkspaceAssets(() => result.assets);
-      updateWorkspaceSales((currentSales) =>
-        getSortedPortfolioSales([result.sale, ...currentSales])
+      const nextSales = getSortedPortfolioSales([result.sale, ...sales]);
+      const portfolioWithSale = ensurePortfolioCoreModel({
+        ...(activePortfolioForEngine ?? activePortfolio!),
+        assets: result.assets,
+        sales: nextSales,
+        realizedAdjustments,
+      });
+      let nextAccounts = ensurePortfolioCashAccount(
+        portfolioWithSale.accounts ?? [],
+        portfolioWithSale.id,
+        settlementCurrency
+      ).accounts;
+
+      if (result.sale.feePln > 0 || (result.sale.taxTotalPln ?? 0) > 0) {
+        nextAccounts = ensurePortfolioCashAccount(
+          nextAccounts,
+          portfolioWithSale.id,
+          "PLN"
+        ).accounts;
+      }
+
+      const cashOperation = buildCashImpactSellOperation(
+        portfolioWithSale.id,
+        result.sale
       );
-      setDraft(createDraftFromMode(searchMode));
-      setResults([]);
-      setSearchError(null);
-      setQuoteError(null);
+      const nextPortfolio = ensurePortfolioCoreModel({
+        ...portfolioWithSale,
+        accounts: nextAccounts,
+        operations: [
+          ...(portfolioWithSale.operations ?? []).filter(
+            (operation) => operation.id !== cashOperation.id
+          ),
+          cashOperation,
+        ],
+      });
+
+      updateWorkspaceAssets(() => result.assets);
+      updateWorkspaceSales(() => nextSales);
+      handlePortfolioCoreModelChange(nextPortfolio);
+      resetAssetEntryForm();
       setSyncError(null);
     } catch (error) {
       setSearchError(toErrorMessage(error, "Nie udalo sie zapisac sprzedazy."));
@@ -3568,7 +3709,11 @@ export default function PortfolioApp({
     let skippedDuplicates = 0;
     let skippedPlanLimit = 0;
 
-    const appendCoreOperation = (operation: ImportedBrokerOperation, targetAccountId?: string) => {
+    const appendCoreOperation = (
+      operation: ImportedBrokerOperation,
+      targetAccountId?: string,
+      metadataPatch: Record<string, unknown> = {}
+    ) => {
       const broker = normalizeImportedBroker(operation.broker);
       const sourceCurrency = toCurrencyCode(
         operation.sourceCurrency ?? operation.accountCurrency ?? operation.currency,
@@ -3623,7 +3768,7 @@ export default function PortfolioApp({
       );
       nextInstruments = instrumentResult.instruments;
 
-      const nextOperation = buildImportedPortfolioOperation({
+      const importedOperation = buildImportedPortfolioOperation({
         portfolioId,
         accountId,
         targetAccountId: resolvedTargetAccountId,
@@ -3631,6 +3776,13 @@ export default function PortfolioApp({
         operation,
         now,
       });
+      const nextOperation = {
+        ...importedOperation,
+        metadata: {
+          ...importedOperation.metadata,
+          ...metadataPatch,
+        },
+      };
 
       if (
         isImportedOperationDuplicate(
@@ -3816,7 +3968,7 @@ export default function PortfolioApp({
           createdAt: new Date(`${operation.date}T00:00:00.000Z`).toISOString(),
         };
 
-        if (appendCoreOperation(operation)) {
+        if (appendCoreOperation(operation, undefined, { lotId: nextAsset.id })) {
           nextAssets = [nextAsset, ...nextAssets];
           importedBuys += 1;
         }
@@ -3891,7 +4043,7 @@ export default function PortfolioApp({
           },
         });
 
-        if (appendCoreOperation(operation)) {
+        if (appendCoreOperation(operation, undefined, { saleId: result.sale.id })) {
           nextAssets = result.assets;
           nextSales = getSortedPortfolioSales([
             applyBrokerRealizedResult(result.sale, operation),
@@ -4148,12 +4300,29 @@ export default function PortfolioApp({
         sales,
         saleId,
       });
+      const portfolioWithoutSaleCash = activePortfolioForEngine
+        ? ensurePortfolioCoreModel({
+            ...activePortfolioForEngine,
+            assets: result.assets,
+            sales: result.sales,
+            operations: (activePortfolioForEngine.operations ?? []).filter(
+              (operation) =>
+                !(
+                  operation.metadata.cashMirror === true &&
+                  operation.metadata.saleId === saleId
+                )
+            ),
+          })
+        : null;
 
       replaceWorkspace({
         ...workspaceRef.current,
         assets: result.assets,
         sales: result.sales,
       });
+      if (portfolioWithoutSaleCash) {
+        handlePortfolioCoreModelChange(portfolioWithoutSaleCash);
+      }
       setSyncError(null);
     } catch (error) {
       setSyncError(toErrorMessage(error, "Nie udalo sie cofnac sprzedazy."));
@@ -4432,12 +4601,19 @@ export default function PortfolioApp({
   const summary = useMemo(
     () => {
       if (!isAllPortfoliosSelected) {
+        const cashBalances = activePortfolioForEngine
+          ? calculateCashBalances(
+              activePortfolioForEngine.operations ?? [],
+              activePortfolioForEngine.accounts ?? []
+            )
+          : [];
         return getPortfolioSummary(
           displayedAssets,
           displayedSales,
           effectiveRealizedAdjustments,
           fxRates,
-          activeBaseCurrency
+          activeBaseCurrency,
+          cashBalances
         );
       }
 
@@ -4453,7 +4629,11 @@ export default function PortfolioApp({
           corePortfolio.sales,
           portfolioAdjustments,
           fxRates,
-          toCurrencyCode(corePortfolio.baseCurrency, "PLN")
+          toCurrencyCode(corePortfolio.baseCurrency, "PLN"),
+          calculateCashBalances(
+            corePortfolio.operations ?? [],
+            corePortfolio.accounts ?? []
+          )
         );
       });
 
@@ -4461,6 +4641,7 @@ export default function PortfolioApp({
     },
     [
       activeBaseCurrency,
+      activePortfolioForEngine,
       displayedAssets,
       effectiveRealizedAdjustments,
       displayedSales,
@@ -4478,7 +4659,30 @@ export default function PortfolioApp({
       return;
     }
     setSyncError(null);
-    updateWorkspaceAssets((currentAssets) => normalizeStoredPortfolioAssets(currentAssets.filter((asset) => asset.id !== assetId)));
+    const nextAssets = normalizeStoredPortfolioAssets(
+      assets.filter((asset) => asset.id !== assetId)
+    );
+    const lotHasSaleHistory = sales.some((sale) =>
+      sale.allocations.some((allocation) => allocation.lotId === assetId)
+    );
+
+    if (activePortfolioForEngine) {
+      const nextPortfolio = ensurePortfolioCoreModel({
+        ...activePortfolioForEngine,
+        assets: nextAssets,
+        operations: (activePortfolioForEngine.operations ?? []).filter(
+          (operation) =>
+            lotHasSaleHistory ||
+            !(
+              operation.metadata.cashMirror === true &&
+              operation.metadata.lotId === assetId
+            )
+        ),
+      });
+      handlePortfolioCoreModelChange(nextPortfolio);
+    }
+
+    updateWorkspaceAssets(() => nextAssets);
   };
 
   const assetEntryWorkspace = <>
@@ -4489,7 +4693,7 @@ export default function PortfolioApp({
   const portfolioManagement = <section className="panel portfolio-hub-panel workspace-portfolio-manager" aria-busy={isSavingPortfolio || isPortfolioMutationPending}><div className="portfolio-hub-head"><div><p className="eyebrow">Portfele</p><h2 className="section-title">Zarządzaj przestrzenią inwestycji</h2><p className="section-copy">Portfele są niezależnymi rachunkami. Aktywny wybierzesz także w górnym pasku.</p></div><div className="portfolio-hub-actions"><button className="ghost-button" type="button" onClick={handleRenamePortfolio} disabled={isPortfolioMutationPending}>Zmień nazwę</button><button className="ghost-button admin-danger-button" type="button" onClick={() => { void handleDeletePortfolio(); }} disabled={portfolios.length <= 1 || isPortfolioMutationPending}>{isPortfolioMutationPending ? "Zapisywanie…" : "Usuń portfel"}</button><button className="primary-button" type="button" onClick={() => { void handleCreatePortfolio(); }} disabled={isPortfolioMutationPending}>{isPortfolioMutationPending ? "Zapisywanie…" : "Dodaj portfel"}</button></div></div><div className="portfolio-card-grid mt-5">{portfolioSummaries.map(({ portfolio, summary: portfolioSummary }) => { const isActive = portfolio.id === activePortfolioId; return <button key={portfolio.id} type="button" className={`portfolio-switch-card${isActive ? " is-active" : ""}`} onClick={() => { void handleSelectPortfolio(portfolio.id); }} disabled={isPortfolioMutationPending} aria-pressed={isActive}><span>{isActive ? "Aktywny portfel" : "Przełącz"}</span><strong>{portfolio.name}</strong><div><span>{formatCurrency(portfolioSummary.totalValue, portfolioSummary.currency)}</span><span className={portfolioSummary.combinedProfitLoss >= 0 ? "tone-positive" : "tone-negative"}>{formatCurrency(portfolioSummary.combinedProfitLoss, portfolioSummary.currency)}</span></div><small>{portfolioSummary.currency} · {portfolioSummary.positionsCount} pozycji / {portfolioSummary.salesCount} sprzedaży</small></button>; })}</div></section>;
 
   const operationsWorkspace = isAllPortfoliosSelected ? <section className="panel"><p className="eyebrow">Operacje</p><h2 className="section-title">Wybierz konkretny portfel</h2><p className="section-copy">Historia i korekty operacji pozostają rozdzielone według portfela w widoku łącznym.</p></section> : <><SalesHistoryPanel sales={sales} baseCurrency={activeBaseCurrency} fxRates={fxRates} canUndoSale={(saleId) => canUndoPortfolioSale(sales, saleId)} onUndoSale={handleUndoSale} /><RealizedAdjustmentsPanel draft={realizedAdjustmentDraft} adjustments={effectiveRealizedAdjustments} error={realizedAdjustmentError} onChange={(nextDraft) => { setRealizedAdjustmentDraft(nextDraft); setRealizedAdjustmentError(null); }} onSubmit={() => { void handleAddRealizedAdjustment(); }} onRemove={handleRemoveRealizedAdjustment} /></>;
-  const incomeWorkspace = activePortfolioForEngine ? <PortfolioIncomeWorkspace portfolio={activePortfolioForEngine} fxRates={fxRates} baseCurrency={activeBaseCurrency} isAdmin={isAdmin} onPortfolioChange={handleActivePortfolioCoreModelChange} /> : null;
+  const incomeWorkspace = activePortfolioForEngine ? <PortfolioIncomeWorkspace portfolio={activePortfolioForEngine} portfolios={portfolios} activePortfolioId={activePortfolioId} isAllPortfoliosSelected={isAllPortfoliosSelected} fxRates={fxRates} baseCurrency={activeBaseCurrency} totalPortfolioValue={summary.totalValue} isAdmin={isAdmin} onPortfolioChange={persistPortfolioCoreModelChange} /> : null;
   const importWorkspace = <BrokerImportPanel onImport={handleImportBrokerOperations} />;
   const wealthWorkspace = <WealthWorkspace profile={profile} fxRates={fxRates} onChange={setProfile} />;
   const settingsWorkspace = <><UserProfilePanel account={account} profile={profile} positionsCount={groupedAssets.length} assetsCount={displayedAssets.length} isLoggingOut={isLoggingOut} onChange={(patch) => setProfile((current) => ({ ...current, ...patch, updatedAt: new Date().toISOString() }))} onReset={() => setProfile((current) => ({ ...current, displayName: "", country: "", preferredBroker: "", investmentGoal: "", monthlyContributionPln: 0, updatedAt: new Date().toISOString() }))} onLogout={() => { void handleLogout(); }} /><ChangePasswordPanel hasPassword={account.hasPassword} /><section className="panel panel-compact workspace-plan-placeholder"><p className="eyebrow">Plan</p><h2 className="section-title">{MEXO_TESTER_MODE ? "Tester" : account.subscriptionPlan === "pro" ? "Mexo Pro" : "Mexo Free"}</h2><p className="section-copy">W trybie testowym wszystkie wdrożone funkcje są dostępne. Zarządzanie płatnościami pozostaje poza tą wersją aplikacji.</p></section></>;
@@ -4500,6 +4704,7 @@ export default function PortfolioApp({
     onBaseCurrencyChange: (currency) => { void handleBaseCurrencyChange(currency); },
     getReadHref: (href) => getWorkspaceReadHref(href, selectedPortfolioId, activeBaseCurrency),
     onQuickAdd: () => { if (requireConcretePortfolioSelection()) router.push("/portfolio/positions?add=asset"); else router.push("/portfolios"); },
+    resetAssetEntryForm,
     onLogout: () => { void handleLogout(); },
     displayedSyncError, assets: displayedAssets, sales: displayedSales, realizedAdjustments: displayedRealizedAdjustments, effectiveRealizedAdjustments, fxRates, groupedAssets,
     watchlistItems, isWatchlistLoading, watchlistReadError,

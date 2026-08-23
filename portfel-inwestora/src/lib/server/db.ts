@@ -462,6 +462,82 @@ const schemaStatements = [
   `,
   "CREATE INDEX IF NOT EXISTS idx_corporate_event_history_event_id ON corporate_event_history(corporate_event_id)",
   `
+    CREATE TABLE IF NOT EXISTS espi_reports (
+      id TEXT PRIMARY KEY,
+      source TEXT NOT NULL,
+      source_id TEXT NOT NULL,
+      issuer_id TEXT,
+      issuer_name TEXT NOT NULL,
+      source_ticker TEXT,
+      source_isin TEXT,
+      report_number TEXT,
+      report_type TEXT NOT NULL,
+      published_at TEXT NOT NULL,
+      source_title TEXT NOT NULL,
+      title TEXT NOT NULL,
+      body_text TEXT NOT NULL,
+      legal_basis TEXT,
+      category TEXT NOT NULL,
+      source_url TEXT NOT NULL,
+      is_correction BOOLEAN NOT NULL DEFAULT FALSE,
+      correction_target_report_number TEXT,
+      correction_of_report_id TEXT,
+      discovered_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (issuer_id) REFERENCES corporate_event_instruments(id) ON DELETE SET NULL,
+      FOREIGN KEY (correction_of_report_id) REFERENCES espi_reports(id) ON DELETE SET NULL,
+      UNIQUE (source, source_id),
+      UNIQUE (source_url)
+    )
+  `,
+  "CREATE INDEX IF NOT EXISTS idx_espi_reports_published ON espi_reports(published_at DESC, id DESC)",
+  "CREATE INDEX IF NOT EXISTS idx_espi_reports_issuer_published ON espi_reports(issuer_id, published_at DESC)",
+  "CREATE INDEX IF NOT EXISTS idx_espi_reports_isin_published ON espi_reports(source_isin, published_at DESC)",
+  "CREATE INDEX IF NOT EXISTS idx_espi_reports_ticker_published ON espi_reports(source_ticker, published_at DESC)",
+  "CREATE INDEX IF NOT EXISTS idx_espi_reports_category_published ON espi_reports(category, published_at DESC)",
+  "CREATE INDEX IF NOT EXISTS idx_espi_reports_type_published ON espi_reports(report_type, published_at DESC)",
+  "CREATE INDEX IF NOT EXISTS idx_espi_reports_correction_of ON espi_reports(correction_of_report_id) WHERE correction_of_report_id IS NOT NULL",
+  `
+    CREATE INDEX IF NOT EXISTS idx_espi_reports_search
+    ON espi_reports USING GIN (
+      to_tsvector(
+        'simple'::regconfig,
+        COALESCE(issuer_name, '') || ' ' || COALESCE(source_ticker, '') || ' ' ||
+        COALESCE(report_number, '') || ' ' || COALESCE(title, '') || ' ' || COALESCE(body_text, '')
+      )
+    )
+  `,
+  `
+    CREATE TABLE IF NOT EXISTS espi_report_attachments (
+      id TEXT PRIMARY KEY,
+      espi_report_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      media_type TEXT,
+      size_label TEXT,
+      source_url TEXT NOT NULL,
+      discovered_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (espi_report_id) REFERENCES espi_reports(id) ON DELETE CASCADE,
+      UNIQUE (espi_report_id, source_url)
+    )
+  `,
+  "CREATE INDEX IF NOT EXISTS idx_espi_attachments_report ON espi_report_attachments(espi_report_id)",
+  `
+    CREATE TABLE IF NOT EXISTS espi_sync_state (
+      source TEXT PRIMARY KEY,
+      status TEXT NOT NULL,
+      last_checked_at TEXT,
+      last_success_at TEXT,
+      last_error_code TEXT,
+      next_backfill_page INTEGER NOT NULL DEFAULT 1,
+      backfill_complete BOOLEAN NOT NULL DEFAULT FALSE,
+      lock_token TEXT,
+      lock_expires_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )
+  `,
+  `
     CREATE TABLE IF NOT EXISTS portfolio_engine_cache (
       "key" TEXT PRIMARY KEY,
       portfolio_id TEXT NOT NULL,

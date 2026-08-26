@@ -234,8 +234,6 @@ export const getBondQuoteAccrual = ({
 export const clampBondFee = (interestAmount: number, feeCap: number) =>
   round(Math.max(0, Math.min(Math.max(0, interestAmount), Math.max(0, feeCap))), 8);
 
-export const applyBondTax = (amount: number) => round(Math.max(0, amount) * 0.19, 8);
-
 export const getBondPeriodEndDate = (purchaseDate: string, yearIndex: number) =>
   addUtcYears(purchaseDate, yearIndex);
 

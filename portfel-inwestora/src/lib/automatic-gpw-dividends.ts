@@ -5,6 +5,10 @@ import {
 } from "@/lib/dividend-engine";
 import { getGpwTickerCore } from "@/lib/ticker";
 import { round } from "@/lib/utils";
+import {
+  calculatePolishDividendTax,
+  getPortfolioAccountType,
+} from "@/lib/portfolio-account-rules";
 import type { CorporateEvent } from "@/lib/corporate-events";
 import type {
   InvestmentPortfolio,
@@ -13,7 +17,6 @@ import type {
   PortfolioOperation,
 } from "@/types/portfolio";
 
-export const POLISH_DIVIDEND_TAX_RATE = 0.19;
 export const AUTOMATIC_DIVIDEND_NOTE = "Dodano automatycznie przez Mexo";
 
 const isFinitePositive = (value: unknown): value is number =>
@@ -88,14 +91,18 @@ export const projectDividendEventsForPortfolios = ({
         ? "ENTITLEMENT_CONFIRMED" as const
         : "CURRENT_ESTIMATE" as const;
     const quantityDate = eligibilityStatus === "CURRENT_ESTIMATE" ? today : eligibilityDate;
-    const eligibleQuantity = quantityDate
-      ? portfolios.reduce((total, portfolio) => {
+    const portfolioEntitlements = quantityDate
+      ? portfolios.flatMap((portfolio) => {
           const instrument = getPortfolioInstrumentForEvent(portfolio, event);
-          return instrument
-            ? total + getHistoricalInstrumentQuantity(portfolio, instrument.id, quantityDate)
-            : total;
-        }, 0)
+          if (!instrument) return [];
+          const quantity = getHistoricalInstrumentQuantity(portfolio, instrument.id, quantityDate);
+          return quantity > 0 ? [{ portfolio, quantity }] : [];
+        })
       : undefined;
+    const eligibleQuantity = portfolioEntitlements?.reduce(
+      (total, entitlement) => total + entitlement.quantity,
+      0
+    );
 
     if (eligibleQuantity === undefined) {
       return {
@@ -106,7 +113,17 @@ export const projectDividendEventsForPortfolios = ({
     }
 
     const estimatedGrossAmount = round(eligibleQuantity * event.dividendPerShare, 2);
-    const estimatedTaxAmount = round(estimatedGrossAmount * POLISH_DIVIDEND_TAX_RATE, 2);
+    const estimatedTaxAmount = round(
+      (portfolioEntitlements ?? []).reduce((total, entitlement) => {
+        const grossAmount = entitlement.quantity * event.dividendPerShare!;
+        return total + calculatePolishDividendTax({
+          grossAmount,
+          accountType: getPortfolioAccountType(entitlement.portfolio),
+          paymentDate: event.paymentDate ?? event.eventDate,
+        }).amount;
+      }, 0),
+      2
+    );
     const estimatedNetAmount = round(estimatedGrossAmount - estimatedTaxAmount, 2);
 
     return {
@@ -209,7 +226,12 @@ export const applyAutomaticGpwDividends = ({
       if (!account) continue;
 
       const grossAmount = round(quantity * event.dividendPerShare, 2);
-      const domesticTax = round(grossAmount * POLISH_DIVIDEND_TAX_RATE, 2);
+      const taxTreatment = calculatePolishDividendTax({
+        grossAmount,
+        accountType: getPortfolioAccountType(portfolio),
+        paymentDate: event.paymentDate,
+      });
+      const domesticTax = taxTreatment.amount;
       const operation = buildDividendOperation({
         id: `auto-dividend:${portfolio.id}:${event.id}`,
         portfolioId: portfolio.id,
@@ -232,6 +254,9 @@ export const applyAutomaticGpwDividends = ({
           automaticDividendSourceUrl: event.source?.sourceUrl,
           automaticDividendInstallment: event.dividendInstallment,
           automaticDividendPostedAt: createdAt,
+          accountTypeAtPosting: getPortfolioAccountType(portfolio),
+          domesticTaxTreatment: taxTreatment.treatment,
+          domesticTaxRuleNote: taxTreatment.note,
         },
         createdAt,
       });

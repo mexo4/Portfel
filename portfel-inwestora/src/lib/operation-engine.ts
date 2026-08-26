@@ -2,6 +2,10 @@ import { BASE_CURRENCY } from "@/lib/constants";
 import { getPortfolioAssetGroupKey, normalizeSymbol } from "@/lib/ticker";
 import { resolveTickerIdentity } from "@/lib/ticker-aliases";
 import { getTodayDateInputValue, round, toCurrencyCode, toDateInputValue } from "@/lib/utils";
+import {
+  normalizePortfolioAccountConfiguration,
+  normalizePortfolioAccountType,
+} from "@/lib/portfolio-account-rules";
 import type {
   AccountKind,
   BrokerCode,
@@ -22,6 +26,7 @@ import type {
   InstrumentType,
   AssetKind,
   InstrumentIdentity,
+  TreasuryBondSeries,
 } from "@/types/portfolio";
 
 const SUPPORTED_OPERATION_TYPES = new Set<OperationType>([
@@ -343,6 +348,7 @@ const buildLegacyInstruments = (
       providerId?: string;
       priceScale?: number;
       instrumentIdentity?: InstrumentIdentity;
+      bondMeta?: TreasuryBondSeries;
     }
   ) => {
     const id = getPortfolioInstrumentId(portfolioId, source);
@@ -372,6 +378,12 @@ const buildLegacyInstruments = (
           symbol: source.symbol,
           instrumentIdentity: source.instrumentIdentity,
         }),
+        ...(source.bondMeta
+          ? {
+              treasuryBondType: source.bondMeta.type,
+              treasuryBondCode: source.bondMeta.code,
+            }
+          : {}),
       },
       instrumentIdentity: source.instrumentIdentity,
       createdAt: now,
@@ -393,6 +405,7 @@ const buildLegacyInstruments = (
           providerId: allocation.providerId,
           priceScale: allocation.priceScale,
           instrumentIdentity: allocation.instrumentIdentity,
+          bondMeta: allocation.bondMeta,
         });
       }
     });
@@ -1203,9 +1216,15 @@ export const ensurePortfolioCoreModel = (
     now
   );
   const tags = normalizePortfolioTags(portfolio.id, portfolio.tags, now);
+  const accountType = normalizePortfolioAccountType(portfolio.accountType);
 
   return {
     ...portfolio,
+    accountType,
+    accountConfiguration: normalizePortfolioAccountConfiguration(
+      portfolio.accountConfiguration,
+      accountType
+    ),
     schemaVersion: 2,
     baseCurrency,
     subPortfolios: Array.isArray(portfolio.subPortfolios)

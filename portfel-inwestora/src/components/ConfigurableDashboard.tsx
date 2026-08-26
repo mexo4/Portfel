@@ -63,6 +63,7 @@ const OPERATION_LABELS: Record<PortfolioOperation["operationType"], string> = {
 const getHistoryScopes = (workspace: ReturnType<typeof usePortfolioWorkspace>) =>
   workspace.isAllPortfoliosSelected ? workspace.portfolios.map((portfolio) => ({
     portfolioId: portfolio.id,
+    accountType: portfolio.accountType,
     assets: portfolio.assets,
     sales: portfolio.sales,
     realizedAdjustments: portfolio.realizedAdjustments,
@@ -79,6 +80,9 @@ const getHistoryAssetSignature = (asset: ReturnType<typeof usePortfolioWorkspace
 
 const getHistorySignature = (workspace: ReturnType<typeof usePortfolioWorkspace>) => JSON.stringify({
   scope: getDashboardScopeKey(workspace.activePortfolioId, workspace.isAllPortfoliosSelected),
+  accountType: workspace.isAllPortfoliosSelected
+    ? undefined
+    : workspace.activePortfolio?.accountType,
   assets: workspace.isAllPortfoliosSelected ? [] : workspace.assets.map(getHistoryAssetSignature),
   sales: workspace.sales,
   adjustments: workspace.effectiveRealizedAdjustments,
@@ -146,6 +150,9 @@ function DashboardDataProvider({ children, scopeKey }: { children: ReactNode; sc
           accounts: workspace.isAllPortfoliosSelected
             ? []
             : workspace.activePortfolio?.accounts ?? [],
+          accountType: workspace.isAllPortfoliosSelected
+            ? undefined
+            : workspace.activePortfolio?.accountType,
           benchmarks: workspace.isAllPortfoliosSelected ? [] : (workspace.activePortfolio?.benchmarks ?? []),
           portfolioScopes: getHistoryScopes(workspace),
           signal: controller.signal,

@@ -154,7 +154,7 @@ export default function UpcomingDividendsPanel({ portfolioId }: UpcomingDividend
                         Szacowana dywidenda brutto: {formatCurrency(event.estimatedGrossAmount, currency)}
                       </strong>
                       <span>
-                        Podatek 19%: {formatCurrency(event.estimatedTaxAmount ?? 0, currency)}
+                        Szacowany podatek: {formatCurrency(event.estimatedTaxAmount ?? 0, currency)}
                       </span>
                       <strong>
                         Szacowana dywidenda netto: {formatCurrency(event.estimatedNetAmount ?? 0, currency)}

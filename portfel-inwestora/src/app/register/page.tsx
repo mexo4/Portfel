@@ -7,7 +7,7 @@ export default async function RegisterPage() {
   const accountData = await getCurrentAccountData();
 
   if (accountData) {
-    redirect("/app");
+    redirect("/dashboard");
   }
 
   const googleOAuthConfiguration = getGoogleOAuthConfigurationPresence();

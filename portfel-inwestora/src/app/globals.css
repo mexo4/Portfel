@@ -1,6 +1,80 @@
 @import "tailwindcss";
 
+/*
+ * Keep the two established Mexo typefaces self-hosted. Depending on
+ * next/font/google made the first local compilation wait for an external
+ * network fetch; these small WOFF2 subsets are the same font files that were
+ * already emitted by the last successful production build.
+ */
+@font-face {
+  font-family: "Manrope";
+  font-style: normal;
+  font-weight: 200 800;
+  font-display: swap;
+  src: url("/fonts/manrope-latin-ext.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF,
+    U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020,
+    U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+@font-face {
+  font-family: "Manrope";
+  font-style: normal;
+  font-weight: 200 800;
+  font-display: swap;
+  src: url("/fonts/manrope-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+    U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/ibm-plex-mono-400-latin-ext.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF,
+    U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020,
+    U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/ibm-plex-mono-400-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+    U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("/fonts/ibm-plex-mono-500-latin-ext.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF,
+    U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020,
+    U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("/fonts/ibm-plex-mono-500-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+    U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
 :root {
+  --font-sans: "Manrope", Arial, sans-serif;
+  --font-mono: "IBM Plex Mono", Consolas, monospace;
   --canvas: #f4efe7;
   --canvas-strong: #fffdf8;
   --surface: rgba(255, 252, 247, 0.9);
@@ -2843,6 +2917,209 @@ textarea {
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
 }
 
+.portfolio-account-management {
+  display: grid;
+  gap: 18px;
+}
+
+.portfolio-card-kicker {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.account-type-badge {
+  display: inline-flex;
+  width: max-content;
+  align-items: center;
+  border: 1px solid rgba(15, 118, 110, 0.18);
+  border-radius: 6px;
+  padding: 3px 7px;
+  color: #0f6c66;
+  background: rgba(220, 245, 239, 0.68);
+  font-size: 0.72rem;
+  font-weight: 850;
+  letter-spacing: 0.04em;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.account-type-badge-strong {
+  padding: 5px 9px;
+  font-size: 0.78rem;
+}
+
+.portfolio-account-form {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.3fr) repeat(3, minmax(170px, 1fr));
+  align-items: end;
+  gap: 14px;
+  border: 1px solid rgba(15, 118, 110, 0.16);
+  border-radius: 10px;
+  padding: 16px;
+  background: rgba(244, 248, 246, 0.72);
+}
+
+.portfolio-account-form-copy {
+  align-self: center;
+}
+
+.portfolio-account-form-copy h3,
+.account-rule-card h3 {
+  margin: 3px 0 0;
+  color: var(--text);
+  font-size: 1rem;
+}
+
+.portfolio-account-form-copy p:last-child {
+  margin: 5px 0 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.portfolio-account-form-actions {
+  grid-column: 1 / -1;
+  justify-content: flex-end;
+}
+
+.account-type-inline-note {
+  align-self: end;
+  margin: 0 0 9px;
+  line-height: 1.4;
+}
+
+.portfolio-account-settings-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(180px, 1fr));
+  align-items: end;
+  gap: 14px;
+}
+
+.account-type-warning {
+  border-left: 3px solid rgba(204, 126, 24, 0.65);
+  padding-left: 10px;
+}
+
+.portfolio-account-rule-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+}
+
+.account-rule-card {
+  display: grid;
+  gap: 15px;
+  border: 1px solid rgba(20, 35, 48, 0.09);
+  border-radius: 10px;
+  padding: 18px;
+  background: rgba(255, 255, 255, 0.78);
+}
+
+.portfolio-account-management > .account-rule-card {
+  box-shadow: 0 10px 28px rgba(20, 35, 48, 0.04);
+}
+
+.account-rule-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.account-year-switch {
+  display: inline-grid;
+  grid-auto-flow: column;
+  gap: 3px;
+  border: 1px solid rgba(20, 35, 48, 0.09);
+  border-radius: 8px;
+  padding: 3px;
+  background: rgba(244, 248, 246, 0.68);
+}
+
+.account-year-switch button {
+  min-height: 30px;
+  border: 0;
+  border-radius: 5px;
+  padding: 0 9px;
+  color: var(--muted);
+  background: transparent;
+  font: inherit;
+  font-size: 0.76rem;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.account-year-switch button:is(:hover, :focus-visible),
+.account-year-switch button.is-active {
+  color: #0f6c66;
+  background: #fff;
+  box-shadow: 0 2px 8px rgba(20, 35, 48, 0.08);
+}
+
+.account-contribution-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.account-contribution-metrics > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.account-contribution-metrics span,
+.account-rule-foot,
+.account-rule-card .field-note {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.account-contribution-metrics strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: 1.06rem;
+}
+
+.account-limit-progress {
+  height: 7px;
+  overflow: hidden;
+  border-radius: 4px;
+  background: rgba(20, 35, 48, 0.08);
+}
+
+.account-limit-progress span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+}
+
+.account-rule-foot {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px 16px;
+}
+
+.account-rule-foot strong,
+.account-rule-state {
+  color: var(--text);
+}
+
+.account-rule-card-oki {
+  border-left: 3px solid rgba(15, 118, 110, 0.55);
+}
+
+.account-aggregate-note {
+  border-top: 1px solid rgba(20, 35, 48, 0.08);
+  padding-top: 11px;
+}
+
 .portfolio-switch-card {
   display: grid;
   gap: 8px;
@@ -2996,6 +3273,24 @@ textarea {
 .cash-target-portfolio {
   max-width: 420px;
   margin-top: 16px;
+}
+
+.account-tax-note {
+  display: grid;
+  gap: 4px;
+  border: 1px solid rgba(15, 118, 110, 0.14);
+  border-left: 3px solid rgba(15, 118, 110, 0.48);
+  border-radius: 7px;
+  padding: 11px 13px;
+  color: var(--muted);
+  background: rgba(244, 248, 246, 0.64);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.account-tax-note strong {
+  color: var(--text);
+  font-size: 0.84rem;
 }
 
 .cash-workspace .sprint-table {
@@ -7239,9 +7534,39 @@ textarea {
   .workspace-position-card dl { gap: 10px; }
 }
 
+@media (max-width: 980px) {
+  .portfolio-account-form {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .portfolio-account-form-copy,
+  .portfolio-account-form-actions,
+  .account-type-inline-note {
+    grid-column: 1 / -1;
+  }
+}
+
 @media (max-width: 520px) {
   .cash-workspace .cash-form-grid {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .portfolio-account-form,
+  .portfolio-account-settings-grid,
+  .account-contribution-metrics {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .account-rule-card-head,
+  .account-rule-foot {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .account-year-switch {
+    width: 100%;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-auto-flow: row;
   }
 }
 

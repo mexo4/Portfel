@@ -49,6 +49,27 @@ export type TagTargetType = "portfolio" | "instrument" | "operation";
 
 export type PortfolioSchemaVersion = 2;
 
+export type PortfolioAccountType = "STANDARD" | "IKE" | "IKZE" | "OKI";
+
+export type IkzeLimitVariant = "STANDARD" | "BUSINESS";
+
+export type IkzeTaxEstimateRate = 0.12 | 0.19 | 0.32;
+
+export type PortfolioAccountConfiguration = {
+  ikzeLimitVariant?: IkzeLimitVariant;
+  /** Optional PIT rate used only for the clearly labelled IKZE estimate. */
+  ikzeTaxEstimateRate?: IkzeTaxEstimateRate;
+};
+
+export type AccountFlowKind =
+  | "CONTRIBUTION"
+  | "ORDINARY_WITHDRAWAL"
+  | "QUALIFIED_WITHDRAWAL"
+  | "EARLY_RETURN"
+  | "PARTIAL_RETURN"
+  | "TRANSFER_IN"
+  | "TRANSFER_OUT";
+
 export type AssetSearchMode =
   | "stock-global"
   | "stock-gpw"
@@ -438,6 +459,8 @@ export type BondRedemptionQuote = {
   taxableInterestTotal: number;
   taxPerUnit: number;
   taxTotal: number;
+  domesticTaxTreatment?: "RULE_BASED_STANDARD" | "RULE_BASED_EXEMPT" | "OKI_NOT_EFFECTIVE";
+  domesticTaxNote?: string;
   netValuePerUnit: number;
   netValueTotal: number;
   marketCurrency: CurrencyCode;
@@ -470,6 +493,9 @@ export type PortfolioState = {
 export type InvestmentPortfolio = PortfolioState & {
   id: string;
   name: string;
+  /** Missing legacy values are normalized to STANDARD without touching ledger data. */
+  accountType?: PortfolioAccountType;
+  accountConfiguration?: PortfolioAccountConfiguration;
   schemaVersion?: PortfolioSchemaVersion;
   baseCurrency?: CurrencyCode;
   subPortfolios?: PortfolioSubPortfolio[];
@@ -546,6 +572,7 @@ export type PortfolioHistoryPoint = {
  */
 export type PortfolioHistoryScope = {
   portfolioId: string;
+  accountType?: PortfolioAccountType;
   assets: PortfolioAsset[];
   sales: PortfolioSale[];
   realizedAdjustments: PortfolioRealizedAdjustment[];

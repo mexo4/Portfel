@@ -19,6 +19,7 @@ const getWorkspaceHistoryScopes = (workspace: ReturnType<typeof usePortfolioWork
   workspace.isAllPortfoliosSelected
     ? workspace.portfolios.map((portfolio) => ({
         portfolioId: portfolio.id,
+        accountType: portfolio.accountType,
         assets: portfolio.assets,
         sales: portfolio.sales,
         realizedAdjustments: portfolio.realizedAdjustments,
@@ -37,6 +38,7 @@ const workspaceHistoryProps = (workspace: ReturnType<typeof usePortfolioWorkspac
   refreshRevision: workspace.refreshRevision,
   operations: workspace.activePortfolio?.operations ?? [],
   accounts: workspace.activePortfolio?.accounts ?? [],
+  accountType: workspace.activePortfolio?.accountType,
   portfolioScopes: getWorkspaceHistoryScopes(workspace),
 });
 
@@ -63,7 +65,7 @@ export function WorkspacePositionsPage() {
     if (isAddAssetOpen) resetAssetEntryForm();
     return () => { if (isAddAssetOpen) resetAssetEntryForm(); };
   }, [isAddAssetOpen, resetAssetEntryForm]);
-  return <div className="workspace-page"><section className="workspace-page-actions"><p>{workspace.isAllPortfoliosSelected ? "Widok łączny jest tylko do odczytu. Pozycje o takim samym tickerze pozostają rozdzielone według portfela." : isAddAssetOpen ? "Formularz operacji jest otwarty." : "Zarządzaj pozycjami i przeglądaj ich bieżącą wycenę."}</p>{workspace.isAllPortfoliosSelected ? <Link href="/portfolios" className="primary-button">Wybierz portfel do zmian</Link> : <Link href={isAddAssetOpen ? "/portfolio/positions" : "/portfolio/positions?add=asset"} className="primary-button">{isAddAssetOpen ? "Zamknij formularz" : "Dodaj aktywo"}</Link>}</section>{workspace.displayedSyncError ? <p className="field-note field-note-error">{workspace.displayedSyncError}</p> : null}{isAddAssetOpen && !workspace.isAllPortfoliosSelected ? workspace.assetEntryWorkspace : null}<div className="workspace-desktop-only"><AssetTable assets={workspace.assets} groups={workspace.groupedAssets} fxRates={workspace.fxRates} baseCurrency={workspace.activeBaseCurrency} filter={workspace.filter} sortMode={workspace.assetSortMode} isRefreshing={workspace.isRefreshing} onFilterChange={workspace.onFilterChange} onSortModeChange={workspace.onSortModeChange} onReorderGroups={workspace.onReorderGroups} onRemove={workspace.onRemoveAsset} /></div><div className="workspace-mobile-only"><PortfolioPositionCards assets={workspace.assets} groups={workspace.groupedAssets} fxRates={workspace.fxRates} baseCurrency={workspace.activeBaseCurrency} filter={workspace.filter} sortMode={workspace.assetSortMode} isRefreshing={workspace.isRefreshing} onSortModeChange={workspace.onSortModeChange} onRemove={workspace.onRemoveAsset} /></div></div>;
+  return <div className="workspace-page"><section className="workspace-page-actions"><p>{workspace.isAllPortfoliosSelected ? "Widok łączny jest tylko do odczytu. Pozycje o takim samym tickerze pozostają rozdzielone według portfela." : isAddAssetOpen ? "Formularz operacji jest otwarty." : "Zarządzaj pozycjami i przeglądaj ich bieżącą wycenę."}</p>{workspace.isAllPortfoliosSelected ? <Link href="/portfolios" className="primary-button">Wybierz portfel do zmian</Link> : <Link href={isAddAssetOpen ? "/portfolio/positions" : "/portfolio/positions?add=asset"} className="primary-button">{isAddAssetOpen ? "Zamknij formularz" : "Dodaj transakcję"}</Link>}</section>{workspace.displayedSyncError ? <p className="field-note field-note-error">{workspace.displayedSyncError}</p> : null}{isAddAssetOpen && !workspace.isAllPortfoliosSelected ? workspace.assetEntryWorkspace : null}<div className="workspace-desktop-only"><AssetTable assets={workspace.assets} groups={workspace.groupedAssets} fxRates={workspace.fxRates} baseCurrency={workspace.activeBaseCurrency} filter={workspace.filter} sortMode={workspace.assetSortMode} isRefreshing={workspace.isRefreshing} onFilterChange={workspace.onFilterChange} onSortModeChange={workspace.onSortModeChange} onReorderGroups={workspace.onReorderGroups} onRemove={workspace.onRemoveAsset} /></div><div className="workspace-mobile-only"><PortfolioPositionCards assets={workspace.assets} groups={workspace.groupedAssets} fxRates={workspace.fxRates} baseCurrency={workspace.activeBaseCurrency} filter={workspace.filter} sortMode={workspace.assetSortMode} isRefreshing={workspace.isRefreshing} onSortModeChange={workspace.onSortModeChange} onRemove={workspace.onRemoveAsset} /></div></div>;
 }
 
 export function WorkspaceOperationsPage() {

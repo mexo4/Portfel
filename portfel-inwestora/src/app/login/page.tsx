@@ -15,7 +15,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
   const accountData = await getCurrentAccountData();
 
   if (accountData) {
-    redirect("/app");
+    redirect("/dashboard");
   }
 
   const params = await searchParams;

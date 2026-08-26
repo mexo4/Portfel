@@ -68,6 +68,7 @@ import type {
   FxRates,
   PortfolioAsset,
   PortfolioAccount,
+  PortfolioAccountType,
   PortfolioAssetHistorySeries,
   PortfolioBenchmarkDefinition,
   PortfolioBenchmarkHistorySeries,
@@ -89,6 +90,7 @@ type PortfolioLineChartsProps = {
   refreshRevision: number;
   operations?: PortfolioOperation[];
   accounts?: PortfolioAccount[];
+  accountType?: PortfolioAccountType;
   /** Real portfolio boundaries for the URL-only all-portfolios view. */
   portfolioScopes?: PortfolioHistoryScope[];
   initialMode?: ChartMode;
@@ -144,6 +146,7 @@ type HistoryRequestPayload = {
   realizedAdjustments: PortfolioRealizedAdjustment[];
   operations?: PortfolioOperation[];
   accounts?: PortfolioAccount[];
+  accountType?: PortfolioAccountType;
   benchmarks: PortfolioBenchmarkDefinition[];
   portfolioScopes?: PortfolioHistoryScope[];
 };
@@ -883,6 +886,7 @@ export default function PortfolioLineCharts({
   refreshRevision,
   operations = [],
   accounts = [],
+  accountType,
   portfolioScopes,
   initialMode = "value",
 }: PortfolioLineChartsProps) {
@@ -1156,9 +1160,11 @@ export default function PortfolioLineCharts({
         realizedAdjustments,
         operations: portfolioScopes?.length ? [] : operations,
         accounts: portfolioScopes?.length ? [] : accounts,
+        accountType: portfolioScopes?.length ? undefined : accountType,
         benchmarks: selectedBenchmarks,
         portfolioScopes: portfolioScopes?.map((scope) => ({
           portfolioId: scope.portfolioId,
+          accountType: scope.accountType,
           assets: scope.assets.map((asset) => {
             const historyAsset = { ...asset };
             delete historyAsset.latestPrice;
@@ -1176,7 +1182,7 @@ export default function PortfolioLineCharts({
         })),
         refreshRevision,
       }),
-    [accounts, assets, operations, portfolioScopes, realizedAdjustments, refreshRevision, sales, selectedBenchmarks]
+    [accountType, accounts, assets, operations, portfolioScopes, realizedAdjustments, refreshRevision, sales, selectedBenchmarks]
   );
 
   useEffect(() => {
@@ -1187,6 +1193,7 @@ export default function PortfolioLineCharts({
       realizedAdjustments: PortfolioRealizedAdjustment[];
       operations?: PortfolioOperation[];
       accounts?: PortfolioAccount[];
+      accountType?: PortfolioAccountType;
       benchmarks: PortfolioBenchmarkDefinition[];
       portfolioScopes?: PortfolioHistoryScope[];
     };

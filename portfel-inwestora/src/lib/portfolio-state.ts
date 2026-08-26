@@ -10,6 +10,11 @@ import {
   normalizeTreasuryBondCode,
 } from "@/lib/treasury-bonds";
 import { ensurePortfolioCoreModel } from "@/lib/operation-engine";
+import {
+  getDomesticInvestmentIncomeTaxTreatment,
+  normalizePortfolioAccountConfiguration,
+  normalizePortfolioAccountType,
+} from "@/lib/portfolio-account-rules";
 import { resolveTickerIdentity } from "@/lib/ticker-aliases";
 import {
   getDefaultProviderForKind,
@@ -24,6 +29,7 @@ import type {
   InstrumentIdentity,
   InvestmentPortfolio,
   PortfolioBook,
+  PortfolioAccountType,
   PortfolioAsset,
   PortfolioRealizedAdjustment,
   PortfolioSale,
@@ -903,14 +909,24 @@ export const assertUniquePortfolioNames = (
 
 export const createInvestmentPortfolio = (
   name = "Nowy portfel",
-  state: PortfolioState = createEmptyPortfolioState()
+  state: PortfolioState = createEmptyPortfolioState(),
+  accountOptions?: Pick<
+    InvestmentPortfolio,
+    "accountType" | "accountConfiguration"
+  >
 ): InvestmentPortfolio => {
   const now = new Date().toISOString();
   const normalizedState = normalizePortfolioState(state);
+  const accountType = normalizePortfolioAccountType(accountOptions?.accountType);
 
   return ensurePortfolioCoreModel({
     id: createPortfolioId(),
     name: normalizePortfolioName(name, "Nowy portfel"),
+    accountType,
+    accountConfiguration: normalizePortfolioAccountConfiguration(
+      accountOptions?.accountConfiguration,
+      accountType
+    ),
     assets: normalizedState.assets,
     sales: normalizedState.sales,
     realizedAdjustments: normalizedState.realizedAdjustments,
@@ -948,6 +964,7 @@ const normalizeInvestmentPortfolio = (
     typeof rawPortfolio.updatedAt === "string" && rawPortfolio.updatedAt
       ? rawPortfolio.updatedAt
       : createdAt;
+  const accountType = normalizePortfolioAccountType(rawPortfolio.accountType);
 
   return ensurePortfolioCoreModel({
     id:
@@ -955,6 +972,11 @@ const normalizeInvestmentPortfolio = (
         ? rawPortfolio.id
         : createPortfolioId(),
     name: normalizePortfolioName(rawPortfolio.name, index === 0 ? "Portfel 1" : `Portfel ${index + 1}`),
+    accountType,
+    accountConfiguration: normalizePortfolioAccountConfiguration(
+      rawPortfolio.accountConfiguration,
+      accountType
+    ),
     assets: normalizedState.assets,
     sales: normalizedState.sales,
     realizedAdjustments: normalizedState.realizedAdjustments,
@@ -1126,8 +1148,10 @@ const getBondAnnualRateForYear = (bondMeta: TreasuryBondSeries, yearIndex: numbe
 
 export const buildAutomaticBondCouponAdjustments = (
   assets: PortfolioAsset[],
-  sales: PortfolioSale[]
+  sales: PortfolioSale[],
+  accountType: PortfolioAccountType = "STANDARD"
 ) => {
+  const normalizedAccountType = normalizePortfolioAccountType(accountType);
   const bondCouponSegments = [
     ...assets
       .filter((asset) => asset.kind === "bond" && asset.bondMeta?.couponMode === "paid-out")
@@ -1171,7 +1195,11 @@ export const buildAutomaticBondCouponAdjustments = (
               (getBondAnnualRateForYear(segment.bondMeta, index + 1) / 100),
             6
           );
-          const netCoupon = round(grossCoupon * 0.81, 6);
+          const taxTreatment = getDomesticInvestmentIncomeTaxTreatment({
+            accountType: normalizedAccountType,
+            paymentDate,
+          });
+          const netCoupon = round(grossCoupon * (1 - taxTreatment.rate), 6);
 
           return {
             id: `bond-coupon-${segment.segmentId}-${paymentDate}`,
@@ -1181,7 +1209,7 @@ export const buildAutomaticBondCouponAdjustments = (
             date: paymentDate,
             source: "bond-coupon" as const,
             bondCode: segment.bondMeta.code,
-            note: `Kupon COI ${segment.bondMeta.code}`,
+            note: `Kupon COI ${segment.bondMeta.code} (${normalizedAccountType})`,
             createdAt: new Date(`${paymentDate}T00:00:00.000Z`).toISOString(),
           } satisfies PortfolioRealizedAdjustment;
         });

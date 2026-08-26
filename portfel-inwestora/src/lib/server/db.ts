@@ -8,10 +8,9 @@ export type DatabaseTransaction = {
   execute: (statement: string, parameters?: QueryParameter[]) => Promise<void>;
 };
 
-let schemaInitialization: Promise<void> | null = null;
-
 declare global {
   var portfelPostgresPool: Pool | undefined;
+  var portfelSchemaInitialization: Promise<void> | null | undefined;
 }
 
 const getDatabaseUrl = () => {
@@ -70,7 +69,9 @@ const getPool = () => {
       // A small, shared pool works both on serverless runtimes and Aiven Free,
       // where each runtime should consume as few database connections as possible.
       max: 2,
-      idleTimeoutMillis: 10_000,
+      // Keep a verified TLS connection across normal route changes. Ten
+      // seconds forced an avoidable Aiven handshake after a short pause.
+      idleTimeoutMillis: 30_000,
       connectionTimeoutMillis: 10_000,
     });
   }
@@ -192,12 +193,33 @@ const schemaStatements = [
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL,
       name TEXT NOT NULL,
+      account_type TEXT NOT NULL DEFAULT 'STANDARD',
+      account_config_json TEXT NOT NULL DEFAULT '{}',
       base_currency TEXT NOT NULL DEFAULT 'PLN',
       metadata_json TEXT NOT NULL DEFAULT '{}',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
+      CONSTRAINT chk_core_portfolios_account_type
+        CHECK (account_type IN ('STANDARD', 'IKE', 'IKZE', 'OKI')),
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     )
+  `,
+  "ALTER TABLE core_portfolios ADD COLUMN IF NOT EXISTS account_type TEXT NOT NULL DEFAULT 'STANDARD'",
+  "ALTER TABLE core_portfolios ADD COLUMN IF NOT EXISTS account_config_json TEXT NOT NULL DEFAULT '{}'",
+  `
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'chk_core_portfolios_account_type'
+      ) THEN
+        ALTER TABLE core_portfolios
+          ADD CONSTRAINT chk_core_portfolios_account_type
+          CHECK (account_type IN ('STANDARD', 'IKE', 'IKZE', 'OKI'));
+      END IF;
+    END
+    $$
   `,
   "CREATE INDEX IF NOT EXISTS idx_core_portfolios_user_id ON core_portfolios(user_id)",
   `
@@ -556,18 +578,35 @@ const schemaStatements = [
 ] as const;
 
 export const initializeDatabase = async () => {
-  if (!schemaInitialization) {
-    schemaInitialization = (async () => {
-      for (const statement of schemaStatements) {
-        await getPool().query(statement);
+  if (!globalThis.portfelSchemaInitialization) {
+    globalThis.portfelSchemaInitialization = (async () => {
+      const client = await getPool().connect();
+
+      try {
+        await client.query("BEGIN");
+        // These are independent idempotent schema guards. Sending them as one
+        // PostgreSQL batch removes one Aiven round-trip per table and index.
+        await client.query(
+          schemaStatements.map((statement) => `${statement.trim()};`).join("\n")
+        );
+        await client.query("COMMIT");
+      } catch (error) {
+        try {
+          await client.query("ROLLBACK");
+        } catch {
+          // Preserve the original initialization error.
+        }
+        throw error;
+      } finally {
+        client.release();
       }
     })().catch((error) => {
-      schemaInitialization = null;
+      globalThis.portfelSchemaInitialization = null;
       throw error;
     });
   }
 
-  return schemaInitialization;
+  return globalThis.portfelSchemaInitialization;
 };
 
 export const query = async <T>(

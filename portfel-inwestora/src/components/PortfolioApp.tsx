@@ -1,19 +1,10 @@
 "use client";
 
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import AddAssetForm from "@/components/AddAssetForm";
 import AppWorkspaceShell from "@/components/AppWorkspaceShell";
 import AssetModeSelector from "@/components/AssetModeSelector";
-import BrokerImportPanel from "@/components/BrokerImportPanel";
-import ChangePasswordPanel from "@/components/ChangePasswordPanel";
-import PortfolioIncomeWorkspace from "@/components/PortfolioIncomeWorkspace";
-import RealizedAdjustmentsPanel from "@/components/RealizedAdjustmentsPanel";
-import PortfolioSummary from "@/components/PortfolioSummary";
-import SalesHistoryPanel from "@/components/SalesHistoryPanel";
-import TreasuryBondForm from "@/components/TreasuryBondForm";
-import UserProfilePanel from "@/components/UserProfilePanel";
-import WealthWorkspace from "@/components/WealthWorkspace";
 import { PortfolioWorkspaceProvider, type PortfolioWorkspaceValue } from "@/components/PortfolioWorkspaceContext";
 import {
   AUTO_REFRESH_INTERVAL_MS,
@@ -69,7 +60,6 @@ import {
   getAllPortfolioScopedGroups,
   getGroupedPortfolioAssets,
   getPortfolioSummary,
-  hasAssetLivePrice,
 } from "@/lib/pricing";
 import {
   buildCashImpactBuyOperation,
@@ -99,9 +89,9 @@ import {
 } from "@/lib/ticker";
 import { getGpwWatchlistCanonicalKey, type WatchlistItem } from "@/lib/watchlist";
 import { ALL_PORTFOLIOS_ID, getWorkspaceReadHref } from "@/lib/portfolio-selection";
+import { normalizePortfolioAccountType } from "@/lib/portfolio-account-rules";
 import {
   getTodayDateInputValue,
-  formatCurrency,
   normalizeText,
   round,
   toCurrencyCode,
@@ -135,6 +125,8 @@ import type {
   PortfolioBook,
   PortfolioInstrument,
   PortfolioOperation,
+  PortfolioAccountConfiguration,
+  PortfolioAccountType,
   PortfolioRealizedAdjustment,
   PortfolioSale,
   RealizedAdjustmentDraft,
@@ -144,6 +136,26 @@ import type {
   UserProfile,
   WealthItem,
 } from "@/types/portfolio";
+
+// Route-specific workspaces (broker parsers, profile tools, bond forms and
+// dividend views) do not belong in the dashboard's first client chunk.
+const AddAssetForm = dynamic(() => import("@/components/AddAssetForm"));
+const BrokerImportPanel = dynamic(() => import("@/components/BrokerImportPanel"));
+const ChangePasswordPanel = dynamic(() => import("@/components/ChangePasswordPanel"));
+const PortfolioIncomeWorkspace = dynamic(
+  () => import("@/components/PortfolioIncomeWorkspace")
+);
+const PortfolioAccountManagement = dynamic(
+  () => import("@/components/PortfolioAccountManagement")
+);
+const RealizedAdjustmentsPanel = dynamic(
+  () => import("@/components/RealizedAdjustmentsPanel")
+);
+const PortfolioSummary = dynamic(() => import("@/components/PortfolioSummary"));
+const SalesHistoryPanel = dynamic(() => import("@/components/SalesHistoryPanel"));
+const TreasuryBondForm = dynamic(() => import("@/components/TreasuryBondForm"));
+const UserProfilePanel = dynamic(() => import("@/components/UserProfilePanel"));
+const WealthWorkspace = dynamic(() => import("@/components/WealthWorkspace"));
 import type { ImportedBrokerOperation } from "@/lib/import-operations";
 
 type PortfolioAppProps = {
@@ -1122,14 +1134,34 @@ export default function PortfolioApp({
     // global identity and a shared ticker must stay attributable to its owner.
     return getAllPortfolioScopedGroups(portfolios, fxRates, activeBaseCurrency);
   }, [activeBaseCurrency, assets, fxRates, isAllPortfoliosSelected, portfolios]);
-  const effectiveRealizedAdjustments = useMemo(
-    () =>
-      getSortedPortfolioRealizedAdjustments([
-        ...displayedRealizedAdjustments,
-        ...buildAutomaticBondCouponAdjustments(displayedAssets, displayedSales),
-      ]),
-    [displayedAssets, displayedRealizedAdjustments, displayedSales]
-  );
+  const effectiveRealizedAdjustments = useMemo(() => {
+    const automaticBondCoupons = isAllPortfoliosSelected
+      ? portfolios.flatMap((portfolio) => {
+          const corePortfolio = ensurePortfolioCoreModel(portfolio);
+          return buildAutomaticBondCouponAdjustments(
+            corePortfolio.assets,
+            corePortfolio.sales,
+            corePortfolio.accountType
+          );
+        })
+      : buildAutomaticBondCouponAdjustments(
+          displayedAssets,
+          displayedSales,
+          activePortfolio?.accountType
+        );
+
+    return getSortedPortfolioRealizedAdjustments([
+      ...displayedRealizedAdjustments,
+      ...automaticBondCoupons,
+    ]);
+  }, [
+    activePortfolio?.accountType,
+    displayedAssets,
+    displayedRealizedAdjustments,
+    displayedSales,
+    isAllPortfoliosSelected,
+    portfolios,
+  ]);
   const hasProFeatures = canUseProFeatures(account);
   const getFreePlanAssetLimitError = (
     nextAssetGroups = new Set(assets.map(getPortfolioAssetGroupKey)).size + 1
@@ -1341,7 +1373,11 @@ export default function PortfolioApp({
         const corePortfolio = ensurePortfolioCoreModel(portfolio);
         const portfolioEffectiveAdjustments = getSortedPortfolioRealizedAdjustments([
           ...corePortfolio.realizedAdjustments,
-          ...buildAutomaticBondCouponAdjustments(corePortfolio.assets, corePortfolio.sales),
+          ...buildAutomaticBondCouponAdjustments(
+            corePortfolio.assets,
+            corePortfolio.sales,
+            corePortfolio.accountType
+          ),
         ]);
         return {
           portfolio,
@@ -2554,6 +2590,7 @@ export default function PortfolioApp({
           purchaseDate: request.lot.purchaseDate,
           requestDate,
           quantity: request.quantity,
+          accountType: normalizePortfolioAccountType(activePortfolioForEngine?.accountType),
         });
 
         return response.redemption;
@@ -2604,6 +2641,8 @@ export default function PortfolioApp({
       taxableInterestTotal,
       taxPerUnit: round(taxTotal / quantity, 6),
       taxTotal,
+      domesticTaxTreatment: redemptions[0]?.domesticTaxTreatment,
+      domesticTaxNote: redemptions[0]?.domesticTaxNote,
       netValuePerUnit: round(netValueTotal / quantity, 6),
       netValueTotal,
       marketCurrency: "PLN",
@@ -3620,8 +3659,7 @@ export default function PortfolioApp({
   };
 
   const handleImportBrokerOperations = async (
-    operations: ImportedBrokerOperation[],
-    onQuoteProgress: (progress: { completed: number; total: number }) => void
+    operations: ImportedBrokerOperation[]
   ) => {
     if (!requireConcretePortfolioSelection()) {
       throw new Error("Wybierz konkretny portfel docelowy przed importem.");
@@ -3655,26 +3693,33 @@ export default function PortfolioApp({
             operation.sourceCurrency,
             operation.targetCurrency,
           ])
+          .filter((currency): currency is string => Boolean(currency?.trim()))
           .map((currency) => toCurrencyCode(currency, "PLN"))
       )
     );
     let importFxRates = fxRatesRef.current;
 
-    try {
-      const response = await fetchFxRates(importCurrencies);
-      importFxRates = {
-        ...FALLBACK_FX_RATES,
-        ...fxRatesRef.current,
-        ...response.rates,
-      };
-      fxRatesRef.current = importFxRates;
-      setFxRates(importFxRates);
-      setFxUpdatedAt(response.fetchedAt);
-    } catch {
-      importFxRates = {
-        ...FALLBACK_FX_RATES,
-        ...fxRatesRef.current,
-      };
+    const foreignImportCurrencies = importCurrencies.filter(
+      (currency) => currency !== "PLN"
+    );
+
+    if (foreignImportCurrencies.length > 0) {
+      try {
+        const response = await fetchFxRates(foreignImportCurrencies);
+        importFxRates = {
+          ...FALLBACK_FX_RATES,
+          ...fxRatesRef.current,
+          ...response.rates,
+        };
+        fxRatesRef.current = importFxRates;
+        setFxRates(importFxRates);
+        setFxUpdatedAt(response.fetchedAt);
+      } catch {
+        importFxRates = {
+          ...FALLBACK_FX_RATES,
+          ...fxRatesRef.current,
+        };
+      }
     }
 
     let nextAssets: PortfolioAsset[] = normalizeStoredPortfolioAssets(assets);
@@ -4110,85 +4155,21 @@ export default function PortfolioApp({
         },
         true
       );
-
-      let quoteRefresh: Awaited<ReturnType<typeof refreshPortfolioQuotesWithProgress>>;
-
-      try {
-        quoteRefresh = await refreshPortfolioQuotesWithProgress(
-          nextPortfolios.flatMap((portfolio) => portfolio.assets),
-          onQuoteProgress
-        );
-      } catch (error) {
-        // A historical transaction has already been persisted. A transient
-        // quote-provider failure must not undo that transaction (in
-        // particular for crypto, whose live quote is independent of import).
-        console.warn("[broker-import] Import zapisany bez odswiezenia kursow.", {
-          error,
-        });
-        setLastSyncAt(new Date().toISOString());
-        setSyncError(null);
-
-        return {
-          importedBuys,
-          importedSells,
-          importedDividends,
-          importedCashOperations,
-          skippedSells,
-          skippedInvalid,
-          skippedDuplicates,
-          skippedPlanLimit,
-          quoteTotal: 0,
-          missingQuotes: nextPortfolios
-            .flatMap((portfolio) => portfolio.assets)
-            .filter((asset) => !hasAssetLivePrice(asset)).length,
-        };
-      }
-      const refreshedById = new Map(
-        quoteRefresh.assets.map((asset) => [asset.id, asset])
-      );
-      const refreshedPortfolios = nextPortfolios.map((portfolio) => ({
-        ...portfolio,
-        assets: normalizeStoredPortfolioAssets(
-          portfolio.assets.map((asset) => {
-            const refreshed = refreshedById.get(asset.id);
-
-            if (!refreshed) {
-              return asset;
-            }
-
-            return applyRefreshedPortfolioAssetSnapshot(asset, refreshed);
-          })
-        ),
-        updatedAt: new Date().toISOString(),
-      }));
-      const refreshedActivePortfolio =
-        refreshedPortfolios.find(
+      const importedActivePortfolio =
+        nextPortfolios.find(
           (portfolio) => portfolio.id === activePortfolioIdRef.current
-        ) ?? refreshedPortfolios[0];
-      const refreshedWorkspace = {
-        assets: refreshedActivePortfolio.assets,
-        sales: refreshedActivePortfolio.sales,
-        realizedAdjustments: refreshedActivePortfolio.realizedAdjustments,
-      };
-      const refreshedBook = {
-        schemaVersion: 2 as const,
-        portfolios: refreshedPortfolios,
-        activePortfolioId: activePortfolioIdRef.current,
-      };
+        ) ?? nextPortfolios[0];
+      applyPortfolioBook(nextPortfolios, activePortfolioIdRef.current);
+      replaceWorkspace({
+        assets: importedActivePortfolio.assets,
+        sales: importedActivePortfolio.sales,
+        realizedAdjustments: importedActivePortfolio.realizedAdjustments,
+      });
 
-      quoteRefreshSeqRef.current.all += 1;
-      quoteRefreshSeqRef.current.crypto += 1;
-      applyPortfolioBook(refreshedPortfolios, activePortfolioIdRef.current);
-      replaceWorkspace(refreshedWorkspace);
-      quoteOnlyPortfolioFingerprintRef.current = getPortfolioSaveFingerprint(refreshedBook);
-      void savePortfolioQuoteSnapshots(
-        getQuoteSnapshotPayload(
-          refreshedPortfolios,
-          new Set(quoteRefresh.assets.map((asset) => asset.id))
-        )
-      ).catch(() => undefined);
+      // Persistence is the import success boundary. The existing assets-change
+      // effect starts one in-flight-deduplicated background quote refresh, so
+      // a slow provider no longer blocks import or starts a competing refresh.
       setLastSyncAt(new Date().toISOString());
-      setRefreshRevision((currentRevision) => currentRevision + 1);
       setSyncError(null);
 
       return {
@@ -4200,8 +4181,8 @@ export default function PortfolioApp({
         skippedInvalid,
         skippedDuplicates,
         skippedPlanLimit,
-        quoteTotal: quoteRefresh.total,
-        missingQuotes: quoteRefresh.missing,
+        quoteTotal: 0,
+        missingQuotes: 0,
       };
     } catch (error) {
       restoreLastPersistedPortfolioBook();
@@ -4427,17 +4408,20 @@ export default function PortfolioApp({
     }
   };
 
-  const handleCreatePortfolio = async () => {
+  const handleCreatePortfolio = async ({
+    name,
+    accountType,
+    accountConfiguration,
+  }: {
+    name: string;
+    accountType: PortfolioAccountType;
+    accountConfiguration: PortfolioAccountConfiguration;
+  }) => {
     if (isPortfolioMutationPending) {
       return;
     }
 
-    const name = window.prompt(
-      "Nazwa nowego portfela",
-      `Portfel ${portfoliosRef.current.length + 1}`
-    );
-
-    if (!name?.trim()) {
+    if (!name.trim()) {
       return;
     }
 
@@ -4446,7 +4430,10 @@ export default function PortfolioApp({
       setSyncError("Masz już portfel o tej nazwie. Wybierz inną nazwę.");
       return;
     }
-    const nextPortfolio = createInvestmentPortfolio(name.trim());
+    const nextPortfolio = createInvestmentPortfolio(name.trim(), undefined, {
+      accountType,
+      accountConfiguration,
+    });
     const nextPortfolios = [...currentPortfolios, nextPortfolio];
 
     setIsPortfolioMutationPending(true);
@@ -4621,7 +4608,11 @@ export default function PortfolioApp({
         const corePortfolio = ensurePortfolioCoreModel(portfolio);
         const portfolioAdjustments = getSortedPortfolioRealizedAdjustments([
           ...corePortfolio.realizedAdjustments,
-          ...buildAutomaticBondCouponAdjustments(corePortfolio.assets, corePortfolio.sales),
+          ...buildAutomaticBondCouponAdjustments(
+            corePortfolio.assets,
+            corePortfolio.sales,
+            corePortfolio.accountType
+          ),
         ]);
 
         return getPortfolioSummary(
@@ -4685,12 +4676,57 @@ export default function PortfolioApp({
     updateWorkspaceAssets(() => nextAssets);
   };
 
+  const handleUpdatePortfolioAccount = async ({
+    accountType,
+    accountConfiguration,
+  }: {
+    accountType: PortfolioAccountType;
+    accountConfiguration: PortfolioAccountConfiguration;
+  }) => {
+    if (!activePortfolio || isPortfolioMutationPending || isAllPortfoliosSelected) {
+      return;
+    }
+
+    const currentPortfolios = commitActivePortfolioSnapshot(portfoliosRef.current);
+    const nextPortfolios = currentPortfolios.map((portfolio) =>
+      portfolio.id === activePortfolioId
+        ? {
+            ...portfolio,
+            accountType,
+            accountConfiguration,
+            updatedAt: new Date().toISOString(),
+          }
+        : portfolio
+    );
+
+    setIsPortfolioMutationPending(true);
+    applyPortfolioBook(nextPortfolios, activePortfolioId);
+    loadPortfolioIntoWorkspace(
+      nextPortfolios.find((portfolio) => portfolio.id === activePortfolioId) ?? activePortfolio
+    );
+
+    try {
+      await queuePortfolioSave(
+        {
+          schemaVersion: 2,
+          portfolios: nextPortfolios,
+          activePortfolioId,
+        },
+        true
+      );
+    } catch {
+      restoreLastPersistedPortfolioBook();
+    } finally {
+      setIsPortfolioMutationPending(false);
+    }
+  };
+
   const assetEntryWorkspace = <>
     <section className="panel panel-compact workspace-entry-head"><div><p className="eyebrow">Nowa operacja</p><h2 className="section-title">Dodaj instrument</h2><p className="section-copy">Wybierz klasę aktywa i dodaj zakup lub sprzedaż do aktywnego portfela.</p></div><AssetModeSelector value={entryMode} onChange={handleEntryModeChange} /></section>
     {entryMode === "bond" ? <TreasuryBondForm draft={bondDraft} series={bondSeries} quote={bondQuote} redemptionPreview={bondRedemptionPreview} swapPreview={bondSwapPreview} isLoadingSeries={isBondLoading} isLoadingRedemption={isBondRedemptionLoading} isLoadingSwap={isBondSwapLoading} error={bondError} redemptionError={bondRedemptionError} swapError={bondSwapError} onChange={(nextDraft) => { setBondDraft(nextDraft); resetBondInteractionState(); }} onCodeChange={(code) => { setBondDraft((currentDraft) => ({ ...currentDraft, code: normalizeTreasuryBondCode(code) })); setBondError(null); resetBondInteractionState(); }} onBuySubmit={() => { void handleAddBondAsset(); }} onSellSubmit={() => { void handleSellBondAsset(); }} onRedeemSubmit={() => { void handleRedeemBondAsset(); }} onSwapSubmit={() => { void handleSwapBondAsset(); }} /> : <AddAssetForm showModeSelector={false} searchMode={searchMode} draft={draft} results={results} etfResultGroups={etfResultGroups} lastAddedResult={lastAddedResult} isSearching={isSearching} isQuoteLoading={isQuoteLoading} isBuyPending={isAssetAddPending} searchError={searchError} quoteError={quoteError} watchlistKeys={watchlistKeys} isWatchlistTogglePending={isWatchlistTogglePending} watchlistError={watchlistError} onToggleWatchlist={(result) => { void handleToggleWatchlist(result); }} onDraftChange={setDraft} onSearchModeChange={handleSearchModeChange} onQueryChange={(query) => { const trimmedQuery = query.trim(); const minimumSearchLength = getMinimumSearchLength(searchMode); quoteRequestSeqRef.current += 1; lastPreviewRequestKeyRef.current = ""; isManualSymbolRef.current = false; setIsSearching(trimmedQuery.length >= minimumSearchLength); setIsQuoteLoading(false); setResults([]); setEtfResultGroups([]); setSearchError(null); setQuoteError(null); setWatchlistError(null); setDraft((currentDraft) => ({ ...currentDraft, query, name: query, symbol: "", providerId: undefined, priceScale: undefined, issuerCountry: undefined, instrumentIdentity: undefined, marketCurrencyConfirmed: undefined, latestPrice: undefined, latestPriceDate: undefined, previousClose: undefined })); }} onSymbolChange={(symbol) => { quoteRequestSeqRef.current += 1; lastPreviewRequestKeyRef.current = ""; isManualSymbolRef.current = true; setIsSearching(false); setIsQuoteLoading(false); setResults([]); setEtfResultGroups([]); setSearchError(null); setQuoteError(null); setWatchlistError(null); setDraft((currentDraft) => ({ ...currentDraft, symbol: symbol.toUpperCase(), query: "", name: "", providerId: undefined, priceScale: undefined, issuerCountry: undefined, instrumentIdentity: undefined, marketCurrencyConfirmed: undefined, latestPrice: undefined, latestPriceDate: undefined, previousClose: undefined })); }} onPickResult={(result) => { void handlePickResult(result); }} onReuseLastAddedResult={(result) => { void handlePickResult(result); }} onBuySubmit={() => { void handleAddAsset(); }} onSellSubmit={() => { void handleSellAsset(); }} />}
   </>;
 
-  const portfolioManagement = <section className="panel portfolio-hub-panel workspace-portfolio-manager" aria-busy={isSavingPortfolio || isPortfolioMutationPending}><div className="portfolio-hub-head"><div><p className="eyebrow">Portfele</p><h2 className="section-title">Zarządzaj przestrzenią inwestycji</h2><p className="section-copy">Portfele są niezależnymi rachunkami. Aktywny wybierzesz także w górnym pasku.</p></div><div className="portfolio-hub-actions"><button className="ghost-button" type="button" onClick={handleRenamePortfolio} disabled={isPortfolioMutationPending}>Zmień nazwę</button><button className="ghost-button admin-danger-button" type="button" onClick={() => { void handleDeletePortfolio(); }} disabled={portfolios.length <= 1 || isPortfolioMutationPending}>{isPortfolioMutationPending ? "Zapisywanie…" : "Usuń portfel"}</button><button className="primary-button" type="button" onClick={() => { void handleCreatePortfolio(); }} disabled={isPortfolioMutationPending}>{isPortfolioMutationPending ? "Zapisywanie…" : "Dodaj portfel"}</button></div></div><div className="portfolio-card-grid mt-5">{portfolioSummaries.map(({ portfolio, summary: portfolioSummary }) => { const isActive = portfolio.id === activePortfolioId; return <button key={portfolio.id} type="button" className={`portfolio-switch-card${isActive ? " is-active" : ""}`} onClick={() => { void handleSelectPortfolio(portfolio.id); }} disabled={isPortfolioMutationPending} aria-pressed={isActive}><span>{isActive ? "Aktywny portfel" : "Przełącz"}</span><strong>{portfolio.name}</strong><div><span>{formatCurrency(portfolioSummary.totalValue, portfolioSummary.currency)}</span><span className={portfolioSummary.combinedProfitLoss >= 0 ? "tone-positive" : "tone-negative"}>{formatCurrency(portfolioSummary.combinedProfitLoss, portfolioSummary.currency)}</span></div><small>{portfolioSummary.currency} · {portfolioSummary.positionsCount} pozycji / {portfolioSummary.salesCount} sprzedaży</small></button>; })}</div></section>;
+  const portfolioManagement = <PortfolioAccountManagement portfolios={portfolios} activePortfolio={activePortfolio} activePortfolioId={activePortfolioId} isAllPortfoliosSelected={isAllPortfoliosSelected} summaries={portfolioSummaries} isPending={isSavingPortfolio || isPortfolioMutationPending} onSelect={(portfolioId) => { void handleSelectPortfolio(portfolioId); }} onRename={() => { void handleRenamePortfolio(); }} onDelete={() => { void handleDeletePortfolio(); }} onCreate={(input) => { void handleCreatePortfolio(input); }} onUpdateAccount={(input) => { void handleUpdatePortfolioAccount(input); }} />;
 
   const operationsWorkspace = isAllPortfoliosSelected ? <section className="panel"><p className="eyebrow">Operacje</p><h2 className="section-title">Wybierz konkretny portfel</h2><p className="section-copy">Historia i korekty operacji pozostają rozdzielone według portfela w widoku łącznym.</p></section> : <><SalesHistoryPanel sales={sales} baseCurrency={activeBaseCurrency} fxRates={fxRates} canUndoSale={(saleId) => canUndoPortfolioSale(sales, saleId)} onUndoSale={handleUndoSale} /><RealizedAdjustmentsPanel draft={realizedAdjustmentDraft} adjustments={effectiveRealizedAdjustments} error={realizedAdjustmentError} onChange={(nextDraft) => { setRealizedAdjustmentDraft(nextDraft); setRealizedAdjustmentError(null); }} onSubmit={() => { void handleAddRealizedAdjustment(); }} onRemove={handleRemoveRealizedAdjustment} /></>;
   const incomeWorkspace = activePortfolioForEngine ? <PortfolioIncomeWorkspace portfolio={activePortfolioForEngine} portfolios={portfolios} activePortfolioId={activePortfolioId} isAllPortfoliosSelected={isAllPortfoliosSelected} fxRates={fxRates} baseCurrency={activeBaseCurrency} totalPortfolioValue={summary.totalValue} isAdmin={isAdmin} onPortfolioChange={persistPortfolioCoreModelChange} /> : null;

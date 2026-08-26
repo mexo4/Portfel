@@ -295,17 +295,27 @@ test("deposits and withdrawals change history value without creating investment 
     accounts: [plnAccount],
   });
 
-  assert.deepEqual(
-    history.points.map(({ date, portfolioValuePln, netInvestedPln, profitLossPln }) => ({
+  const values = history.points.map(
+    ({ date, portfolioValuePln, netInvestedPln, profitLossPln }) => ({
       date,
       portfolioValuePln,
       netInvestedPln,
       profitLossPln,
-    })),
+    })
+  );
+
+  assert.deepEqual(
+    values.slice(0, 2),
     [
       { date: "2026-08-22", portfolioValuePln: 1_000, netInvestedPln: 1_000, profitLossPln: 0 },
       { date: "2026-08-23", portfolioValuePln: 600, netInvestedPln: 600, profitLossPln: 0 },
     ]
+  );
+  assert.ok(
+    values.slice(2).every(
+      ({ portfolioValuePln, netInvestedPln, profitLossPln }) =>
+        portfolioValuePln === 600 && netInvestedPln === 600 && profitLossPln === 0
+    )
   );
 });
 

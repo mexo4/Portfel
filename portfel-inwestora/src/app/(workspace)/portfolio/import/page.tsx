@@ -1,2 +1,5 @@
-import { WorkspaceImportPage } from "@/components/WorkspaceRouteViews";
-export default function ImportPage() { return <WorkspaceImportPage />; }
+import WorkspaceImportView from "@/components/WorkspaceImportView";
+
+export default function ImportPage() {
+  return <WorkspaceImportView />;
+}

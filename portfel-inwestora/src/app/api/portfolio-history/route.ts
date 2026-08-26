@@ -5,6 +5,7 @@ import { buildAggregatePortfolioHistory, buildPortfolioHistory } from "@/lib/ser
 import { getSortedPortfolioRealizedAdjustments } from "@/lib/portfolio-state";
 import type {
   PortfolioAccount,
+  PortfolioAccountType,
   PortfolioBenchmarkDefinition,
   PortfolioHistoryScope,
   PortfolioOperation,
@@ -12,6 +13,17 @@ import type {
 } from "@/types/portfolio";
 
 export const runtime = "nodejs";
+
+const mergeRealizedAdjustments = (
+  ...groups: PortfolioState["realizedAdjustments"][]
+) =>
+  getSortedPortfolioRealizedAdjustments(
+    Array.from(
+      new Map(
+        groups.flat().map((adjustment) => [adjustment.id, adjustment] as const)
+      ).values()
+    )
+  );
 
 export async function POST(request: Request) {
   const user = await getCurrentAuthenticatedUser();
@@ -27,6 +39,7 @@ export async function POST(request: Request) {
       realizedAdjustments?: PortfolioState["realizedAdjustments"];
       operations?: PortfolioOperation[];
       accounts?: PortfolioAccount[];
+      accountType?: PortfolioAccountType;
       benchmarks?: PortfolioBenchmarkDefinition[];
       portfolioScopes?: PortfolioHistoryScope[];
     };
@@ -49,10 +62,14 @@ export async function POST(request: Request) {
           portfolioId: scope.portfolioId,
           assets: state.assets,
           sales: state.sales,
-          realizedAdjustments: getSortedPortfolioRealizedAdjustments([
-            ...state.realizedAdjustments,
-            ...buildAutomaticBondCouponAdjustments(state.assets, state.sales),
-          ]),
+          realizedAdjustments: mergeRealizedAdjustments(
+            state.realizedAdjustments,
+            buildAutomaticBondCouponAdjustments(
+              state.assets,
+              state.sales,
+              scope.accountType
+            )
+          ),
           operations: Array.isArray(scope.operations) ? scope.operations : [],
           accounts: Array.isArray(scope.accounts) ? scope.accounts : [],
         }];
@@ -66,10 +83,14 @@ export async function POST(request: Request) {
         ? payload.realizedAdjustments
         : [],
     });
-    const effectiveRealizedAdjustments = getSortedPortfolioRealizedAdjustments([
-      ...portfolioState.realizedAdjustments,
-      ...buildAutomaticBondCouponAdjustments(portfolioState.assets, portfolioState.sales),
-    ]);
+    const effectiveRealizedAdjustments = mergeRealizedAdjustments(
+      portfolioState.realizedAdjustments,
+      buildAutomaticBondCouponAdjustments(
+        portfolioState.assets,
+        portfolioState.sales,
+        payload.accountType
+      )
+    );
     const history = await buildPortfolioHistory({
       assets: portfolioState.assets,
       sales: portfolioState.sales,

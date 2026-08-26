@@ -54,11 +54,6 @@ type TokenRow = {
   expires_at: string;
 };
 
-type PortfolioJsonRow = {
-  portfolio_json: string;
-  portfolio_revision: number;
-};
-
 export class EmailVerificationRequiredError extends Error {
   userId: string;
 
@@ -184,19 +179,6 @@ const parsePortfolioBook = (portfolioJson: string): {
   }
 };
 
-const getStoredPortfolioBook = async (userId: string) => {
-  const row = await queryOne<PortfolioJsonRow>(
-    "SELECT portfolio_json, portfolio_revision FROM users WHERE id = $1",
-    [userId]
-  );
-  const parsedPortfolioBook = parsePortfolioBook(row?.portfolio_json ?? "");
-
-  return {
-    ...parsedPortfolioBook,
-    portfolioRevision: row?.portfolio_revision ?? 0,
-  };
-};
-
 const parseUserProfile = (
   user: Pick<
     UserRow,
@@ -265,11 +247,11 @@ const getUserByProviderAccount = (provider: string, providerAccountId: string) =
     [provider, providerAccountId]
   );
 
-const getSessionUser = (token: string) =>
+const getSessionUser = (token: string, includePortfolio = false) =>
   queryOne<SessionUserRow>(
     `
       SELECT ${sessionUserColumnsWithoutPortfolio},
-        '' AS portfolio_json,
+        ${includePortfolio ? "users.portfolio_json" : "'' AS portfolio_json"},
         sessions.expires_at
       FROM sessions
       INNER JOIN users ON users.id = sessions.user_id
@@ -346,13 +328,13 @@ const scheduleExpiredAuthRecordCleanup = () => {
   });
 };
 
-const getCurrentSessionUser = async () => {
+const getCurrentSessionUser = async (includePortfolio = false) => {
   const cookieStore = await cookies();
   const sessionToken = cookieStore.get(SESSION_COOKIE_NAME)?.value;
 
   if (!sessionToken) return null;
 
-  const sessionUser = await getSessionUser(sessionToken);
+  const sessionUser = await getSessionUser(sessionToken, includePortfolio);
 
   if (!sessionUser) return null;
 
@@ -748,14 +730,16 @@ export const loginAccount = async ({
 };
 
 export const getCurrentAccountData = async () => {
-  const sessionUser = await getCurrentSessionUser();
+  // Load the portfolio read model in the indexed session lookup instead of
+  // paying for a second users query on every workspace page and API call.
+  const sessionUser = await getCurrentSessionUser(true);
 
   if (!sessionUser) return null;
 
   const user = await withForcedProSubscription(sessionUser);
-  const storedPortfolio = await getStoredPortfolioBook(user.id);
+  const storedPortfolio = parsePortfolioBook(user.portfolio_json);
   let portfolioBook = storedPortfolio.portfolioBook;
-  let portfolioRevision = storedPortfolio.portfolioRevision;
+  let portfolioRevision = user.portfolio_revision;
 
   if (
     storedPortfolio.needsMigration ||

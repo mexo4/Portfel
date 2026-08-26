@@ -128,7 +128,7 @@ export default function AuthCard({
 
       await loginUser({ email: normalizedEmail, password: submittedPassword });
       shouldKeepSubmitting = true;
-      window.location.replace("/app");
+      window.location.replace("/dashboard");
     } catch (submitError) {
       const verificationPayload = getVerificationPayload(submitError);
 

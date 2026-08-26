@@ -60,7 +60,7 @@ export async function GET(request: Request) {
     const identity = await exchangeGoogleOAuthCode({ code, pending });
     const user = await resolveGoogleOAuthAccount(identity);
     const session = await createSessionForUser(user.id);
-    const response = NextResponse.redirect(getOAuthApplicationUrl("/app"));
+    const response = NextResponse.redirect(getOAuthApplicationUrl("/dashboard"));
 
     appendSessionCookie(response, session.token, session.expiresAt);
     response.cookies.set(

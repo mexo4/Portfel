@@ -18,6 +18,7 @@ import type {
   PortfolioDividend,
   PortfolioEngineSnapshot,
   PortfolioOperation,
+  PortfolioAccountType,
   InvestmentPortfolio,
   PortfolioBenchmarkDefinition,
   PortfolioHistoryResponse,
@@ -340,17 +341,20 @@ export const fetchTreasuryBondRedemption = async ({
   purchaseDate,
   requestDate,
   quantity,
+  accountType = "STANDARD",
 }: {
   code: string;
   purchaseDate: string;
   requestDate: string;
   quantity: number;
+  accountType?: PortfolioAccountType;
 }) => {
   const params = new URLSearchParams({
     code,
     purchaseDate,
     requestDate,
     quantity: String(quantity),
+    accountType,
   });
 
   return requestJson<{
@@ -938,6 +942,7 @@ export const fetchPortfolioHistory = async ({
   realizedAdjustments,
   operations,
   accounts,
+  accountType,
   benchmarks,
   portfolioScopes,
   signal,
@@ -947,6 +952,7 @@ export const fetchPortfolioHistory = async ({
   realizedAdjustments: PortfolioRealizedAdjustment[];
   operations?: PortfolioOperation[];
   accounts?: PortfolioAccount[];
+  accountType?: PortfolioAccountType;
   benchmarks?: PortfolioBenchmarkDefinition[];
   portfolioScopes?: PortfolioHistoryScope[];
   signal?: AbortSignal;
@@ -960,6 +966,7 @@ export const fetchPortfolioHistory = async ({
       realizedAdjustments,
       operations,
       accounts,
+      accountType,
       benchmarks,
       portfolioScopes,
     }),

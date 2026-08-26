@@ -2,6 +2,7 @@ import { BASE_CURRENCY } from "@/lib/constants";
 import { getOperationCashDeltas } from "@/lib/operation-engine";
 import { round, toCurrencyCode, toDateInputValue } from "@/lib/utils";
 import type {
+  AccountFlowKind,
   CashHistoryEntry,
   CurrencyCode,
   InvestmentPortfolio,
@@ -53,6 +54,9 @@ export const buildCashOperation = ({
   entryKind = "STANDARD",
   createdAt,
   updatedAt,
+  accountFlowKind,
+  amountPlnSnapshot,
+  taxEstimate,
 }: {
   id: string;
   portfolioId: string;
@@ -68,6 +72,14 @@ export const buildCashOperation = ({
   entryKind?: CashEntryKind;
   createdAt?: string;
   updatedAt?: string;
+  accountFlowKind?: AccountFlowKind;
+  amountPlnSnapshot?: number;
+  taxEstimate?: {
+    status: string;
+    taxRate: number | null;
+    estimatedTaxPln: number | null;
+    note: string;
+  };
 }): PortfolioOperation => {
   const currentTimestamp = new Date().toISOString();
   const normalizedCreatedAt = createdAt ?? currentTimestamp;
@@ -104,6 +116,11 @@ export const buildCashOperation = ({
       kind: "cash",
       cashEntryKind: entryKind,
       cashImpact: true,
+      ...(accountFlowKind ? { accountFlowKind } : {}),
+      ...(typeof amountPlnSnapshot === "number" && Number.isFinite(amountPlnSnapshot)
+        ? { amountPlnSnapshot: round(Math.abs(amountPlnSnapshot), 2) }
+        : {}),
+      ...(taxEstimate ? { taxEstimate } : {}),
       ...(targetAccountId
         ? {
             targetAccountId,

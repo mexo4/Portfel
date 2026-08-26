@@ -1,4 +1,8 @@
 import { withTransaction, type DatabaseTransaction } from "@/lib/server/db";
+import {
+  normalizePortfolioAccountConfiguration,
+  normalizePortfolioAccountType,
+} from "@/lib/portfolio-account-rules";
 import type { PortfolioBook } from "@/types/portfolio";
 
 const stringifyMetadata = (value: Record<string, unknown> | undefined) =>
@@ -47,6 +51,18 @@ export const syncPortfolioCoreTablesInTransaction = async (
 ) => {
   const portfolioIds = portfolioBook.portfolios.map((portfolio) => portfolio.id);
   const portfolioRows = portfolioBook.portfolios.map((portfolio) => ({
+    ...(() => {
+      const accountType = normalizePortfolioAccountType(portfolio.accountType);
+      return {
+        account_type: accountType,
+        account_config_json: JSON.stringify(
+          normalizePortfolioAccountConfiguration(
+            portfolio.accountConfiguration,
+            accountType
+          )
+        ),
+      };
+    })(),
     id: portfolio.id,
     user_id: userId,
     name: portfolio.name,
@@ -229,13 +245,17 @@ export const syncPortfolioCoreTablesInTransaction = async (
   await transaction.execute(
     `
       INSERT INTO core_portfolios (
-        id, user_id, name, base_currency, metadata_json, created_at, updated_at
+        id, user_id, name, account_type, account_config_json, base_currency,
+        metadata_json, created_at, updated_at
       )
-      SELECT id, user_id, name, base_currency, metadata_json, created_at, updated_at
+      SELECT id, user_id, name, account_type, account_config_json, base_currency,
+        metadata_json, created_at, updated_at
       FROM jsonb_to_recordset($1::jsonb) AS input(
         id TEXT,
         user_id TEXT,
         name TEXT,
+        account_type TEXT,
+        account_config_json TEXT,
         base_currency TEXT,
         metadata_json TEXT,
         created_at TEXT,
@@ -243,6 +263,8 @@ export const syncPortfolioCoreTablesInTransaction = async (
       )
       ON CONFLICT (id) DO UPDATE SET
         name = EXCLUDED.name,
+        account_type = EXCLUDED.account_type,
+        account_config_json = EXCLUDED.account_config_json,
         base_currency = EXCLUDED.base_currency,
         metadata_json = EXCLUDED.metadata_json,
         created_at = EXCLUDED.created_at,

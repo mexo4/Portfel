@@ -1,12 +1,18 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { buildCashHistory, buildCashOperation, type CashEntryKind, type CashOperationKind } from "@/lib/cash-engine";
 import { SUPPORTED_CURRENCIES } from "@/lib/constants";
 import { calculateCashBalances, ensurePortfolioCashAccount } from "@/lib/operation-engine";
 import { convertCurrency } from "@/lib/pricing";
+import {
+  PORTFOLIO_ACCOUNT_TYPE_LABELS,
+  getWithdrawalTaxEstimate,
+  normalizeAccountFlowKind,
+  normalizePortfolioAccountType,
+} from "@/lib/portfolio-account-rules";
 import { formatCurrency, formatDate, getTodayDateInputValue, toCurrencyCode } from "@/lib/utils";
-import type { CurrencyCode, FxRates, InvestmentPortfolio, PortfolioAccount, PortfolioOperation } from "@/types/portfolio";
+import type { AccountFlowKind, CurrencyCode, FxRates, InvestmentPortfolio, PortfolioAccount, PortfolioOperation, PortfolioAccountType } from "@/types/portfolio";
 
 type Props = {
   portfolio?: InvestmentPortfolio | null;
@@ -30,6 +36,7 @@ type Draft = {
   targetAmount: string;
   date: string;
   notes: string;
+  accountFlowKind: AccountFlowKind | "";
 };
 
 const operationLabels: Record<CashOperationKind, string> = {
@@ -61,7 +68,20 @@ const isEditableCashOperation = (operation: PortfolioOperation) =>
   editableCashTypes.has(operation.operationType as CashOperationKind) &&
   editableCashEntryKinds.has(operation.metadata.cashEntryKind as CashEntryKind);
 
-const createDraft = (): Draft => ({
+const defaultAccountFlowKind = (
+  operationType: CashOperationKind,
+  accountType: PortfolioAccountType
+): AccountFlowKind | "" => {
+  if (operationType === "DEPOSIT") return "CONTRIBUTION";
+  if (operationType === "WITHDRAW") {
+    return accountType === "STANDARD" || accountType === "OKI"
+      ? "ORDINARY_WITHDRAWAL"
+      : "";
+  }
+  return "ORDINARY_WITHDRAWAL";
+};
+
+const createDraft = (accountType: PortfolioAccountType = "STANDARD"): Draft => ({
   operationType: "DEPOSIT",
   entryKind: "STANDARD",
   accountId: "",
@@ -72,7 +92,38 @@ const createDraft = (): Draft => ({
   targetAmount: "",
   date: getTodayDateInputValue(),
   notes: "",
+  accountFlowKind: defaultAccountFlowKind("DEPOSIT", accountType),
 });
+
+const accountFlowLabels: Record<AccountFlowKind, string> = {
+  CONTRIBUTION: "Wpłata na rachunek",
+  ORDINARY_WITHDRAWAL: "Zwykła wypłata",
+  QUALIFIED_WITHDRAWAL: "Wypłata po spełnieniu warunków",
+  EARLY_RETURN: "Wcześniejszy zwrot",
+  PARTIAL_RETURN: "Częściowy zwrot IKE",
+  TRANSFER_IN: "Wypłata transferowa — przychodząca",
+  TRANSFER_OUT: "Wypłata transferowa — wychodząca",
+};
+
+function getAccountFlowOptions(
+  accountType: PortfolioAccountType,
+  operationType: CashOperationKind
+): AccountFlowKind[] {
+  if (operationType === "DEPOSIT") {
+    return accountType === "STANDARD"
+      ? ["CONTRIBUTION"]
+      : ["CONTRIBUTION", "TRANSFER_IN"];
+  }
+  if (operationType !== "WITHDRAW") return [];
+  if (accountType === "IKE") {
+    return ["QUALIFIED_WITHDRAWAL", "EARLY_RETURN", "PARTIAL_RETURN", "TRANSFER_OUT"];
+  }
+  if (accountType === "IKZE") {
+    return ["QUALIFIED_WITHDRAWAL", "EARLY_RETURN", "TRANSFER_OUT"];
+  }
+  if (accountType === "OKI") return ["ORDINARY_WITHDRAWAL", "TRANSFER_OUT"];
+  return ["ORDINARY_WITHDRAWAL"];
+}
 
 const numberValue = (value: string) => Number(value.replace(/\s/g, "").replace(",", "."));
 
@@ -87,6 +138,14 @@ function operationLabel(operation: PortfolioOperation) {
   const entryKind = operation.metadata.cashEntryKind;
   if (entryKind === "INITIAL_BALANCE") return "Saldo początkowe";
   if (entryKind === "BALANCE_ADJUSTMENT") return "Korekta salda";
+  const storedFlowKind = operation.metadata.accountFlowKind;
+  if (
+    (operation.operationType === "DEPOSIT" || operation.operationType === "WITHDRAW") &&
+    typeof storedFlowKind === "string" &&
+    storedFlowKind in accountFlowLabels
+  ) {
+    return accountFlowLabels[storedFlowKind as AccountFlowKind];
+  }
   return historyLabels[operation.operationType] ?? "Operacja gotówkowa";
 }
 
@@ -110,6 +169,13 @@ export default function CashWorkspace({
   const selectedPortfolio = aggregate
     ? portfolios.find((item) => item.id === targetPortfolioId) ?? portfolios[0] ?? null
     : portfolio ?? portfolios.find((item) => item.id === activePortfolioId) ?? null;
+  const selectedAccountType = normalizePortfolioAccountType(selectedPortfolio?.accountType);
+  useEffect(() => {
+    setDraft((current) => ({
+      ...current,
+      accountFlowKind: defaultAccountFlowKind(current.operationType, selectedAccountType),
+    }));
+  }, [selectedAccountType, selectedPortfolio?.id]);
   const allBalances = useMemo(() => {
     const result = new Map<string, { accountId: string; accountName: string; currency: CurrencyCode; amount: number }>();
     portfolios.forEach((item) => {
@@ -151,7 +217,12 @@ export default function CashWorkspace({
   const targetAccounts = accountCandidates(selectedPortfolio?.accounts, draft.targetCurrency);
 
   const updateDraft = (patch: Partial<Draft>) => setDraft((current) => ({ ...current, ...patch }));
-  const changeOperationType = (operationType: CashOperationKind) => setDraft((current) => ({ ...current, operationType, entryKind: "STANDARD" }));
+  const changeOperationType = (operationType: CashOperationKind) => setDraft((current) => ({
+    ...current,
+    operationType,
+    entryKind: "STANDARD",
+    accountFlowKind: defaultAccountFlowKind(operationType, selectedAccountType),
+  }));
   const changeEntryKind = (entryKind: CashEntryKind) => setDraft((current) => ({ ...current, entryKind, operationType: entryKind === "INITIAL_BALANCE" ? "DEPOSIT" : entryKind === "BALANCE_ADJUSTMENT" ? "CUSTOM" : current.operationType }));
 
   const submit = async () => {
@@ -211,13 +282,45 @@ export default function CashWorkspace({
       return;
     }
     const id = editingId ?? `cash-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const operation = buildCashOperation({ id, portfolioId: selectedPortfolio.id, accountId, targetAccountId: targetAccountId || undefined, targetCurrency, targetAmount, operationType: draft.operationType, amount: draft.operationType === "CUSTOM" ? amount : Math.abs(amount), currency, date: draft.date, notes: draft.notes, entryKind: draft.entryKind, createdAt: editingId ? selectedPortfolio.operations?.find((item) => item.id === editingId)?.createdAt : undefined });
+    const existingOperation = editingId
+      ? selectedPortfolio.operations?.find((item) => item.id === editingId)
+      : undefined;
+    const convertedAmountPln = convertCurrency(Math.abs(amount), currency, "PLN", fxRates, 2);
+    const savedAmountPlnSnapshot = existingOperation?.metadata.amountPlnSnapshot;
+    const amountPlnSnapshot =
+      typeof savedAmountPlnSnapshot === "number" && Number.isFinite(savedAmountPlnSnapshot)
+        ? savedAmountPlnSnapshot
+        : convertedAmountPln > 0
+          ? convertedAmountPln
+          : undefined;
+    const accountFlowKind =
+      draft.operationType === "DEPOSIT" || draft.operationType === "WITHDRAW"
+        ? draft.accountFlowKind || undefined
+        : undefined;
+    if (
+      selectedAccountType !== "STANDARD" &&
+      (draft.operationType === "DEPOSIT" || draft.operationType === "WITHDRAW") &&
+      !accountFlowKind
+    ) {
+      setMessage({ type: "error", text: "Wybierz charakter przepływu dla tego rachunku." });
+      return;
+    }
+    const taxEstimate =
+      draft.operationType === "WITHDRAW" && accountFlowKind
+        ? getWithdrawalTaxEstimate({
+            accountType: selectedAccountType,
+            flowKind: accountFlowKind,
+            amountPln: amountPlnSnapshot ?? 0,
+            date: draft.date,
+          })
+        : undefined;
+    const operation = buildCashOperation({ id, portfolioId: selectedPortfolio.id, accountId, targetAccountId: targetAccountId || undefined, targetCurrency, targetAmount, operationType: draft.operationType, amount: draft.operationType === "CUSTOM" ? amount : Math.abs(amount), currency, date: draft.date, notes: draft.notes, entryKind: draft.entryKind, createdAt: existingOperation?.createdAt, accountFlowKind, amountPlnSnapshot, taxEstimate });
     const nextOperations = editingId ? (selectedPortfolio.operations ?? []).map((item) => item.id === editingId ? { ...operation, metadata: { ...item.metadata, ...operation.metadata } } : item) : [...(selectedPortfolio.operations ?? []), operation];
     const nextPortfolio: InvestmentPortfolio = { ...selectedPortfolio, accounts: ensuredTarget.accounts, operations: nextOperations, updatedAt: new Date().toISOString() };
     setPending(true); setMessage(null);
     try {
       await onPortfolioChange(nextPortfolio);
-      setDraft(createDraft()); setEditingId(null); setMessage({ type: "success", text: editingId ? "Operacja została zaktualizowana." : "Operacja została zapisana." });
+      setDraft(createDraft(selectedAccountType)); setEditingId(null); setMessage({ type: "success", text: editingId ? "Operacja została zaktualizowana." : "Operacja została zapisana." });
     } catch {
       setMessage({ type: "error", text: "Nie udało się zapisać operacji. Spróbuj ponownie." });
     } finally { setPending(false); }
@@ -225,9 +328,24 @@ export default function CashWorkspace({
 
   const edit = (operation: PortfolioOperation) => {
     if (aggregate || !isEditableCashOperation(operation)) return;
-    updateDraft({ operationType: operation.operationType as CashOperationKind, entryKind: (operation.metadata.cashEntryKind as CashEntryKind) ?? "STANDARD", accountId: operation.accountId, targetAccountId: typeof operation.metadata.targetAccountId === "string" ? operation.metadata.targetAccountId : "", amount: String(operation.amount), currency: operation.currency, targetCurrency: typeof operation.metadata.targetCurrency === "string" ? operation.metadata.targetCurrency : operation.currency, targetAmount: typeof operation.metadata.targetAmount === "number" ? String(operation.metadata.targetAmount) : String(operation.amount), date: operation.date, notes: operation.notes });
+    updateDraft({ operationType: operation.operationType as CashOperationKind, entryKind: (operation.metadata.cashEntryKind as CashEntryKind) ?? "STANDARD", accountId: operation.accountId, targetAccountId: typeof operation.metadata.targetAccountId === "string" ? operation.metadata.targetAccountId : "", amount: String(operation.amount), currency: operation.currency, targetCurrency: typeof operation.metadata.targetCurrency === "string" ? operation.metadata.targetCurrency : operation.currency, targetAmount: typeof operation.metadata.targetAmount === "number" ? String(operation.metadata.targetAmount) : String(operation.amount), date: operation.date, notes: operation.notes, accountFlowKind: normalizeAccountFlowKind(operation.metadata.accountFlowKind, operation.operationType) ?? defaultAccountFlowKind(operation.operationType as CashOperationKind, selectedAccountType) });
     setEditingId(operation.id); setMessage(null);
   };
+
+  const flowOptions = getAccountFlowOptions(selectedAccountType, draft.operationType);
+  const draftAmount = numberValue(draft.amount);
+  const draftAmountPln = Number.isFinite(draftAmount)
+    ? convertCurrency(Math.abs(draftAmount), draft.currency, "PLN", fxRates, 2)
+    : 0;
+  const withdrawalTaxNote =
+    draft.operationType === "WITHDRAW" && draft.accountFlowKind
+      ? getWithdrawalTaxEstimate({
+          accountType: selectedAccountType,
+          flowKind: draft.accountFlowKind,
+          amountPln: draftAmountPln,
+          date: draft.date,
+        })
+      : null;
 
   const remove = async (operation: PortfolioOperation) => {
     if (aggregate || pending || !isEditableCashOperation(operation) || !selectedPortfolio) return;
@@ -242,16 +360,17 @@ export default function CashWorkspace({
   return (
     <section className="cash-workspace">
       <div className="panel cash-summary-panel">
-        <div className="sprint-panel-head"><div><p className="eyebrow">Gotówka</p><h2 className="section-title">Saldo gotówkowe</h2><p className="section-copy">Środki są liczone z tego samego dziennika operacji co portfel.</p></div>{aggregate ? <span className="tag">Wszystkie portfele</span> : null}</div>
+        <div className="sprint-panel-head"><div><p className="eyebrow">Gotówka</p><h2 className="section-title">Saldo gotówkowe</h2><p className="section-copy">Środki są liczone z tego samego dziennika operacji co portfel.</p></div>{aggregate ? <span className="tag">Wszystkie portfele</span> : <span className="account-type-badge account-type-badge-strong">{PORTFOLIO_ACCOUNT_TYPE_LABELS[selectedAccountType]}</span>}</div>
         {aggregate ? <label className="field cash-target-portfolio"><span>Portfel docelowy dla nowych operacji</span><select value={targetPortfolioId} onChange={(event) => setTargetPortfolioId(event.target.value)}>{portfolios.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label> : null}
         <div className="workspace-performance-metric-grid cash-summary-grid mt-6"><article><span>Łączna gotówka</span><strong>{formatCurrency(cashValue, baseCurrency)}</strong></article><article><span>Udział w portfelu</span><strong>{cashShare.toFixed(1)}%</strong></article><article><span>Waluty / konta</span><strong>{balances.length}</strong></article></div>
         {balances.some((item) => item.amount < 0) ? <p className="field-note field-note-error mt-4">Saldo ujemne jest dozwolone, ale wymaga weryfikacji.</p> : null}
         <div className="cash-balance-list mt-6">{balances.map((balance) => { const accountName = "accountName" in balance ? String(balance.accountName) : selectedPortfolio?.accounts?.find((account) => account.id === balance.accountId)?.name ?? "Gotówka"; return <article key={`${balance.accountId}:${balance.currency}`}><span>{accountName}</span><strong className={balance.amount < 0 ? "tone-negative" : ""}>{formatCurrency(balance.amount, balance.currency)}</strong><small>{balance.currency} · {formatCurrency(convertCurrency(balance.amount, balance.currency, baseCurrency, fxRates), baseCurrency)}</small></article>; })}{balances.length === 0 ? <p className="field-note">Brak sald gotówkowych.</p> : null}</div>
       </div>
 
-      <article className="panel cash-form-panel mt-6"><div className="sprint-panel-head"><div><p className="eyebrow">Dziennik gotówki</p><h2 className="section-title">{editingId ? "Edytuj operację" : "Dodaj operację"}</h2></div>{editingId ? <button type="button" className="ghost-button" onClick={() => { setEditingId(null); setDraft(createDraft()); }}>Anuluj edycję</button> : null}</div>
+      <article className="panel cash-form-panel mt-6"><div className="sprint-panel-head"><div><p className="eyebrow">Dziennik gotówki</p><h2 className="section-title">{editingId ? "Edytuj operację" : "Dodaj operację"}</h2></div>{editingId ? <button type="button" className="ghost-button" onClick={() => { setEditingId(null); setDraft(createDraft(selectedAccountType)); }}>Anuluj edycję</button> : null}</div>
         <div className="cash-form-grid mt-5">
           <label className="field"><span>Typ operacji</span><select value={draft.operationType} onChange={(event) => changeOperationType(event.target.value as CashOperationKind)}>{Object.entries(operationLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+          {flowOptions.length > 0 && selectedAccountType !== "STANDARD" ? <label className="field"><span>Charakter przepływu {selectedAccountType}</span><select value={draft.accountFlowKind} onChange={(event) => updateDraft({ accountFlowKind: event.target.value as AccountFlowKind })}>{draft.operationType === "WITHDRAW" && (selectedAccountType === "IKE" || selectedAccountType === "IKZE") ? <option value="">Wybierz rodzaj wypłaty</option> : null}{flowOptions.map((flowKind) => <option key={flowKind} value={flowKind}>{accountFlowLabels[flowKind]}</option>)}</select></label> : null}
           <label className="field"><span>Rodzaj wpisu</span><select value={draft.entryKind} onChange={(event) => changeEntryKind(event.target.value as CashEntryKind)}><option value="STANDARD">Standardowa operacja</option><option value="INITIAL_BALANCE">Saldo początkowe (wpłata)</option><option value="BALANCE_ADJUSTMENT">Korekta salda</option></select></label>
           <label className="field"><span>Konto źródłowe</span><select value={draft.accountId} onChange={(event) => updateDraft({ accountId: event.target.value })}><option value="">Automatycznie według waluty</option>{accountForCurrency.map((account) => <option key={account.id} value={account.id}>{account.name} · {account.currency}</option>)}</select></label>
           <label className="field"><span>Kwota {draft.operationType === "CUSTOM" ? "(może być ujemna)" : ""}</span><input inputMode="decimal" value={draft.amount} onChange={(event) => updateDraft({ amount: event.target.value })} placeholder="0,00" /></label>
@@ -260,6 +379,7 @@ export default function CashWorkspace({
           {draft.operationType === "TRANSFER" ? <label className="field"><span>Konto docelowe</span><select value={draft.targetAccountId} onChange={(event) => updateDraft({ targetAccountId: event.target.value })}><option value="">Wybierz konto</option>{accounts.filter((account) => account.id !== draft.accountId && (account.kind === "cash" || account.kind === "currency")).map((account) => <option key={account.id} value={account.id}>{account.name} · {account.currency}</option>)}</select></label> : null}
           <label className="field"><span>Data</span><input type="date" value={draft.date} onChange={(event) => updateDraft({ date: event.target.value })} /></label><label className="field field-full"><span>Notatka</span><input value={draft.notes} onChange={(event) => updateDraft({ notes: event.target.value })} placeholder="np. przelew z rachunku bankowego" /></label>
         </div>
+        {withdrawalTaxNote && selectedAccountType !== "STANDARD" ? <div className="account-tax-note mt-4"><strong>{withdrawalTaxNote.status === "EXACT_RULE" ? "Reguła podatkowa" : "Informacja podatkowa"}</strong><span>{withdrawalTaxNote.note}</span>{withdrawalTaxNote.estimatedTaxPln !== null && withdrawalTaxNote.estimatedTaxPln > 0 ? <span>Szacowana kwota podatku: {formatCurrency(withdrawalTaxNote.estimatedTaxPln, "PLN")}. Nie jest automatycznie potrącana.</span> : null}</div> : null}
         {message ? <p className={`field-note mt-4 ${message.type === "error" ? "field-note-error" : "tone-positive"}`} role={message.type === "error" ? "alert" : "status"}>{message.text}</p> : null}
         <div className="sprint-action-row mt-5"><button type="button" className="primary-button" onClick={submit} disabled={pending}>{pending ? "Zapisywanie…" : editingId ? "Zapisz zmiany" : "Dodaj operację"}</button></div>
       </article>

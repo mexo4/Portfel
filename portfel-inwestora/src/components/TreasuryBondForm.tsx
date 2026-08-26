@@ -311,6 +311,9 @@ export default function TreasuryBondForm({
               </p>
             </article>
           </div>
+          {redemptionPreview.domesticTaxNote ? (
+            <p className="field-note mt-3">{redemptionPreview.domesticTaxNote}</p>
+          ) : null}
         </div>
       ) : null}
 

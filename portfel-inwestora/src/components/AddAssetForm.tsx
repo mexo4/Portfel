@@ -153,15 +153,12 @@ export default function AddAssetForm({
     <section className="panel">
       <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
         <div>
-          <p className="eyebrow">Dodaj pozycje</p>
-          <h2 className="section-title">
-            Najpierw wybierasz co dodajesz, potem wyszukujesz ticker
-          </h2>
+          <p className="eyebrow">Transakcja</p>
+          <h2 className="section-title">Dodaj transakcję do portfela</h2>
         </div>
 
         <p className="section-copy">
-          Wpisujesz nazwe, klikasz wynik z listy i dopiero wtedy ticker wpada do
-          formularza.
+          Rejestrujesz transakcję w Mexo. Mexo nie składa zleceń giełdowych.
         </p>
       </div>
 

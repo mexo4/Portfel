@@ -18,11 +18,16 @@ import { normalizeSymbol } from "@/lib/ticker";
 import { round, toDateInputValue } from "@/lib/utils";
 import type {
   BondRedemptionQuote,
+  PortfolioAccountType,
   BondSwapQuote,
   TreasuryBondQuote,
   TreasuryBondRateEntry,
   TreasuryBondSeries,
 } from "@/types/portfolio";
+import {
+  getDomesticInvestmentIncomeTaxTreatment,
+  normalizePortfolioAccountType,
+} from "@/lib/portfolio-account-rules";
 
 type GusDataPoint = {
   val?: number | null;
@@ -51,7 +56,6 @@ const SERIES_CACHE_TTL_MS = 24 * 60 * 60 * 1_000;
 const CPI_CACHE_TTL_MS = 31 * 24 * 60 * 60 * 1_000;
 const GUS_VARIABLE_CANDIDATES = [2955, 2496];
 const POLAND_UNIT_LEVEL = 0;
-const POLISH_TAX_RATE = 0.19;
 const getCachedPayload = getMarketCachePayload;
 const setCachedPayload = setMarketCachePayload;
 
@@ -610,11 +614,13 @@ export const fetchTreasuryBondRedemptionQuoteServer = async ({
   purchaseDate,
   quantity,
   requestDate,
+  accountType = "STANDARD",
 }: {
   code: string;
   purchaseDate: string;
   quantity: number;
   requestDate: string;
+  accountType?: PortfolioAccountType;
 }): Promise<BondRedemptionQuote> => {
   const normalizedQuantity = round(quantity, 6);
 
@@ -648,7 +654,11 @@ export const fetchTreasuryBondRedemptionQuoteServer = async ({
     ? 0
     : clampBondFee(grossInterestBase, settlementQuote.bondMeta.earlyRedemptionFee);
   const taxableInterestPerUnit = Math.max(0, grossInterestBase - feePerUnit);
-  const taxPerUnit = round(taxableInterestPerUnit * POLISH_TAX_RATE, 8);
+  const domesticTaxTreatment = getDomesticInvestmentIncomeTaxTreatment({
+    accountType: normalizePortfolioAccountType(accountType),
+    paymentDate: settlementDate,
+  });
+  const taxPerUnit = round(taxableInterestPerUnit * domesticTaxTreatment.rate, 8);
   const netValuePerUnit = round(settlementQuote.grossValue - feePerUnit - taxPerUnit, 8);
 
   return {
@@ -668,6 +678,8 @@ export const fetchTreasuryBondRedemptionQuoteServer = async ({
     taxableInterestTotal: round(taxableInterestPerUnit * normalizedQuantity, 2),
     taxPerUnit: round(taxPerUnit, 6),
     taxTotal: round(taxPerUnit * normalizedQuantity, 2),
+    domesticTaxTreatment: domesticTaxTreatment.treatment,
+    domesticTaxNote: domesticTaxTreatment.note,
     netValuePerUnit: round(netValuePerUnit, 6),
     netValueTotal: round(netValuePerUnit * normalizedQuantity, 2),
     marketCurrency: "PLN",

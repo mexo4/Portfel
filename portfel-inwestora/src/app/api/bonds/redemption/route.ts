@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { fetchTreasuryBondRedemptionQuoteServer } from "@/lib/server/treasury-bonds";
 import { getCurrentAuthenticatedUser } from "@/lib/server/auth";
 import { toDateInputValue } from "@/lib/utils";
+import { normalizePortfolioAccountType } from "@/lib/portfolio-account-rules";
 
 export const runtime = "nodejs";
 
@@ -16,6 +17,7 @@ export async function GET(request: Request) {
   const requestDate = toDateInputValue(searchParams.get("requestDate") ?? undefined);
   const quantityValue = searchParams.get("quantity")?.trim();
   const quantity = quantityValue ? Number(quantityValue) : 0;
+  const accountType = normalizePortfolioAccountType(searchParams.get("accountType"));
 
   if (!code) {
     return NextResponse.json({ error: "Brak kodu obligacji." }, { status: 400 });
@@ -31,6 +33,7 @@ export async function GET(request: Request) {
       purchaseDate,
       requestDate,
       quantity,
+      accountType,
     });
 
     return NextResponse.json({ redemption });

@@ -604,7 +604,7 @@ function SortableWidget({ widget, isEditing, device, index, total, onRemove, onR
     transition,
   } = useSortable({ id: widget.id, disabled: !isEditing });
   if (!definition) return null;
-  return <div ref={setNodeRef} className={`dashboard-widget dashboard-widget--${widget.size}${isEditing ? " is-editing" : ""}${isDragging ? " is-dragging" : ""}`} style={{ transform: CSS.Transform.toString(transform), transition }}>
+  return <div ref={setNodeRef} data-widget-id={widget.id} className={`dashboard-widget dashboard-widget--${widget.size}${isEditing ? " is-editing" : ""}${isDragging ? " is-dragging" : ""}`} style={{ transform: CSS.Transform.toString(transform), transition }}>
     {isEditing ? <div className="dashboard-widget-editor" aria-label={`Edytuj widget ${definition.label}`}>
       <button type="button" className="dashboard-widget-drag-handle" aria-label={`Przeciągnij ${definition.label}`} {...attributes} {...listeners}>⠿</button>
       <strong>{definition.label}</strong>
@@ -762,7 +762,7 @@ export default function ConfigurableDashboard() {
   const portfolioScopes = [{ key: "all", label: "Wszystkie portfele" }, ...workspace.portfolios.map((item) => ({ key: `portfolio:${item.id}`, label: item.name }))].filter((item) => item.key !== scopeKey);
 
   return <DashboardDataProvider scopeKey={scopeKey}><div className="workspace-page dashboard-builder" aria-busy={isLoading}>
-    <section className="workspace-dashboard-intro dashboard-builder-intro"><div><p className="eyebrow">Centrum dowodzenia · {scopeName}</p><h2>Twój pulpit inwestycyjny.</h2><p className="section-copy">Najważniejsze odczyty, koncentracja i kalendarz w układzie zapisanym osobno dla tego zakresu.</p></div><div className="dashboard-builder-actions">
+    <section className="workspace-dashboard-intro dashboard-builder-intro"><div><p className="eyebrow">Aktualny zakres · {scopeName}</p><h2>Najważniejsze dzisiaj</h2><p className="section-copy">Wynik, struktura i najbliższe wydarzenia w Twoim zapisanym układzie.</p></div><div className="dashboard-builder-actions">
       {isEditing ? <><button type="button" className="ghost-button" onClick={(event) => { triggerRef.current = event.currentTarget; setLibraryQuery(""); setIsLibraryOpen(true); }}>Dodaj widget</button><button type="button" className="ghost-button" disabled={isSaving || isCopying} onClick={() => { setDraft(layouts); setIsEditing(false); }}>Anuluj</button><button type="button" className="primary-button" disabled={isSaving || isCopying} onClick={() => void persist(draft, true)}>{isSaving ? "Zapisywanie…" : isCopying ? "Kopiowanie…" : "Zapisz pulpit"}</button></> : <button type="button" className="primary-button" onClick={() => { setDraft(layouts); setError(null); setIsEditing(true); }}>Edytuj pulpit</button>}
     </div></section>
 

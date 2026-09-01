@@ -8,7 +8,7 @@ import { SUPPORTED_CURRENCIES } from "../src/lib/constants.ts";
 
 const readSource = (relativePath) => readFile(new URL(`../${relativePath}`, import.meta.url), "utf8");
 
-test("dashboard capital return uses the same current P/L and invested capital as its card", () => {
+test("dashboard capital return uses the canonical history snapshot instead of open-position fallbacks", () => {
   const metrics = getDashboardHistoryMetrics({
     points: [{
       date: "2026-08-21",
@@ -20,9 +20,16 @@ test("dashboard capital return uses the same current P/L and invested capital as
     assetSeries: [],
     warnings: [],
     benchmarkSeries: [],
-  }, 1_545.29, 3_934.18);
+  }, -2_910.57, 3_934.18);
 
   assert.equal(metrics.returnPercent, 39.28);
+  assert.deepEqual(metrics.latestPoint, {
+    date: "2026-08-21",
+    portfolioValuePln: 5_479.47,
+    netInvestedPln: 3_934.18,
+    profitLossPln: 1_545.29,
+    timeWeightedReturnPercent: -487.63,
+  });
   assert.equal(getDashboardHistoryMetrics(null, -250, 5_000).returnPercent, -5);
   assert.equal(getDashboardHistoryMetrics(null, 500, 0).returnPercent, null);
 });

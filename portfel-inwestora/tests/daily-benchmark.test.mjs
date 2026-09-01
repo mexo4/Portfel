@@ -183,7 +183,7 @@ test("benchmark work stays outside the global asset-search route", async () => {
 test("current-position primary values use the same natural numeric feature as dividend summaries", async () => {
   const styles = await readSource("src/app/globals.css");
   const selector = styles.match(
-    /\.portfolio-positions-table td:nth-child\(4\) \.financial-value,[\s\S]*?\.portfolio-positions-table td:nth-child\(5\) \.financial-value \{([\s\S]*?)\n\}/
+    /\.portfolio-positions-table \.portfolio-number,[\s\S]*?\.workspace-position-card \.portfolio-number \{([\s\S]*?)\n\}/
   );
 
   assert.ok(selector);

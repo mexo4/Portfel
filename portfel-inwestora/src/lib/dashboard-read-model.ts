@@ -95,18 +95,20 @@ export const getDashboardHistoryMetrics = (
   const dailyPoints = buildPortfolioDailyMetricPoints(points);
   const latest = dailyPoints.at(-1) ?? null;
   const latestPoint = points.at(-1) ?? null;
-  // Dashboard value and P/L are current snapshot values, so the adjacent
-  // percentage must use the same current capital denominator. A cumulative
-  // TWR point answers a different question and can become extreme around
-  // deposits/withdrawals, making one card internally contradictory.
-  const currentCapitalReturn = calculateCapitalReturnPercent(fallbackProfitLoss, fallbackInvested);
+  // The final history point is the canonical cash-flow-aware snapshot used by
+  // analytics. Value, P/L and return on the dashboard must come from that one
+  // point; mixing current open-position cost with cumulative realised P/L can
+  // produce extreme percentages after sales or withdrawals.
+  const currentCapitalReturn = latestPoint
+    ? calculateCapitalReturnPercent(latestPoint.profitLossPln, latestPoint.netInvestedPln)
+    : calculateCapitalReturnPercent(fallbackProfitLoss, fallbackInvested);
   return {
     points,
     dailyPoints,
     latest,
+    latestPoint,
     benchmark: history?.benchmarkSeries[0] ?? null,
-    returnPercent: currentCapitalReturn ??
-      (latestPoint ? calculateCapitalReturnPercent(latestPoint.profitLossPln, latestPoint.netInvestedPln) : null),
+    returnPercent: currentCapitalReturn,
   };
 };
 

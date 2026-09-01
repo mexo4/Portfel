@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import { usePortfolioWorkspace } from "@/components/PortfolioWorkspaceContext";
 import { getGroupedPortfolioAssets, type PortfolioAssetGroup } from "@/lib/pricing";
+import { sortPortfolioAssetGroups } from "@/lib/portfolio-position-sort";
 import { formatCurrency, formatDate, formatNumber } from "@/lib/utils";
 import type {
   AssetTableSortMode,
@@ -32,41 +33,24 @@ const MOBILE_SORT_OPTIONS: Array<{ value: AssetTableSortMode; label: string }> =
   { value: "loss-asc", label: "Największa strata" },
   { value: "profit-percent-desc", label: "Największy zysk %" },
   { value: "profit-percent-asc", label: "Najmniejszy zysk %" },
-  { value: "daily-gain-desc", label: "Największy dzienny zysk %" },
-  { value: "daily-loss-asc", label: "Największa dzienna strata %" },
+  { value: "daily-gain-desc", label: "Największy wynik dzienny" },
+  { value: "daily-loss-asc", label: "Najmniejszy wynik dzienny" },
 ];
 
-const sortMobileGroups = (groups: PortfolioAssetGroup[], sortMode: AssetTableSortMode) => {
-  const ranked = groups.map((group, index) => ({ group, index }));
-  const byManual = (left: (typeof ranked)[number], right: (typeof ranked)[number]) =>
-    left.group.groupOrder - right.group.groupOrder || left.index - right.index ||
-    left.group.name.localeCompare(right.group.name, "pl");
-  const byLiveQuote = (left: (typeof ranked)[number], right: (typeof ranked)[number]) =>
-    Number(!left.group.hasLivePrice) - Number(!right.group.hasLivePrice);
-  const byDailyQuote = (left: (typeof ranked)[number], right: (typeof ranked)[number]) =>
-    Number(!left.group.hasDailyChange) - Number(!right.group.hasDailyChange);
+const getValueTone = (value: number | undefined) =>
+  value === undefined
+    ? undefined
+    : value > 0
+      ? "tone-positive"
+      : value < 0
+        ? "tone-negative"
+        : "tone-neutral";
 
-  ranked.sort((left, right) => {
-    if (sortMode === "manual") return byManual(left, right);
-    if (sortMode === "daily-gain-desc" || sortMode === "daily-loss-asc") {
-      const availability = byDailyQuote(left, right);
-      if (availability) return availability;
-      const leftValue = left.group.dailyChangePercent ?? 0;
-      const rightValue = right.group.dailyChangePercent ?? 0;
-      return (sortMode === "daily-gain-desc" ? rightValue - leftValue : leftValue - rightValue) || byManual(left, right);
-    }
-    const availability = byLiveQuote(left, right);
-    if (availability) return availability;
-    if (sortMode === "value-desc") return right.group.totalValuePln - left.group.totalValuePln || byManual(left, right);
-    if (sortMode === "value-asc") return left.group.totalValuePln - right.group.totalValuePln || byManual(left, right);
-    if (sortMode === "profit-percent-desc") return right.group.profitLossPercent - left.group.profitLossPercent || byManual(left, right);
-    if (sortMode === "profit-percent-asc") return left.group.profitLossPercent - right.group.profitLossPercent || byManual(left, right);
-    if (sortMode === "profit-desc") return right.group.totalProfitLossPln - left.group.totalProfitLossPln || byManual(left, right);
-    return left.group.totalProfitLossPln - right.group.totalProfitLossPln || byManual(left, right);
-  });
+const formatSignedCurrency = (value: number, currency: CurrencyCode) =>
+  `${value > 0 ? "+" : ""}${formatCurrency(value, currency)}`;
 
-  return ranked.map((entry) => entry.group);
-};
+const formatSignedPercent = (value: number) =>
+  `${value > 0 ? "+" : ""}${value.toFixed(2)}%`;
 
 export default function PortfolioPositionCards({
   assets,
@@ -96,7 +80,7 @@ export default function PortfolioPositionCards({
       );
   }, [assets, baseCurrency, filter, fxRates, providedGroups]);
   const sortedGroups = useMemo(
-    () => sortMobileGroups(groups, sortMode),
+    () => sortPortfolioAssetGroups(groups, sortMode),
     [groups, sortMode]
   );
 
@@ -115,15 +99,17 @@ export default function PortfolioPositionCards({
               <strong title={group.name}>{group.name}</strong>
               <span>{group.symbol} · {group.kind.toUpperCase()}{group.portfolioName ? ` · ${group.portfolioName}` : ""}</span>
             </div>
-            <strong className={group.profitLossBase >= 0 ? "tone-positive" : "tone-negative"}>
+            <strong className={`portfolio-number ${getValueTone(group.profitLossBase) ?? ""}`}>
               {formatCurrency(group.profitLossBase, baseCurrency)}
             </strong>
           </header>
           <dl>
-            <div><dt>Ilość</dt><dd>{formatNumber(group.quantity, group.kind === "crypto" ? 12 : 6)}</dd></div>
-            <div><dt>Kurs jednostkowy</dt><dd>{group.currentUnitPrice ? formatCurrency(group.currentUnitPrice, group.marketCurrency) : "Brak kursu"}</dd></div>
-            <div><dt>Zysk %</dt><dd className={group.profitLossPercent >= 0 ? "tone-positive" : "tone-negative"}>{group.hasLivePrice ? `${group.profitLossPercent >= 0 ? "+" : ""}${group.profitLossPercent.toFixed(2)}%` : "Brak kursu"}</dd></div>
-            <div><dt>Wartość</dt><dd>{formatCurrency(group.marketValueBase, baseCurrency)}</dd></div>
+            <div><dt>Ilość</dt><dd className="portfolio-number">{formatNumber(group.quantity, group.kind === "crypto" ? 12 : 6)}</dd></div>
+            <div><dt>Kurs jednostkowy</dt><dd className="portfolio-number">{group.currentUnitPrice ? formatCurrency(group.currentUnitPrice, group.marketCurrency) : "Brak kursu"}</dd></div>
+            <div><dt>Zysk %</dt><dd className={`portfolio-number ${getValueTone(group.hasLivePrice ? group.profitLossPercent : undefined) ?? ""}`}>{group.hasLivePrice ? formatSignedPercent(group.profitLossPercent) : "Brak kursu"}</dd></div>
+            <div><dt>Wartość</dt><dd className="portfolio-number">{formatCurrency(group.marketValueBase, baseCurrency)}</dd></div>
+            <div><dt>Wynik dzienny</dt><dd className={`portfolio-number ${getValueTone(group.dailyChangeBase) ?? ""}`}>{group.dailyChangeBase === undefined ? "—" : formatSignedCurrency(group.dailyChangeBase, baseCurrency)}</dd></div>
+            <div><dt>Zmiana dzienna %</dt><dd className={`portfolio-number ${getValueTone(group.dailyChangePercent) ?? ""}`}>{group.dailyChangePercent === undefined ? "—" : formatSignedPercent(group.dailyChangePercent)}</dd></div>
             <div><dt>Notowanie</dt><dd>{group.latestPriceDate ? formatDate(group.latestPriceDate) : "Do odświeżenia"}</dd></div>
           </dl>
           <details>

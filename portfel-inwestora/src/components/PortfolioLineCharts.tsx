@@ -26,6 +26,7 @@ import {
 } from "recharts";
 import { createPortal } from "react-dom";
 import TruncatedText from "@/components/TruncatedText";
+import { getUserFacingHistoryWarnings } from "@/lib/history-warning-visibility";
 import {
   filterChartPointsByRange,
   getChartRangeViewport,
@@ -91,6 +92,8 @@ type PortfolioLineChartsProps = {
   operations?: PortfolioOperation[];
   accounts?: PortfolioAccount[];
   accountType?: PortfolioAccountType;
+  benchmarks?: PortfolioBenchmarkDefinition[];
+  onBenchmarksChange?: (benchmarks: PortfolioBenchmarkDefinition[]) => Promise<void>;
   /** Real portfolio boundaries for the URL-only all-portfolios view. */
   portfolioScopes?: PortfolioHistoryScope[];
   initialMode?: ChartMode;
@@ -728,35 +731,6 @@ const getToneClass = (value: number): ToneClass => {
   return "tone-neutral";
 };
 
-const START_GAP_WARNING_PATTERN =
-  /^Historia (.+) ma braki na poczatku zakresu; brakujace dni wyceniono po cenie zakupu\.$/;
-
-const compactWarnings = (warnings: string[]) => {
-  const startingGapSymbols: string[] = [];
-  const remainingWarnings: string[] = [];
-
-  warnings.forEach((warning) => {
-    const match = warning.match(START_GAP_WARNING_PATTERN);
-
-    if (match?.[1]) {
-      startingGapSymbols.push(match[1]);
-      return;
-    }
-
-    remainingWarnings.push(warning);
-  });
-
-  if (startingGapSymbols.length > 0) {
-    remainingWarnings.unshift(
-      startingGapSymbols.length === 1
-        ? `Historia ${startingGapSymbols[0]} startuje kilka sesji po poczatku zakresu; pierwsze dni wyceniono po cenie zakupu.`
-        : `Czesc aktywow startuje kilka sesji po poczatku zakresu (${startingGapSymbols.join(", ")}); pierwsze dni wyceniono po cenie zakupu.`
-    );
-  }
-
-  return remainingWarnings;
-};
-
 const getFiniteNumber = (value: unknown) =>
   typeof value === "number" && Number.isFinite(value) ? value : null;
 
@@ -887,6 +861,8 @@ export default function PortfolioLineCharts({
   operations = [],
   accounts = [],
   accountType,
+  benchmarks = [],
+  onBenchmarksChange,
   portfolioScopes,
   initialMode = "value",
 }: PortfolioLineChartsProps) {
@@ -898,9 +874,7 @@ export default function PortfolioLineCharts({
   const [isChartInteracting, setIsChartInteracting] = useState(false);
   const [hiddenSeriesKeys, setHiddenSeriesKeys] = useState<string[]>([]);
   const [isChartModalOpen, setIsChartModalOpen] = useState(false);
-  const [selectedBenchmarks, setSelectedBenchmarks] = useState<PortfolioBenchmarkDefinition[]>(
-    []
-  );
+  const [selectedBenchmarks, setSelectedBenchmarks] = useState<PortfolioBenchmarkDefinition[]>(benchmarks);
   const [visibleBenchmarkIds, setVisibleBenchmarkIds] = useState<string[]>([]);
   const [benchmarkSearchMode, setBenchmarkSearchMode] = useState<AssetSearchMode>(
     DEFAULT_BENCHMARK_SEARCH_MODE
@@ -930,6 +904,15 @@ export default function PortfolioLineCharts({
   const crosshairFrameRef = useRef<number | null>(null);
   const nativeFullscreenActiveRef = useRef(false);
   const didDragChartRef = useRef(false);
+
+  useEffect(() => {
+    setSelectedBenchmarks(benchmarks);
+    setVisibleBenchmarkIds((currentIds) => {
+      const availableIds = new Set(benchmarks.map((benchmark) => benchmark.id));
+      const retained = currentIds.filter((id) => availableIds.has(id));
+      return retained.length ? retained : benchmarks.map((benchmark) => benchmark.id);
+    });
+  }, [benchmarks]);
 
   const cancelScheduledViewport = useCallback(() => {
     if (viewportFrameRef.current !== null) {
@@ -1270,9 +1253,7 @@ export default function PortfolioLineCharts({
     () => convertBenchmarkSeriesToBase(serverHistory.benchmarkSeries, baseCurrency, fxRates),
     [baseCurrency, fxRates, serverHistory.benchmarkSeries]
   );
-  const isUsingFallbackHistory =
-    serverHistory.points.length === 0 && fallbackHistory.points.length > 0;
-  const displayWarnings = useMemo(() => compactWarnings(warnings), [warnings]);
+  const displayWarnings = useMemo(() => getUserFacingHistoryWarnings(warnings), [warnings]);
   const benchmarkSearchKind = VISIBLE_SEARCH_MODE_OPTIONS.find(
     (option) => option.value === benchmarkSearchMode
   )?.kind;
@@ -1432,8 +1413,9 @@ export default function PortfolioLineCharts({
       if (currentBenchmarks.some((currentBenchmark) => currentBenchmark.id === benchmark.id)) {
         return currentBenchmarks;
       }
-
-      return [...currentBenchmarks, benchmark];
+      const nextBenchmarks = [...currentBenchmarks, benchmark];
+      void onBenchmarksChange?.(nextBenchmarks).catch(() => undefined);
+      return nextBenchmarks;
     });
     setVisibleBenchmarkIds((currentIds) =>
       currentIds.includes(benchmark.id) ? currentIds : [...currentIds, benchmark.id]
@@ -1445,9 +1427,11 @@ export default function PortfolioLineCharts({
   };
 
   const handleRemoveBenchmark = (benchmarkId: string) => {
-    setSelectedBenchmarks((currentBenchmarks) =>
-      currentBenchmarks.filter((benchmark) => benchmark.id !== benchmarkId)
-    );
+    setSelectedBenchmarks((currentBenchmarks) => {
+      const nextBenchmarks = currentBenchmarks.filter((benchmark) => benchmark.id !== benchmarkId);
+      void onBenchmarksChange?.(nextBenchmarks).catch(() => undefined);
+      return nextBenchmarks;
+    });
     setVisibleBenchmarkIds((currentIds) =>
       currentIds.filter((visibleBenchmarkId) => visibleBenchmarkId !== benchmarkId)
     );
@@ -2343,10 +2327,14 @@ export default function PortfolioLineCharts({
   }
 
   const hasRenderableData = chartModel.data.length > 0 && visibleChartLines.length > 0;
+  const hasSelectedChartData =
+    mode === "daily-investment-result"
+      ? hasDailyInvestmentResultData
+      : hasRenderableData;
   const hasManualViewport = manualViewport !== null;
 
   const handleOpenChartModal = () => {
-    if (!hasRenderableData) {
+    if (!hasSelectedChartData) {
       return;
     }
 
@@ -2738,6 +2726,29 @@ export default function PortfolioLineCharts({
     </div>
   );
 
+  const renderDailyResultActions = (isFullscreen = false) => (
+    <div className="line-visual-chart-actions" onClick={(event) => event.stopPropagation()}>
+      {isFullscreen ? (
+        <button
+          type="button"
+          className="ghost-button line-visual-close-button"
+          onClick={closeChartModal}
+        >
+          × Zamknij
+        </button>
+      ) : (
+        <button
+          type="button"
+          className="ghost-button line-visual-expand-button"
+          disabled={!hasDailyInvestmentResultData}
+          onClick={handleOpenChartModal}
+        >
+          Powieksz
+        </button>
+      )}
+    </div>
+  );
+
   const renderSummary = (isFullscreen = false) => (
     <div
       className={
@@ -2927,13 +2938,29 @@ export default function PortfolioLineCharts({
     );
   };
 
-  const renderDailyInvestmentResultChart = () =>
+  const renderDailyInvestmentResultChart = (isFullscreen = false) =>
     hasDailyInvestmentResultData ? (
-      <div className="line-visual-daily-result-chart mt-4">
-        <ResponsiveContainer width="100%" height={260}>
+      <div
+        className={
+          isFullscreen
+            ? "line-visual-chart-frame line-visual-modal-chart-frame line-visual-daily-result-chart mt-4"
+            : "line-visual-chart-frame line-visual-daily-result-chart mt-4"
+        }
+        aria-label="Inwestycyjny wynik dzień po dniu. Dotknij lub najedź na słupek, aby zobaczyć szczegóły."
+        onDoubleClick={() => {
+          if (!isFullscreen) {
+            handleOpenChartModal();
+          }
+        }}
+      >
+        <ResponsiveContainer width="100%" height={isFullscreen ? "100%" : 260}>
           <ComposedChart
             data={renderedDailyInvestmentResultPoints}
-            margin={{ top: 12, right: 12, left: 0, bottom: 0 }}
+            margin={
+              isFullscreen
+                ? { top: 28, right: 30, left: 14, bottom: 18 }
+                : { top: 12, right: 12, left: 0, bottom: 0 }
+            }
           >
             <CartesianGrid
               stroke="rgba(20, 35, 48, 0.08)"
@@ -2943,8 +2970,8 @@ export default function PortfolioLineCharts({
             <XAxis
               axisLine={false}
               dataKey="date"
-              minTickGap={40}
-              tick={{ fill: "#7b8895", fontSize: 11, fontWeight: 700 }}
+              minTickGap={isFullscreen ? 48 : 40}
+              tick={{ fill: "#7b8895", fontSize: isFullscreen ? 15 : 11, fontWeight: 700 }}
               tickFormatter={(value) => formatShortDate(String(value))}
               tickLine={false}
             />
@@ -2952,16 +2979,26 @@ export default function PortfolioLineCharts({
               axisLine={false}
               domain={dailyInvestmentResultDomain}
               orientation="right"
-              tick={{ fill: "#7b8895", fontSize: 11, fontWeight: 700 }}
+              tick={{ fill: "#7b8895", fontSize: isFullscreen ? 15 : 11, fontWeight: 700 }}
               tickFormatter={(value: number) => formatCompactCurrency(value, baseCurrency)}
               tickLine={false}
-              width={84}
+              width={isFullscreen ? 104 : 84}
             />
             <Tooltip
               allowEscapeViewBox={{ x: false, y: false }}
-              content={(props) => <ChartTooltip {...props} lines={[dailyInvestmentResultLine]} />}
+              content={(props) => (
+                <ChartTooltip
+                  {...props}
+                  isFullscreen={isFullscreen}
+                  lines={[dailyInvestmentResultLine]}
+                />
+              )}
               cursor={{ fill: "rgba(15, 118, 110, 0.06)" }}
-              wrapperStyle={{ outline: "none", pointerEvents: "none" }}
+              wrapperStyle={{
+                outline: "none",
+                pointerEvents: "none",
+                zIndex: isFullscreen ? 1200 : 20,
+              }}
             />
             <ReferenceLine
               stroke="rgba(180, 35, 24, 0.36)"
@@ -2972,8 +3009,8 @@ export default function PortfolioLineCharts({
             <Bar
               dataKey="investmentResult"
               isAnimationActive={!isChartInteracting}
-              maxBarSize={18}
-              radius={[4, 4, 2, 2]}
+              maxBarSize={isFullscreen ? 28 : 18}
+              radius={isFullscreen ? [6, 6, 3, 3] : [4, 4, 2, 2]}
             >
               {renderedDailyInvestmentResultPoints.map((point) => (
                 <Cell
@@ -3004,9 +3041,12 @@ export default function PortfolioLineCharts({
             jako wynik inwestycyjny.
           </p>
         </div>
-        <span className="line-visual-daily-result-range">Zakres: {rangePreset}</span>
+        <div className="line-visual-chart-side">
+          {renderDailyResultActions()}
+          <span className="line-visual-daily-result-range">Zakres: {rangePreset}</span>
+        </div>
       </div>
-      {renderDailyInvestmentResultChart()}
+      {!isChartModalOpen ? renderDailyInvestmentResultChart() : null}
     </div>
   );
 
@@ -3189,14 +3229,8 @@ export default function PortfolioLineCharts({
 
       {mode === "daily-investment-result" ? null : renderSummary()}
 
-      {isUsingFallbackHistory || isLoading || error || displayWarnings.length > 0 ? (
+      {isLoading || error || displayWarnings.length > 0 ? (
         <div className="line-visual-status mt-6">
-          {isUsingFallbackHistory ? (
-            <p className="field-note">
-              Pokazujemy lokalna, przyblizona historie. Gdy serwer odda pelniejsza
-              serie, wykres podmieni ja automatycznie.
-            </p>
-          ) : null}
           {isLoading ? (
             <p className="field-note">Dociagam dokladniejsza historie portfela...</p>
           ) : null}
@@ -3243,7 +3277,7 @@ export default function PortfolioLineCharts({
       )}
       </section>
 
-      {mode !== "daily-investment-result" && isChartModalOpen && hasRenderableData && typeof document !== "undefined"
+      {isChartModalOpen && hasSelectedChartData && typeof document !== "undefined"
         ? createPortal(
         <div
           className="line-visual-modal-backdrop"
@@ -3251,8 +3285,16 @@ export default function PortfolioLineCharts({
           onClick={closeChartModal}
         >
           <section
-            aria-label="Powiekszony wykres liniowy"
-            className="line-visual-modal-card"
+            aria-label={
+              mode === "daily-investment-result"
+                ? "Powiększony inwestycyjny wynik dzień po dniu"
+                : "Powiekszony wykres liniowy"
+            }
+            className={
+              mode === "daily-investment-result"
+                ? "line-visual-modal-card is-daily-result"
+                : "line-visual-modal-card"
+            }
             role="dialog"
             aria-modal="true"
             onClick={(event) => event.stopPropagation()}
@@ -3260,18 +3302,34 @@ export default function PortfolioLineCharts({
             <div className="line-visual-modal-head">
               <div>
                 <p className="eyebrow">Wykres liniowy</p>
-                <h2 className="section-title">{chartModel.title}</h2>
-                <p className="section-copy">{chartModel.copy}</p>
+                <h2 className="section-title">
+                  {mode === "daily-investment-result"
+                    ? "Inwestycyjny wynik dzień po dniu"
+                    : chartModel.title}
+                </h2>
+                <p className="section-copy">
+                  {mode === "daily-investment-result"
+                    ? "Zysk lub strata inwestycyjna bez wpłat i wypłat."
+                    : chartModel.copy}
+                </p>
               </div>
               <div className="line-visual-modal-head-actions">
                 {renderRangeSelector(true)}
-                {renderChartActions(true)}
+                {mode === "daily-investment-result"
+                  ? renderDailyResultActions(true)
+                  : renderChartActions(true)}
               </div>
             </div>
 
-            {renderSummary(true)}
-            {renderLegend(true)}
-            {renderChartFrame(true)}
+            {mode === "daily-investment-result" ? (
+              renderDailyInvestmentResultChart(true)
+            ) : (
+              <>
+                {renderSummary(true)}
+                {renderLegend(true)}
+                {renderChartFrame(true)}
+              </>
+            )}
           </section>
         </div>,
         document.body

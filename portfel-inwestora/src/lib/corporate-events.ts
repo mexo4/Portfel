@@ -357,6 +357,10 @@ const getDividendAmounts = (text: string): ParsedDividendAmount[] => {
     /(?:^|[^\d])(\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{1,4})?)\s*(?:z\u0142(?:ot(?:y|a|ych|e))?|zl(?:otych)?|pln)\s*(?:\([^)]{0,80}\)\s*)?(?:brutto\s*)?(?:na|\/)\s*(?:(?:jedn(?:a|\u0105)|1)\s*)?akcj/giu;
   const unicodeAmountAfterPerSharePattern =
     /(?:na|dla)\s*(?:(?:jedn(?:a|\u0105)|1)\s*)?akcj(?:\u0119|e)\s*(?:przypada|wynosi|w\s+wysoko\u015Bci)?\s*(\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{1,4})?)\s*(?:z\u0142(?:ot(?:y|a|ych|e))?|zl(?:otych)?|pln)/giu;
+  const labeledAmountAfterPerSharePattern =
+    /(?:kwota|wysokość)\s+dywidendy(?:\s+brutto)?\s+(?:na|dla)\s*(?:(?:jedn(?:ą|a)|1)\s*)?akcj[ęe]\s*(?::|wynosi(?:\s+obecnie)?|w\s+wysokości)?\s*(\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{1,4})?)\s*(?:zł(?:ot(?:y|a|ych|e))?|zl(?:otych)?|pln)/giu;
+  const descriptiveAmountAfterPerSharePattern =
+    /(?:kwota|wysokość)\s+dywidendy[\s\S]{0,220}?(?:na|dla)\s*(?:(?:jedn(?:ą|a)|1)\s*)?akcj[ęe][\s\S]{0,220}?(\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{1,4})?)\s*(?:zł(?:ot(?:y|a|ych|e))?|zl(?:otych)?|pln)/giu;
   const amounts: ParsedDividendAmount[] = [];
 
   for (const pattern of [
@@ -364,13 +368,17 @@ const getDividendAmounts = (text: string): ParsedDividendAmount[] => {
     amountAfterPerSharePattern,
     unicodePerSharePattern,
     unicodeAmountAfterPerSharePattern,
+    labeledAmountAfterPerSharePattern,
+    descriptiveAmountAfterPerSharePattern,
   ]) {
     for (const match of text.matchAll(pattern)) {
-      const amount = toAmount(match[1] ?? "");
-      const index = match.index ?? 0;
+      const amountText = match[1] ?? "";
+      const amount = toAmount(amountText);
+      const relativeAmountIndex = match[0].lastIndexOf(amountText);
+      const index = (match.index ?? 0) + Math.max(relativeAmountIndex, 0);
       if (!amount) continue;
 
-      const nearby = text.slice(Math.max(0, index - 96), index + 96);
+      const nearby = text.slice(Math.max(0, index - 140), index + 140);
       amounts.push({
         amount,
         index,
@@ -437,7 +445,7 @@ const getUpcomingDividendEvents = (text: string): ParsedCorporateEvent[] => {
         }))
       : [{ section: text, statusContext: "" }];
 
-  return sections.flatMap(({ section, statusContext }) => {
+  const candidates = sections.flatMap(({ section, statusContext }) => {
     const parsedAmounts = getDividendAmounts(section);
     if (parsedAmounts.length === 0) return [];
     const advanceAdjustment = getAdvanceAdjustedDividend(section, parsedAmounts);
@@ -479,11 +487,25 @@ const getUpcomingDividendEvents = (text: string): ParsedCorporateEvent[] => {
         250,
         "first"
       );
+      const localInstallmentDateAfter = getDateAfterKeyword(
+        localContextAfter,
+        /transz(?:a|y|ę|ie)[\s\S]{0,140}?(?:ustalon\w*\s+na\s+dzień|w\s+terminie)/iu,
+        100,
+        "first",
+        true
+      );
       const localPaymentDateBefore = getDateAfterKeyword(
         localContextBefore,
         /w\s+terminie|(?:termin|dzie.)\s+wyp.{0,3}at(?:y|a)/iu,
         240,
         "last"
+      );
+      const localInstallmentDateBefore = getDateAfterKeyword(
+        localContextBefore,
+        /transz(?:a|y|ę|ie)[\s\S]{0,140}?(?:ustalon\w*\s+na\s+dzień|w\s+terminie)/iu,
+        100,
+        "last",
+        true
       );
       const resolvedPaymentDate =
         getDateAfterKeyword(
@@ -492,8 +514,10 @@ const getUpcomingDividendEvents = (text: string): ParsedCorporateEvent[] => {
           250,
           "first"
         ) ??
-        localPaymentDateAfter ??
+        localInstallmentDateBefore ??
         localPaymentDateBefore ??
+        localInstallmentDateAfter ??
+        localPaymentDateAfter ??
         paymentDate;
       const eventDate = recordDate ?? exDividendDate ?? resolvedPaymentDate;
 
@@ -527,6 +551,54 @@ const getUpcomingDividendEvents = (text: string): ParsedCorporateEvent[] => {
         dividendInstallment: installment,
         dividendStatus,
       }];
+    });
+  });
+
+  const uniqueCandidates = Array.from(new Map(candidates.map((event) => [
+    [
+      event.fiscalYear ?? "unknown",
+      event.recordDate ?? event.exDividendDate ?? "no-record-date",
+      event.paymentDate ?? event.eventDate,
+      event.dividendPerShare ?? "no-amount",
+    ].join(":"),
+    event,
+  ])).values());
+  const distributions = new Map<string, ParsedCorporateEvent[]>();
+  for (const event of uniqueCandidates) {
+    const distributionKey = [
+      event.fiscalYear ?? "unknown",
+      event.recordDate ?? event.exDividendDate ?? "no-record-date",
+    ].join(":");
+    distributions.set(distributionKey, [...(distributions.get(distributionKey) ?? []), event]);
+  }
+
+  return Array.from(distributions.values()).flatMap((distribution) => {
+    const distinctAmounts = Array.from(new Set(
+      distribution
+        .map((event) => event.dividendPerShare)
+        .filter((amount): amount is number => typeof amount === "number")
+    ));
+    const withoutInformationalTotal = distribution.filter((event) => {
+      if (distinctAmounts.length < 3 || typeof event.dividendPerShare !== "number") return true;
+      const otherTotal = distinctAmounts
+        .filter((amount) => amount !== event.dividendPerShare)
+        .reduce((sum, amount) => sum + amount, 0);
+      return Math.abs(event.dividendPerShare - otherTotal) > 0.005;
+    });
+    const sorted = [...withoutInformationalTotal].sort((left, right) =>
+      (left.paymentDate ?? left.eventDate).localeCompare(right.paymentDate ?? right.eventDate)
+    );
+    return sorted.map((event, index) => {
+      const installment = sorted.length > 1 ? index + 1 : undefined;
+      return {
+        ...event,
+        dividendInstallment: installment,
+        eventIdentity: [
+          "dividend",
+          event.fiscalYear ?? (event.recordDate ?? event.exDividendDate ?? event.paymentDate ?? event.eventDate).slice(0, 4),
+          installment ?? "single",
+        ].join(":"),
+      };
     });
   });
 };

@@ -201,6 +201,49 @@ const normalizeAccountKind = (value: unknown, fallback: AccountKind): AccountKin
     ? (value as AccountKind)
     : fallback;
 
+export const isPortfolioAccountArchived = (account: Pick<PortfolioAccount, "metadata">) =>
+  account.metadata.archived === true;
+
+export const getPortfolioAccountArchivedDate = (
+  account: Pick<PortfolioAccount, "metadata" | "updatedAt">
+) => {
+  if (!isPortfolioAccountArchived(account)) return null;
+  const archivedAt = typeof account.metadata.archivedAt === "string"
+    ? account.metadata.archivedAt
+    : account.updatedAt;
+  return toDateInputValue(archivedAt, "");
+};
+
+export const setPortfolioAccountArchived = (
+  account: PortfolioAccount,
+  archived: boolean,
+  now = new Date().toISOString()
+): PortfolioAccount => {
+  if (archived) {
+    return {
+      ...account,
+      metadata: { ...account.metadata, archived: true, archivedAt: now },
+      updatedAt: now,
+    };
+  }
+
+  const previousArchivedAt = typeof account.metadata.archivedAt === "string"
+    ? account.metadata.archivedAt
+    : undefined;
+  const metadata = { ...account.metadata };
+  delete metadata.archived;
+  delete metadata.archivedAt;
+  return {
+    ...account,
+    metadata: {
+      ...metadata,
+      ...(previousArchivedAt ? { lastArchivedAt: previousArchivedAt } : {}),
+      reactivatedAt: now,
+    },
+    updatedAt: now,
+  };
+};
+
 export const createDefaultPortfolioAccounts = (
   portfolioId: string,
   baseCurrency: CurrencyCode = BASE_CURRENCY,
@@ -240,23 +283,34 @@ export const ensurePortfolioCashAccount = (
   const defaultAccountId = getDefaultCashAccountId(portfolioId, normalizedCurrency);
   const existingAccount = accounts.find(
     (account) =>
-      account.metadata.archived !== true &&
-      account.id === defaultAccountId
+      !isPortfolioAccountArchived(account) &&
+      account.currency === normalizedCurrency &&
+      (account.id === defaultAccountId || account.metadata.defaultCashAccount === true)
   );
 
   if (existingAccount) {
     return { accounts, account: existingAccount };
   }
 
-  const account = createDefaultAccount({
+  let replacementIndex = 0;
+  let accountId = defaultAccountId;
+  while (accounts.some((candidate) => candidate.id === accountId)) {
+    replacementIndex += 1;
+    accountId = `${defaultAccountId}:replacement:${replacementIndex}`;
+  }
+
+  const account = {
+    ...createDefaultAccount({
     portfolioId,
-    id: defaultAccountId,
+    id: accountId,
     name: `Gotowka ${normalizedCurrency}`,
     kind: normalizedCurrency === BASE_CURRENCY ? "cash" : "currency",
     broker: normalizedCurrency === BASE_CURRENCY ? "CASH" : "CURRENCY",
     currency: normalizedCurrency,
     now,
-  });
+    }),
+    metadata: { defaultCashAccount: true },
+  };
 
   return {
     accounts: [...accounts, account],
@@ -280,10 +334,6 @@ export const normalizePortfolioAccounts = (
       }
 
       const metadata = asRecord(rawAccount.metadata);
-
-      if (metadata.archived === true) {
-        return null;
-      }
 
       const kind = normalizeAccountKind(rawAccount.kind, "investment");
       const currency = normalizeCurrency(rawAccount.currency);
@@ -1454,7 +1504,7 @@ export const calculateCashBalances = (
   const activeAccountIds = accounts && accounts.length > 0
     ? new Set(
         accounts
-          .filter((account) => account.metadata.archived !== true)
+          .filter((account) => !isPortfolioAccountArchived(account))
           .map((account) => account.id)
       )
     : null;

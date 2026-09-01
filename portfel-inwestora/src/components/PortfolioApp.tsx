@@ -1551,6 +1551,7 @@ export default function PortfolioApp({
               accounts: nextPortfolio.accounts,
               instruments: nextPortfolio.instruments,
               operations: nextPortfolio.operations,
+              benchmarks: nextPortfolio.benchmarks,
               updatedAt: now,
             }
           : portfolio
@@ -4737,6 +4738,10 @@ export default function PortfolioApp({
   const workspaceValue: PortfolioWorkspaceValue = {
     account, isAdmin, portfolios, activePortfolio, activePortfolioId, selectedPortfolioId, isAllPortfoliosSelected, activeBaseCurrency, isPortfolioMutationPending, isLoggingOut,
     onPortfolioChange: (portfolioId) => { void handleSelectPortfolio(portfolioId); },
+    onBenchmarksChange: async (benchmarks) => {
+      if (!activePortfolio || isAllPortfoliosSelected) return;
+      await persistPortfolioCoreModelChange({ ...activePortfolio, benchmarks });
+    },
     onBaseCurrencyChange: (currency) => { void handleBaseCurrencyChange(currency); },
     getReadHref: (href) => getWorkspaceReadHref(href, selectedPortfolioId, activeBaseCurrency),
     onQuickAdd: () => { if (requireConcretePortfolioSelection()) router.push("/portfolio/positions?add=asset"); else router.push("/portfolios"); },

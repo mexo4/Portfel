@@ -248,10 +248,16 @@ function PortfolioStateWidget() {
   const dailyInBase = daily === undefined ? null : convertFromPln(daily, workspace.activeBaseCurrency, workspace.fxRates);
   const dailyPercent = metrics.latest?.cashFlowNeutralResultPercent ?? null;
   const returnPercent = metrics.returnPercent;
+  const snapshotValue = metrics.latestPoint
+    ? convertFromPln(metrics.latestPoint.portfolioValuePln, workspace.activeBaseCurrency, workspace.fxRates)
+    : workspace.summaryTotalValue;
+  const snapshotProfitLoss = metrics.latestPoint
+    ? convertFromPln(metrics.latestPoint.profitLossPln, workspace.activeBaseCurrency, workspace.fxRates)
+    : workspace.summaryCombinedProfitLoss;
   return <WidgetShell eyebrow="Szybki odczyt" title="Stan portfela">
     <div className="dashboard-state-grid">
-      <div><span>Wartość</span><strong>{formatCurrency(workspace.summaryTotalValue, workspace.activeBaseCurrency)}</strong></div>
-      <div><span>Zysk / strata</span><strong className={workspace.summaryCombinedProfitLoss >= 0 ? "tone-positive" : "tone-negative"}>{formatCurrency(workspace.summaryCombinedProfitLoss, workspace.activeBaseCurrency)}</strong></div>
+      <div><span>Wartość</span><strong>{formatCurrency(snapshotValue, workspace.activeBaseCurrency)}</strong></div>
+      <div><span>Zysk / strata</span><strong className={snapshotProfitLoss >= 0 ? "tone-positive" : "tone-negative"}>{formatCurrency(snapshotProfitLoss, workspace.activeBaseCurrency)}</strong></div>
       <div><span>Stopa zwrotu</span><strong>{formatPercent(returnPercent)}</strong></div>
       <div><span>Wynik dzienny</span><strong className={dailyInBase === null ? undefined : dailyInBase >= 0 ? "tone-positive" : "tone-negative"}>{dailyInBase === null ? (data.isHistoryLoading ? "Wczytywanie…" : "Brak danych") : formatCurrency(dailyInBase, workspace.activeBaseCurrency)}</strong><small>{dailyPercent === null ? "neutralny względem przepływów" : `${formatPercent(dailyPercent)} · bez wpłat i wypłat`}</small></div>
     </div>
@@ -264,12 +270,21 @@ function DashboardMetricWidget({ id }: { id: DashboardWidgetId }) {
   const history = data.model.history;
   const latestDaily = history.latest?.cashFlowNeutralResultPln;
   const dailyBase = latestDaily === undefined ? null : convertFromPln(latestDaily, workspace.activeBaseCurrency, workspace.fxRates);
+  const snapshotValue = history.latestPoint
+    ? convertFromPln(history.latestPoint.portfolioValuePln, workspace.activeBaseCurrency, workspace.fxRates)
+    : workspace.summaryTotalValue;
+  const snapshotProfitLoss = history.latestPoint
+    ? convertFromPln(history.latestPoint.profitLossPln, workspace.activeBaseCurrency, workspace.fxRates)
+    : workspace.summaryCombinedProfitLoss;
+  const snapshotInvested = history.latestPoint
+    ? convertFromPln(history.latestPoint.netInvestedPln, workspace.activeBaseCurrency, workspace.fxRates)
+    : workspace.summaryTotalInvested;
   const values: Partial<Record<DashboardWidgetId, { label: string; value: string; detail: string; tone?: "positive" | "negative" }>> = {
-    "portfolio-value": { label: "Wartość", value: formatCurrency(workspace.summaryTotalValue, workspace.activeBaseCurrency), detail: workspace.isAllPortfoliosSelected ? "Wszystkie portfele" : workspace.activePortfolio?.name ?? "Portfel" },
-    "profit-loss": { label: "Zysk / strata", value: formatCurrency(workspace.summaryCombinedProfitLoss, workspace.activeBaseCurrency), detail: "Wynik łączny", tone: workspace.summaryCombinedProfitLoss >= 0 ? "positive" : "negative" },
-    "return-rate": { label: "Stopa zwrotu", value: formatPercent(history.returnPercent), detail: "Istniejący kapitał i P/L" },
+    "portfolio-value": { label: "Wartość", value: formatCurrency(snapshotValue, workspace.activeBaseCurrency), detail: workspace.isAllPortfoliosSelected ? "Wszystkie portfele" : workspace.activePortfolio?.name ?? "Portfel" },
+    "profit-loss": { label: "Zysk / strata", value: formatCurrency(snapshotProfitLoss, workspace.activeBaseCurrency), detail: "Wynik łączny", tone: snapshotProfitLoss >= 0 ? "positive" : "negative" },
+    "return-rate": { label: "Stopa zwrotu", value: formatPercent(history.returnPercent), detail: "Kapitał netto i P/L" },
     "daily-result": { label: "Wynik dzienny", value: dailyBase === null ? (data.isHistoryLoading ? "Wczytywanie…" : "Brak danych") : formatCurrency(dailyBase, workspace.activeBaseCurrency), detail: history.latest?.cashFlowNeutralResultPercent === null || history.latest?.cashFlowNeutralResultPercent === undefined ? "Bez wpłat i wypłat" : `${formatPercent(history.latest.cashFlowNeutralResultPercent)} · bez wpłat i wypłat`, tone: dailyBase === null ? undefined : dailyBase >= 0 ? "positive" : "negative" },
-    "invested-capital": { label: "Zainwestowany kapitał", value: formatCurrency(workspace.summaryTotalInvested, workspace.activeBaseCurrency), detail: "Kapitał netto" },
+    "invested-capital": { label: "Zainwestowany kapitał", value: formatCurrency(snapshotInvested, workspace.activeBaseCurrency), detail: "Kapitał netto" },
     cash: { label: "Gotówka", value: formatCurrency(workspace.summaryCashValue, workspace.activeBaseCurrency), detail: "Saldo z rachunków" },
     "dividends-ytd": { label: "Dywidendy YTD", value: formatCurrency(workspace.activeDividendYtd, workspace.activeBaseCurrency), detail: "Otrzymane w bieżącym roku" },
   };

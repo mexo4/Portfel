@@ -15,6 +15,7 @@ import {
   getGpwCorporateEventCanonicalKey,
   isGpwCorporateEventInstrument,
   PapEspiCorporateEventProvider,
+  shouldApplyEvent,
 } from "../src/lib/server/corporate-events.ts";
 
 const sourceFixtures = {
@@ -325,6 +326,58 @@ test("subtracts an already paid advance from the confirmed LPP total", () => {
     paymentDate: event.paymentDate,
     status: event.dividendStatus,
   }, { remaining: 500, total: 900, advance: 400, recordDate: "2026-10-09", paymentDate: "2026-10-30", status: "CONFIRMED" });
+});
+
+test("a confirmed issuer resolution supersedes lower-priority PAP data even without a parsed publication timestamp", () => {
+  const parsed = parseCorporateEventDocument(`
+    Uchwała Zwyczajnego Walnego Zgromadzenia.
+    Dywidenda za rok obrotowy 2025/2026: 900 PLN na jedną akcję.
+    Dzień dywidendy 9 października 2026 r. Termin wypłaty dywidendy 30 października 2026 r.
+    Wypłata zostanie pomniejszona o wcześniej wypłaconą zaliczkę 400 PLN na jedną akcję.
+  `).find((event) => event.eventType === "UPCOMING_DIVIDEND");
+
+  assert.ok(parsed);
+  assert.equal(shouldApplyEvent({
+    id: "existing",
+    event_date: "2026-10-09",
+    status: "CONFIRMED",
+    source_published_at: "2026-06-10T12:05:00.000Z",
+    source_priority: 100,
+    source_type: "PAP_ESPI",
+    updated_at: "2026-06-10T12:05:00.000Z",
+  }, {
+    sourceType: "ISSUER_CURRENT_REPORT",
+    sourceUrl: "https://issuer.example/final-resolution",
+  }, parsed), true);
+});
+
+test("parses the newer Grupa Kęty installment update without turning the total into a third payment", () => {
+  const events = parseCorporateEventDocument(`
+    Dywidenda za rok 2025 została uchwalona przez Zwyczajne Walne Zgromadzenie.
+    Dzień dywidendy 19 sierpnia 2026 r. Łączna kwota dywidendy wynosi obecnie 48,96 zł na akcję.
+    W ramach wypłaty pierwszej transzy w terminie 3 września 2026 r. wynosi 16,32 zł na akcję,
+    natomiast w ramach wypłaty drugiej transzy w terminie 4 listopada 2026 r. wynosi 32,64 zł na akcję.
+  `).filter((event) => event.eventType === "UPCOMING_DIVIDEND");
+
+  assert.deepEqual(
+    events.map((event) => [event.dividendPerShare, event.paymentDate, event.dividendInstallment]),
+    [[16.32, "2026-09-03", 1], [32.64, "2026-11-04", 2]]
+  );
+});
+
+test("parses the exact issuer wording used by the Grupa Kęty installment correction", () => {
+  const events = parseCorporateEventDocument(`
+    W konsekwencji zmianie ulega łączna kwota dywidendy, która przypada do wypłaty na jedną akcję i wynosi obecnie 48,96 zł
+    (wobec 48,97 zł według stanu na dzień 18 czerwca 2026 r.) oraz kwota dywidendy do wypłaty na jedną akcję
+    w ramach pierwszej transzy ustalonej na dzień 3 września 2026 r., która wynosi obecnie 16,32 zł
+    (wobec 16,33 zł według stanu na 18 czerwca 2026 r.). Kwota dywidendy do wypłaty na jedną akcję w ramach wypłaty
+    drugiej transzy ustalonej na dzień 4 listopada 2026 r. nie ulega zmianie i wynosi 32,64 zł.
+  `).filter((event) => event.eventType === "UPCOMING_DIVIDEND");
+
+  assert.deepEqual(events.map((event) => [event.dividendPerShare, event.paymentDate]), [
+    [16.32, "2026-09-03"],
+    [32.64, "2026-11-04"],
+  ]);
 });
 
 test("associates installment dates that appear before each per-share amount", () => {

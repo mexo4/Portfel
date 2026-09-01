@@ -22,6 +22,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { useMemo, useState, type CSSProperties } from "react";
 import TruncatedText from "@/components/TruncatedText";
 import { KIND_LABELS } from "@/lib/constants";
+import { sortPortfolioAssetGroups } from "@/lib/portfolio-position-sort";
 import {
   getAssetLatestUnitPrice,
   getAssetProfitLoss,
@@ -76,120 +77,26 @@ const SORT_OPTIONS: Array<{
   { value: "loss-asc", label: "Najwieksza strata" },
   { value: "profit-percent-desc", label: "Najwiekszy zysk %" },
   { value: "profit-percent-asc", label: "Najmniejszy zysk %" },
-  { value: "daily-gain-desc", label: "Najwiekszy dzienny zysk %" },
-  { value: "daily-loss-asc", label: "Najwieksza dzienna strata %" },
+  { value: "daily-gain-desc", label: "Najwiekszy wynik dzienny" },
+  { value: "daily-loss-asc", label: "Najmniejszy wynik dzienny" },
 ];
 
 const DRAG_HANDLE_DOTS = Array.from({ length: 6 }, (_, index) => index);
 
-const sortGroupedAssets = (
-  groups: PortfolioAssetGroup[],
-  sortMode: AssetTableSortMode
-) => {
-  const rankedGroups = groups.map((group, index) => ({
-    group,
-    index,
-  }));
+const getValueTone = (value: number | undefined) =>
+  value === undefined
+    ? ""
+    : value > 0
+      ? "tone-positive"
+      : value < 0
+        ? "tone-negative"
+        : "tone-neutral";
 
-  const compareByManualOrder = (
-    left: (typeof rankedGroups)[number],
-    right: (typeof rankedGroups)[number]
-  ) =>
-    left.group.groupOrder - right.group.groupOrder ||
-    left.index - right.index ||
-    left.group.name.localeCompare(right.group.name, "pl");
+const formatSignedCurrency = (value: number, currency: CurrencyCode) =>
+  `${value > 0 ? "+" : ""}${formatCurrency(value, currency)}`;
 
-  const compareWithLivePriceLast = (
-    left: (typeof rankedGroups)[number],
-    right: (typeof rankedGroups)[number]
-  ) => {
-    const leftRank = left.group.hasLivePrice ? 0 : 1;
-    const rightRank = right.group.hasLivePrice ? 0 : 1;
-
-    return leftRank - rightRank;
-  };
-
-  const compareWithDailyChangeLast = (
-    left: (typeof rankedGroups)[number],
-    right: (typeof rankedGroups)[number]
-  ) => {
-    const leftRank = left.group.hasDailyChange ? 0 : 1;
-    const rightRank = right.group.hasDailyChange ? 0 : 1;
-
-    return leftRank - rightRank;
-  };
-
-  rankedGroups.sort((left, right) => {
-    if (sortMode === "manual") {
-      return compareByManualOrder(left, right);
-    }
-
-    if (sortMode === "daily-gain-desc" || sortMode === "daily-loss-asc") {
-      const dailyChangeComparison = compareWithDailyChangeLast(left, right);
-
-      if (dailyChangeComparison !== 0) {
-        return dailyChangeComparison;
-      }
-
-      const leftDailyChange = left.group.dailyChangePercent ?? 0;
-      const rightDailyChange = right.group.dailyChangePercent ?? 0;
-
-      if (sortMode === "daily-gain-desc") {
-        return rightDailyChange - leftDailyChange || compareByManualOrder(left, right);
-      }
-
-      return leftDailyChange - rightDailyChange || compareByManualOrder(left, right);
-    }
-
-    const livePriceComparison = compareWithLivePriceLast(left, right);
-
-    if (livePriceComparison !== 0) {
-      return livePriceComparison;
-    }
-
-    if (sortMode === "value-desc") {
-      return (
-        right.group.totalValuePln - left.group.totalValuePln ||
-        compareByManualOrder(left, right)
-      );
-    }
-
-    if (sortMode === "value-asc") {
-      return (
-        left.group.totalValuePln - right.group.totalValuePln ||
-        compareByManualOrder(left, right)
-      );
-    }
-
-    if (sortMode === "profit-percent-desc") {
-      return (
-        right.group.profitLossPercent - left.group.profitLossPercent ||
-        compareByManualOrder(left, right)
-      );
-    }
-
-    if (sortMode === "profit-percent-asc") {
-      return (
-        left.group.profitLossPercent - right.group.profitLossPercent ||
-        compareByManualOrder(left, right)
-      );
-    }
-
-    if (sortMode === "profit-desc") {
-      return (
-        right.group.totalProfitLossPln - left.group.totalProfitLossPln ||
-        compareByManualOrder(left, right)
-      );
-    }
-
-    return (
-      left.group.totalProfitLossPln - right.group.totalProfitLossPln ||
-      compareByManualOrder(left, right)
-    );
-  });
-
-  return rankedGroups.map((entry) => entry.group);
-};
+const formatSignedPercent = (value: number) =>
+  `${value > 0 ? "+" : ""}${value.toFixed(2)}%`;
 
 const GroupDragOverlayCard = ({ group }: { group: PortfolioAssetGroup }) => {
   return (
@@ -280,7 +187,7 @@ const SortableGroupSection = ({
         role="button"
         tabIndex={0}
       >
-        <td>
+        <td className="portfolio-cell-asset">
           <div className="portfolio-row-main">
             {isManualSortMode ? (
               <button
@@ -314,73 +221,93 @@ const SortableGroupSection = ({
             </div>
           </div>
         </td>
-        <td>
+        <td className="portfolio-cell-kind">
           {isDragging ? (
             <span className="drag-row-kind">{KIND_LABELS[group.kind]}</span>
           ) : (
             KIND_LABELS[group.kind]
           )}
         </td>
-        <td>{isDragging ? <DragRowPlaceholder /> : formatNumber(group.quantity)}</td>
-        <td>
+        <td className="portfolio-cell-quantity">
+          {isDragging ? (
+            <DragRowPlaceholder />
+          ) : (
+            <span className="portfolio-number">{formatNumber(group.quantity)}</span>
+          )}
+        </td>
+        <td className="portfolio-cell-average-price">
           {isDragging ? (
             <DragRowPlaceholder />
           ) : (
             <>
-              <span className="financial-value portfolio-financial-primary">
+              <span className="financial-value portfolio-financial-primary portfolio-number">
                 {formatCurrency(group.averagePurchasePrice, group.averagePurchasePriceCurrency)}
               </span>
               <div className="table-note">
-                koszt: <span className="financial-value">{formatCurrency(group.costBasisBase, baseCurrency)}</span>
+                koszt: <span className="financial-value portfolio-number">{formatCurrency(group.costBasisBase, baseCurrency)}</span>
               </div>
             </>
           )}
         </td>
-        <td>
+        <td className="portfolio-cell-unit-price">
           {isDragging ? (
             <DragRowPlaceholder />
           ) : (
             <>
-              <span className="financial-value portfolio-financial-primary">{currentUnitPriceLabel}</span>
-              <div className="table-note">Wartość: <span className="financial-value">{marketValueBaseLabel}</span></div>
+              <span className="financial-value portfolio-financial-primary portfolio-number">{currentUnitPriceLabel}</span>
+              <div className="table-note">Wartość: <span className="financial-value portfolio-number">{marketValueBaseLabel}</span></div>
             </>
           )}
         </td>
         <td
-          className={
-            group.hasLivePrice
-              ? group.profitLossBase >= 0
-                ? "tone-positive"
-                : "tone-negative"
-              : ""
-          }
+          className={`portfolio-cell-profit-loss ${
+            group.hasLivePrice ? getValueTone(group.profitLossBase) : ""
+          }`}
         >
           {isDragging ? (
             <DragRowPlaceholder />
           ) : group.hasLivePrice ? (
-            <span className="financial-value">{formatCurrency(group.profitLossBase, baseCurrency)}</span>
+            <span className="financial-value portfolio-number">{formatCurrency(group.profitLossBase, baseCurrency)}</span>
           ) : (
             "brak kursu"
           )}
         </td>
         <td
-          className={
-            group.hasLivePrice
-              ? group.profitLossPercent >= 0
-                ? "tone-positive"
-                : "tone-negative"
-              : ""
-          }
+          className={`portfolio-cell-profit-percent ${
+            group.hasLivePrice ? getValueTone(group.profitLossPercent) : ""
+          }`}
         >
           {isDragging ? (
             <DragRowPlaceholder />
           ) : group.hasLivePrice ? (
-            `${group.profitLossPercent >= 0 ? "+" : ""}${group.profitLossPercent.toFixed(2)}%`
+            <span className="portfolio-number">{formatSignedPercent(group.profitLossPercent)}</span>
           ) : (
             "brak kursu"
           )}
         </td>
-        <td>
+        <td className={`portfolio-cell-daily-result ${getValueTone(group.dailyChangeBase)}`}>
+          {isDragging ? (
+            <DragRowPlaceholder />
+          ) : group.dailyChangeBase !== undefined ? (
+            <span className="financial-value portfolio-number">
+              {formatSignedCurrency(group.dailyChangeBase, baseCurrency)}
+            </span>
+          ) : (
+            <span className="portfolio-number tone-neutral" aria-label="Brak danych">—</span>
+          )}
+        </td>
+        <td className={`portfolio-cell-daily-percent ${getValueTone(group.dailyChangePercent)}`}>
+          {isDragging ? (
+            <DragRowPlaceholder />
+          ) : group.dailyChangePercent !== undefined ? (
+            <span className="portfolio-number">
+              {formatSignedPercent(group.dailyChangePercent)}
+            </span>
+          ) : (
+            <span className="portfolio-number tone-neutral" aria-label="Brak danych">—</span>
+          )}
+        </td>
+        <td className="portfolio-cell-actions">
           {isDragging ? null : (
             <div className="table-actions">
               <button
@@ -400,7 +327,7 @@ const SortableGroupSection = ({
 
       {isExpanded && !isDragging ? (
         <tr className="portfolio-detail-row">
-          <td colSpan={8} className="portfolio-detail-cell">
+          <td colSpan={10} className="portfolio-detail-cell">
             <div className="lot-list">
               {group.lots.map((lot, index) => {
                 const lotProfitLoss = getAssetProfitLoss(lot, fxRates, baseCurrency);
@@ -513,7 +440,7 @@ export default function AssetTable({
       return haystack.includes(normalizedFilter);
     });
 
-    return sortGroupedAssets(groupedAssets, sortMode);
+    return sortPortfolioAssetGroups(groupedAssets, sortMode);
   }, [assets, baseCurrency, fxRates, groups, normalizedFilter, sortMode]);
 
   const sortableGroupKeys = filteredGroups.map((group) => group.key);
@@ -617,25 +544,29 @@ export default function AssetTable({
               <col className="portfolio-column-unit-price" />
               <col className="portfolio-column-profit-loss" />
               <col className="portfolio-column-profit-percent" />
+              <col className="portfolio-column-daily-result" />
+              <col className="portfolio-column-daily-percent" />
               <col className="portfolio-column-actions" />
             </colgroup>
             <thead>
               <tr>
-                <th>Aktywo</th>
-                <th>Typ</th>
-                <th>Ilosc</th>
-                <th>Sredni zakup</th>
-                <th>Kurs jednostkowy</th>
-                <th>P/L {baseCurrency}</th>
-                <th>Zysk %</th>
-                <th />
+                <th className="portfolio-cell-asset">Aktywo</th>
+                <th className="portfolio-cell-kind">Typ</th>
+                <th className="portfolio-cell-quantity">Ilosc</th>
+                <th className="portfolio-cell-average-price">Sredni zakup</th>
+                <th className="portfolio-cell-unit-price">Kurs jednostkowy</th>
+                <th className="portfolio-cell-profit-loss">P/L {baseCurrency}</th>
+                <th className="portfolio-cell-profit-percent">Zysk %</th>
+                <th className="portfolio-cell-daily-result">Wynik dzienny</th>
+                <th className="portfolio-cell-daily-percent">Zmiana dzienna %</th>
+                <th className="portfolio-cell-actions" />
               </tr>
             </thead>
 
             {filteredGroups.length === 0 ? (
               <tbody>
                 <tr>
-                  <td className="empty-row" colSpan={8}>
+                  <td className="empty-row" colSpan={10}>
                     Brak pozycji. Dodaj pierwsze aktywo formularzem powyzej.
                   </td>
                 </tr>

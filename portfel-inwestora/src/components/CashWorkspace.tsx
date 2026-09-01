@@ -3,7 +3,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { buildCashHistory, buildCashOperation, type CashEntryKind, type CashOperationKind } from "@/lib/cash-engine";
 import { SUPPORTED_CURRENCIES } from "@/lib/constants";
-import { calculateCashBalances, ensurePortfolioCashAccount } from "@/lib/operation-engine";
+import {
+  calculateCashBalances,
+  ensurePortfolioCashAccount,
+  isPortfolioAccountArchived,
+  setPortfolioAccountArchived,
+} from "@/lib/operation-engine";
 import { convertCurrency } from "@/lib/pricing";
 import {
   PORTFOLIO_ACCOUNT_TYPE_LABELS,
@@ -129,8 +134,65 @@ const numberValue = (value: string) => Number(value.replace(/\s/g, "").replace("
 
 function accountCandidates(accounts: PortfolioAccount[] | undefined, currency?: string) {
   return (accounts ?? []).filter((account) =>
+    !isPortfolioAccountArchived(account) &&
     (account.kind === "cash" || account.kind === "currency") &&
     (!currency || account.currency === toCurrencyCode(currency, "PLN"))
+  );
+}
+
+function getDisplayCashAccounts(portfolio: InvestmentPortfolio) {
+  const usedAccountIds = new Set(
+    (portfolio.operations ?? []).flatMap((operation) =>
+      getOperationAccountIds(operation)
+    )
+  );
+  return accountCandidates(portfolio.accounts).filter(
+    (account) =>
+      !account.isDefault ||
+      account.metadata.imported === true ||
+      usedAccountIds.has(account.id)
+  );
+}
+
+function getOperationAccountIds(operation: PortfolioOperation) {
+  const targetAccountId = typeof operation.metadata.targetAccountId === "string"
+    ? operation.metadata.targetAccountId
+    : null;
+  return targetAccountId ? [operation.accountId, targetAccountId] : [operation.accountId];
+}
+
+type CurrentCashAccountRow = {
+  accountId: string;
+  accountName: string;
+  currency: CurrencyCode;
+  amount: number;
+};
+
+function getCurrentCashAccountRows(portfolio: InvestmentPortfolio): CurrentCashAccountRow[] {
+  const activeAccounts = getDisplayCashAccounts(portfolio);
+  const accountsById = new Map(activeAccounts.map((account) => [account.id, account] as const));
+  const rows = new Map<string, CurrentCashAccountRow>();
+
+  for (const account of activeAccounts) {
+    rows.set(`${account.id}:${account.currency}`, {
+      accountId: account.id,
+      accountName: account.name,
+      currency: account.currency,
+      amount: 0,
+    });
+  }
+
+  for (const balance of calculateCashBalances(portfolio.operations ?? [], portfolio.accounts)) {
+    const account = accountsById.get(balance.accountId);
+    if (!account) continue;
+    rows.set(`${balance.accountId}:${balance.currency}`, {
+      ...balance,
+      accountName: account.name,
+    });
+  }
+
+  return Array.from(rows.values()).sort(
+    (left, right) => left.accountName.localeCompare(right.accountName, "pl") || left.currency.localeCompare(right.currency)
   );
 }
 
@@ -177,12 +239,11 @@ export default function CashWorkspace({
     }));
   }, [selectedAccountType, selectedPortfolio?.id]);
   const allBalances = useMemo(() => {
-    const result = new Map<string, { accountId: string; accountName: string; currency: CurrencyCode; amount: number }>();
+    const result = new Map<string, CurrentCashAccountRow>();
     portfolios.forEach((item) => {
-      calculateCashBalances(item.operations ?? [], item.accounts).forEach((balance) => {
-        const account = item.accounts?.find((candidate) => candidate.id === balance.accountId);
+      getCurrentCashAccountRows(item).forEach((balance) => {
         const key = `${item.id}:${balance.accountId}:${balance.currency}`;
-        result.set(key, { accountId: balance.accountId, accountName: `${item.name} · ${account?.name ?? "Gotówka"}`, currency: balance.currency, amount: balance.amount });
+        result.set(key, { ...balance, accountName: `${item.name} · ${balance.accountName}` });
       });
     });
     return Array.from(result.values());
@@ -191,10 +252,29 @@ export default function CashWorkspace({
     () => aggregate
       ? allBalances
       : selectedPortfolio
-        ? calculateCashBalances(selectedPortfolio.operations ?? [], selectedPortfolio.accounts)
+        ? getCurrentCashAccountRows(selectedPortfolio)
         : [],
     [aggregate, allBalances, selectedPortfolio]
   );
+  const activeCashAccounts = useMemo(
+    () => accountCandidates(selectedPortfolio?.accounts),
+    [selectedPortfolio?.accounts]
+  );
+  const displayActiveCashAccounts = useMemo(
+    () => selectedPortfolio ? getDisplayCashAccounts(selectedPortfolio) : [],
+    [selectedPortfolio]
+  );
+  const archivedCashAccounts = useMemo(
+    () => (selectedPortfolio?.accounts ?? []).filter(
+      (account) =>
+        isPortfolioAccountArchived(account) &&
+        (account.kind === "cash" || account.kind === "currency")
+    ),
+    [selectedPortfolio?.accounts]
+  );
+  const activeAccountCount = aggregate
+    ? portfolios.reduce((count, item) => count + getDisplayCashAccounts(item).length, 0)
+    : displayActiveCashAccounts.length;
   const cashValue = balances.reduce((sum, balance) => sum + convertCurrency(balance.amount, balance.currency, baseCurrency, fxRates), 0);
   const portfolioValue = totalPortfolioValue;
   const cashShare = portfolioValue > 0 ? (cashValue / portfolioValue) * 100 : 0;
@@ -242,7 +322,9 @@ export default function CashWorkspace({
       : undefined;
     if (
       draft.accountId &&
-      (!selectedSourceAccount || selectedSourceAccount.currency !== currency)
+      (!selectedSourceAccount ||
+        isPortfolioAccountArchived(selectedSourceAccount) ||
+        selectedSourceAccount.currency !== currency)
     ) {
       setMessage({ type: "error", text: "Wybierz konto źródłowe zgodne z walutą operacji." });
       return;
@@ -250,7 +332,10 @@ export default function CashWorkspace({
     const selectedTargetAccount = draft.targetAccountId
       ? selectedPortfolio.accounts?.find((account) => account.id === draft.targetAccountId)
       : undefined;
-    if (draft.operationType === "TRANSFER" && !selectedTargetAccount) {
+    if (
+      draft.operationType === "TRANSFER" &&
+      (!selectedTargetAccount || isPortfolioAccountArchived(selectedTargetAccount))
+    ) {
       setMessage({ type: "error", text: "Wybierz konto docelowe dla przelewu." });
       return;
     }
@@ -357,14 +442,52 @@ export default function CashWorkspace({
     } catch { setMessage({ type: "error", text: "Nie udało się usunąć operacji." }); } finally { setPending(false); }
   };
 
+  const updateAccountArchiveState = async (account: PortfolioAccount, archived: boolean) => {
+    if (aggregate || pending || !selectedPortfolio) return;
+    if (
+      archived &&
+      typeof window !== "undefined" &&
+      !window.confirm("Oznaczyć rachunek jako zamknięty? Jego historia pozostanie dostępna, ale saldo przestanie być liczone jako bieżąca gotówka.")
+    ) return;
+
+    const now = new Date().toISOString();
+    setPending(true);
+    setMessage(null);
+    try {
+      await onPortfolioChange({
+        ...selectedPortfolio,
+        accounts: (selectedPortfolio.accounts ?? []).map((candidate) =>
+          candidate.id === account.id
+            ? setPortfolioAccountArchived(candidate, archived, now)
+            : candidate
+        ),
+        updatedAt: now,
+      });
+      setDraft((current) => ({
+        ...current,
+        accountId: current.accountId === account.id ? "" : current.accountId,
+        targetAccountId: current.targetAccountId === account.id ? "" : current.targetAccountId,
+      }));
+      setMessage({
+        type: "success",
+        text: archived ? "Rachunek został przeniesiony do archiwum." : "Rachunek został przywrócony jako aktywny.",
+      });
+    } catch {
+      setMessage({ type: "error", text: "Nie udało się zmienić stanu rachunku." });
+    } finally {
+      setPending(false);
+    }
+  };
+
   return (
     <section className="cash-workspace">
       <div className="panel cash-summary-panel">
         <div className="sprint-panel-head"><div><p className="eyebrow">Gotówka</p><h2 className="section-title">Saldo gotówkowe</h2><p className="section-copy">Środki są liczone z tego samego dziennika operacji co portfel.</p></div>{aggregate ? <span className="tag">Wszystkie portfele</span> : <span className="account-type-badge account-type-badge-strong">{PORTFOLIO_ACCOUNT_TYPE_LABELS[selectedAccountType]}</span>}</div>
         {aggregate ? <label className="field cash-target-portfolio"><span>Portfel docelowy dla nowych operacji</span><select value={targetPortfolioId} onChange={(event) => setTargetPortfolioId(event.target.value)}>{portfolios.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label> : null}
-        <div className="workspace-performance-metric-grid cash-summary-grid mt-6"><article><span>Łączna gotówka</span><strong>{formatCurrency(cashValue, baseCurrency)}</strong></article><article><span>Udział w portfelu</span><strong>{cashShare.toFixed(1)}%</strong></article><article><span>Waluty / konta</span><strong>{balances.length}</strong></article></div>
+        <div className="workspace-performance-metric-grid cash-summary-grid mt-6"><article><span>Łączna gotówka</span><strong>{formatCurrency(cashValue, baseCurrency)}</strong></article><article><span>Udział w portfelu</span><strong>{cashShare.toFixed(1)}%</strong></article><article><span>Aktywne konta</span><strong>{activeAccountCount}</strong></article></div>
         {balances.some((item) => item.amount < 0) ? <p className="field-note field-note-error mt-4">Saldo ujemne jest dozwolone, ale wymaga weryfikacji.</p> : null}
-        <div className="cash-balance-list mt-6">{balances.map((balance) => { const accountName = "accountName" in balance ? String(balance.accountName) : selectedPortfolio?.accounts?.find((account) => account.id === balance.accountId)?.name ?? "Gotówka"; return <article key={`${balance.accountId}:${balance.currency}`}><span>{accountName}</span><strong className={balance.amount < 0 ? "tone-negative" : ""}>{formatCurrency(balance.amount, balance.currency)}</strong><small>{balance.currency} · {formatCurrency(convertCurrency(balance.amount, balance.currency, baseCurrency, fxRates), baseCurrency)}</small></article>; })}{balances.length === 0 ? <p className="field-note">Brak sald gotówkowych.</p> : null}</div>
+        <div className="cash-balance-list mt-6">{balances.map((balance) => <article key={`${balance.accountId}:${balance.currency}`}><span>{balance.accountName}</span><strong className={balance.amount < 0 ? "tone-negative" : ""}>{formatCurrency(balance.amount, balance.currency)}</strong><small>{balance.currency} · {formatCurrency(convertCurrency(balance.amount, balance.currency, baseCurrency, fxRates), baseCurrency)}</small>{!aggregate ? <button type="button" className="ghost-button" onClick={() => { const account = displayActiveCashAccounts.find((candidate) => candidate.id === balance.accountId); if (account) void updateAccountArchiveState(account, true); }} disabled={pending}>Archiwizuj</button> : null}</article>)}{balances.length === 0 ? <p className="field-note">Brak aktywnych rachunków gotówkowych.</p> : null}</div>
+        {!aggregate && archivedCashAccounts.length > 0 ? <div className="mt-6"><div className="sprint-panel-head"><div><p className="eyebrow">Archiwum</p><h3 className="section-title">Zamknięte rachunki</h3></div><span className="tag">{archivedCashAccounts.length}</span></div><div className="cash-balance-list mt-4">{archivedCashAccounts.map((account) => <article key={account.id}><span>{account.name}</span><strong>{account.currency}</strong><small>Historia operacji pozostaje dostępna poniżej.</small><button type="button" className="ghost-button" onClick={() => void updateAccountArchiveState(account, false)} disabled={pending}>Przywróć</button></article>)}</div></div> : null}
       </div>
 
       <article className="panel cash-form-panel mt-6"><div className="sprint-panel-head"><div><p className="eyebrow">Dziennik gotówki</p><h2 className="section-title">{editingId ? "Edytuj operację" : "Dodaj operację"}</h2></div>{editingId ? <button type="button" className="ghost-button" onClick={() => { setEditingId(null); setDraft(createDraft(selectedAccountType)); }}>Anuluj edycję</button> : null}</div>
@@ -376,7 +499,7 @@ export default function CashWorkspace({
           <label className="field"><span>Kwota {draft.operationType === "CUSTOM" ? "(może być ujemna)" : ""}</span><input inputMode="decimal" value={draft.amount} onChange={(event) => updateDraft({ amount: event.target.value })} placeholder="0,00" /></label>
           <label className="field"><span>Waluta</span><select value={draft.currency} onChange={(event) => updateDraft({ currency: event.target.value, accountId: "" })}>{currencyOptions.map((currency) => <option key={currency} value={currency}>{currency}</option>)}</select></label>
           {draft.operationType === "CONVERSION" ? <><label className="field"><span>Kwota docelowa</span><input inputMode="decimal" value={draft.targetAmount} onChange={(event) => updateDraft({ targetAmount: event.target.value })} placeholder="0,00" /></label><label className="field"><span>Waluta docelowa</span><select value={draft.targetCurrency} onChange={(event) => updateDraft({ targetCurrency: event.target.value, targetAccountId: "" })}>{currencyOptions.map((currency) => <option key={currency} value={currency}>{currency}</option>)}</select></label><label className="field"><span>Konto docelowe</span><select value={draft.targetAccountId} onChange={(event) => updateDraft({ targetAccountId: event.target.value })}><option value="">Automatycznie według waluty</option>{targetAccounts.map((account) => <option key={account.id} value={account.id}>{account.name} · {account.currency}</option>)}</select></label></> : null}
-          {draft.operationType === "TRANSFER" ? <label className="field"><span>Konto docelowe</span><select value={draft.targetAccountId} onChange={(event) => updateDraft({ targetAccountId: event.target.value })}><option value="">Wybierz konto</option>{accounts.filter((account) => account.id !== draft.accountId && (account.kind === "cash" || account.kind === "currency")).map((account) => <option key={account.id} value={account.id}>{account.name} · {account.currency}</option>)}</select></label> : null}
+          {draft.operationType === "TRANSFER" ? <label className="field"><span>Konto docelowe</span><select value={draft.targetAccountId} onChange={(event) => updateDraft({ targetAccountId: event.target.value })}><option value="">Wybierz konto</option>{activeCashAccounts.filter((account) => account.id !== draft.accountId).map((account) => <option key={account.id} value={account.id}>{account.name} · {account.currency}</option>)}</select></label> : null}
           <label className="field"><span>Data</span><input type="date" value={draft.date} onChange={(event) => updateDraft({ date: event.target.value })} /></label><label className="field field-full"><span>Notatka</span><input value={draft.notes} onChange={(event) => updateDraft({ notes: event.target.value })} placeholder="np. przelew z rachunku bankowego" /></label>
         </div>
         {withdrawalTaxNote && selectedAccountType !== "STANDARD" ? <div className="account-tax-note mt-4"><strong>{withdrawalTaxNote.status === "EXACT_RULE" ? "Reguła podatkowa" : "Informacja podatkowa"}</strong><span>{withdrawalTaxNote.note}</span>{withdrawalTaxNote.estimatedTaxPln !== null && withdrawalTaxNote.estimatedTaxPln > 0 ? <span>Szacowana kwota podatku: {formatCurrency(withdrawalTaxNote.estimatedTaxPln, "PLN")}. Nie jest automatycznie potrącana.</span> : null}</div> : null}

@@ -3,7 +3,10 @@ import { fetchFxRatesServer } from "@/lib/server/market-data";
 import { fetchTreasuryBondQuoteSeriesServer } from "@/lib/server/treasury-bonds";
 import { normalizeYahooMoneyUnit } from "@/lib/server/yahoo";
 import { FALLBACK_FX_RATES } from "@/lib/constants";
-import { getOperationCashDeltas } from "@/lib/operation-engine";
+import {
+  getOperationCashDeltas,
+  getPortfolioAccountArchivedDate,
+} from "@/lib/operation-engine";
 import { createHash } from "node:crypto";
 import https from "node:https";
 import {
@@ -1303,33 +1306,17 @@ const buildCashLedgerEvents = (
   accounts: PortfolioAccount[],
   fxSeriesByCode: Map<CurrencyCode, Map<string, number>>
 ) => {
-  const activeAccountIds = accounts.length
-    ? new Set(
-        accounts
-          .filter((account) => account.metadata.archived !== true)
-          .map((account) => account.id)
-      )
-    : null;
-  const deltasByDate = new Map<string, Map<CurrencyCode, number>>();
+  const deltasByDate = new Map<string, ReturnType<typeof getOperationCashDeltas>>();
   const externalFlowsByDate = new Map<string, number>();
 
   operations.forEach((operation) => {
     const date = toDateInputValue(operation.date, "");
     if (!date) return;
 
-    const deltas = getOperationCashDeltas(operation).filter(
-      (delta) => !activeAccountIds || activeAccountIds.has(delta.accountId)
-    );
+    const deltas = getOperationCashDeltas(operation);
     if (!deltas.length) return;
 
-    const currencyDeltas = deltasByDate.get(date) ?? new Map<CurrencyCode, number>();
-    deltas.forEach((delta) => {
-      currencyDeltas.set(
-        delta.currency,
-        round((currencyDeltas.get(delta.currency) ?? 0) + delta.amount, 8)
-      );
-    });
-    deltasByDate.set(date, currencyDeltas);
+    deltasByDate.set(date, [...(deltasByDate.get(date) ?? []), ...deltas]);
 
     const isExternalFlow =
       operation.operationType === "DEPOSIT" ||
@@ -1346,6 +1333,45 @@ const buildCashLedgerEvents = (
       addAmountToDateMap(externalFlowsByDate, date, flowPln);
     }
   });
+
+  // Archiving is a current-state choice, not a deletion of the ledger. Keep
+  // every historical side of transfers/conversions, then neutralize only a
+  // residual balance removed from the current view on the archive date. A
+  // fully transferred account therefore contributes exactly zero external
+  // flow and can never manufacture P/L.
+  const archivedByDate = new Map<string, PortfolioAccount[]>();
+  for (const account of accounts) {
+    const archivedDate = getPortfolioAccountArchivedDate(account);
+    if (!archivedDate) continue;
+    archivedByDate.set(archivedDate, [...(archivedByDate.get(archivedDate) ?? []), account]);
+  }
+
+  const balancesByKey = new Map<string, { accountId: string; currency: CurrencyCode; amount: number }>();
+  const ledgerDates = Array.from(new Set([...deltasByDate.keys(), ...archivedByDate.keys()])).sort();
+  for (const date of ledgerDates) {
+    for (const delta of deltasByDate.get(date) ?? []) {
+      const key = `${delta.accountId}:${delta.currency}`;
+      const current = balancesByKey.get(key);
+      balancesByKey.set(key, {
+        accountId: delta.accountId,
+        currency: delta.currency,
+        amount: round((current?.amount ?? 0) + delta.amount, 8),
+      });
+    }
+
+    for (const account of archivedByDate.get(date) ?? []) {
+      const removedValuePln = Array.from(balancesByKey.values())
+        .filter((balance) => balance.accountId === account.id && balance.amount !== 0)
+        .reduce(
+          (total, balance) =>
+            total + convertToPlnOnDate(balance.amount, balance.currency, date, fxSeriesByCode),
+          0
+        );
+      if (removedValuePln !== 0) {
+        addAmountToDateMap(externalFlowsByDate, date, -removedValuePln);
+      }
+    }
+  }
 
   return { deltasByDate, externalFlowsByDate };
 };
@@ -1715,7 +1741,10 @@ export const buildPortfolioHistory = async ({
   let cumulativeAdjustmentsPln = 0;
   let cumulativeTimeWeightedReturnFactor = 1;
   let previousPortfolioValuePln: number | null = null;
-  const cashBalancesByCurrency = new Map<CurrencyCode, number>();
+  const cashBalancesByKey = new Map<string, { accountId: string; currency: CurrencyCode; amount: number }>();
+  const accountArchivedDates = new Map(
+    accounts.map((account) => [account.id, getPortfolioAccountArchivedDate(account)] as const)
+  );
 
   for (const date of dates) {
     const externalFlowPln = netInvestedEvents.get(date) ?? 0;
@@ -1728,15 +1757,21 @@ export const buildPortfolioHistory = async ({
       cumulativeAdjustmentsPln + realizedAdjustmentPln
     );
 
-    cashLedgerEvents.deltasByDate.get(date)?.forEach((amount, currency) => {
-      cashBalancesByCurrency.set(
-        currency,
-        round((cashBalancesByCurrency.get(currency) ?? 0) + amount, 8)
-      );
-    });
-    const cashValuePln = Array.from(cashBalancesByCurrency).reduce(
-      (total, [currency, amount]) =>
-        total + convertToPlnOnDate(amount, currency, date, fxSeriesByCode),
+    for (const delta of cashLedgerEvents.deltasByDate.get(date) ?? []) {
+      const key = `${delta.accountId}:${delta.currency}`;
+      const current = cashBalancesByKey.get(key);
+      cashBalancesByKey.set(key, {
+        accountId: delta.accountId,
+        currency: delta.currency,
+        amount: round((current?.amount ?? 0) + delta.amount, 8),
+      });
+    }
+    const cashValuePln = Array.from(cashBalancesByKey.values()).reduce(
+      (total, balance) => {
+        const archivedDate = accountArchivedDates.get(balance.accountId);
+        if (archivedDate && archivedDate <= date) return total;
+        return total + convertToPlnOnDate(balance.amount, balance.currency, date, fxSeriesByCode);
+      },
       0
     );
     const portfolioValuePln = round(

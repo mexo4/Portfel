@@ -12,6 +12,7 @@ import type {
   PortfolioRealizedAdjustment,
   PortfolioSale,
   AssetSearchResult,
+  PortfolioBenchmarkDefinition,
 } from "@/types/portfolio";
 
 export type PortfolioWorkspaceValue = {
@@ -27,6 +28,7 @@ export type PortfolioWorkspaceValue = {
   isPortfolioMutationPending: boolean;
   isLoggingOut: boolean;
   onPortfolioChange: (portfolioId: string) => void;
+  onBenchmarksChange: (benchmarks: PortfolioBenchmarkDefinition[]) => Promise<void>;
   onBaseCurrencyChange: (currency: string) => void;
   getReadHref: (href: string) => string;
   onQuickAdd: () => void;

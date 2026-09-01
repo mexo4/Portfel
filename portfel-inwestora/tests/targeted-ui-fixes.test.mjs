@@ -34,7 +34,7 @@ test("clean dividend form requires explicit instrument and account selection", a
 test("average purchase and unit-price cells inherit the same numeric rendering as dividends", async () => {
   const styles = await readSource("src/app/globals.css");
   const selector = styles.match(
-    /\.portfolio-positions-table td:nth-child\(4\) \.financial-value,[\s\S]*?\.portfolio-positions-table td:nth-child\(5\) \.financial-value \{([\s\S]*?)\n\}/
+    /\.portfolio-positions-table \.portfolio-number,[\s\S]*?\.workspace-position-card \.portfolio-number \{([\s\S]*?)\n\}/
   );
 
   assert.ok(selector);
@@ -87,16 +87,16 @@ test("current positions omit the quote column and keep desktop-sized column budg
 
   assert.doesNotMatch(table, /<th>Notowanie<\/th>/);
   assert.doesNotMatch(table, /portfolio-column-quote/);
-  assert.match(table, /colSpan=\{8\}/);
-  assert.match(styles, /\.portfolio-positions-table \{[\s\S]*?min-width:\s*1040px;/);
+  assert.match(table, /colSpan=\{10\}/);
+  assert.match(styles, /\.portfolio-positions-table \{[\s\S]*?min-width:\s*1028px;/);
   assert.doesNotMatch(styles, /\.portfolio-positions-table \.portfolio-column-quote/);
   assert.match(
     styles,
-    /@media \(min-width: 861px\) and \(max-width: 1419px\) \{[\s\S]*?\.portfolio-positions-table \{\s*min-width:\s*962px;/
+    /@media \(min-width: 861px\) and \(max-width: 1419px\) \{[\s\S]*?\.portfolio-positions-table \{\s*min-width:\s*964px;/
   );
   assert.match(
     styles,
-    /\.portfolio-positions-table th:nth-child\(2\),[\s\S]*?\.portfolio-positions-table td:nth-child\(2\) \{\s*display:\s*none;/
+    /\.portfolio-positions-table \.portfolio-cell-kind \{\s*display:\s*none;/
   );
 });
 

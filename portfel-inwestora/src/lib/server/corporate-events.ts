@@ -146,6 +146,10 @@ const GPW_ISSUER_SOURCE_REGISTRY: Record<string, IssuerSource[]> = {
       type: "ISSUER_CURRENT_REPORT",
       url: "https://grupakety.com/raporty_biezace/uchwala-zwyczajnego-walnego-zgromadzenia-grupy-kety-s-a-w-sprawie-wyplaty-dywidendy-7/",
     },
+    {
+      type: "ISSUER_CURRENT_REPORT",
+      url: "https://grupakety.com/raporty_biezace/rejestracja-akcji-serii-l-w-depozycie-papierow-wartosciowych-i-podwyzszenie-kapitalu-zakladowego-spolki-oraz-aktualizacja-informacji-o-liczbie-akcji-objetych-uchwalona-przez-zwyczajne-walne-zgromadzen/",
+    },
   ],
 };
 
@@ -172,9 +176,21 @@ export const classifyCorporateEventHttpStatus = (status: number): CorporateEvent
 };
 
 const extractSourcePublishedAt = (text: string) => {
-  const candidate = text.match(
-    /(?:data publikacji|opublikowano|data)\s*:?\s*([^\n]{0,48})/i
+  const structuredCandidate = text.match(
+    /(?:"datePublished"\s*:\s*"|property=["']article:published_time["'][^>]*content=["'])([^"']+)/i
   )?.[1];
+  const structuredTimestamp = structuredCandidate ? Date.parse(structuredCandidate) : Number.NaN;
+  if (Number.isFinite(structuredTimestamp)) return new Date(structuredTimestamp).toISOString();
+
+  const readableText = text
+    .replace(/<(?:br|\/p|\/div|\/li|\/time)\b[^>]*>/gi, "\n")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;|&#160;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/[ \t]+/g, " ");
+  const candidate = readableText.match(
+    /(?:data publikacji|opublikowano)\s*:?\s*([^\n]{0,64})/i
+  )?.[1] ?? readableText.match(/(?:^|\n)\s*data\s*:?\s*([^\n]{0,48})/i)?.[1];
   const event = candidate ? parseCorporateEventDocument(`Raport roczny ${candidate}`)[0] : undefined;
   return event?.eventDate ? `${event.eventDate}T00:00:00.000Z` : undefined;
 };
@@ -450,10 +466,16 @@ export class PapEspiDiscoveryCorporateEventProvider implements CorporateEventPro
 }
 
 export class GpwIssuerIrCorporateEventProvider implements CorporateEventProvider {
-  id = "gpw-issuer-ir";
+  readonly id: string;
+  private readonly sourceIndex: number;
+
+  constructor(sourceIndex = 0) {
+    this.sourceIndex = sourceIndex;
+    this.id = `gpw-issuer-ir-${sourceIndex}`;
+  }
 
   async fetchEvents(instrument: CanonicalInstrument): Promise<ProviderResult> {
-    const source = GPW_ISSUER_SOURCE_REGISTRY[instrument.ticker]?.[0];
+    const source = GPW_ISSUER_SOURCE_REGISTRY[instrument.ticker]?.[this.sourceIndex];
 
     if (!source) {
       return { status: "NOT_FOUND", events: [] };
@@ -599,7 +621,8 @@ export class PapEspiCorporateEventProvider implements CorporateEventProvider {
 }
 
 const defaultProviders: CorporateEventProvider[] = [
-  new GpwIssuerIrCorporateEventProvider(),
+  new GpwIssuerIrCorporateEventProvider(0),
+  new GpwIssuerIrCorporateEventProvider(1),
   new PapEspiDiscoveryCorporateEventProvider("report-change"),
   new PapEspiDiscoveryCorporateEventProvider("report-schedule"),
   new PapEspiDiscoveryCorporateEventProvider("dividend"),
@@ -713,7 +736,7 @@ const sourceTimestamp = (value: string | undefined | null) => {
   return Number.isFinite(timestamp) ? timestamp : 0;
 };
 
-const shouldApplyEvent = (
+export const shouldApplyEvent = (
   existing: ExistingEventRow | undefined,
   source: CorporateEventSourceReference,
   parsed: ParsedCorporateEvent
@@ -736,7 +759,15 @@ const shouldApplyEvent = (
       (incomingTimestamp > 0 && incomingTimestamp >= existingTimestamp);
   }
 
-  if (existingIsChange && incomingTimestamp < existingTimestamp) return false;
+  if (existingIsChange) {
+    return incomingTimestamp > 0 && incomingTimestamp >= existingTimestamp;
+  }
+  if (
+    incomingPriority > existing.source_priority &&
+    (incomingTimestamp === 0 || existingTimestamp === 0)
+  ) {
+    return true;
+  }
   return incomingTimestamp >= existingTimestamp && incomingPriority >= existing.source_priority;
 };
 
@@ -834,18 +865,18 @@ const upsertParsedEvents = async (
         `
           UPDATE corporate_events
           SET event_date = $1,
-              event_time = $2,
-              fiscal_period = $3,
-              fiscal_year = $4,
+              event_time = COALESCE($2, event_time),
+              fiscal_period = COALESCE($3, fiscal_period),
+              fiscal_year = COALESCE($4, fiscal_year),
               event_identity = $5,
               dividend_per_share = $6,
-              dividend_total_per_share = $7,
-              dividend_advance_per_share = $8,
-              dividend_currency = $9,
-              ex_dividend_date = $10,
-              record_date = $11,
-              payment_date = $12,
-              dividend_installment = $13,
+              dividend_total_per_share = COALESCE($7, dividend_total_per_share),
+              dividend_advance_per_share = COALESCE($8, dividend_advance_per_share),
+              dividend_currency = COALESCE($9, dividend_currency),
+              ex_dividend_date = COALESCE($10, ex_dividend_date),
+              record_date = COALESCE($11, record_date),
+              payment_date = COALESCE($12, payment_date),
+              dividend_installment = COALESCE($13, dividend_installment),
               status = $14,
               source_published_at = $15,
               source_type = $16,
@@ -909,6 +940,36 @@ const upsertParsedEvents = async (
         [randomUUID(), eventId, existing.event_date, parsed.eventDate, result.source.sourceUrl, now]
       );
     }
+  }
+
+  const completeInstallmentGroups = new Map<number, string[]>();
+  for (const parsed of result.events) {
+    if (
+      parsed.eventType !== "UPCOMING_DIVIDEND" ||
+      parsed.dividendInstallment === undefined ||
+      parsed.fiscalYear === undefined
+    ) continue;
+    completeInstallmentGroups.set(parsed.fiscalYear, [
+      ...(completeInstallmentGroups.get(parsed.fiscalYear) ?? []),
+      getCorporateEventIdentityKey(parsed),
+    ]);
+  }
+  for (const [fiscalYear, identities] of completeInstallmentGroups) {
+    const expectedIdentities = Array.from(new Set(identities));
+    if (expectedIdentities.length < 2) continue;
+    await transaction.execute(
+      `
+        UPDATE corporate_events
+        SET active = FALSE, updated_at = $1
+        WHERE instrument_id = $2
+          AND event_type = 'UPCOMING_DIVIDEND'
+          AND fiscal_year = $3
+          AND dividend_installment IS NOT NULL
+          AND active = TRUE
+          AND NOT (event_identity = ANY($4::text[]))
+      `,
+      [new Date().toISOString(), instrument.id, fiscalYear, expectedIdentities]
+    );
   }
 };
 
@@ -1113,7 +1174,9 @@ export const getCorporateEventsForGpwPortfolio = async ({
 
   // First discovery is awaited so a new GPW holding can receive events in the
   // first API response. Existing data is returned stale-while-revalidate.
-  if (initialInstruments.length > 0) {
+  if (forceRefresh) {
+    await Promise.all(refreshes);
+  } else if (initialInstruments.length > 0) {
     await Promise.all(
       initialInstruments.map((instrument) => refreshCanonicalInstrument(instrument))
     );

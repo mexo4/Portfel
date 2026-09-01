@@ -38,7 +38,7 @@ test("crypto import rows and crypto-only exchanges are gated in UI while histori
 test("current-position primary values reuse the natural proportional figures from dividend summaries", async () => {
   const styles = await readSource("src/app/globals.css");
   const selector = styles.match(
-    /\.portfolio-positions-table td:nth-child\(4\) \.financial-value,[\s\S]*?\.portfolio-positions-table td:nth-child\(5\) \.financial-value \{([\s\S]*?)\n\}/
+    /\.portfolio-positions-table \.portfolio-number,[\s\S]*?\.workspace-position-card \.portfolio-number \{([\s\S]*?)\n\}/
   );
 
   assert.ok(selector);

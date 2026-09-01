@@ -43,6 +43,8 @@ export type PortfolioAssetGroup = {
   hasLivePrice: boolean;
   hasDailyChange: boolean;
   dailyChangePercent?: number;
+  /** Today's position-value movement in the selected portfolio currency. */
+  dailyChangeBase?: number;
   totalInvestedPln: number;
   totalValuePln: number;
   totalProfitLossPln: number;
@@ -312,6 +314,19 @@ export const getGroupedPortfolioAssets = (
       weightedLatestUnitPrice !== undefined && previousClose !== undefined && previousClose > 0
         ? round(((weightedLatestUnitPrice - previousClose) / previousClose) * 100, 2)
         : undefined;
+    const dailyChangeConversionRate = getCurrencyConversionRate(
+      representativeLot.marketCurrency,
+      baseCurrency,
+      fxRates
+    );
+    const dailyChangeBase =
+      weightedLatestUnitPrice !== undefined &&
+      previousClose !== undefined &&
+      dailyChangeConversionRate > 0
+        ? round(
+            (weightedLatestUnitPrice - previousClose) * quantity * dailyChangeConversionRate
+          )
+        : undefined;
     const purchaseCurrencies = new Set(sortedLots.map(getAssetPurchasePriceCurrency));
     const averagePurchasePriceCurrency =
       purchaseCurrencies.size === 1
@@ -392,6 +407,7 @@ export const getGroupedPortfolioAssets = (
       hasLivePrice,
       hasDailyChange: dailyChangePercent !== undefined,
       dailyChangePercent,
+      dailyChangeBase,
       totalInvestedPln,
       totalValuePln,
       totalProfitLossPln,

@@ -6,6 +6,8 @@ import {
   calculateCashBalances,
   ensurePortfolioCoreModel,
   getOperationCashDeltas,
+  isPortfolioAccountArchived,
+  setPortfolioAccountArchived,
 } from "../src/lib/operation-engine.ts";
 import { buildCashOperation, buildCashHistory } from "../src/lib/cash-engine.ts";
 import { getPortfolioSummary } from "../src/lib/portfolio-engine.ts";
@@ -99,6 +101,63 @@ test("an internal transfer moves cash between accounts without changing the curr
     { accountId: secondPlnAccount.id, currency: "PLN", amount: 250 },
   ]);
   assert.equal(balances.reduce((total, balance) => total + balance.amount, 0), 1_000);
+});
+
+test("archived cash accounts leave current totals but retain their ledger and transfer history", async () => {
+  const replacementAccount = { ...account("portfolio-1:account:cash:PLN:replacement", "PLN"), isDefault: false };
+  const archivedAccount = setPortfolioAccountArchived(plnAccount, true, "2026-08-24T09:00:00.000Z");
+  const operations = [
+    cashOperation({ id: "archive-seed", operationType: "DEPOSIT", amount: 1_000, date: "2026-08-22" }),
+    cashOperation({ id: "archive-transfer", operationType: "TRANSFER", amount: 1_000, date: "2026-08-23", targetAccountId: replacementAccount.id, targetAmount: 1_000, targetCurrency: "PLN" }),
+  ];
+  const portfolio = {
+    id: "portfolio-1",
+    name: "Archiwum",
+    baseCurrency: "PLN",
+    assets: [],
+    sales: [],
+    realizedAdjustments: [],
+    accounts: [archivedAccount, replacementAccount],
+    instruments: [],
+    operations,
+    createdAt: NOW,
+    updatedAt: NOW,
+  };
+
+  assert.equal(isPortfolioAccountArchived(archivedAccount), true);
+  assert.deepEqual(calculateCashBalances(operations, portfolio.accounts), [
+    { accountId: replacementAccount.id, currency: "PLN", amount: 1_000 },
+  ]);
+  const normalized = ensurePortfolioCoreModel(portfolio);
+  assert.equal(normalized.accounts.some((candidate) => candidate.id === archivedAccount.id), true);
+  assert.equal(buildCashHistory(normalized).filter((entry) => entry.accountId === archivedAccount.id).length, 2);
+
+  const history = await buildPortfolioHistory({
+    assets: [], sales: [], realizedAdjustments: [], operations, accounts: portfolio.accounts,
+  });
+  assert.deepEqual(
+    (({ portfolioValuePln, netInvestedPln, profitLossPln }) => ({ portfolioValuePln, netInvestedPln, profitLossPln }))(history.points.at(-1)),
+    { portfolioValuePln: 1_000, netInvestedPln: 1_000, profitLossPln: 0 }
+  );
+});
+
+test("archiving a non-zero stale balance is a neutral external removal and restoration is explicit", async () => {
+  const archivedAccount = setPortfolioAccountArchived(plnAccount, true, "2026-08-23T18:00:00.000Z");
+  const operations = [
+    cashOperation({ id: "stale-seed", operationType: "DEPOSIT", amount: 250, date: "2026-08-22" }),
+  ];
+  const history = await buildPortfolioHistory({
+    assets: [], sales: [], realizedAdjustments: [], operations, accounts: [archivedAccount],
+  });
+  const latest = history.points.at(-1);
+
+  assert.deepEqual(
+    { value: latest.portfolioValuePln, invested: latest.netInvestedPln, profit: latest.profitLossPln },
+    { value: 0, invested: 0, profit: 0 }
+  );
+  const restored = setPortfolioAccountArchived(archivedAccount, false, "2026-08-25T09:00:00.000Z");
+  assert.equal(isPortfolioAccountArchived(restored), false);
+  assert.equal(restored.metadata.lastArchivedAt, "2026-08-23T18:00:00.000Z");
 });
 
 test("new buy and sell operations affect cash while legacy positions remain neutral", () => {

@@ -39,6 +39,7 @@ const workspaceHistoryProps = (workspace: ReturnType<typeof usePortfolioWorkspac
   operations: workspace.activePortfolio?.operations ?? [],
   accounts: workspace.activePortfolio?.accounts ?? [],
   accountType: workspace.activePortfolio?.accountType,
+  benchmarks: workspace.isAllPortfoliosSelected ? [] : (workspace.activePortfolio?.benchmarks ?? []),
   portfolioScopes: getWorkspaceHistoryScopes(workspace),
 });
 
@@ -82,8 +83,8 @@ export function WorkspaceDividendsPage() {
 
 export function WorkspaceImportPage() { const workspace = usePortfolioWorkspace(); return <div className="workspace-page workspace-import-page"><section className="workspace-page-actions"><p>{workspace.isAllPortfoliosSelected ? "Import wymaga wskazania jednego portfela docelowego." : "Import tworzy rzeczywiste operacje w aktywnym portfelu. Kurs bieżący nie blokuje zapisu transakcji."}</p><Link href={workspace.isAllPortfoliosSelected ? "/portfolios" : "/portfolio/positions"} className="ghost-button">{workspace.isAllPortfoliosSelected ? "Wybierz portfel" : "Wróć do pozycji"}</Link></section>{workspace.isAllPortfoliosSelected ? null : workspace.importWorkspace}</div>; }
 
-export function WorkspacePerformancePage() { const workspace = usePortfolioWorkspace(); return <PortfolioPerformanceResults {...workspaceChartProps(workspace)} />; }
-export function WorkspaceChartsPage() { const workspace = usePortfolioWorkspace(); return <div className="workspace-page workspace-analysis-page"><PortfolioLineCharts initialMode="value" {...workspaceHistoryProps(workspace)} /></div>; }
+export function WorkspacePerformancePage() { const workspace = usePortfolioWorkspace(); return <PortfolioPerformanceResults {...workspaceHistoryProps(workspace)} isAggregate={workspace.isAllPortfoliosSelected} />; }
+export function WorkspaceChartsPage() { const workspace = usePortfolioWorkspace(); return <div className="workspace-page workspace-analysis-page"><PortfolioLineCharts initialMode="value" {...workspaceHistoryProps(workspace)} onBenchmarksChange={workspace.isAllPortfoliosSelected ? undefined : workspace.onBenchmarksChange} /></div>; }
 export function WorkspaceStructurePage() { const workspace = usePortfolioWorkspace(); return <div className="workspace-page workspace-analysis-page"><PortfolioCharts view="structure" {...workspaceChartProps(workspace)} /></div>; }
 export function WorkspaceInstrumentsPage() {
   const workspace = usePortfolioWorkspace();

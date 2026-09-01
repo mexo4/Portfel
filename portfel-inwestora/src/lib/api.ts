@@ -36,6 +36,7 @@ import type { DashboardScopeLayouts } from "@/lib/dashboard-layout";
 import type { WatchlistItem, WatchlistItemInput } from "@/lib/watchlist";
 import type { PerformanceMetricId } from "@/lib/performance-preferences";
 import type { EspiFeedResponse, EspiReport } from "@/lib/espi";
+import type { RiskFreeRatePoint } from "@/lib/portfolio-risk-analytics";
 
 type SearchParams = {
   query: string;
@@ -972,6 +973,15 @@ export const fetchPortfolioHistory = async ({
     }),
   });
 };
+
+export const fetchPoloniaRates = async (signal?: AbortSignal) =>
+  requestJson<{
+    rates: RiskFreeRatePoint[];
+    sourceUrl: string;
+    descriptionUrl: string;
+    fetchedAt: string;
+    stale: boolean;
+  }>("/api/risk-analytics/polonia", { signal });
 
 export const fetchEspiFeed = async ({
   scope = "mine",

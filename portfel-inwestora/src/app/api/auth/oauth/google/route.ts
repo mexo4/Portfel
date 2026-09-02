@@ -2,7 +2,6 @@ import { NextResponse } from "next/server";
 import {
   createGoogleOAuthPending,
   getGoogleAuthorizationUrl,
-  getGoogleOAuthConfigurationPresence,
   getGoogleOAuthCookieOptions,
   getOAuthApplicationUrl,
   GOOGLE_OAUTH_STATE_COOKIE_NAME,
@@ -18,9 +17,6 @@ const redirectToLogin = (message: string) => {
 };
 
 export async function GET() {
-  // TEMP: remove after the Netlify Functions environment is confirmed in production.
-  console.info("[auth/google] OAuth configuration", getGoogleOAuthConfigurationPresence());
-
   try {
     const { pending, cookieValue } = createGoogleOAuthPending();
     const response = NextResponse.redirect(getGoogleAuthorizationUrl(pending));

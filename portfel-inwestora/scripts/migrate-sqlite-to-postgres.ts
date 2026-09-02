@@ -1,9 +1,10 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
-const fs = require("node:fs");
-const path = require("node:path");
-const { DatabaseSync } = require("node:sqlite");
-const { loadEnvConfig } = require("@next/env");
-const { Pool } = require("pg");
+import fs from "node:fs";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { fileURLToPath } from "node:url";
+import { loadEnvConfig } from "@next/env";
+import { Pool } from "pg";
 
 type TableDefinition = {
   name: string;
@@ -20,7 +21,8 @@ type PortfolioMergeReport = {
   addedPortfolios: number;
 };
 
-const appRoot = path.resolve(__dirname, "..");
+const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
+const appRoot = path.resolve(scriptDirectory, "..");
 const sqlitePath = path.join(appRoot, ".data", "portfel-inwestora.db");
 
 loadEnvConfig(appRoot);

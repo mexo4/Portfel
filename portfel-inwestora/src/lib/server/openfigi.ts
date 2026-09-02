@@ -1,5 +1,3 @@
-import { Agent, request as httpsRequest } from "node:https";
-import * as tls from "node:tls";
 import {
   searchEodhdEtfPriceCandidates,
   searchEodhdEtfs,
@@ -27,113 +25,11 @@ type JsonRecord = Record<string, unknown>;
 type FetchLike = typeof fetch;
 type OpenFigiPath = "/filter" | "/mapping";
 
-type CertificateStore = "default" | "system";
-
-type TlsCertificateReader = {
-  getCACertificates?: (store?: CertificateStore) => string[];
-};
-
 /**
- * Node's bundled CA store can differ from the operating system store.  On a
- * locally managed Windows network that left OpenFIGI with an otherwise-valid
- * certificate chain untrusted, while the OS trusted it.  Merge both stores
- * for this outbound provider only; this preserves TLS verification and never
- * weakens `rejectUnauthorized`.
+ * The Workers runtime uses its verified Web Fetch implementation. Local
+ * development uses the system CA store through the existing Node dev command.
  */
-const getOpenFigiTrustedCertificates = () => {
-  const readCertificates = (tls as unknown as TlsCertificateReader).getCACertificates;
-
-  if (!readCertificates) {
-    return undefined;
-  }
-
-  try {
-    return Array.from(
-      new Set([...readCertificates("default"), ...readCertificates("system")])
-    );
-  } catch {
-    // Older runtimes keep their normal bundled trust chain.
-    return undefined;
-  }
-};
-
-const openFigiHttpsAgent = new Agent({
-  keepAlive: true,
-  maxSockets: 2,
-  ca: getOpenFigiTrustedCertificates(),
-});
-
-const toNodeHeaders = (headers?: HeadersInit) => {
-  const result: Record<string, string> = {};
-  const normalized = new Headers(headers);
-
-  normalized.forEach((value, name) => {
-    result[name] = value;
-  });
-
-  return result;
-};
-
-/**
- * Isolated OpenFIGI transport.  The rest of the application continues using
- * its existing fetch path and stock resolvers are not affected.
- */
-const fetchOpenFigiWithSystemTrust: FetchLike = async (input, init) => {
-  const target =
-    typeof input === "string"
-      ? input
-      : input instanceof URL
-        ? input.toString()
-        : input.url;
-  const body = init?.body;
-
-  // OpenFIGI requests use a JSON string.  Preserve the standard fetch
-  // fallback for any future unsupported stream body instead of buffering it.
-  if (body !== undefined && body !== null && typeof body !== "string") {
-    return fetch(input, init);
-  }
-
-  return new Promise<Response>((resolve, reject) => {
-    const request = httpsRequest(
-      target,
-      {
-        method: init?.method ?? "GET",
-        headers: toNodeHeaders(init?.headers),
-        agent: openFigiHttpsAgent,
-        signal: init?.signal ?? undefined,
-      },
-      (response) => {
-        const chunks: Buffer[] = [];
-
-        response.on("data", (chunk: Buffer | Uint8Array) => {
-          chunks.push(Buffer.from(chunk));
-        });
-        response.once("error", reject);
-        response.once("end", () => {
-          const headers = new Headers();
-
-          Object.entries(response.headers).forEach(([name, value]) => {
-            if (Array.isArray(value)) {
-              value.forEach((item) => headers.append(name, item));
-            } else if (value !== undefined) {
-              headers.set(name, String(value));
-            }
-          });
-
-          resolve(
-            new Response(Buffer.concat(chunks), {
-              status: response.statusCode ?? 502,
-              headers,
-            })
-          );
-        });
-      }
-    );
-
-    request.once("error", reject);
-    request.end(body ?? undefined);
-  });
-};
+const fetchOpenFigiWithSystemTrust: FetchLike = (input, init) => fetch(input, init);
 
 type OpenFigiFilterResponse = {
   data?: unknown[];

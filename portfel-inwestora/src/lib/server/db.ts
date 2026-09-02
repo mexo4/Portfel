@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { Pool, type PoolClient, type QueryResultRow } from "pg";
+import { Client, type QueryResultRow } from "pg";
 
 type QueryParameter = string | number | boolean | null | string[] | number[];
 
@@ -7,11 +7,6 @@ export type DatabaseTransaction = {
   query: <T>(statement: string, parameters?: QueryParameter[]) => Promise<T[]>;
   execute: (statement: string, parameters?: QueryParameter[]) => Promise<void>;
 };
-
-declare global {
-  var portfelPostgresPool: Pool | undefined;
-  var portfelSchemaInitialization: Promise<void> | null | undefined;
-}
 
 const getDatabaseUrl = () => {
   const databaseUrl = process.env.DATABASE_URL;
@@ -56,27 +51,65 @@ const getSslConfiguration = () => {
   };
 };
 
-const getPool = () => {
-  if (!globalThis.portfelPostgresPool) {
-    const ssl = getSslConfiguration();
+type CloudflareWorkersModule = {
+  env?: {
+    HYPERDRIVE?: {
+      connectionString?: string;
+    };
+  };
+};
 
-    globalThis.portfelPostgresPool = new Pool({
-      // When a CA is supplied (Aiven), provide an explicit verified TLS
-      // configuration. Otherwise preserve the TLS policy encoded in an
-      // existing standard PostgreSQL URI (for example sslmode=require).
-      connectionString: ssl ? getConnectionString() : getDatabaseUrl(),
-      ...(ssl ? { ssl } : {}),
-      // A small, shared pool works both on serverless runtimes and Aiven Free,
-      // where each runtime should consume as few database connections as possible.
-      max: 2,
-      // Keep a verified TLS connection across normal route changes. Ten
-      // seconds forced an avoidable Aiven handshake after a short pause.
-      idleTimeoutMillis: 30_000,
-      connectionTimeoutMillis: 10_000,
-    });
+const getHyperdriveConnectionString = async () => {
+  try {
+    // Dynamic import keeps the Node test runner and local migration scripts
+    // usable while vinext resolves this built-in module in Workers.
+    const cloudflareWorkers = (await import("cloudflare:workers")) as CloudflareWorkersModule;
+    return cloudflareWorkers.env?.HYPERDRIVE?.connectionString;
+  } catch {
+    return undefined;
+  }
+};
+
+const getClientConfiguration = async () => {
+  // In a deployed Worker Hyperdrive owns the origin pool and verified TLS
+  // session. The Node fallback is used only by local scripts and local dev.
+  const hyperdriveConnectionString = await getHyperdriveConnectionString();
+
+  if (hyperdriveConnectionString) {
+    return { connectionString: hyperdriveConnectionString };
   }
 
-  return globalThis.portfelPostgresPool;
+  const ssl = getSslConfiguration();
+
+  return {
+    connectionString: ssl ? getConnectionString() : getDatabaseUrl(),
+    ...(ssl ? { ssl } : {}),
+    connectionTimeoutMillis: 10_000,
+  };
+};
+
+const withClient = async <T>(callback: (client: Client) => Promise<T>) => {
+  // A Client is intentionally scoped to this database operation. Workers may
+  // reuse an isolate after its request has completed, but I/O objects may not
+  // cross that request boundary. Hyperdrive performs safe pooling upstream.
+  const client = new Client(await getClientConfiguration());
+  let operationError: unknown;
+
+  try {
+    await client.connect();
+    return await callback(client);
+  } catch (error) {
+    operationError = error;
+    throw error;
+  } finally {
+    try {
+      await client.end();
+    } catch (closeError) {
+      if (!operationError) {
+        throw closeError;
+      }
+    }
+  }
 };
 
 const schemaStatements = [
@@ -577,45 +610,103 @@ const schemaStatements = [
   "ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL",
 ] as const;
 
-export const initializeDatabase = async () => {
-  if (!globalThis.portfelSchemaInitialization) {
-    globalThis.portfelSchemaInitialization = (async () => {
-      const client = await getPool().connect();
+const schemaBatch = schemaStatements.map((statement) => `${statement.trim()};`).join("\n");
 
-      try {
-        await client.query("BEGIN");
-        // These are independent idempotent schema guards. Sending them as one
-        // PostgreSQL batch removes one Aiven round-trip per table and index.
-        await client.query(
-          schemaStatements.map((statement) => `${statement.trim()};`).join("\n")
-        );
-        await client.query("COMMIT");
-      } catch (error) {
-        try {
-          await client.query("ROLLBACK");
-        } catch {
-          // Preserve the original initialization error.
-        }
-        throw error;
-      } finally {
-        client.release();
-      }
-    })().catch((error) => {
-      globalThis.portfelSchemaInitialization = null;
-      throw error;
-    });
+const getSchemaFingerprint = async () => {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(schemaBatch)
+  );
+
+  return Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, "0")
+  ).join("");
+};
+
+const hasPostgresErrorCode = (error: unknown, code: string) =>
+  typeof error === "object" &&
+  error !== null &&
+  "code" in error &&
+  error.code === code;
+
+const isSchemaApplied = async (client: Client, fingerprint: string) => {
+  try {
+    const result = await client.query<{ exists: boolean }>(
+      "SELECT EXISTS(SELECT 1 FROM portfel_schema_migrations WHERE fingerprint = $1) AS exists",
+      [fingerprint]
+    );
+    return result.rows[0]?.exists === true;
+  } catch (error) {
+    // PostgreSQL's undefined_table. A first deployment creates the state
+    // table under the advisory lock below.
+    if (hasPostgresErrorCode(error, "42P01")) {
+      return false;
+    }
+    throw error;
+  }
+};
+
+const initializeDatabaseWithClient = async (client: Client) => {
+  const fingerprint = await getSchemaFingerprint();
+
+  if (await isSchemaApplied(client, fingerprint)) {
+    return;
   }
 
-  return globalThis.portfelSchemaInitialization;
+  let transactionStarted = false;
+
+  try {
+    await client.query("BEGIN");
+    transactionStarted = true;
+    // DDL has to be serialized across concurrent first requests. The lock is
+    // owned by this transaction and is released on COMMIT or ROLLBACK.
+    await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
+      "mexo-postgres-schema",
+    ]);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS portfel_schema_migrations (
+        fingerprint TEXT PRIMARY KEY,
+        applied_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    if (await isSchemaApplied(client, fingerprint)) {
+      await client.query("COMMIT");
+      transactionStarted = false;
+      return;
+    }
+
+    await client.query(schemaBatch);
+    await client.query(
+      "INSERT INTO portfel_schema_migrations (fingerprint) VALUES ($1) ON CONFLICT DO NOTHING",
+      [fingerprint]
+    );
+    await client.query("COMMIT");
+    transactionStarted = false;
+  } catch (error) {
+    if (transactionStarted) {
+      try {
+        await client.query("ROLLBACK");
+      } catch {
+        // Preserve the schema initialization error.
+      }
+    }
+    throw error;
+  }
 };
+
+export const initializeDatabase = async () =>
+  withClient(async (client) => initializeDatabaseWithClient(client));
 
 export const query = async <T>(
   statement: string,
   parameters: QueryParameter[] = []
 ) => {
-  await initializeDatabase();
-  const result = await getPool().query<T & QueryResultRow>(statement, parameters);
-  return result.rows;
+  return withClient(async (client) => {
+    await initializeDatabaseWithClient(client);
+    const result = await client.query<T & QueryResultRow>(statement, parameters);
+    return result.rows;
+  });
 };
 
 export const queryOne = async <T>(
@@ -633,7 +724,7 @@ export const execute = async (
   await query<Record<string, never>>(statement, parameters);
 };
 
-const createTransaction = (client: PoolClient): DatabaseTransaction => ({
+const createTransaction = (client: Client): DatabaseTransaction => ({
   query: async <T>(statement: string, parameters: QueryParameter[] = []) => {
     const result = await client.query<T & QueryResultRow>(statement, parameters);
     return result.rows;
@@ -645,24 +736,27 @@ const createTransaction = (client: PoolClient): DatabaseTransaction => ({
 
 export const withTransaction = async <T>(
   callback: (transaction: DatabaseTransaction) => Promise<T>
-) => {
-  await initializeDatabase();
-  const client = await getPool().connect();
+) =>
+  withClient(async (client) => {
+    await initializeDatabaseWithClient(client);
+    let transactionStarted = false;
 
-  try {
-    await client.query("BEGIN");
-    const result = await callback(createTransaction(client));
-    await client.query("COMMIT");
-    return result;
-  } catch (error) {
     try {
-      await client.query("ROLLBACK");
-    } catch {
-      // The original database error is more useful to the caller.
-    }
+      await client.query("BEGIN");
+      transactionStarted = true;
+      const result = await callback(createTransaction(client));
+      await client.query("COMMIT");
+      transactionStarted = false;
+      return result;
+    } catch (error) {
+      if (transactionStarted) {
+        try {
+          await client.query("ROLLBACK");
+        } catch {
+          // The original database error is more useful to the caller.
+        }
+      }
 
-    throw error;
-  } finally {
-    client.release();
-  }
-};
+      throw error;
+    }
+  });

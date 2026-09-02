@@ -20,17 +20,17 @@ test("login enters the dashboard directly without the legacy app redirect", asyn
   assert.match(googleCallback, /getOAuthApplicationUrl\("\/dashboard"\)/);
 });
 
-test("database initialization is shared and batched while the pool stays small", async () => {
+test("database access is request-scoped and Hyperdrive owns connection pooling", async () => {
   const database = await readSource("src/lib/server/db.ts");
 
-  assert.match(database, /var portfelSchemaInitialization/);
+  assert.match(database, /import\("cloudflare:workers"\)/);
+  assert.match(database, /new Client\(await getClientConfiguration\(\)\)/);
+  assert.match(database, /await client\.end\(\)/);
+  assert.match(database, /pg_advisory_xact_lock/);
   assert.match(database, /schemaStatements\.map\(\(statement\)/);
-  assert.match(database, /max:\s*2/);
-  assert.match(database, /idleTimeoutMillis:\s*30_000/);
-  assert.doesNotMatch(
-    database,
-    /for \(const statement of schemaStatements\) \{\s*await getPool\(\)\.query/
-  );
+  assert.doesNotMatch(database, /\bPool\b/);
+  assert.doesNotMatch(database, /globalThis\.portfel/);
+  assert.doesNotMatch(database, /client\.release\(\)/);
 });
 
 test("broker import persists first and leaves quotes to the shared background refresh", async () => {

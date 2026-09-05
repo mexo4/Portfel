@@ -240,6 +240,11 @@ function Metric({ label, value, detail, tone }: {
 const formatPercent = (value: number | null | undefined) =>
   value === null || value === undefined || !Number.isFinite(value) ? "Brak danych" : `${value >= 0 ? "+" : ""}${value.toFixed(2)}%`;
 
+const formatEventTime = (eventTime: string) => {
+  const match = eventTime.match(/^(\d{1,2}):(\d{2})/);
+  return match ? `${match[1].padStart(2, "0")}:${match[2]}` : eventTime;
+};
+
 function PortfolioStateWidget() {
   const workspace = usePortfolioWorkspace();
   const data = useDashboardData();
@@ -483,7 +488,7 @@ function EventsWidget({ mode }: { mode: "reports" | "dividends" | "timeline" | "
   return <WidgetShell eyebrow="Kalendarz" title={title} href={workspace.getReadHref(mode === "dividends" ? "/portfolio/dividends" : "/market/events")}>
     {data.isEventsLoading ? <EmptyState>Wczytywanie jednego wspólnego kalendarza…</EmptyState> : data.eventsError ? <EmptyState>Kalendarz jest chwilowo niedostępny.</EmptyState> : items.length ? <div className="dashboard-event-list">{items.map((event) => {
       const date = event.eventType === "UPCOMING_DIVIDEND" ? getUpcomingDividendRelevantDate(event) ?? event.eventDate : event.eventDate;
-      return <article key={event.id}><time dateTime={date}><strong>{new Date(`${date}T00:00:00`).getDate()}</strong><span>{new Intl.DateTimeFormat("pl-PL", { month: "short" }).format(new Date(`${date}T00:00:00`)).replace(".", "")}</span></time><div><strong>{event.companyName}</strong><span>{event.eventType === "UPCOMING_DIVIDEND" ? `${formatCurrency(event.dividendPerShare ?? 0, event.dividendCurrency ?? "PLN")} / akcję` : getCorporateEventLabel(event)}</span><small>{trackingLabel(event)}</small></div></article>;
+      return <article key={event.id}><time dateTime={date}><strong>{new Date(`${date}T00:00:00`).getDate()}</strong><span>{new Intl.DateTimeFormat("pl-PL", { month: "short" }).format(new Date(`${date}T00:00:00`)).replace(".", "")}</span></time><div><strong>{event.companyName}</strong><span>{event.eventType === "UPCOMING_DIVIDEND" ? `${formatCurrency(event.dividendPerShare ?? 0, event.dividendCurrency ?? "PLN")} / akcję` : getCorporateEventLabel(event)}</span><small>{event.eventType === "GENERAL_MEETING" && event.eventTime ? `godz. ${formatEventTime(event.eventTime)} · ` : ""}{trackingLabel(event)}</small></div></article>;
     })}</div> : <EmptyState>Brak przyszłych wydarzeń w tym zakresie.</EmptyState>}
   </WidgetShell>;
 }

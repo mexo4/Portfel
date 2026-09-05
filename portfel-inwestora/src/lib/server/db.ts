@@ -410,6 +410,8 @@ const schemaStatements = [
       record_date TEXT,
       payment_date TEXT,
       dividend_installment INTEGER,
+      general_meeting_type TEXT,
+      registration_date TEXT,
       status TEXT NOT NULL,
       active BOOLEAN NOT NULL DEFAULT TRUE,
       source_published_at TEXT,
@@ -429,6 +431,8 @@ const schemaStatements = [
   "ALTER TABLE corporate_events ADD COLUMN IF NOT EXISTS record_date TEXT",
   "ALTER TABLE corporate_events ADD COLUMN IF NOT EXISTS payment_date TEXT",
   "ALTER TABLE corporate_events ADD COLUMN IF NOT EXISTS dividend_installment INTEGER",
+  "ALTER TABLE corporate_events ADD COLUMN IF NOT EXISTS general_meeting_type TEXT",
+  "ALTER TABLE corporate_events ADD COLUMN IF NOT EXISTS registration_date TEXT",
   `
     UPDATE corporate_events
     SET event_identity = event_type || ':' || COALESCE(fiscal_period, '') || ':' || COALESCE(fiscal_year::TEXT, '')
@@ -443,6 +447,11 @@ const schemaStatements = [
     WHERE active = TRUE
   `,
   "CREATE INDEX IF NOT EXISTS idx_corporate_events_date ON corporate_events(event_date) WHERE active = TRUE",
+  `
+    CREATE INDEX IF NOT EXISTS idx_corporate_events_general_meeting_lookup
+    ON corporate_events(instrument_id, general_meeting_type, event_date)
+    WHERE event_type = 'GENERAL_MEETING'
+  `,
   `
     CREATE TABLE IF NOT EXISTS corporate_event_sources (
       id TEXT PRIMARY KEY,

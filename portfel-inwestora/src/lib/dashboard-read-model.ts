@@ -70,9 +70,12 @@ export const getDashboardOperations = (
 export const getDashboardUpcomingEvents = (events: CorporateEvent[], limit = 6) => {
   const byIdentity = new Map<string, CorporateEvent>();
   events.forEach((event) => {
+    if (event.active === false || event.status === "CANCELLED") return;
     const date = event.eventType === "UPCOMING_DIVIDEND" ? getUpcomingDividendRelevantDate(event) : event.eventDate;
     if (!date) return;
-    const key = `${event.instrumentId}:${event.eventType}:${event.fiscalPeriod ?? event.dividendInstallment ?? ""}:${event.fiscalYear ?? ""}`;
+    const key = event.eventType === "GENERAL_MEETING"
+      ? `${event.instrumentId}:${event.eventType}:${event.id}`
+      : `${event.instrumentId}:${event.eventType}:${event.fiscalPeriod ?? event.dividendInstallment ?? ""}:${event.fiscalYear ?? ""}`;
     const current = byIdentity.get(key);
     const currentDate = current?.eventType === "UPCOMING_DIVIDEND" ? getUpcomingDividendRelevantDate(current) : current?.eventDate;
     if (!current || date < (currentDate ?? "9999-12-31")) byIdentity.set(key, event);

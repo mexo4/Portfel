@@ -70,7 +70,7 @@ export const DASHBOARD_WIDGET_DEFINITIONS: readonly DashboardWidgetDefinition[] 
   widget("recent-cash-flows", "activity", "Ostatnie wpłaty i wypłaty", "Najnowsze przepływy gotówkowe.", ["medium", "large"], "medium"),
   widget("recent-dividends", "activity", "Ostatnie dywidendy", "Ostatnio zaksięgowane wypłaty.", ["medium", "large"], "medium"),
   widget("upcoming-dividends", "calendar", "Nadchodzące dywidendy", "Najbliższe oficjalne wydarzenia dywidendowe.", ["medium", "large", "full"], "medium"),
-  widget("gpw-events", "calendar", "Wydarzenia GPW", "Najbliższe potwierdzone raporty.", ["medium", "large", "full"], "medium"),
+  widget("gpw-events", "calendar", "Wydarzenia GPW", "Najbliższe raporty i walne zgromadzenia.", ["medium", "large", "full"], "medium"),
   widget("upcoming-timeline", "calendar", "Nadchodzące", "Wspólna, deduplikowana oś raportów i dywidend.", ["medium", "large", "full"], "large"),
   widget("watchlist", "calendar", "Watchlista", "Obserwowane spółki i dostępne kursy.", ["medium", "large"], "medium"),
   widget("watchlist-events", "calendar", "Najbliższe wydarzenia obserwowanych", "Wydarzenia spółek dodanych do obserwowanych.", ["medium", "large"], "medium"),

@@ -5,6 +5,7 @@ import {
   getCorporateEventLabel,
   getDaysUntilCorporateEvent,
   isCorporateEventSourceUnavailable,
+  type CorporateEvent,
   type CorporateEventsResponse,
 } from "@/lib/corporate-events";
 import { fetchCorporateEvents } from "@/lib/api";
@@ -34,6 +35,17 @@ const getRelativeDateLabel = (eventDate: string) => {
   if (days === 0) return "dzisiaj";
   if (days === 1) return "jutro";
   return `za ${days} dni`;
+};
+
+const formatEventTime = (eventTime: string) => {
+  const match = eventTime.match(/^(\d{1,2}):(\d{2})/);
+  return match ? `${match[1].padStart(2, "0")}:${match[2]}` : eventTime;
+};
+
+const getEventStatusLabel = (event: CorporateEvent) => {
+  if (event.status === "CHANGED") return "Termin zmieniony";
+  if (event.status === "CONFIRMED") return "Termin potwierdzony";
+  return null;
 };
 
 export default function CorporateEventsPanel({ portfolioId }: CorporateEventsPanelProps) {
@@ -68,7 +80,10 @@ export default function CorporateEventsPanel({ portfolioId }: CorporateEventsPan
     data?.sourceStates.length &&
     data.sourceStates.every((source) => isCorporateEventSourceUnavailable(source.status));
   const reportEvents = (data?.events ?? []).filter(
-    (event) => event.eventType !== "UPCOMING_DIVIDEND"
+    (event) =>
+      event.eventType !== "UPCOMING_DIVIDEND" &&
+      event.active !== false &&
+      event.status !== "CANCELLED"
   );
 
   return (
@@ -78,10 +93,10 @@ export default function CorporateEventsPanel({ portfolioId }: CorporateEventsPan
           <p className="eyebrow">Kalendarz GPW</p>
           <h2 className="section-title">Wydarzenia GPW</h2>
         </div>
-        <span className="tag">najbliższe 60 dni</span>
+        <span className="tag">raporty · WZA · 60 dni</span>
       </div>
 
-      {isLoading ? <p className="corporate-events-state">Sprawdzanie zapisanych terminów…</p> : null}
+      {isLoading ? <p className="corporate-events-state">Sprawdzanie zapisanych wydarzeń…</p> : null}
       {hasError ? (
         <p className="field-note field-note-error mt-4">Nie udało się pobrać wydarzeń GPW. Spróbuj ponownie później.</p>
       ) : null}
@@ -94,7 +109,7 @@ export default function CorporateEventsPanel({ portfolioId }: CorporateEventsPan
         <p className="corporate-events-state">
           {allSourcesUnavailable
             ? "Źródła wydarzeń są chwilowo niedostępne. Zachowamy ostatnie potwierdzone terminy, gdy będą dostępne."
-            : "Brak potwierdzonych przyszłych terminów raportów dla śledzonych spółek."}
+            : "Brak potwierdzonych przyszłych wydarzeń dla śledzonych spółek."}
         </p>
       ) : null}
 
@@ -102,7 +117,11 @@ export default function CorporateEventsPanel({ portfolioId }: CorporateEventsPan
         <div className="corporate-events-list" aria-label="Nadchodzące wydarzenia">
           {reportEvents.map((event) => {
             const date = formatEventDateParts(event.eventDate);
-            const isConfirmed = event.status === "CONFIRMED" || event.status === "CHANGED";
+            const statusLabel = getEventStatusLabel(event);
+            const isGeneralMeeting = event.eventType === "GENERAL_MEETING";
+            const registrationDate = event.registrationDate
+              ? formatEventDateParts(event.registrationDate)
+              : null;
 
             return (
               <article className="corporate-event-row" key={event.id}>
@@ -112,11 +131,40 @@ export default function CorporateEventsPanel({ portfolioId }: CorporateEventsPan
                 </time>
                 <div className="corporate-event-copy">
                   <strong>{event.companyName}</strong>
-                  <span>{getCorporateEventLabel(event)}</span>
-                  <small>
-                    {date.long} · {getRelativeDateLabel(event.eventDate)}
-                    {isConfirmed ? " · Termin potwierdzony" : ""}
+                  <div className="corporate-event-title-line">
+                    <span>{getCorporateEventLabel(event)}</span>
+                    {isGeneralMeeting && event.generalMeetingType ? (
+                      <abbr title={event.generalMeetingType === "ZWZ" ? "Zwyczajne Walne Zgromadzenie" : "Nadzwyczajne Walne Zgromadzenie"}>
+                        {event.generalMeetingType}
+                      </abbr>
+                    ) : null}
+                  </div>
+                  <small className="corporate-event-schedule">
+                    <span>{date.long}</span>
+                    {event.eventTime ? (
+                      <>
+                        <span aria-hidden="true">·</span>
+                        <time dateTime={`${event.eventDate}T${event.eventTime}`}>
+                          godz. {formatEventTime(event.eventTime)}
+                        </time>
+                      </>
+                    ) : null}
+                    <span aria-hidden="true">·</span>
+                    <span>{getRelativeDateLabel(event.eventDate)}</span>
+                    {statusLabel ? (
+                      <span className={`corporate-event-status is-${event.status.toLocaleLowerCase()}`}>
+                        {statusLabel}
+                      </span>
+                    ) : null}
                   </small>
+                  {isGeneralMeeting && registrationDate ? (
+                    <div className="corporate-event-registration">
+                      <span>
+                        Dzień rejestracji: <time dateTime={event.registrationDate}>{registrationDate.long}</time>
+                      </span>
+                      <small>16 dni przed WZA · szczegóły uczestnictwa sprawdź u brokera</small>
+                    </div>
+                  ) : null}
                 </div>
                 {event.source?.sourceUrl ? (
                   <a

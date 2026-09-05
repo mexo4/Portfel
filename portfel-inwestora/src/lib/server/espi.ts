@@ -35,7 +35,7 @@ import type { WatchlistItem } from "@/lib/watchlist";
 import type { InvestmentPortfolio, PortfolioInstrument } from "@/types/portfolio";
 
 const PAP_SOURCE = "PAP_ESPI" as const;
-const PAP_FEED_URL = "https://pap-mediaroom.pl/zrodlo/ESPI";
+export const PAP_ESPI_FEED_URL = "https://pap-mediaroom.pl/zrodlo/ESPI";
 const ESPI_REFRESH_TTL_MS = 10 * 60 * 1_000;
 const ESPI_SOURCE_TIMEOUT_MS = 15_000;
 const ESPI_LOCK_TTL_MS = 3 * 60 * 1_000;
@@ -114,6 +114,14 @@ export type EspiSynchronizationResult = {
   locked: boolean;
 };
 
+export type StoredEspiCorporateEventReport = {
+  sourceId: string;
+  title: string;
+  body: string;
+  publishedAt: string;
+  sourceUrl: string;
+};
+
 const isDiagnosticsEnabled = () => process.env.ESPI_DIAGNOSTICS === "true";
 const diagnose = (payload: Record<string, unknown>) => {
   if (isDiagnosticsEnabled()) console.info("espi", payload);
@@ -154,7 +162,8 @@ const fetchPapHtml = async (url: string) => {
   }
 };
 
-const getFeedPageUrl = (page: number) => page > 0 ? `${PAP_FEED_URL}?page=${page}` : PAP_FEED_URL;
+const getFeedPageUrl = (page: number) =>
+  page > 0 ? `${PAP_ESPI_FEED_URL}?page=${page}` : PAP_ESPI_FEED_URL;
 
 export const getEspiSyncState = async (): Promise<EspiSyncMeta & { nextBackfillPage: number; backfillComplete: boolean }> => {
   const row = await queryOne<EspiSyncStateRow>(
@@ -430,6 +439,62 @@ const getStoredSourceIds = async (candidates: PapEspiListCandidate[]) => {
     [PAP_SOURCE, candidates.map((candidate) => candidate.sourceId)]
   );
   return new Set(rows.map((row) => row.source_id));
+};
+
+/**
+ * Read the already-normalized central ESPI cache for Corporate Events.
+ *
+ * This deliberately does not fetch PAP itself. The caller can use the shared
+ * synchronizePapEspi TTL/lock before reading, so WZA discovery never creates a
+ * second per-user or per-issuer crawler. The title predicate keeps large report
+ * bodies out of the DB-to-runtime payload unless the report can actually be a
+ * general-meeting notice; the deterministic Corporate Events parser remains
+ * the final authority on whether the notice creates an event.
+ */
+export const getStoredEspiReportsForCorporateEvents = async ({
+  instrumentId,
+  limit = 80,
+}: {
+  instrumentId: string;
+  limit?: number;
+}): Promise<StoredEspiCorporateEventReport[]> => {
+  const boundedLimit = Math.min(Math.max(Math.trunc(limit), 1), 100);
+  const publishedAfter = new Date(Date.now() - 730 * 24 * 60 * 60 * 1_000).toISOString();
+  const rows = await query<{
+    source_id: string;
+    source_title: string;
+    title: string;
+    body_text: string;
+    published_at: string;
+    source_url: string;
+  }>(
+    `
+      SELECT source_id, source_title, title, body_text, published_at, source_url
+      FROM espi_reports
+      WHERE source = $1
+        AND issuer_id = $2
+        AND published_at >= $3
+        AND (
+          category = 'GENERAL_MEETING'
+          OR
+          source_title ILIKE '%waln%zgromadz%'
+          OR title ILIKE '%waln%zgromadz%'
+          OR source_title ~* '(^|[^[:alnum:]])(ZWZ|NWZ)([^[:alnum:]]|$)'
+          OR title ~* '(^|[^[:alnum:]])(ZWZ|NWZ)([^[:alnum:]]|$)'
+        )
+      ORDER BY published_at DESC, source_id DESC
+      LIMIT $4
+    `,
+    [PAP_SOURCE, instrumentId, publishedAfter, boundedLimit]
+  );
+
+  return rows.map((row) => ({
+    sourceId: row.source_id,
+    title: row.source_title || row.title,
+    body: row.body_text,
+    publishedAt: normalizeIso(row.published_at),
+    sourceUrl: row.source_url,
+  }));
 };
 
 const reconcileStoredEspiMetadata = async () => {

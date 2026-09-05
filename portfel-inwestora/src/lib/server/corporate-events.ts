@@ -14,6 +14,12 @@ import {
 } from "@/lib/corporate-events";
 import { getGpwTickerCore, isGpwSymbol, normalizeGpwSymbol } from "@/lib/ticker";
 import { query, queryOne, withTransaction, type DatabaseTransaction } from "@/lib/server/db";
+import {
+  getStoredEspiReportsForCorporateEvents,
+  PAP_ESPI_FEED_URL,
+  synchronizePapEspi,
+  type StoredEspiCorporateEventReport,
+} from "@/lib/server/espi";
 import { findGpwCatalogEntry } from "@/lib/server/gpw-catalog";
 import { getMarketCachePayload, setMarketCachePayload } from "@/lib/server/market-cache";
 import { fetchWithSystemTrust } from "@/lib/server/system-trust-fetch";
@@ -53,6 +59,8 @@ type EventRow = {
   event_time: string | null;
   fiscal_period: string | null;
   fiscal_year: number | null;
+  general_meeting_type: "ZWZ" | "NWZ" | null;
+  registration_date: string | null;
   dividend_per_share: number | null;
   dividend_total_per_share: number | null;
   dividend_advance_per_share: number | null;
@@ -79,8 +87,11 @@ type ExistingEventRow = Pick<
   | "source_published_at"
   | "source_type"
   | "updated_at"
+  | "active"
+  | "general_meeting_type"
 > & {
   source_priority: number;
+  event_identity: string;
 };
 
 type IssuerSource = {
@@ -88,10 +99,16 @@ type IssuerSource = {
   url: string;
 };
 
+type ProviderEventBatch = {
+  source: CorporateEventSourceReference;
+  events: ParsedCorporateEvent[];
+};
+
 type ProviderResult = {
   status: CorporateEventSourceStatus;
   source?: CorporateEventSourceReference;
   events: ParsedCorporateEvent[];
+  batches?: ProviderEventBatch[];
   durationMs?: number;
 };
 
@@ -153,7 +170,14 @@ const GPW_ISSUER_SOURCE_REGISTRY: Record<string, IssuerSource[]> = {
   ],
 };
 
-const sourcePriority = (sourceType: CorporateEventSourceType, isChange: boolean) => {
+const sourcePriority = (
+  sourceType: CorporateEventSourceType,
+  isChange: boolean,
+  isCancellation = false
+) => {
+  // A formal cancellation must win over an earlier convening or reschedule.
+  // Publication timestamps still protect the record from an older notice.
+  if (isCancellation) return 500;
   if (isChange) return 400;
   if (sourceType === "ISSUER_CURRENT_REPORT") return 300;
   if (sourceType === "ISSUER_IR") return 200;
@@ -620,12 +644,88 @@ export class PapEspiCorporateEventProvider implements CorporateEventProvider {
   }
 }
 
+let corporateEventsEspiSyncInFlight: Promise<Awaited<ReturnType<typeof synchronizePapEspi>>> | null = null;
+
+const synchronizeCorporateEventsEspi = () => {
+  if (corporateEventsEspiSyncInFlight) return corporateEventsEspiSyncInFlight;
+  corporateEventsEspiSyncInFlight = synchronizePapEspi().finally(() => {
+    corporateEventsEspiSyncInFlight = null;
+  });
+  return corporateEventsEspiSyncInFlight;
+};
+
+/**
+ * WZA uses the same central PAP/ESPI ingestion, TTL and lock as the ESPI feed.
+ * It only parses normalized reports already stored in `espi_reports`; it never
+ * starts a second issuer crawler or fetches individual PAP pages itself.
+ */
+export class StoredPapEspiGeneralMeetingProvider implements CorporateEventProvider {
+  id = "stored-pap-espi-general-meeting";
+
+  async fetchEvents(instrument: CanonicalInstrument): Promise<ProviderResult> {
+    const startedAt = Date.now();
+    let synchronization: Awaited<ReturnType<typeof synchronizePapEspi>>;
+    let reports: StoredEspiCorporateEventReport[];
+
+    try {
+      synchronization = await synchronizeCorporateEventsEspi();
+      reports = await getStoredEspiReportsForCorporateEvents({ instrumentId: instrument.id });
+    } catch {
+      return {
+        status: "TEMPORARILY_UNAVAILABLE",
+        events: [],
+        source: { sourceType: "PAP_ESPI", sourceUrl: PAP_ESPI_FEED_URL },
+        durationMs: Date.now() - startedAt,
+      };
+    }
+
+    const batches = reports
+      // Apply the public notices chronologically. Source timestamps provide a
+      // second deterministic guard against a stale report winning later.
+      .sort((left, right) => left.publishedAt.localeCompare(right.publishedAt))
+      .flatMap((report): ProviderEventBatch[] => {
+        const events = parseCorporateEventDocument(`${report.title}\n${report.body}`)
+          .filter((event) => event.eventType === "GENERAL_MEETING");
+        return events.length === 0
+          ? []
+          : [{
+              events,
+              source: {
+                sourceType: "PAP_ESPI",
+                sourceUrl: report.sourceUrl,
+                sourcePublishedAt: report.publishedAt,
+              },
+            }];
+      });
+
+    if (batches.length > 0) {
+      return {
+        status: "SUCCESS",
+        events: batches.flatMap((batch) => batch.events),
+        batches,
+        source: { sourceType: "PAP_ESPI", sourceUrl: PAP_ESPI_FEED_URL },
+        durationMs: Date.now() - startedAt,
+      };
+    }
+
+    return {
+      status: isCorporateEventSourceUnavailable(synchronization.status)
+        ? synchronization.status
+        : "NOT_FOUND",
+      events: [],
+      source: { sourceType: "PAP_ESPI", sourceUrl: PAP_ESPI_FEED_URL },
+      durationMs: Date.now() - startedAt,
+    };
+  }
+}
+
 const defaultProviders: CorporateEventProvider[] = [
   new GpwIssuerIrCorporateEventProvider(0),
   new GpwIssuerIrCorporateEventProvider(1),
   new PapEspiDiscoveryCorporateEventProvider("report-change"),
   new PapEspiDiscoveryCorporateEventProvider("report-schedule"),
   new PapEspiDiscoveryCorporateEventProvider("dividend"),
+  new StoredPapEspiGeneralMeetingProvider(),
 ];
 
 const refreshInFlight = new Map<string, Promise<void>>();
@@ -721,15 +821,36 @@ const isFreshCheck = (instrument: CanonicalInstrument) => {
   return Date.now() - checkedAt < ttl;
 };
 
+const getGeneralMeetingBootstrapInstrumentIds = async (instrumentIds: string[]) => {
+  if (instrumentIds.length === 0) return new Set<string>();
+
+  const rows = await query<{ instrument_id: string }>(
+    `
+      SELECT instrument_id
+      FROM corporate_event_source_checks
+      WHERE instrument_id = ANY($1::text[])
+        AND source_type = 'PAP_ESPI'
+        AND source_url = $2
+    `,
+    [instrumentIds, PAP_ESPI_FEED_URL]
+  );
+
+  return new Set(rows.map((row) => row.instrument_id));
+};
+
 const toSourcePriority = (source: CorporateEventSourceReference, parsed: ParsedCorporateEvent) =>
-  sourcePriority(source.sourceType, parsed.isScheduleChange);
+  sourcePriority(source.sourceType, parsed.isScheduleChange, parsed.isCancellation);
 
 const getParsedEventStatus = (parsed: ParsedCorporateEvent): CorporateEventStatus =>
-  parsed.eventType === "UPCOMING_DIVIDEND"
+  parsed.isCancellation
+    ? "CANCELLED"
+    : parsed.eventType === "UPCOMING_DIVIDEND"
     ? parsed.dividendStatus ?? "UNKNOWN"
     : parsed.isScheduleChange
       ? "CHANGED"
       : "CONFIRMED";
+
+const isParsedEventActive = (parsed: ParsedCorporateEvent) => !parsed.isCancellation;
 
 const sourceTimestamp = (value: string | undefined | null) => {
   const timestamp = value ? Date.parse(value) : Number.NaN;
@@ -742,12 +863,24 @@ export const shouldApplyEvent = (
   parsed: ParsedCorporateEvent
 ) => {
   if (!existing) return true;
+  const incomingTimestamp = sourceTimestamp(source.sourcePublishedAt);
+  const existingTimestamp = sourceTimestamp(existing.source_published_at);
+
+  if (parsed.isCancellation) {
+    // Official cancellation is the terminal state for this publication
+    // sequence. When both reports are dated, an older cancellation cannot
+    // override a newer reconvening/change.
+    return incomingTimestamp === 0 || existingTimestamp === 0 || incomingTimestamp >= existingTimestamp;
+  }
+  if (existing.status === "CANCELLED") {
+    // A later formal notice may legitimately convene the meeting again, but a
+    // stale schedule discovered during backfill must never resurrect it.
+    return incomingTimestamp > 0 && incomingTimestamp > existingTimestamp;
+  }
   if (existing.status === "CONFIRMED" && getParsedEventStatus(parsed) === "PROPOSED") {
     return false;
   }
   const incomingPriority = toSourcePriority(source, parsed);
-  const incomingTimestamp = sourceTimestamp(source.sourcePublishedAt);
-  const existingTimestamp = sourceTimestamp(existing.source_published_at);
   const incomingIsChange = parsed.isScheduleChange;
   const existingIsChange = existing.status === "CHANGED";
 
@@ -774,21 +907,24 @@ export const shouldApplyEvent = (
 const upsertParsedEvents = async (
   transaction: DatabaseTransaction,
   instrument: CanonicalInstrument,
-  result: ProviderResult
+  batch: ProviderEventBatch
 ) => {
-  if (!result.source || result.events.length === 0) return;
+  if (batch.events.length === 0) return;
 
-  for (const parsed of result.events) {
+  for (const parsed of batch.events) {
     const eventIdentity = getCorporateEventIdentityKey(parsed);
-    let existing = (
+    let existing: ExistingEventRow | undefined = (
       await transaction.query<ExistingEventRow>(
         `
-          SELECT id, event_date, status, source_published_at, source_priority, source_type, updated_at
+          SELECT id, event_date, status, source_published_at, source_priority,
+                 source_type, updated_at, active, general_meeting_type, event_identity
           FROM corporate_events
           WHERE instrument_id = $1
             AND event_type = $2
             AND event_identity = $3
-            AND active = TRUE
+            AND ($2 = 'GENERAL_MEETING' OR active = TRUE)
+          ORDER BY active DESC, updated_at DESC
+          LIMIT 1
           FOR UPDATE
         `,
         [instrument.id, parsed.eventType, eventIdentity]
@@ -802,7 +938,8 @@ const upsertParsedEvents = async (
         await transaction.query<ExistingEventRow>(
           `
             SELECT event.id, event.event_date, event.status, event.source_published_at,
-                   event.source_priority, event.source_type, event.updated_at
+                   event.source_priority, event.source_type, event.updated_at,
+                   event.active, event.general_meeting_type, event.event_identity
             FROM corporate_events AS event
             INNER JOIN corporate_event_sources AS source
               ON source.corporate_event_id = event.id
@@ -820,9 +957,45 @@ const upsertParsedEvents = async (
         )
       )[0];
     }
+    if (!existing && parsed.eventType === "GENERAL_MEETING") {
+      const candidates = await transaction.query<ExistingEventRow>(
+        `
+          SELECT id, event_date, status, source_published_at, source_priority,
+                 source_type, updated_at, active, general_meeting_type, event_identity
+          FROM corporate_events
+          WHERE instrument_id = $1
+            AND event_type = 'GENERAL_MEETING'
+            AND event_date = ANY($2::text[])
+            AND (
+              $3::text IS NULL
+              OR general_meeting_type = $3
+              OR general_meeting_type IS NULL
+            )
+          ORDER BY
+            CASE WHEN general_meeting_type = $3 THEN 0 ELSE 1 END,
+            active DESC,
+            updated_at DESC
+          LIMIT 2
+          FOR UPDATE
+        `,
+        [
+          instrument.id,
+          Array.from(new Set(
+            [parsed.previousEventDate, parsed.eventDate]
+              .filter((date): date is string => Boolean(date))
+          )),
+          parsed.generalMeetingType ?? null,
+        ]
+      );
+      // Without a meeting type, a shared date may be ambiguous. Do not merge
+      // two independent meetings merely because their dates coincide.
+      existing = parsed.generalMeetingType || candidates.length === 1
+        ? candidates[0]
+        : undefined;
+    }
     const now = new Date().toISOString();
     const eventId = existing?.id ?? randomUUID();
-    const apply = shouldApplyEvent(existing, result.source, parsed);
+    const apply = shouldApplyEvent(existing, batch.source, parsed);
     const sourceId = randomUUID();
 
     if (!existing) {
@@ -830,11 +1003,12 @@ const upsertParsedEvents = async (
         `
           INSERT INTO corporate_events (
             id, instrument_id, event_type, event_date, event_time, fiscal_period, fiscal_year,
-            event_identity, dividend_per_share, dividend_total_per_share, dividend_advance_per_share,
+            event_identity, general_meeting_type, registration_date,
+            dividend_per_share, dividend_total_per_share, dividend_advance_per_share,
             dividend_currency, ex_dividend_date, record_date, payment_date, dividend_installment, status, active, source_published_at, source_type,
             source_priority, discovered_at, updated_at
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, TRUE, $18, $19, $20, $21, $21)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $24)
         `,
         [
           eventId,
@@ -845,6 +1019,8 @@ const upsertParsedEvents = async (
           parsed.fiscalPeriod ?? null,
           parsed.fiscalYear ?? null,
           eventIdentity,
+          parsed.generalMeetingType ?? null,
+          parsed.registrationDate ?? null,
           parsed.dividendPerShare ?? null,
           parsed.dividendTotalPerShare ?? null,
           parsed.dividendAdvancePerShare ?? null,
@@ -854,9 +1030,10 @@ const upsertParsedEvents = async (
           parsed.paymentDate ?? null,
           parsed.dividendInstallment ?? null,
           getParsedEventStatus(parsed),
-          result.source.sourcePublishedAt ?? null,
-          result.source.sourceType,
-          toSourcePriority(result.source, parsed),
+          isParsedEventActive(parsed),
+          batch.source.sourcePublishedAt ?? null,
+          batch.source.sourceType,
+          toSourcePriority(batch.source, parsed),
           now,
         ]
       );
@@ -869,27 +1046,32 @@ const upsertParsedEvents = async (
               fiscal_period = COALESCE($3, fiscal_period),
               fiscal_year = COALESCE($4, fiscal_year),
               event_identity = $5,
-              dividend_per_share = $6,
-              dividend_total_per_share = COALESCE($7, dividend_total_per_share),
-              dividend_advance_per_share = COALESCE($8, dividend_advance_per_share),
-              dividend_currency = COALESCE($9, dividend_currency),
-              ex_dividend_date = COALESCE($10, ex_dividend_date),
-              record_date = COALESCE($11, record_date),
-              payment_date = COALESCE($12, payment_date),
-              dividend_installment = COALESCE($13, dividend_installment),
-              status = $14,
-              source_published_at = $15,
-              source_type = $16,
-              source_priority = $17,
-              updated_at = $18
-          WHERE id = $19
+              general_meeting_type = COALESCE($6, general_meeting_type),
+              registration_date = COALESCE($7, registration_date),
+              dividend_per_share = $8,
+              dividend_total_per_share = COALESCE($9, dividend_total_per_share),
+              dividend_advance_per_share = COALESCE($10, dividend_advance_per_share),
+              dividend_currency = COALESCE($11, dividend_currency),
+              ex_dividend_date = COALESCE($12, ex_dividend_date),
+              record_date = COALESCE($13, record_date),
+              payment_date = COALESCE($14, payment_date),
+              dividend_installment = COALESCE($15, dividend_installment),
+              status = $16,
+              active = $17,
+              source_published_at = $18,
+              source_type = $19,
+              source_priority = $20,
+              updated_at = $21
+          WHERE id = $22
         `,
         [
           parsed.eventDate,
           parsed.eventTime ?? null,
           parsed.fiscalPeriod ?? null,
           parsed.fiscalYear ?? null,
-          eventIdentity,
+          existing.event_identity || eventIdentity,
+          parsed.generalMeetingType ?? null,
+          parsed.registrationDate ?? null,
           parsed.dividendPerShare ?? null,
           parsed.dividendTotalPerShare ?? null,
           parsed.dividendAdvancePerShare ?? null,
@@ -899,9 +1081,10 @@ const upsertParsedEvents = async (
           parsed.paymentDate ?? null,
           parsed.dividendInstallment ?? null,
           getParsedEventStatus(parsed),
-          result.source.sourcePublishedAt ?? null,
-          result.source.sourceType,
-          toSourcePriority(result.source, parsed),
+          isParsedEventActive(parsed),
+          batch.source.sourcePublishedAt ?? null,
+          batch.source.sourceType,
+          toSourcePriority(batch.source, parsed),
           now,
           eventId,
         ]
@@ -921,10 +1104,10 @@ const upsertParsedEvents = async (
       [
         sourceId,
         eventId,
-        result.source.sourceType,
-        result.source.sourceUrl,
-        result.source.sourcePublishedAt ?? null,
-        toSourcePriority(result.source, parsed),
+        batch.source.sourceType,
+        batch.source.sourceUrl,
+        batch.source.sourcePublishedAt ?? null,
+        toSourcePriority(batch.source, parsed),
         now,
       ]
     );
@@ -937,13 +1120,13 @@ const upsertParsedEvents = async (
           )
           VALUES ($1, $2, $3, $4, $5, $6)
         `,
-        [randomUUID(), eventId, existing.event_date, parsed.eventDate, result.source.sourceUrl, now]
+        [randomUUID(), eventId, existing.event_date, parsed.eventDate, batch.source.sourceUrl, now]
       );
     }
   }
 
   const completeInstallmentGroups = new Map<number, string[]>();
-  for (const parsed of result.events) {
+  for (const parsed of batch.events) {
     if (
       parsed.eventType !== "UPCOMING_DIVIDEND" ||
       parsed.dividendInstallment === undefined ||
@@ -1031,7 +1214,14 @@ const refreshCanonicalInstrument = async (
       );
 
       for (const result of successful) {
-        await upsertParsedEvents(transaction, instrument, result);
+        const batches = result.batches ?? (
+          result.source
+            ? [{ source: result.source, events: result.events }]
+            : []
+        );
+        for (const batch of batches) {
+          await upsertParsedEvents(transaction, instrument, batch);
+        }
       }
 
       for (const result of results) {
@@ -1074,6 +1264,8 @@ const toCorporateEvent = (row: EventRow): CorporateEvent => ({
   eventTime: row.event_time ?? undefined,
   fiscalPeriod: row.fiscal_period ?? undefined,
   fiscalYear: row.fiscal_year ?? undefined,
+  generalMeetingType: row.general_meeting_type ?? undefined,
+  registrationDate: row.registration_date ?? undefined,
   dividendPerShare: row.dividend_per_share ?? undefined,
   dividendTotalPerShare: row.dividend_total_per_share ?? undefined,
   dividendAdvancePerShare: row.dividend_advance_per_share ?? undefined,
@@ -1108,7 +1300,8 @@ const getStoredEvents = async (
     `
       SELECT event.id, event.instrument_id, instrument.ticker, instrument.company_name,
              event.event_type, event.event_date, event.event_time, event.fiscal_period,
-             event.fiscal_year, event.dividend_per_share, event.dividend_total_per_share,
+             event.fiscal_year, event.general_meeting_type, event.registration_date,
+             event.dividend_per_share, event.dividend_total_per_share,
              event.dividend_advance_per_share, event.dividend_currency,
              event.ex_dividend_date, event.record_date, event.payment_date,
              event.dividend_installment, event.status, event.active, event.source_published_at,
@@ -1167,24 +1360,43 @@ export const getCorporateEventsForGpwPortfolio = async ({
     new Map(canonicalInstruments.map((instrument) => [instrument.id, instrument])).values()
   );
 
-  const refreshes = uniqueCanonical
-    .filter((instrument) => forceRefresh || !isFreshCheck(instrument))
-    .map((instrument) => refreshCanonicalInstrument(instrument));
-  const initialInstruments = uniqueCanonical.filter((instrument) => !instrument.last_checked_at);
+  // `last_checked_at` predates individual provider adapters. After adding WZA,
+  // an otherwise fresh instrument must still run the new central ESPI adapter
+  // once; otherwise the UI can remain empty until the aggregate 24 h TTL ends.
+  const generalMeetingBootstrapIds = await getGeneralMeetingBootstrapInstrumentIds(
+    uniqueCanonical.map((instrument) => instrument.id)
+  );
+  const refreshCandidates = uniqueCanonical.filter(
+    (instrument) =>
+      forceRefresh ||
+      !isFreshCheck(instrument) ||
+      !generalMeetingBootstrapIds.has(instrument.id)
+  );
+  const awaitedRefreshIds = new Set(
+    forceRefresh
+      ? uniqueCanonical.map((instrument) => instrument.id)
+      : uniqueCanonical
+          .filter(
+            (instrument) =>
+              !instrument.last_checked_at ||
+              !generalMeetingBootstrapIds.has(instrument.id)
+          )
+          .map((instrument) => instrument.id)
+  );
+  const awaitedRefreshes: Promise<void>[] = [];
 
   // First discovery is awaited so a new GPW holding can receive events in the
-  // first API response. Existing data is returned stale-while-revalidate.
-  if (forceRefresh) {
-    await Promise.all(refreshes);
-  } else if (initialInstruments.length > 0) {
-    await Promise.all(
-      initialInstruments.map((instrument) => refreshCanonicalInstrument(instrument))
-    );
-  } else {
-    for (const refresh of refreshes) {
+  // first API response. The first check by a newly introduced provider is also
+  // awaited. Existing fully-initialized data remains stale-while-revalidate.
+  for (const instrument of refreshCandidates) {
+    const refresh = refreshCanonicalInstrument(instrument);
+    if (awaitedRefreshIds.has(instrument.id)) {
+      awaitedRefreshes.push(refresh);
+    } else {
       void refresh;
     }
   }
+  await Promise.all(awaitedRefreshes);
 
   const refreshedCanonical = await Promise.all(
     uniqueCanonical.map((instrument) =>

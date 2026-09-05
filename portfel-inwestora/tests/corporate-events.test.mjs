@@ -489,7 +489,7 @@ test("corporate-event refresh preserves stored data and delegates posting to the
   const routeSource = await readFile(new URL("../src/app/api/corporate-events/route.ts", import.meta.url), "utf8");
   const automaticSource = await readFile(new URL("../src/lib/automatic-gpw-dividends.ts", import.meta.url), "utf8");
 
-  assert.match(providerSource, /for \(const result of successful\) \{\s*await upsertParsedEvents/s);
+  assert.match(providerSource, /for \(const result of successful\)[\s\S]*for \(const batch of batches\) \{\s*await upsertParsedEvents/);
   assert.doesNotMatch(providerSource, /buildDividendOperation|operationType:\s*["']DIVIDEND|calculateCashBalances/);
   assert.match(routeSource, /applyAutomaticGpwDividends/);
   assert.match(automaticSource, /event\.status !== "CONFIRMED"/);

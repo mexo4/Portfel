@@ -16,7 +16,7 @@ import {
 } from "@/lib/automatic-gpw-dividends";
 import { normalizePortfolioBook } from "@/lib/portfolio-state";
 import { getUserWatchlist, getWatchlistCorporateEventInputs } from "@/lib/server/watchlist";
-import type { CorporateEvent } from "@/lib/corporate-events";
+import { CORPORATE_EVENT_TYPES, type CorporateEvent, type CorporateEventType } from "@/lib/corporate-events";
 import type { InvestmentPortfolio, PortfolioBook } from "@/types/portfolio";
 
 export const runtime = "nodejs";
@@ -197,6 +197,9 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const requestedPortfolioId = searchParams.get("portfolio")?.trim();
   const requestedInstrumentId = searchParams.get("instrumentId")?.trim();
+  const requestedEventTypes = searchParams
+    .getAll("eventType")
+    .filter((eventType): eventType is CorporateEventType => CORPORATE_EVENT_TYPES.includes(eventType as CorporateEventType));
   const isAggregateRequest = requestedPortfolioId === "all";
   const initialBook = normalizePortfolioBook({
     portfolios: accountData.portfolios,
@@ -227,6 +230,7 @@ export async function GET(request: Request) {
       instruments,
       fromDate,
       toDate: addDays(fromDate, days),
+      eventTypes: requestedEventTypes.length > 0 ? requestedEventTypes : undefined,
     });
     // Watchlist rows are informational only. They never participate in the
     // automatic dividend posting path, which is intentionally based on open

@@ -12,6 +12,7 @@ import { fetchCorporateEvents } from "@/lib/api";
 
 type CorporateEventsPanelProps = {
   portfolioId: string;
+  variant?: "all" | "general-meetings";
 };
 
 const formatEventDateParts = (date: string) => {
@@ -48,7 +49,7 @@ const getEventStatusLabel = (event: CorporateEvent) => {
   return null;
 };
 
-export default function CorporateEventsPanel({ portfolioId }: CorporateEventsPanelProps) {
+export default function CorporateEventsPanel({ portfolioId, variant = "all" }: CorporateEventsPanelProps) {
   const [data, setData] = useState<CorporateEventsResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [hasError, setHasError] = useState(false);
@@ -56,7 +57,12 @@ export default function CorporateEventsPanel({ portfolioId }: CorporateEventsPan
   useEffect(() => {
     const controller = new AbortController();
 
-    void fetchCorporateEvents({ portfolioId, days: 60, signal: controller.signal })
+    void fetchCorporateEvents({
+      portfolioId,
+      days: 60,
+      eventTypes: variant === "general-meetings" ? ["GENERAL_MEETING"] : undefined,
+      signal: controller.signal,
+    })
       .then((response) => {
         if (!controller.signal.aborted) {
           setData(response);
@@ -74,7 +80,7 @@ export default function CorporateEventsPanel({ portfolioId }: CorporateEventsPan
       });
 
     return () => controller.abort();
-  }, [portfolioId]);
+  }, [portfolioId, variant]);
 
   const allSourcesUnavailable =
     data?.sourceStates.length &&
@@ -82,18 +88,20 @@ export default function CorporateEventsPanel({ portfolioId }: CorporateEventsPan
   const reportEvents = (data?.events ?? []).filter(
     (event) =>
       event.eventType !== "UPCOMING_DIVIDEND" &&
+      (variant !== "general-meetings" || event.eventType === "GENERAL_MEETING") &&
       event.active !== false &&
       event.status !== "CANCELLED"
   );
+  const isMeetingView = variant === "general-meetings";
 
   return (
     <section className="panel panel-compact corporate-events-panel" aria-busy={isLoading}>
       <div className="corporate-events-head">
         <div>
           <p className="eyebrow">Kalendarz GPW</p>
-          <h2 className="section-title">Wydarzenia GPW</h2>
+          <h2 className="section-title">{isMeetingView ? "Walne zgromadzenia" : "Wydarzenia GPW"}</h2>
         </div>
-        <span className="tag">raporty · WZA · 60 dni</span>
+        <span className="tag">{isMeetingView ? "ZWZ i NWZ · 60 dni" : "raporty · WZA · 60 dni"}</span>
       </div>
 
       {isLoading ? <p className="corporate-events-state">Sprawdzanie zapisanych wydarzeń…</p> : null}
@@ -109,12 +117,14 @@ export default function CorporateEventsPanel({ portfolioId }: CorporateEventsPan
         <p className="corporate-events-state">
           {allSourcesUnavailable
             ? "Źródła wydarzeń są chwilowo niedostępne. Zachowamy ostatnie potwierdzone terminy, gdy będą dostępne."
-            : "Brak potwierdzonych przyszłych wydarzeń dla śledzonych spółek."}
+            : isMeetingView
+              ? "Brak nadchodzących walnych zgromadzeń dla posiadanych lub obserwowanych spółek."
+              : "Brak potwierdzonych przyszłych wydarzeń dla śledzonych spółek."}
         </p>
       ) : null}
 
       {reportEvents.length ? (
-        <div className="corporate-events-list" aria-label="Nadchodzące wydarzenia">
+        <div className="corporate-events-list" aria-label={isMeetingView ? "Nadchodzące walne zgromadzenia" : "Nadchodzące wydarzenia"}>
           {reportEvents.map((event) => {
             const date = formatEventDateParts(event.eventDate);
             const statusLabel = getEventStatusLabel(event);

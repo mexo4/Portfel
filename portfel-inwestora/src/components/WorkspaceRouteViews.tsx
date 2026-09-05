@@ -98,6 +98,7 @@ export function WorkspaceInstrumentsPage() {
 }
 export function WorkspaceWatchlistPage() { return <WatchlistWorkspace />; }
 export function WorkspaceEventsPage() { const workspace = usePortfolioWorkspace(); return <div className="workspace-page"><CorporateEventsPanel portfolioId={workspace.isAllPortfoliosSelected ? "all" : workspace.activePortfolioId} /></div>; }
+export function WorkspaceGeneralMeetingsPage() { const workspace = usePortfolioWorkspace(); return <div className="workspace-page"><CorporateEventsPanel portfolioId={workspace.isAllPortfoliosSelected ? "all" : workspace.activePortfolioId} variant="general-meetings" /></div>; }
 export function WorkspaceSettingsPage() { return <div className="workspace-page workspace-settings-page">{usePortfolioWorkspace().settingsWorkspace}</div>; }
 export function WorkspacePortfoliosPage() { return <div className="workspace-page workspace-portfolios-page">{usePortfolioWorkspace().portfolioManagementWorkspace}</div>; }
 export function WorkspaceWealthPage() { return <div className="workspace-page workspace-wealth-page">{usePortfolioWorkspace().wealthWorkspace}</div>; }

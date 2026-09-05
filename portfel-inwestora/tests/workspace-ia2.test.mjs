@@ -6,17 +6,25 @@ const readSource = (relativePath) =>
   readFile(new URL(`../${relativePath}`, import.meta.url), "utf8");
 
 test("workspace uses one live-route hierarchy across sidebar, tabs and command search", async () => {
-  const shell = await readSource("src/components/AppWorkspaceShell.tsx");
+  const [shell, css] = await Promise.all([
+    readSource("src/components/AppWorkspaceShell.tsx"),
+    readSource("src/app/globals.css"),
+  ]);
 
   assert.match(shell, /id: "portfolio", label: "Portfel"/);
   assert.match(shell, /label: "Dywidendy i gotówka"/);
   assert.match(shell, /id: "analysis", label: "Analiza"/);
   assert.match(shell, /id: "market", label: "Rynek"/);
   assert.match(shell, /label: "Obserwowane"/);
+  assert.match(shell, /label: "WZA — Walne zgromadzenia"/);
   assert.match(shell, /id: "tools", label: "Narzędzia"/);
   assert.match(shell, /className="workspace-section-tabs"/);
   assert.match(shell, /className="workspace-nav-group"/);
   assert.doesNotMatch(shell, /<details[^>]*workspace-nav-group/);
+  assert.match(shell, /className="workspace-nav-group-toggle"/);
+  assert.match(shell, /aria-expanded=\{isExpanded\}/);
+  assert.match(shell, /NAV_GROUPS_STORAGE_KEY/);
+  assert.match(css, /\.workspace-nav-group-links\[hidden\]\s*\{\s*display:\s*none;/);
 });
 
 test("command search and quick actions only target existing workspace flows", async () => {

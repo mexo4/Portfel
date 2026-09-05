@@ -42,6 +42,7 @@ type WorkspaceIconName =
   | "watchlist"
   | "espi"
   | "events"
+  | "meetings"
   | "settings"
   | "admin"
   | "search"
@@ -63,6 +64,7 @@ const WORKSPACE_ICON_DRAWINGS: Record<WorkspaceIconName, ReactNode> = {
   watchlist: <path d="m12 3 2.7 5.5 6.1.9-4.4 4.3 1 6.1-5.4-2.9-5.4 2.9 1-6.1-4.4-4.3 6.1-.9L12 3Z" />,
   espi: <><path d="M6 3h9l4 4v14H6z" /><path d="M15 3v5h4M9 12h6M9 16h6" /></>,
   events: <><rect x="3" y="5" width="18" height="16" rx="2" /><path d="M8 3v4M16 3v4M3 10h18" /></>,
+  meetings: <><path d="M4 20h16M6 20v-9h12v9M8 11V7h8v4" /><path d="M9 15h6M12 13v4" /></>,
   settings: <><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6 1.7 1.7 0 0 0 10 3v-.2h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z" /></>,
   admin: <><path d="M12 3 4 6v5c0 5 3.4 8.6 8 10 4.6-1.4 8-5 8-10V6z" /><path d="m9 12 2 2 4-4" /></>,
   search: <><circle cx="10.5" cy="10.5" r="6.5" /><path d="m15.5 15.5 5 5" /></>,
@@ -75,7 +77,31 @@ export function WorkspaceIcon({ name }: { name: WorkspaceIconName }) {
 }
 
 type NavigationItem = { key: WorkspaceRouteKey; href: string; label: string; icon: WorkspaceIconName; keywords?: string; testerOnly?: boolean };
-type NavigationGroup = { id: "portfolio" | "analysis" | "market" | "tools"; label: string; items: NavigationItem[] };
+type NavigationGroupId = "portfolio" | "analysis" | "market" | "tools";
+type NavigationGroup = { id: NavigationGroupId; label: string; items: NavigationItem[] };
+
+const NAV_GROUPS_STORAGE_KEY = "mexo.workspace.nav-groups";
+const DEFAULT_NAV_GROUP_STATE: Record<NavigationGroupId, boolean> = {
+  portfolio: true,
+  analysis: true,
+  market: true,
+  tools: true,
+};
+
+const getInitialNavGroupState = (): Record<NavigationGroupId, boolean> => {
+  if (typeof window === "undefined") return DEFAULT_NAV_GROUP_STATE;
+  try {
+    const stored = JSON.parse(window.localStorage.getItem(NAV_GROUPS_STORAGE_KEY) ?? "{}") as Partial<Record<NavigationGroupId, unknown>>;
+    return Object.fromEntries(
+      Object.entries(DEFAULT_NAV_GROUP_STATE).map(([key, defaultValue]) => [
+        key,
+        typeof stored[key as NavigationGroupId] === "boolean" ? stored[key as NavigationGroupId] : defaultValue,
+      ])
+    ) as Record<NavigationGroupId, boolean>;
+  } catch {
+    return DEFAULT_NAV_GROUP_STATE;
+  }
+};
 
 const directNavigation: NavigationItem[] = [
   { key: "dashboard", href: "/dashboard", label: "Pulpit", icon: "dashboard", keywords: "start dashboard centrum" },
@@ -98,6 +124,7 @@ const navigationGroups: NavigationGroup[] = [
   { id: "market", label: "Rynek", items: [
     { key: "watchlist", href: "/market/watchlist", label: "Obserwowane", icon: "watchlist", keywords: "watchlista spółki" },
     { key: "events", href: "/market/events", label: "Wydarzenia GPW", icon: "events", keywords: "kalendarz raporty dywidendy" },
+    { key: "meetings", href: "/market/general-meetings", label: "WZA — Walne zgromadzenia", icon: "meetings", keywords: "WZA ZWZ NWZ akcjonariusze walne zgromadzenie" },
     { key: "espi", href: "/market/espi", label: "Raporty ESPI", icon: "espi", keywords: "komunikaty emitentów", testerOnly: true },
     { key: "instruments", href: "/market/instruments", label: "Instrumenty", icon: "instruments", keywords: "wyszukaj akcje etf" },
   ] },
@@ -119,6 +146,7 @@ const routeMeta: Record<WorkspaceRouteKey, { eyebrow: string; title: string; bre
   watchlist: { eyebrow: "Rynek", title: "Obserwowane", breadcrumb: "Rynek / Obserwowane", description: "Spółki śledzone niezależnie od aktualnych pozycji." },
   espi: { eyebrow: "Rynek", title: "Raporty ESPI", breadcrumb: "Rynek / Raporty ESPI", description: "Oficjalne komunikaty emitentów GPW." },
   events: { eyebrow: "Rynek", title: "Wydarzenia GPW", breadcrumb: "Rynek / Wydarzenia GPW", description: "Nadchodzące raporty, dywidendy i walne zgromadzenia śledzonych spółek." },
+  meetings: { eyebrow: "Rynek", title: "Walne zgromadzenia", breadcrumb: "Rynek / Walne zgromadzenia", description: "Nadchodzące zwyczajne i nadzwyczajne walne zgromadzenia śledzonych spółek GPW." },
   portfolios: { eyebrow: "Portfel", title: "Portfele", breadcrumb: "Portfel / Portfele", description: "Zarządzaj realnymi portfelami i typami rachunków." },
   wealth: { eyebrow: "Portfel", title: "Majątek", breadcrumb: "Portfel / Majątek", description: "Łączny obraz aktywów ujętych w Mexo." },
   settings: { eyebrow: "Ustawienia", title: "Konto i preferencje", breadcrumb: "Ustawienia", description: "Ustawienia konta i preferencje aplikacji." },
@@ -136,6 +164,7 @@ export default function AppWorkspaceShell({ account, portfolios, selectedPortfol
   const router = useRouter();
   const route = getWorkspaceRoute(pathname);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(() => typeof window !== "undefined" && window.localStorage.getItem("mexo.workspace.sidebar-collapsed") === "true");
+  const [expandedNavGroups, setExpandedNavGroups] = useState(getInitialNavGroupState);
   const [isMoreOpen, setIsMoreOpen] = useState(false);
   const [isQuickAddOpen, setIsQuickAddOpen] = useState(false);
   const [isQuickActionsOpen, setIsQuickActionsOpen] = useState(false);
@@ -185,6 +214,15 @@ export default function AppWorkspaceShell({ account, portfolios, selectedPortfol
   const runCommand = (entry: (typeof commandEntries)[number]) => { closeAllOverlays(); if (entry.action === "quick-add") onQuickAdd(); else if (entry.href) router.push(entry.href); };
 
   useEffect(() => { window.localStorage.setItem("mexo.workspace.sidebar-collapsed", String(isSidebarCollapsed)); }, [isSidebarCollapsed]);
+  useEffect(() => { window.localStorage.setItem(NAV_GROUPS_STORAGE_KEY, JSON.stringify(expandedNavGroups)); }, [expandedNavGroups]);
+  useEffect(() => {
+    const activeGroup = navigationGroups.find((group) => isGroupActive(route, group));
+    if (!activeGroup) return;
+    const frame = window.requestAnimationFrame(() => {
+      setExpandedNavGroups((current) => current[activeGroup.id] ? current : { ...current, [activeGroup.id]: true });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [route]);
   useEffect(() => {
     const handleShortcut = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase() === "k") { event.preventDefault(); openCommand(); }
@@ -232,7 +270,25 @@ export default function AppWorkspaceShell({ account, portfolios, selectedPortfol
       <div className="workspace-brand-row"><Link href={getWorkspaceHref("/dashboard")} className="workspace-brand" aria-label="Mexo — pulpit"><Image src="/mexo-mark-transparent.png" className="workspace-brand-mark" alt="" width={34} height={34} priority /><span className="workspace-brand-name">Mexo</span></Link><button type="button" className="workspace-sidebar-toggle" onClick={() => setIsSidebarCollapsed((current) => !current)} aria-label={isSidebarCollapsed ? "Rozwiń menu" : "Zwiń menu"} title={isSidebarCollapsed ? "Rozwiń menu" : "Zwiń menu"}><span aria-hidden="true">‹</span></button></div>
       <nav className="workspace-sidebar-nav" aria-label="Sekcje aplikacji">
         {directNavigation.map((item) => <NavigationLink key={item.key} item={withWorkspaceContext(item)} active={route === item.key} compact={isSidebarCollapsed} />)}
-        {visibleNavigationGroups.map((group) => <section key={group.id} className="workspace-nav-group" aria-labelledby={`workspace-nav-${group.id}`}><h2 id={`workspace-nav-${group.id}`}>{group.label}</h2><div className="workspace-nav-group-links">{group.items.map((item) => <NavigationLink key={item.key} item={withWorkspaceContext(item)} active={route === item.key} compact={isSidebarCollapsed} />)}</div></section>)}
+        {visibleNavigationGroups.map((group) => {
+          const isExpanded = isSidebarCollapsed || expandedNavGroups[group.id];
+          const linksId = `workspace-nav-${group.id}-links`;
+          return <section key={group.id} className="workspace-nav-group">
+            <h2>
+              <button
+                type="button"
+                className="workspace-nav-group-toggle"
+                aria-expanded={isExpanded}
+                aria-controls={linksId}
+                onClick={() => setExpandedNavGroups((current) => ({ ...current, [group.id]: !current[group.id] }))}
+              >
+                <span>{group.label}</span>
+                <svg className="workspace-nav-group-chevron" aria-hidden="true" viewBox="0 0 16 16" fill="none"><path d="m4 6 4 4 4-4" /></svg>
+              </button>
+            </h2>
+            <div id={linksId} className="workspace-nav-group-links" hidden={!isExpanded}>{group.items.map((item) => <NavigationLink key={item.key} item={withWorkspaceContext(item)} active={route === item.key} compact={isSidebarCollapsed} />)}</div>
+          </section>;
+        })}
       </nav>
       <div className="workspace-sidebar-bottom">
         {isAdmin ? <Link href="/admin" className="workspace-nav-link" title={isSidebarCollapsed ? "Panel admina" : undefined}><span className="workspace-nav-glyph"><WorkspaceIcon name="admin" /></span><span>Panel admina</span></Link> : null}

@@ -17,6 +17,7 @@ test("maps every public workspace URL to one independently mountable view", () =
     ["/market/instruments", "instruments"],
     ["/market/watchlist", "watchlist"],
     ["/market/events", "events"],
+    ["/market/general-meetings", "meetings"],
     ["/settings", "settings"],
   ];
 
@@ -37,6 +38,7 @@ test("each workspace URL has a route-owned view rather than a null page placehol
     ["src/app/(workspace)/market/instruments/page.tsx", "WorkspaceInstrumentsPage"],
     ["src/app/(workspace)/market/watchlist/page.tsx", "WorkspaceWatchlistPage"],
     ["src/app/(workspace)/market/events/page.tsx", "WorkspaceEventsPage"],
+    ["src/app/(workspace)/market/general-meetings/page.tsx", "WorkspaceGeneralMeetingsPage"],
     ["src/app/(workspace)/settings/page.tsx", "WorkspaceSettingsPage"],
   ];
 

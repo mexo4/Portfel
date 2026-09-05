@@ -31,7 +31,7 @@ import type {
   UserProfile,
 } from "@/types/portfolio";
 import { isGpwSymbol } from "@/lib/ticker";
-import type { CorporateEventsResponse } from "@/lib/corporate-events";
+import type { CorporateEventsResponse, CorporateEventType } from "@/lib/corporate-events";
 import type { DashboardScopeLayouts } from "@/lib/dashboard-layout";
 import type { WatchlistItem, WatchlistItemInput } from "@/lib/watchlist";
 import type { PerformanceMetricId } from "@/lib/performance-preferences";
@@ -203,11 +203,13 @@ export const fetchCorporateEvents = async ({
   portfolioId,
   instrumentId,
   days = 60,
+  eventTypes,
   signal,
 }: {
   portfolioId: string;
   instrumentId?: string;
   days?: number;
+  eventTypes?: CorporateEventType[];
   signal?: AbortSignal;
 }) => {
   const params = new URLSearchParams({
@@ -217,6 +219,9 @@ export const fetchCorporateEvents = async ({
 
   if (instrumentId) {
     params.set("instrumentId", instrumentId);
+  }
+  for (const eventType of eventTypes ?? []) {
+    params.append("eventType", eventType);
   }
 
   return requestJson<CorporateEventsResponse>(

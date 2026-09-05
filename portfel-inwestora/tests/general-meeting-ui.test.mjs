@@ -71,3 +71,17 @@ test("existing dashboard widget uses the shared event label for meetings", async
   assert.match(dashboard, /event\.eventType === "GENERAL_MEETING" && event\.eventTime/);
   assert.doesNotMatch(dashboard, /function GeneralMeetingWidget/);
 });
+
+test("market navigation exposes a dedicated general-meetings view backed by the shared panel", async () => {
+  const [shell, views, panel, api] = await Promise.all([
+    readSource("src/components/AppWorkspaceShell.tsx"),
+    readSource("src/components/WorkspaceRouteViews.tsx"),
+    readSource("src/components/CorporateEventsPanel.tsx"),
+    readSource("src/app/api/corporate-events/route.ts"),
+  ]);
+
+  assert.match(shell, /href: "\/market\/general-meetings"/);
+  assert.match(views, /variant="general-meetings"/);
+  assert.match(panel, /eventTypes: variant === "general-meetings" \? \["GENERAL_MEETING"\]/);
+  assert.match(api, /eventTypes: requestedEventTypes\.length > 0 \? requestedEventTypes : undefined/);
+});

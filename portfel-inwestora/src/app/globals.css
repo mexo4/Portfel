@@ -8603,17 +8603,60 @@ textarea {
 
 .workspace-nav-group h2 {
   margin: 0;
-  padding: 5px 10px 3px;
+  padding: 0;
+}
+
+.workspace-nav-group-toggle {
+  display: flex;
+  width: 100%;
+  min-height: 28px;
+  align-items: center;
+  justify-content: space-between;
+  border: 0;
+  border-radius: 6px;
+  padding: 5px 9px 3px 10px;
+  background: transparent;
   color: #5f6f78;
   font-size: .62rem;
   font-weight: 800;
   letter-spacing: .13em;
   line-height: 1.25;
+  text-align: left;
   text-transform: uppercase;
+  cursor: pointer;
+}
+
+.workspace-nav-group-toggle:hover {
+  background: #f7f4ee;
+  color: var(--text);
+}
+
+.workspace-nav-group-toggle:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  outline-offset: 1px;
+}
+
+.workspace-nav-group-chevron {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+  transition: transform 150ms ease;
+}
+
+.workspace-nav-group-toggle[aria-expanded="false"] .workspace-nav-group-chevron {
+  transform: rotate(-90deg);
 }
 
 .workspace-nav-group-links {
   gap: 1px;
+}
+
+.workspace-nav-group-links[hidden] {
+  display: none;
 }
 
 .workspace-nav-link {

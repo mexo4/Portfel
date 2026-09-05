@@ -1,0 +1,101 @@
+name: Deploy Mexo Production
+
+on:
+  push:
+    branches:
+      - najlepsza-wersja
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mexo-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to Oracle
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Configure SSH
+        env:
+          ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
+          ORACLE_SSH_KEY: ${{ secrets.ORACLE_SSH_KEY }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+
+          printf '%s\n' "$ORACLE_SSH_KEY" > ~/.ssh/mexo-production
+          chmod 600 ~/.ssh/mexo-production
+
+          ssh-keyscan -H "$ORACLE_HOST" >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Deploy Mexo
+        env:
+          ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
+          ORACLE_USER: ${{ secrets.ORACLE_USER }}
+        run: |
+          set -euo pipefail
+
+          ssh \
+            -i ~/.ssh/mexo-production \
+            "$ORACLE_USER@$ORACLE_HOST" \
+            'bash -se' <<'REMOTE'
+
+          set -Eeuo pipefail
+
+          REPO="/opt/mexo/repo"
+          BRANCH="najlepsza-wersja"
+
+          echo "== Mexo deploy =="
+
+          cd "$REPO"
+
+          echo "Checking production repository..."
+
+          if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+            echo "ERROR: Production repository contains local tracked changes."
+            git status --short
+            exit 1
+          fi
+
+          echo "Fetching GitHub..."
+          git fetch origin "$BRANCH"
+
+          echo "Updating production code..."
+          git checkout "$BRANCH"
+          git reset --hard "origin/$BRANCH"
+
+          echo "Installing dependencies..."
+          npm ci
+
+          echo "Building Mexo..."
+          NODE_OPTIONS="--max-old-space-size=1536" npm run build
+
+          echo "Restarting Mexo..."
+          sudo -n systemctl restart mexo
+
+          echo "Waiting for application..."
+
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:3000/login >/dev/null; then
+              echo "Mexo health check passed."
+              exit 0
+            fi
+
+            sleep 2
+          done
+
+          echo "ERROR: Mexo health check failed."
+
+          sudo -n systemctl status mexo --no-pager || true
+          sudo -n journalctl -u mexo -n 100 --no-pager || true
+
+          exit 1
+          REMOTE

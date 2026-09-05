@@ -1,5 +1,3 @@
-import * as https from "node:https";
-import * as tls from "node:tls";
 import { inferCurrencyFromSymbol, normalizeSymbol } from "@/lib/ticker";
 import { normalizeText, round, toCurrencyCode, uniqueBy } from "@/lib/utils";
 import type { AssetQuote, AssetSearchResult, CurrencyCode } from "@/types/portfolio";
@@ -79,26 +77,11 @@ const YAHOO_SEARCH_CACHE_TTL_MS = 60_000;
 const YAHOO_QUOTE_CACHE_TTL_MS = 30_000;
 const YAHOO_SEARCH_TIMEOUT_MS = 3_000;
 const YAHOO_QUOTE_TIMEOUT_MS = 2_500;
+const MAX_YAHOO_RESPONSE_BYTES = 1_000_000;
 
 const searchCache = new Map<string, { results: AssetSearchResult[]; expiresAt: number }>();
 const quoteCache = new Map<string, { quote: AssetQuote; expiresAt: number }>();
 const quoteInFlight = new Map<string, Promise<AssetQuote | null>>();
-
-type TlsWithSystemCertificates = typeof tls & {
-  getCACertificates?: (source: "default" | "bundled" | "system" | "extra") => string[];
-};
-
-const getYahooCaCertificates = () => {
-  const getCACertificates = (tls as TlsWithSystemCertificates).getCACertificates;
-  const systemCertificates = getCACertificates?.("system") ?? [];
-
-  return Array.from(new Set([...tls.rootCertificates, ...systemCertificates]));
-};
-
-const yahooHttpsAgent = new https.Agent({
-  keepAlive: true,
-  ca: getYahooCaCertificates(),
-});
 
 export const normalizeYahooMoneyUnit = (
   value?: string,
@@ -128,75 +111,59 @@ export const normalizeYahooMoneyUnit = (
 };
 
 const safeFetchJson = async <T,>(url: string, timeoutMs: number) => {
-  return new Promise<T | null>((resolve) => {
-    let isSettled = false;
-    let request: ReturnType<typeof https.get> | null = null;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
-    const settle = (value: T | null) => {
-      if (isSettled) {
-        return;
-      }
-
-      isSettled = true;
-      clearTimeout(timeoutId);
-
-      resolve(value);
-    };
-
-    const timeoutId = setTimeout(() => {
-      request?.destroy();
-      settle(null);
-    }, timeoutMs);
-
-    request = https.get(
-      url,
-      {
-        agent: yahooHttpsAgent,
-        headers: {
-          Accept: "application/json",
-          "User-Agent": "Mozilla/5.0",
-        },
+  try {
+    const response = await fetch(url, {
+      headers: {
+        Accept: "application/json",
+        "User-Agent": "Mozilla/5.0",
       },
-      (response) => {
-        if (!response.statusCode || response.statusCode < 200 || response.statusCode >= 300) {
-          response.resume();
-          settle(null);
-          return;
-        }
-
-        response.setEncoding("utf8");
-
-        let body = "";
-
-        response.on("data", (chunk: string) => {
-          body += chunk;
-
-          if (body.length > 1_000_000) {
-            request?.destroy();
-            settle(null);
-          }
-        });
-
-        response.on("end", () => {
-          if (isSettled) {
-            return;
-          }
-
-          try {
-            settle(JSON.parse(body) as T);
-          } catch {
-            settle(null);
-          }
-        });
-      }
-    );
-
-    request.on("error", () => settle(null));
-    request.setTimeout(timeoutMs, () => {
-      request?.destroy();
-      settle(null);
+      signal: controller.signal,
     });
-  });
+
+    if (!response.ok || !response.body) {
+      return null;
+    }
+
+    const contentLength = Number(response.headers.get("content-length") ?? 0);
+    if (Number.isFinite(contentLength) && contentLength > MAX_YAHOO_RESPONSE_BYTES) {
+      controller.abort();
+      return null;
+    }
+
+    const reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let receivedBytes = 0;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+
+      receivedBytes += value.byteLength;
+      if (receivedBytes > MAX_YAHOO_RESPONSE_BYTES) {
+        controller.abort();
+        return null;
+      }
+
+      chunks.push(value);
+    }
+
+    const body = new Uint8Array(receivedBytes);
+    let offset = 0;
+    for (const chunk of chunks) {
+      body.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+
+    return JSON.parse(new TextDecoder().decode(body)) as T;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 };
 
 const firstNonNull = async <T,>(promises: Array<Promise<T | null>>) => {

@@ -442,7 +442,12 @@ const hasUsableStoredUnitPrice = (asset: PortfolioAsset) =>
   asset.latestPrice > 0;
 
 export const countAssetsWithoutUsableQuote = (assets: PortfolioAsset[]) =>
-  assets.filter((asset) => !hasUsableStoredUnitPrice(asset)).length;
+  assets.filter(
+    (asset) =>
+      asset.instrumentType !== "CFD" &&
+      asset.instrumentType !== "OTHER" &&
+      !hasUsableStoredUnitPrice(asset)
+  ).length;
 
 /**
  * A provider can legitimately return the same market quote again.  Treating
@@ -598,7 +603,11 @@ export const refreshPortfolioQuotesWithProgress = async (
     ].join(":");
   const assetsByQuoteKey = new Map<string, PortfolioAsset>();
 
-  assets.forEach((asset) => {
+  assets
+    .filter(
+      (asset) => asset.instrumentType !== "CFD" && asset.instrumentType !== "OTHER"
+    )
+    .forEach((asset) => {
     const key = quoteRequestKey(asset);
 
     if (!assetsByQuoteKey.has(key)) {

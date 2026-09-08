@@ -52,6 +52,13 @@ const formatSignedCurrency = (value: number, currency: CurrencyCode) =>
 const formatSignedPercent = (value: number) =>
   `${value > 0 ? "+" : ""}${value.toFixed(2)}%`;
 
+const getPositionTypeLabel = (group: PortfolioAssetGroup) =>
+  group.instrumentType === "CFD"
+    ? `CFD ${group.positionDirection}`
+    : group.instrumentType === "OTHER"
+      ? "IMPORTOWANY"
+      : group.kind.toUpperCase();
+
 export default function PortfolioPositionCards({
   assets,
   groups: providedGroups,
@@ -97,7 +104,7 @@ export default function PortfolioPositionCards({
           <header>
             <div>
               <strong title={group.name}>{group.name}</strong>
-              <span>{group.symbol} · {group.kind.toUpperCase()}{group.portfolioName ? ` · ${group.portfolioName}` : ""}</span>
+              <span>{group.symbol} · {getPositionTypeLabel(group)}{group.portfolioName ? ` · ${group.portfolioName}` : ""}</span>
             </div>
             <strong className={`portfolio-number ${getValueTone(group.profitLossBase) ?? ""}`}>
               {formatCurrency(group.profitLossBase, baseCurrency)}

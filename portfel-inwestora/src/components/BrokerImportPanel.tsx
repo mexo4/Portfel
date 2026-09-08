@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import TruncatedText from "@/components/TruncatedText";
-import { CRYPTO_UI_ENABLED } from "@/lib/constants";
 import {
   parseBrokerOperationsCsv,
   parseBrokerOperationsXlsx,
@@ -80,14 +79,9 @@ export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) 
     completed: number;
     total: number;
   } | null>(null);
-  const importableOperations = useMemo(
-    () =>
-      parseResult?.operations.filter(
-        (operation) => CRYPTO_UI_ENABLED || operation.kind !== "crypto"
-      ) ?? [],
-    [parseResult]
-  );
-  const hiddenCryptoOperations = (parseResult?.operations.length ?? 0) - importableOperations.length;
+  // Import is a historical ledger path. Product gating for adding new crypto
+  // manually must never discard transactions already present in a broker file.
+  const importableOperations = useMemo(() => parseResult?.operations ?? [], [parseResult]);
   const previewRows = useMemo(
     () => importableOperations.slice(0, 6),
     [importableOperations]
@@ -328,12 +322,6 @@ export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) 
       ) : null}
       {error ? <p className="field-note field-note-error mt-4">{error}</p> : null}
       {success ? <p className="field-note mt-4">{success}</p> : null}
-
-      {hiddenCryptoOperations > 0 ? (
-        <p className="field-note mt-4">
-          Pominieto {hiddenCryptoOperations} {hiddenCryptoOperations === 1 ? "operacje kryptowaluty" : "operacje kryptowalut"}: dodawanie crypto jest tymczasowo ukryte.
-        </p>
-      ) : null}
 
       {parseResult?.warnings?.length ? (
         <div className="import-warning-list mt-4">

@@ -5,6 +5,7 @@ export type InstrumentType =
   | "ETF"
   | "BOND"
   | "CRYPTO"
+  | "CFD"
   | "FUND"
   | "TERM_DEPOSIT"
   | "CASH"
@@ -102,6 +103,8 @@ export type TreasuryBondType = "EDO" | "COI" | "ROS";
 export type TreasuryBondCouponMode = "capitalized" | "paid-out";
 
 export type BondTransactionKind = "sale" | "bond-redemption" | "bond-swap";
+
+export type PositionDirection = "LONG" | "SHORT";
 
 export type TreasuryBondSourceLinks = {
   offerPageUrl?: string;
@@ -268,6 +271,11 @@ export type PortfolioAsset = {
   name: string;
   symbol: string;
   kind: AssetKind;
+  /** Imported instruments can be CFDs or legacy assets while retaining the
+   * existing asset-kind compatibility used by quote/search code. */
+  instrumentType?: InstrumentType;
+  positionDirection?: PositionDirection;
+  contractMultiplier?: number;
   purchaseDate: string;
   quantity: number;
   purchasePrice: number;
@@ -347,6 +355,9 @@ export type PortfolioSaleAllocation = {
   name?: string;
   symbol?: string;
   kind?: AssetKind;
+  instrumentType?: InstrumentType;
+  positionDirection?: PositionDirection;
+  contractMultiplier?: number;
   marketCurrency?: CurrencyCode;
   provider?: QuoteProvider;
   providerId?: string;
@@ -369,6 +380,9 @@ export type PortfolioSale = {
   name: string;
   symbol: string;
   kind: AssetKind;
+  instrumentType?: InstrumentType;
+  positionDirection?: PositionDirection;
+  contractMultiplier?: number;
   transactionKind: BondTransactionKind;
   quantity: number;
   salePrice: number;
@@ -409,7 +423,8 @@ export type PortfolioRealizedAdjustment = {
   currency: CurrencyCode;
   amountPlnSnapshot: number;
   date: string;
-  source: "manual" | "bond-coupon";
+  source: "manual" | "bond-coupon" | "broker-import";
+  importKey?: string;
   bondCode?: string;
   note?: string;
   createdAt: string;

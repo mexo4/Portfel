@@ -21,6 +21,9 @@ export type PortfolioAssetGroup = {
   name: string;
   symbol: string;
   kind: PortfolioAsset["kind"];
+  instrumentType?: PortfolioAsset["instrumentType"];
+  positionDirection: NonNullable<PortfolioAsset["positionDirection"]>;
+  contractMultiplier: number;
   quantity: number;
   purchaseCurrency: CurrencyCode;
   averagePurchasePrice: number;
@@ -143,7 +146,14 @@ type PurchasePriceSource = {
   purchasePriceCurrency?: CurrencyCode;
   marketCurrency?: CurrencyCode;
   purchaseFxRateToPln?: number;
+  contractMultiplier?: number;
 };
+
+const getContractMultiplier = (asset: { contractMultiplier?: number }) =>
+  hasPositiveNumber(asset.contractMultiplier) ? asset.contractMultiplier : 1;
+
+const getPositionDirection = (asset: { positionDirection?: PortfolioAsset["positionDirection"] }) =>
+  asset.positionDirection === "SHORT" ? "SHORT" : "LONG";
 
 export const getAssetPurchasePriceCurrency = (asset: PurchasePriceSource) =>
   asset.purchasePriceCurrency ?? asset.purchaseCurrency ?? asset.marketCurrency ?? BASE_CURRENCY;
@@ -165,7 +175,12 @@ export const getAssetPurchaseValuePln = (
     quantity: number;
   },
   fxRates: FxRates
-) => round(asset.purchasePrice * asset.quantity * getAssetPurchaseFxRateToPln(asset, fxRates));
+) => round(
+  asset.purchasePrice *
+    asset.quantity *
+    getContractMultiplier(asset) *
+    getAssetPurchaseFxRateToPln(asset, fxRates)
+);
 
 export const getAssetPurchaseUnitValuePln = (
   asset: PurchasePriceSource & {
@@ -203,12 +218,37 @@ export const getAssetInvestedPln = (asset: PortfolioAsset, fxRates: FxRates) =>
 
 export const getAssetMarketValuePln = (asset: PortfolioAsset, fxRates: FxRates) =>
   hasAssetLivePrice(asset)
-    ? convertToPln((asset.latestPrice ?? 0) * asset.quantity, asset.marketCurrency, fxRates)
+    ? getPositionDirection(asset) === "SHORT"
+      ? round(
+          getAssetPurchaseValuePln(asset, fxRates) +
+            convertToPln(
+              (asset.purchasePrice - (asset.latestPrice ?? 0)) *
+                asset.quantity *
+                getContractMultiplier(asset),
+              asset.marketCurrency,
+              fxRates
+            )
+        )
+      : convertToPln(
+          (asset.latestPrice ?? 0) * asset.quantity * getContractMultiplier(asset),
+          asset.marketCurrency,
+          fxRates
+        )
     : 0;
 
 export const getAssetProfitLossPln = (asset: PortfolioAsset, fxRates: FxRates) =>
   hasAssetLivePrice(asset)
-    ? round(getAssetMarketValuePln(asset, fxRates) - getAssetInvestedPln(asset, fxRates))
+    ? getPositionDirection(asset) === "SHORT"
+      ? round(
+          convertToPln(
+            (asset.purchasePrice - (asset.latestPrice ?? 0)) *
+              asset.quantity *
+              getContractMultiplier(asset),
+            asset.marketCurrency,
+            fxRates
+          ) - asset.feePln
+        )
+      : round(getAssetMarketValuePln(asset, fxRates) - getAssetInvestedPln(asset, fxRates))
     : 0;
 
 export const getAssetInvestedValue = (
@@ -241,7 +281,9 @@ export const getAssetValuation = (
 ) => {
   const currentUnitPrice = getAssetLatestUnitPrice(asset);
   const marketValueQuote =
-    currentUnitPrice === undefined ? undefined : round(currentUnitPrice * asset.quantity, 8);
+    currentUnitPrice === undefined
+      ? undefined
+      : round(currentUnitPrice * asset.quantity * getContractMultiplier(asset), 8);
   const marketValueBase = getAssetMarketValue(asset, fxRates, baseCurrency);
   const costBasisBase = getAssetInvestedValue(asset, fxRates, baseCurrency);
   const profitLossBase = getAssetProfitLoss(asset, fxRates, baseCurrency);
@@ -276,6 +318,8 @@ export const getGroupedPortfolioAssets = (
       (left, right) => getAssetSortTime(right) - getAssetSortTime(left)
     );
     const representativeLot = sortedLots.find((lot) => hasAssetLivePrice(lot)) ?? sortedLots[0];
+    const positionDirection = getPositionDirection(representativeLot);
+    const contractMultiplier = getContractMultiplier(representativeLot);
     const hasLivePrice = sortedLots.some(hasAssetLivePrice);
     const quantity = round(
       sortedLots.reduce((total, lot) => total + lot.quantity, 0),
@@ -324,7 +368,11 @@ export const getGroupedPortfolioAssets = (
       previousClose !== undefined &&
       dailyChangeConversionRate > 0
         ? round(
-            (weightedLatestUnitPrice - previousClose) * quantity * dailyChangeConversionRate
+            (weightedLatestUnitPrice - previousClose) *
+              quantity *
+              contractMultiplier *
+              dailyChangeConversionRate *
+              (positionDirection === "SHORT" ? -1 : 1)
           )
         : undefined;
     const purchaseCurrencies = new Set(sortedLots.map(getAssetPurchasePriceCurrency));
@@ -366,7 +414,7 @@ export const getGroupedPortfolioAssets = (
     const marketValueQuote =
       weightedLatestUnitPrice === undefined
         ? undefined
-        : round(weightedLatestUnitPrice * quantity, 8);
+        : round(weightedLatestUnitPrice * quantity * contractMultiplier, 8);
     const latestPriceDate = sortedLots
       .map((lot) => lot.latestPriceDate)
       .filter((value): value is string => Boolean(value))
@@ -385,6 +433,9 @@ export const getGroupedPortfolioAssets = (
       name: representativeLot.name,
       symbol: representativeLot.symbol,
       kind: representativeLot.kind,
+      instrumentType: representativeLot.instrumentType,
+      positionDirection,
+      contractMultiplier,
       quantity,
       purchaseCurrency: representativeLot.purchaseCurrency,
       averagePurchasePrice: round(

@@ -18,17 +18,18 @@ test("temporary crypto capability hides new entry options without removing the u
   assert.equal(VISIBLE_ASSET_ENTRY_MODE_OPTIONS.some((option) => option.value === "crypto"), false);
 });
 
-test("crypto import rows and crypto-only exchanges are gated in UI while historical holdings stay outside this filter", async () => {
+test("crypto entry stays gated while historical broker imports remain lossless", async () => {
   const importPanel = await readSource("src/components/BrokerImportPanel.tsx");
   const platformPicker = await readSource("src/components/ImportPlatformPicker.tsx");
   const portfolioApp = await readSource("src/components/PortfolioApp.tsx");
   const lineCharts = await readSource("src/components/PortfolioLineCharts.tsx");
 
-  assert.match(importPanel, /operation\.kind !== "crypto"/);
+  assert.doesNotMatch(importPanel, /operation\.kind !== "crypto"/);
+  assert.match(importPanel, /historical ledger path/);
   assert.match(platformPicker, /CRYPTO_IMPORT_PLATFORM_IDS/);
   assert.match(platformPicker, /section\.id !== "crypto"/);
   assert.match(portfolioApp, /draft\.kind === "crypto"/);
-  assert.match(portfolioApp, /operations\.some\(\(operation\) => operation\.kind === "crypto"\)/);
+  assert.doesNotMatch(portfolioApp, /operations\.some\(\(operation\) => operation\.kind === "crypto"\)/);
   assert.match(lineCharts, /VISIBLE_SEARCH_MODE_OPTIONS/);
   assert.match(lineCharts, /!benchmarkSearchKind/);
   assert.match(lineCharts, /VISIBLE_SEARCH_MODE_OPTIONS\.map\(\(option\) =>/);

@@ -444,6 +444,14 @@ const getImportedOperationType = (
 ): PortfolioOperation["operationType"] =>
   operation.operationType ?? (operation.side === "buy" ? "BUY" : operation.side === "sell" ? "SELL" : "CUSTOM");
 
+const getImportedPositionDirection = (operation: ImportedBrokerOperation) =>
+  operation.positionDirection === "SHORT" ? "SHORT" : "LONG";
+
+const getImportedPositionEffect = (operation: ImportedBrokerOperation) => {
+  if (operation.positionEffect) return operation.positionEffect;
+  return getImportedOperationType(operation) === "SELL" ? "CLOSE" : "OPEN";
+};
+
 const sanitizeImportIdPart = (value: string) =>
   normalizeSymbol(value).replace(/[^A-Z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 96);
 
@@ -616,6 +624,8 @@ const upsertImportedInstrument = (
   const instrumentId = getPortfolioInstrumentId(portfolioId, {
     kind: operation.kind,
     symbol: operation.symbol,
+    instrumentType: operation.instrumentType,
+    positionDirection: operation.positionDirection,
   });
 
   if (instruments.some((instrument) => instrument.id === instrumentId)) {
@@ -631,7 +641,7 @@ const upsertImportedInstrument = (
       {
         id: instrumentId,
         portfolioId,
-        type: getInstrumentTypeForAssetKind(operation.kind),
+        type: operation.instrumentType ?? getInstrumentTypeForAssetKind(operation.kind),
         assetKind: operation.kind,
         symbol: operation.symbol,
         name: operation.name || operation.symbol,
@@ -644,6 +654,8 @@ const upsertImportedInstrument = (
           imported: true,
           importSource: operation.broker ?? "broker",
           brokerSymbol: operation.rawSymbol,
+          positionDirection: getImportedPositionDirection(operation),
+          contractMultiplier: operation.contractMultiplier,
         },
         createdAt: now,
         updatedAt: now,
@@ -693,6 +705,12 @@ const getImportedOperationMetadata = (
     paymentDate: isDividend ? operation.date : undefined,
     country: isDividend ? (operation.cashCurrency === "PLN" ? "PL" : "Nie ustawiono") : undefined,
     legacyImportKeys: operation.legacyImportKeys,
+    instrumentType: operation.instrumentType,
+    positionDirection: getImportedPositionDirection(operation),
+    positionEffect: getImportedPositionEffect(operation),
+    contractMultiplier: operation.contractMultiplier,
+    financing: operation.financing,
+    counterpartyAccountNumber: operation.counterpartyAccountNumber,
   };
 };
 
@@ -771,6 +789,7 @@ const buildImportedPortfolioOperation = ({
     metadata: {
       ...getImportedOperationMetadata(operation, targetAccountId),
       autoFxTradeNormalized: hasAutomaticBrokerConversion,
+      cashImpact: operation.instrumentType === "CFD" ? false : true,
     },
     createdAt,
     updatedAt: createdAt,
@@ -783,7 +802,8 @@ const buildAutomaticBrokerConversionOperation = (
 ): PortfolioOperation | null => {
   if (
     (tradeOperation.operationType !== "BUY" && tradeOperation.operationType !== "SELL") ||
-    sourceOperation.autoFxConversion !== true
+    sourceOperation.autoFxConversion !== true ||
+    sourceOperation.instrumentType === "CFD"
   ) {
     return null;
   }
@@ -3669,10 +3689,6 @@ export default function PortfolioApp({
       throw new Error("Brakuje aktywnego portfela do importu.");
     }
 
-    if (!CRYPTO_UI_ENABLED && operations.some((operation) => operation.kind === "crypto")) {
-      throw new Error("Dodawanie kryptowalut przez import jest tymczasowo niedostepne.");
-    }
-
     const now = new Date().toISOString();
     const portfolioForImport =
       activePortfolioForEngine ??
@@ -3725,6 +3741,7 @@ export default function PortfolioApp({
 
     let nextAssets: PortfolioAsset[] = normalizeStoredPortfolioAssets(assets);
     let nextSales = getSortedPortfolioSales(sales);
+    let nextRealizedAdjustments = getSortedPortfolioRealizedAdjustments(realizedAdjustments);
     let nextAccounts = portfolioForImport.accounts ?? [];
     let nextInstruments = portfolioForImport.instruments ?? [];
     let nextOperations = (portfolioForImport.operations ?? []).filter(
@@ -3754,6 +3771,43 @@ export default function PortfolioApp({
     let skippedInvalid = 0;
     let skippedDuplicates = 0;
     let skippedPlanLimit = 0;
+
+    const appendImportedRealizedAdjustment = (
+      operation: ImportedBrokerOperation,
+      amount: number,
+      note: string
+    ) => {
+      if (!Number.isFinite(amount) || amount === 0) return false;
+      const importKey = `${operation.importKey ?? getImportedOperationId(portfolioId, operation)}:result`;
+
+      if (nextRealizedAdjustments.some((adjustment) => adjustment.importKey === importKey)) {
+        return false;
+      }
+
+      const currency = toCurrencyCode(
+        operation.accountCurrency ?? operation.cashCurrency ?? operation.currency,
+        "PLN"
+      );
+      const rate = getFxRateToPlnSnapshot(currency, importFxRates);
+
+      if (!rate) return false;
+
+      nextRealizedAdjustments = getSortedPortfolioRealizedAdjustments([
+        {
+          id: `import-result-${getStableImportKeyHash(importKey)}`,
+          amount: round(amount, 6),
+          currency,
+          amountPlnSnapshot: round(amount * rate),
+          date: operation.date,
+          source: "broker-import",
+          importKey,
+          note,
+          createdAt: now,
+        },
+        ...nextRealizedAdjustments,
+      ]);
+      return true;
+    };
 
     const appendCoreOperation = (
       operation: ImportedBrokerOperation,
@@ -3897,6 +3951,26 @@ export default function PortfolioApp({
 
       if (operationType !== "BUY" && operationType !== "SELL") {
         if (appendCoreOperation(operation)) {
+          if (
+            operationType === "CUSTOM" &&
+            typeof operation.realizedProfitLoss === "number"
+          ) {
+            appendImportedRealizedAdjustment(
+              operation,
+              operation.realizedProfitLoss,
+              `Zrealizowany wynik importowany: ${operation.name || operation.symbol}`
+            );
+          } else if (
+            operationType === "FEE" &&
+            (typeof operation.financing === "number" ||
+              normalizeText(operation.rawType ?? "") === "swap")
+          ) {
+            appendImportedRealizedAdjustment(
+              operation,
+              -Math.abs(operation.financing ?? operation.amount ?? operation.fee ?? 0),
+              `Koszt finansowania: ${operation.name || operation.symbol || "pozycja"}`
+            );
+          }
           if (operationType === "DIVIDEND") {
             importedDividends += 1;
           } else {
@@ -3927,6 +4001,8 @@ export default function PortfolioApp({
       const groupKey = getPortfolioAssetGroupKey({
         kind: operation.kind,
         symbol: operation.symbol,
+        instrumentType: operation.instrumentType,
+        positionDirection: getImportedPositionDirection(operation),
       });
       const importedMarketCurrency = toCurrencyCode(
         operation.marketCurrency ?? operation.currency,
@@ -3978,8 +4054,16 @@ export default function PortfolioApp({
         }
         continue;
       }
+      const importedFinancingPln =
+        typeof operation.financing === "number" && Number.isFinite(operation.financing)
+          ? Math.abs(operation.financing) * importedSettlementFxRateToPln
+          : 0;
+      const importedTotalFeePln = round(operation.feePln + importedFinancingPln, 6);
 
-      if (operationType === "BUY") {
+      const positionDirection = getImportedPositionDirection(operation);
+      const positionEffect = getImportedPositionEffect(operation);
+
+      if (positionEffect === "OPEN") {
         const nextAssetGroups = new Set([
           ...nextAssets.map(getPortfolioAssetGroupKey),
           groupKey,
@@ -3999,6 +4083,9 @@ export default function PortfolioApp({
           name: operation.name,
           symbol: operation.symbol,
           kind: operation.kind,
+          instrumentType: operation.instrumentType,
+          positionDirection,
+          contractMultiplier: operation.contractMultiplier,
           purchaseDate: operation.date,
           quantity: operation.quantity,
           purchasePrice: importedUnitPrice,
@@ -4006,7 +4093,7 @@ export default function PortfolioApp({
           purchasePriceCurrency: importedPriceCurrency,
           purchaseFxRateToPln: importedPurchaseFxRateToPln,
           purchaseSettlementFxRateToPln: importedSettlementFxRateToPln,
-          feePln: operation.feePln,
+          feePln: importedTotalFeePln,
           marketCurrency: importedMarketCurrency,
           provider: operation.provider,
           providerId: operation.providerId,
@@ -4014,7 +4101,11 @@ export default function PortfolioApp({
           createdAt: new Date(`${operation.date}T00:00:00.000Z`).toISOString(),
         };
 
-        if (appendCoreOperation(operation, undefined, { lotId: nextAsset.id })) {
+        if (appendCoreOperation(operation, undefined, {
+          lotId: nextAsset.id,
+          positionDirection,
+          positionEffect,
+        })) {
           nextAssets = [nextAsset, ...nextAssets];
           importedBuys += 1;
         }
@@ -4026,6 +4117,23 @@ export default function PortfolioApp({
       );
 
       if (!targetGroup) {
+        const retainedBrokerResult =
+          typeof operation.realizedProfitLoss === "number" &&
+          appendCoreOperation(operation, undefined, {
+            unmatchedClose: true,
+            cashImpact: operation.instrumentType === "CFD" ? false : undefined,
+          });
+
+        if (retainedBrokerResult) {
+          appendImportedRealizedAdjustment(
+            operation,
+            operation.realizedProfitLoss!,
+            `Zamknieta pozycja bez danych otwarcia: ${operation.name || operation.symbol}`
+          );
+          importedSells += 1;
+          continue;
+        }
+
         console.warn("[broker-import] Pomieto sprzedaz bez pasujacej otwartej pozycji.", {
           rowNumber: operation.rowNumber,
           importKey: operation.importKey,
@@ -4081,7 +4189,7 @@ export default function PortfolioApp({
             salePrice: importedUnitPrice,
             salePriceInput: String(importedUnitPrice),
             saleDate: operation.date,
-            feePln: operation.feePln,
+            feePln: importedTotalFeePln,
           },
           fxRates: {
             ...importFxRates,
@@ -4089,7 +4197,11 @@ export default function PortfolioApp({
           },
         });
 
-        if (appendCoreOperation(operation, undefined, { saleId: result.sale.id })) {
+        if (appendCoreOperation(operation, undefined, {
+          saleId: result.sale.id,
+          positionDirection,
+          positionEffect,
+        })) {
           nextAssets = result.assets;
           nextSales = getSortedPortfolioSales([
             applyBrokerRealizedResult(result.sale, operation),
@@ -4109,8 +4221,25 @@ export default function PortfolioApp({
 
     const importedTotal =
       importedBuys + importedSells + importedDividends + importedCashOperations;
+    const referencedAccountIds = new Set(
+      nextOperations.flatMap((operation) => [
+        operation.accountId,
+        typeof operation.metadata.targetAccountId === "string"
+          ? operation.metadata.targetAccountId
+          : "",
+      ]).filter(Boolean)
+    );
+    const accountCountBeforePrune = nextAccounts.length;
+    nextAccounts = nextAccounts.filter(
+      (account) => account.metadata.imported !== true || referencedAccountIds.has(account.id)
+    );
+    const removedOrphanImportedAccounts = nextAccounts.length < accountCountBeforePrune;
 
-    if (importedTotal === 0) {
+    // A repeated import can be a no-op for operations while still exposing an
+    // imported account that belonged to a stale/removed statement mapping. In
+    // that case persist only the safe account cleanup; never recreate a
+    // counterparty account just because it appeared in the broker comment.
+    if (importedTotal === 0 && !removedOrphanImportedAccounts) {
       return {
         importedBuys,
         importedSells,
@@ -4127,7 +4256,7 @@ export default function PortfolioApp({
       ...portfolioForImport,
       assets: nextAssets,
       sales: nextSales,
-      realizedAdjustments,
+      realizedAdjustments: nextRealizedAdjustments,
       accounts: nextAccounts,
       instruments: nextInstruments,
       operations: nextOperations,
@@ -4141,7 +4270,7 @@ export default function PortfolioApp({
             ...nextPortfolio,
             assets: nextAssets,
             sales: nextSales,
-            realizedAdjustments,
+            realizedAdjustments: nextRealizedAdjustments,
             updatedAt: now,
           }
         : portfolio

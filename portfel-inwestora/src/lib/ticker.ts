@@ -48,7 +48,10 @@ export const toStooqGpwSymbol = (value: string) => {
 };
 
 export const getPortfolioAssetGroupKey = (
-  asset: Pick<PortfolioAsset, "kind" | "symbol" | "instrumentIdentity">
+  asset: Pick<
+    PortfolioAsset,
+    "kind" | "symbol" | "instrumentIdentity" | "instrumentType" | "positionDirection"
+  >
 ) => {
   const normalizedSymbol = normalizeSymbol(asset.symbol);
 
@@ -70,11 +73,16 @@ export const getPortfolioAssetGroupKey = (
     }
   }
 
+  const positionIdentity =
+    asset.instrumentType === "CFD" || asset.positionDirection === "SHORT"
+      ? `:${asset.instrumentType ?? "ASSET"}:${asset.positionDirection ?? "LONG"}`
+      : "";
+
   if (asset.kind === "stock" && isGpwSymbol(normalizedSymbol)) {
-    return `${asset.kind}:${getGpwTickerCore(normalizedSymbol)}`;
+    return `${asset.kind}:${getGpwTickerCore(normalizedSymbol)}${positionIdentity}`;
   }
 
-  return `${asset.kind}:${normalizedSymbol}`;
+  return `${asset.kind}:${normalizedSymbol}${positionIdentity}`;
 };
 
 export const getDefaultCurrencyForKind = (kind: AssetKind): CurrencyCode => {

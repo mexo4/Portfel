@@ -7,11 +7,19 @@ import {
   resolveTickerIdentity,
 } from "@/lib/ticker-aliases";
 import { normalizeText, round, toCurrencyCode, toDateInputValue, uniqueBy } from "@/lib/utils";
-import type { AssetKind, CurrencyCode, OperationType, QuoteProvider } from "@/types/portfolio";
+import type {
+  AssetKind,
+  CurrencyCode,
+  InstrumentType,
+  OperationType,
+  PositionDirection,
+  QuoteProvider,
+} from "@/types/portfolio";
 
 export type BrokerImportPreset = "auto" | "xtb" | "bossa" | "degiro" | "ibkr" | "mbank" | "etoro" | "trading212" | "generic";
 
 export type BrokerOperationSide = "buy" | "sell";
+export type BrokerPositionEffect = "OPEN" | "CLOSE";
 
 export type ImportedBrokerOperation = {
   rowNumber: number;
@@ -21,6 +29,11 @@ export type ImportedBrokerOperation = {
   symbol: string;
   name: string;
   kind: AssetKind;
+  instrumentType?: InstrumentType;
+  positionDirection?: PositionDirection;
+  positionEffect?: BrokerPositionEffect;
+  contractMultiplier?: number;
+  financing?: number;
   quantity: number;
   price: number;
   currency: CurrencyCode;
@@ -46,6 +59,9 @@ export type ImportedBrokerOperation = {
   sourceCurrency?: CurrencyCode;
   targetCurrency?: CurrencyCode;
   targetAmount?: number;
+  /** XTB transfer counterparty metadata. It is deliberately not converted to
+   * another Mexo account while importing one selected portfolio. */
+  counterpartyAccountNumber?: string;
   broker?: string;
   brokerOperationId?: string;
   importKey?: string;
@@ -125,6 +141,20 @@ const HEADER_ALIASES = {
   currency: ["waluta", "waluta ceny", "currency", "price currency", "ccy"],
   fee: ["prowizja", "oplata", "oplaty", "koszty", "fee", "fees", "commission"],
   kind: ["klasa", "typ aktywa", "asset type", "category", "market"],
+  direction: ["kierunek", "direction", "position direction", "long short"],
+  effect: ["status pozycji", "position effect", "open close", "effect"],
+  multiplier: ["mnoznik", "mnożnik", "multiplier", "contract size", "contractsize"],
+  financing: ["finansowanie", "financing", "overnight", "swap"],
+  realizedProfitLoss: [
+    "zrealizowany wynik",
+    "zysk strata",
+    "profit loss",
+    "realized profit loss",
+    "realized p l",
+    "p l",
+  ],
+  purchaseValue: ["koszt zakupu", "purchase value", "entry value"],
+  saleValue: ["przychod ze sprzedazy", "sale value", "exit value"],
   value: [
     "wartosc",
     "wartosc transakcji",
@@ -346,6 +376,64 @@ const inferSide = (value: string): BrokerOperationSide | null => {
   return null;
 };
 
+const inferPositionIntent = (
+  value: string,
+  directionValue = "",
+  effectValue = ""
+): {
+  side: BrokerOperationSide | null;
+  positionDirection: PositionDirection;
+  positionEffect: BrokerPositionEffect;
+} => {
+  const normalized = normalizeHeader(`${value} ${directionValue} ${effectValue}`);
+  const hasExplicitShort = /\b(short|krotk|krótk)\w*\b/.test(normalized);
+  const hasExplicitClose = /\b(close|closed|zamkn|wyjsc|wyjść)\w*\b/.test(normalized);
+  const hasExplicitOpen = /\b(open|opened|otwar)\w*\b/.test(normalized);
+  const basicSide = inferSide(value);
+  const positionDirection: PositionDirection = hasExplicitShort
+    ? "SHORT"
+    : "LONG";
+  const positionEffect: BrokerPositionEffect = hasExplicitClose
+    ? "CLOSE"
+    : hasExplicitOpen || hasExplicitShort
+      ? "OPEN"
+      : basicSide === "sell"
+        ? "CLOSE"
+        : "OPEN";
+  const side =
+    positionDirection === "SHORT"
+      ? positionEffect === "OPEN"
+        ? "sell"
+        : "buy"
+      : positionEffect === "OPEN"
+        ? basicSide ?? "buy"
+        : basicSide ?? "sell";
+
+  return { side, positionDirection, positionEffect };
+};
+
+const inferImportedInstrumentType = (
+  value: string,
+  kind: AssetKind
+): InstrumentType => {
+  const normalized = normalizeHeader(value);
+
+  if (/\b(cfd|forex|fx|contract for difference|kontrakt roznic)\b/.test(normalized)) {
+    return "CFD";
+  }
+  if (kind === "crypto") return "CRYPTO";
+  if (kind === "etf") return "ETF";
+  if (kind === "bond") return "BOND";
+  if (
+    normalized &&
+    !/\b(stock|share|equity|akcj|papier wartosciowy|security|rynek|market)\w*\b/.test(normalized)
+  ) {
+    return "OTHER";
+  }
+
+  return "STOCK";
+};
+
 const inferKind = (value: string, symbol: string, name: string): AssetKind => {
   const normalized = normalizeHeader(`${value} ${symbol} ${name}`);
   const normalizedSymbol = normalizeSymbol(symbol).replace(/[-/].+$/, "");
@@ -429,7 +517,13 @@ const parseBrokerOperationRows = (
     const row = Object.fromEntries(
       headers.map((header, cellIndex) => [header, values[cellIndex] ?? ""])
     );
-    const side = inferSide(getCell(row, HEADER_ALIASES.side));
+    const rawSide = getCell(row, HEADER_ALIASES.side);
+    const positionIntent = inferPositionIntent(
+      rawSide,
+      getCell(row, HEADER_ALIASES.direction),
+      getCell(row, HEADER_ALIASES.effect)
+    );
+    const side = positionIntent.side;
     const rawSymbolSource = getCell(row, HEADER_ALIASES.symbol);
     const rawName = getCell(row, HEADER_ALIASES.name, rawSymbolSource);
     const rawSymbol = getFirstSymbolCandidate(rawSymbolSource || rawName);
@@ -447,7 +541,16 @@ const parseBrokerOperationRows = (
         inferCurrencyFromSymbol(rawSymbol, "USD")
     );
     const fee = parseNumber(getCell(row, HEADER_ALIASES.fee)) ?? 0;
-    const kind = cryptoIdentity ? "crypto" : inferKind(getCell(row, HEADER_ALIASES.kind), rawSymbol, rawName);
+    const rawKind = getCell(row, HEADER_ALIASES.kind);
+    const kind = cryptoIdentity ? "crypto" : inferKind(rawKind, rawSymbol, rawName);
+    const instrumentType = inferImportedInstrumentType(rawKind, kind);
+    const contractMultiplier = parseNumber(getCell(row, HEADER_ALIASES.multiplier));
+    const financing = parseNumber(getCell(row, HEADER_ALIASES.financing));
+    const realizedProfitLoss = parseNumber(
+      getCell(row, HEADER_ALIASES.realizedProfitLoss)
+    );
+    const purchaseValue = parseNumber(getCell(row, HEADER_ALIASES.purchaseValue));
+    const saleValue = parseNumber(getCell(row, HEADER_ALIASES.saleValue));
     const alias = cryptoIdentity ? null : resolveTickerAlias(rawSymbol, kind);
     const symbol =
       cryptoIdentity?.symbol ?? alias?.symbol ?? normalizeImportedSymbol(rawSymbol, kind, currency);
@@ -473,6 +576,28 @@ const parseBrokerOperationRows = (
       rawSymbol,
       name: cryptoIdentity?.name ?? alias?.name ?? (rawName || symbol),
       kind: resolvedKind,
+      instrumentType:
+        cryptoIdentity || alias ? inferImportedInstrumentType(rawKind, resolvedKind) : instrumentType,
+      positionDirection: positionIntent.positionDirection,
+      positionEffect: positionIntent.positionEffect,
+      contractMultiplier:
+        contractMultiplier && contractMultiplier > 0 ? round(contractMultiplier, 8) : undefined,
+      financing:
+        typeof financing === "number" && Number.isFinite(financing)
+          ? round(financing, 6)
+          : undefined,
+      realizedProfitLoss:
+        typeof realizedProfitLoss === "number" && Number.isFinite(realizedProfitLoss)
+          ? round(realizedProfitLoss, 6)
+          : undefined,
+      purchaseValue:
+        typeof purchaseValue === "number" && Number.isFinite(purchaseValue)
+          ? round(Math.abs(purchaseValue), 6)
+          : undefined,
+      saleValue:
+        typeof saleValue === "number" && Number.isFinite(saleValue)
+          ? round(Math.abs(saleValue), 6)
+          : undefined,
       quantity: roundImportedQuantity(quantity, resolvedKind),
       price: round(Math.abs(price), 6),
       currency: resolvedCurrency,
@@ -1769,15 +1894,15 @@ const parseWorksheetRows = async (xmlText: string, sharedStrings: string[]) => {
 
 const parseXtbTradeComment = (comment: string) => {
   const match = comment.match(
-    /^(?:OPEN|CLOSE)\s+(?:BUY|SELL)\s+(.+?)\s*@\s*([-+]?\d[\d.,]*)/i
+    /^(OPEN|CLOSE)\s+(BUY|SELL)\s+(.+?)\s*@\s*([-+]?\d[\d.,]*)/i
   );
 
   if (!match) {
     return null;
   }
 
-  const quantity = parseNumber(match[1].split("/")[0] ?? "");
-  const price = parseNumber(match[2]);
+  const quantity = parseNumber(match[3].split("/")[0] ?? "");
+  const price = parseNumber(match[4]);
 
   if (!quantity || quantity <= 0 || !price || price <= 0) {
     return null;
@@ -1786,6 +1911,14 @@ const parseXtbTradeComment = (comment: string) => {
   return {
     price,
     quantity,
+    positionEffect: match[1].toUpperCase() as BrokerPositionEffect,
+    tradeSide: match[2].toUpperCase() as "BUY" | "SELL",
+    positionDirection: (
+      (match[1].toUpperCase() === "OPEN" && match[2].toUpperCase() === "SELL") ||
+      (match[1].toUpperCase() === "CLOSE" && match[2].toUpperCase() === "BUY")
+        ? "SHORT"
+        : "LONG"
+    ) as PositionDirection,
   };
 };
 
@@ -1830,7 +1963,13 @@ type XtbHeader = {
 };
 
 type XtbClosedPosition = {
+  instrument: string;
+  category: string;
   ticker: string;
+  tradeSide: "BUY" | "SELL";
+  openSerial: number | null;
+  openDate: string;
+  openPrice: number;
   closeSerial: number | null;
   closeDate: string;
   volume: number;
@@ -2346,7 +2485,13 @@ const parseXtbClosedPositionRows = (rows: string[][]): XtbClosedPosition[] => {
   return rows
     .slice(header.rowIndex + 1)
     .map((row) => {
+      const instrument = getMappedCell(row, header, "instrument");
+      const category = getMappedCell(row, header, "category");
       const ticker = getMappedCell(row, header, "ticker");
+      const rawTradeSide = normalizeSymbol(getMappedCell(row, header, "type"));
+      const openSerial = parseNumber(getMappedCell(row, header, "openTime"));
+      const openDate = parseDate(getMappedCell(row, header, "openTime"));
+      const openPrice = parseNumber(getMappedCell(row, header, "openPrice"));
       const closeSerial = parseNumber(getMappedCell(row, header, "closeTime"));
       const closeDate = parseDate(getMappedCell(row, header, "closeTime"));
       const volume = parseNumber(getMappedCell(row, header, "volume"));
@@ -2370,7 +2515,19 @@ const parseXtbClosedPositionRows = (rows: string[][]): XtbClosedPosition[] => {
       }
 
       return {
+        instrument,
+        category,
         ticker,
+        tradeSide: rawTradeSide === "SELL" ? "SELL" : "BUY",
+        openSerial:
+          typeof openSerial === "number" && Number.isFinite(openSerial)
+            ? openSerial
+            : null,
+        openDate: openDate || closeDate,
+        openPrice:
+          typeof openPrice === "number" && Number.isFinite(openPrice) && openPrice > 0
+            ? round(openPrice, 6)
+            : round(closePrice, 6),
         closeSerial:
           typeof closeSerial === "number" && Number.isFinite(closeSerial)
             ? closeSerial
@@ -2429,7 +2586,10 @@ const enrichXtbSalesWithClosedPositions = (
   const usedIndexes = new Set<number>();
 
   return operations.map((operation) => {
-    if (operation.operationType !== "SELL") {
+    if (
+      (operation.operationType !== "SELL" && operation.operationType !== "BUY") ||
+      operation.positionEffect !== "CLOSE"
+    ) {
       return operation;
     }
 
@@ -2485,9 +2645,33 @@ const enrichXtbSalesWithClosedPositions = (
     }
 
     selectedPositions.forEach(({ index }) => usedIndexes.add(index));
+    const representativePosition = selectedPositions[0]?.position;
+    const category = normalizeHeader(
+      `${representativePosition?.category ?? ""} ${representativePosition?.instrument ?? ""}`
+    );
+    const isCfd = /\b(cfd|forex|fx|index|indices|commodity|commodit)\w*\b/.test(category);
+    const entryNotional = representativePosition
+      ? representativePosition.tradeSide === "SELL"
+        ? representativePosition.saleValue
+        : representativePosition.purchaseValue
+      : 0;
+    const multiplierDenominator = representativePosition
+      ? representativePosition.openPrice * representativePosition.volume
+      : 0;
+    const contractMultiplier =
+      isCfd && entryNotional > 0 && multiplierDenominator > 0
+        ? round(entryNotional / multiplierDenominator, 8)
+        : undefined;
 
     return {
       ...operation,
+      instrumentType: isCfd ? "CFD" : operation.instrumentType,
+      positionDirection:
+        representativePosition?.tradeSide === "SELL" ? "SHORT" : operation.positionDirection,
+      contractMultiplier:
+        contractMultiplier && contractMultiplier > 0
+          ? contractMultiplier
+          : operation.contractMultiplier,
       realizedProfitLoss: round(
         selectedPositions.reduce((total, { position }) => total + position.realizedProfitLoss, 0),
         6
@@ -2504,7 +2688,165 @@ const enrichXtbSalesWithClosedPositions = (
   });
 };
 
-const parseXtbCashOperationRows = (
+const isXtbClosedPositionCfd = (position: XtbClosedPosition) =>
+  /\b(cfd|forex|fx|index|indices|commodity|commodit)\w*\b/.test(
+    normalizeHeader(`${position.category} ${position.instrument}`)
+  );
+
+const appendMissingXtbCfdPositions = (
+  operations: ImportedBrokerOperation[],
+  closedPositions: XtbClosedPosition[]
+) => {
+  const nextOperations = [...operations];
+  const accountOperation = operations.find((operation) => operation.accountNumber);
+  const accountNumber = accountOperation?.accountNumber;
+  const accountCurrency = toCurrencyCode(
+    accountOperation?.accountCurrency ?? accountOperation?.currency,
+    "PLN"
+  );
+
+  closedPositions.filter(isXtbClosedPositionCfd).forEach((position, index) => {
+    const closeAlreadyPresent = nextOperations.some(
+      (operation) =>
+        operation.positionEffect === "CLOSE" &&
+        normalizeSymbol(operation.rawSymbol ?? operation.symbol) === normalizeSymbol(position.ticker) &&
+        operation.date === position.closeDate &&
+        Math.abs(operation.quantity - position.volume) < 0.0001 &&
+        Math.abs(operation.price - position.closePrice) < 0.01
+    );
+
+    if (closeAlreadyPresent) {
+      return;
+    }
+
+    const positionDirection: PositionDirection =
+      position.tradeSide === "SELL" ? "SHORT" : "LONG";
+    const entryNotional =
+      positionDirection === "SHORT" ? position.saleValue : position.purchaseValue;
+    const multiplierDenominator = position.openPrice * position.volume;
+    const contractMultiplier =
+      entryNotional > 0 && multiplierDenominator > 0
+        ? Math.max(round(entryNotional / multiplierDenominator, 8), 0.00000001)
+        : 1;
+    const rawSymbol = position.ticker;
+    const symbol = normalizeImportedSymbol(rawSymbol, "stock", accountCurrency);
+    const baseImportKey = [
+      "xtb-closed-cfd",
+      normalizeSymbol(rawSymbol),
+      position.openSerial ?? position.openDate,
+      position.closeSerial ?? position.closeDate,
+      position.volume,
+      position.openPrice,
+      position.closePrice,
+    ].join(":");
+    const common = {
+      name: position.instrument || rawSymbol,
+      kind: "stock" as const,
+      instrumentType: "CFD" as const,
+      positionDirection,
+      contractMultiplier,
+      quantity: position.volume,
+      currency: accountCurrency,
+      marketCurrency: accountCurrency,
+      cashCurrency: accountCurrency,
+      accountCurrency,
+      accountNumber,
+      broker: "XTB",
+      rawSymbol,
+      provider: "catalog" as const,
+      warnings: [] as string[],
+    };
+
+    nextOperations.push(
+      {
+        ...common,
+        rowNumber: 1_000_000 + index * 2,
+        operationType: positionDirection === "SHORT" ? "SELL" : "BUY",
+        side: positionDirection === "SHORT" ? "sell" : "buy",
+        positionEffect: "OPEN",
+        date: position.openDate,
+        symbol,
+        price: position.openPrice,
+        feePln: 0,
+        fee: 0,
+        amount: 0,
+        cashAmount: 0,
+        marketAmount: round(position.openPrice * position.volume * contractMultiplier, 6),
+        rawType: `CFD OPEN ${position.tradeSide}`,
+        rawTime: position.openSerial ? String(position.openSerial) : position.openDate,
+        importKey: `${baseImportKey}:open`,
+      },
+      {
+        ...common,
+        rowNumber: 1_000_001 + index * 2,
+        operationType: positionDirection === "SHORT" ? "BUY" : "SELL",
+        side: positionDirection === "SHORT" ? "buy" : "sell",
+        positionEffect: "CLOSE",
+        date: position.closeDate,
+        symbol,
+        price: position.closePrice,
+        feePln: 0,
+        fee: 0,
+        amount: 0,
+        cashAmount: 0,
+        marketAmount: round(position.closePrice * position.volume * contractMultiplier, 6),
+        realizedProfitLoss: position.realizedProfitLoss,
+        purchaseValue: position.purchaseValue,
+        saleValue: position.saleValue,
+        rawType: `CFD CLOSE ${position.tradeSide}`,
+        rawTime: position.closeSerial ? String(position.closeSerial) : position.closeDate,
+        importKey: `${baseImportKey}:close`,
+      }
+    );
+  });
+
+  return nextOperations;
+};
+
+const mergeXtbClosedPositions = (
+  operations: ImportedBrokerOperation[],
+  closedPositions: XtbClosedPosition[]
+) => {
+  let enrichedOperations = enrichXtbSalesWithClosedPositions(operations, closedPositions);
+
+  closedPositions.filter(isXtbClosedPositionCfd).forEach((position) => {
+    const positionDirection: PositionDirection = position.tradeSide === "SELL" ? "SHORT" : "LONG";
+    const entryNotional = positionDirection === "SHORT" ? position.saleValue : position.purchaseValue;
+    const denominator = position.openPrice * position.volume;
+    const contractMultiplier = denominator > 0 && entryNotional > 0
+      ? Math.max(round(entryNotional / denominator, 8), 0.00000001)
+      : 1;
+
+    enrichedOperations = enrichedOperations.map((operation) => {
+      const sameSymbol =
+        normalizeSymbol(operation.rawSymbol ?? operation.symbol) === normalizeSymbol(position.ticker);
+      const isOpen =
+        sameSymbol &&
+        operation.date === position.openDate &&
+        Math.abs(operation.quantity - position.volume) < 0.0001 &&
+        Math.abs(operation.price - position.openPrice) < 0.01;
+      const isClose =
+        sameSymbol &&
+        operation.date === position.closeDate &&
+        Math.abs(operation.quantity - position.volume) < 0.0001 &&
+        Math.abs(operation.price - position.closePrice) < 0.01;
+
+      if (!isOpen && !isClose) return operation;
+
+      return {
+        ...operation,
+        instrumentType: "CFD",
+        positionDirection,
+        positionEffect: isOpen ? "OPEN" : "CLOSE",
+        contractMultiplier,
+      };
+    });
+  });
+
+  return appendMissingXtbCfdPositions(enrichedOperations, closedPositions);
+};
+
+export const parseXtbCashOperationRows = (
   rows: string[][],
   sheetName: string
 ): BrokerImportParseResult | null => {
@@ -2556,7 +2898,7 @@ const parseXtbCashOperationRows = (
     });
 
   cashRowsForProcessing
-    .filter((row) => isXtbSellType(row.normalizedType))
+    .filter((row) => parseXtbTradeComment(row.comment)?.positionEffect === "CLOSE")
     .forEach((saleRow) => {
       const matchingCloseTradeRow = findMatchingXtbCloseTrade(
         saleRow,
@@ -2593,7 +2935,7 @@ const parseXtbCashOperationRows = (
         return;
       }
 
-      const side: BrokerOperationSide = isXtbBuyType(row.normalizedType) ? "buy" : "sell";
+      const side: BrokerOperationSide = trade.tradeSide === "BUY" ? "buy" : "sell";
       const cryptoIdentity = getImportedCryptoIdentity(
         row.rawSymbol,
         row.instrumentName || row.rawSymbol
@@ -2611,7 +2953,7 @@ const parseXtbCashOperationRows = (
           marketAmount: grossMarketValue,
         });
       const matchingCloseTradeRow =
-        side === "sell" ? closeTradeRowsBySaleId.get(row.id) : undefined;
+        trade.positionEffect === "CLOSE" ? closeTradeRowsBySaleId.get(row.id) : undefined;
       const brokerRealizedProfitLoss = matchingCloseTradeRow?.amount;
       const brokerSaleValue =
         side === "sell" && typeof brokerRealizedProfitLoss === "number"
@@ -2646,6 +2988,8 @@ const parseXtbCashOperationRows = (
           brokerFxSpreadRate: hasAutoFxConversion ? XTB_AUTO_FX_SPREAD_RATE : undefined,
           side,
         }),
+        positionDirection: trade.positionDirection,
+        positionEffect: trade.positionEffect,
         accountNumber,
         realizedProfitLoss:
           typeof brokerRealizedProfitLoss === "number"
@@ -2760,44 +3104,41 @@ const parseXtbCashOperationRows = (
       const transfer =
         parseXtbTransferComment(row.comment) ??
         parseXtbPlainTransferComment(row.comment, accountCurrency);
-      const operation = buildBaseXtbOperation({
-        row,
-        accountCurrency,
-        operationType: transfer?.isCurrencyConversion ? "CONVERSION" : "TRANSFER",
-        amount: absoluteAmount,
-        currency: transfer?.sourceCurrency ?? accountCurrency,
-        exchangeRate: transfer?.exchangeRate ?? undefined,
-      });
-
       if (transfer) {
         const isCurrentSource = transfer.sourceAccountNumber === accountNumber || signedAmount < 0;
-        const targetAmount = transfer.exchangeRate
-          ? isCurrentSource
-            ? round(absoluteAmount * transfer.exchangeRate, 6)
-            : absoluteAmount
-          : absoluteAmount;
-        const sourceAmount = transfer.exchangeRate
-          ? isCurrentSource
-            ? absoluteAmount
-            : round(absoluteAmount / transfer.exchangeRate, 6)
-          : absoluteAmount;
-
+        const currentCurrency = isCurrentSource
+          ? transfer.sourceCurrency
+          : transfer.targetCurrency;
         operations.push({
-          ...operation,
-          accountNumber: transfer.sourceAccountNumber,
-          accountCurrency: transfer.sourceCurrency,
-          currency: transfer.sourceCurrency,
-          amount: sourceAmount,
-          targetAccountNumber: transfer.targetAccountNumber,
-          targetCurrency: transfer.targetCurrency,
-          targetAmount,
+          ...buildBaseXtbOperation({
+            row,
+            accountCurrency,
+            // A statement is imported into one selected Mexo portfolio. The
+            // other XTB account is an external counterparty here, not another
+            // account that should be recreated in this portfolio.
+            operationType: isCurrentSource ? "WITHDRAW" : "DEPOSIT",
+            amount: absoluteAmount,
+            currency: currentCurrency,
+          }),
+          accountNumber,
+          accountCurrency: currentCurrency,
+          currency: currentCurrency,
+          amount: absoluteAmount,
+          counterpartyAccountNumber: isCurrentSource
+            ? transfer.targetAccountNumber
+            : transfer.sourceAccountNumber,
           sourceAccountNumber: transfer.sourceAccountNumber,
           sourceCurrency: transfer.sourceCurrency,
-          importKey: getXtbTransferImportKey(row, transfer),
+          importKey: `${getXtbTransferImportKey(row, transfer)}:${accountNumber}:${currentCurrency}`,
         });
       } else {
         operations.push({
-          ...operation,
+          ...buildBaseXtbOperation({
+            row,
+            accountCurrency,
+            operationType: signedAmount < 0 ? "WITHDRAW" : "DEPOSIT",
+            amount: absoluteAmount,
+          }),
           accountNumber,
         });
       }
@@ -2845,12 +3186,17 @@ const parseXtbCashOperationRows = (
           fee: absoluteAmount,
         }),
         accountNumber,
+        financing: row.normalizedType === "swap" ? round(absoluteAmount, 6) : undefined,
       });
       cashRows += 1;
       return;
     }
 
     if (isXtbCloseTradeType(row.normalizedType)) {
+      if (usedCloseTradeRowIds.has(row.id)) {
+        return;
+      }
+
       operations.push({
         ...buildBaseXtbOperation({
           row,
@@ -2867,6 +3213,7 @@ const parseXtbCashOperationRows = (
         accountNumber,
         amount: round(signedAmount, 6),
         cashAmount: round(signedAmount, 6),
+        realizedProfitLoss: round(signedAmount, 6),
       });
       cashRows += 1;
       return;
@@ -3118,7 +3465,7 @@ const parseXtbReportRows = (
     ...xtbResult,
     operations:
       closedPositions.length > 0
-        ? enrichXtbSalesWithClosedPositions(xtbResult.operations, closedPositions)
+        ? mergeXtbClosedPositions(xtbResult.operations, closedPositions)
         : xtbResult.operations,
     warnings: [
       ...(xtbResult.warnings ?? []),
@@ -3152,7 +3499,7 @@ const parseXtbCashOperationText = (
     ...xtbResult,
     operations:
       closedPositions.length > 0
-        ? enrichXtbSalesWithClosedPositions(xtbResult.operations, closedPositions)
+        ? mergeXtbClosedPositions(xtbResult.operations, closedPositions)
         : xtbResult.operations,
     warnings: [
       ...(xtbResult.warnings ?? []),
@@ -3352,7 +3699,7 @@ export const parseBrokerOperationsXlsx = async (
   }
 
   if (xtbResult) {
-    const enrichedOperations = enrichXtbSalesWithClosedPositions(
+    const enrichedOperations = mergeXtbClosedPositions(
       xtbResult.operations,
       closedPositions
     );

@@ -14,6 +14,7 @@ import type {
   InvestmentPortfolio,
   OperationType,
   PortfolioAccount,
+  PortfolioAsset,
   PortfolioBenchmarkDefinition,
   PortfolioInstrument,
   PortfolioOperation,
@@ -139,6 +140,8 @@ export const getPortfolioInstrumentId = (
     kind?: AssetKind;
     symbol?: string;
     instrumentIdentity?: InstrumentIdentity;
+    instrumentType?: InstrumentType;
+    positionDirection?: PortfolioAsset["positionDirection"];
   }
 ) => {
   const kind = target.kind ?? "stock";
@@ -150,6 +153,8 @@ export const getPortfolioInstrumentId = (
     kind,
     symbol,
     instrumentIdentity: target.instrumentIdentity,
+    instrumentType: target.instrumentType,
+    positionDirection: target.positionDirection,
   });
 
   return `${portfolioId}:instrument:${key}`;
@@ -371,6 +376,7 @@ const normalizeInstrumentType = (value: unknown, fallback: InstrumentType): Inst
     value === "ETF" ||
     value === "BOND" ||
     value === "CRYPTO" ||
+    value === "CFD" ||
     value === "FUND" ||
     value === "TERM_DEPOSIT" ||
     value === "CASH" ||
@@ -399,6 +405,9 @@ const buildLegacyInstruments = (
       priceScale?: number;
       instrumentIdentity?: InstrumentIdentity;
       bondMeta?: TreasuryBondSeries;
+      instrumentType?: InstrumentType;
+      positionDirection?: PortfolioAsset["positionDirection"];
+      contractMultiplier?: number;
     }
   ) => {
     const id = getPortfolioInstrumentId(portfolioId, source);
@@ -410,7 +419,7 @@ const buildLegacyInstruments = (
     instrumentsById.set(id, {
       id,
       portfolioId,
-      type: getInstrumentTypeForAssetKind(source.kind),
+      type: source.instrumentType ?? getInstrumentTypeForAssetKind(source.kind),
       assetKind: source.kind,
       symbol: resolveTickerIdentity({
         symbol: source.symbol,
@@ -427,7 +436,11 @@ const buildLegacyInstruments = (
           kind: source.kind,
           symbol: source.symbol,
           instrumentIdentity: source.instrumentIdentity,
+          instrumentType: source.instrumentType,
+          positionDirection: source.positionDirection,
         }),
+        positionDirection: source.positionDirection,
+        contractMultiplier: source.contractMultiplier,
         ...(source.bondMeta
           ? {
               treasuryBondType: source.bondMeta.type,
@@ -456,6 +469,9 @@ const buildLegacyInstruments = (
           priceScale: allocation.priceScale,
           instrumentIdentity: allocation.instrumentIdentity,
           bondMeta: allocation.bondMeta,
+          instrumentType: allocation.instrumentType,
+          positionDirection: allocation.positionDirection,
+          contractMultiplier: allocation.contractMultiplier,
         });
       }
     });

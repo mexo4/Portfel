@@ -98,6 +98,13 @@ const formatSignedCurrency = (value: number, currency: CurrencyCode) =>
 const formatSignedPercent = (value: number) =>
   `${value > 0 ? "+" : ""}${value.toFixed(2)}%`;
 
+const getGroupTypeLabel = (group: PortfolioAssetGroup) =>
+  group.instrumentType === "CFD"
+    ? "CFD"
+    : group.instrumentType === "OTHER"
+      ? "Instrument importowany"
+      : KIND_LABELS[group.kind];
+
 const GroupDragOverlayCard = ({ group }: { group: PortfolioAssetGroup }) => {
   return (
     <article className="drag-overlay-row">
@@ -115,7 +122,7 @@ const GroupDragOverlayCard = ({ group }: { group: PortfolioAssetGroup }) => {
       </div>
 
       <div className="drag-overlay-kind">
-        <span className="tag">{KIND_LABELS[group.kind]}</span>
+        <span className="tag">{getGroupTypeLabel(group)}</span>
       </div>
     </article>
   );
@@ -223,9 +230,9 @@ const SortableGroupSection = ({
         </td>
         <td className="portfolio-cell-kind">
           {isDragging ? (
-            <span className="drag-row-kind">{KIND_LABELS[group.kind]}</span>
+            <span className="drag-row-kind">{getGroupTypeLabel(group)}</span>
           ) : (
-            KIND_LABELS[group.kind]
+            getGroupTypeLabel(group)
           )}
         </td>
         <td className="portfolio-cell-quantity">

@@ -26,6 +26,7 @@ import type {
   BenchmarkInvestment,
   BondTransactionKind,
   FxRates,
+  InstrumentType,
   InstrumentIdentity,
   InvestmentPortfolio,
   PortfolioBook,
@@ -34,6 +35,7 @@ import type {
   PortfolioRealizedAdjustment,
   PortfolioSale,
   PortfolioSaleAllocation,
+  PositionDirection,
   PortfolioState,
   QuoteProvider,
   RealizedAdjustmentDraft,
@@ -140,6 +142,20 @@ const getSafeQuoteProvider = (value: unknown, kind: AssetKind): QuoteProvider =>
 
 const isSupportedAssetKind = (value: unknown): value is AssetKind =>
   typeof value === "string" && SUPPORTED_ASSET_KINDS.has(value as AssetKind);
+
+const normalizeImportedInstrumentType = (value: unknown): InstrumentType | undefined => {
+  if (value === "CFD" || value === "OTHER") return value;
+  if (value === "STOCK" || value === "ETF" || value === "BOND" || value === "CRYPTO") {
+    return value;
+  }
+  return undefined;
+};
+
+const normalizePositionDirection = (value: unknown): PositionDirection =>
+  value === "SHORT" ? "SHORT" : "LONG";
+
+const normalizeContractMultiplier = (value: unknown) =>
+  hasFiniteNumber(value) && value > 0 ? round(value, 8) : undefined;
 
 const isBondTransactionKind = (value: unknown): value is BondTransactionKind =>
   value === "sale" || value === "bond-redemption" || value === "bond-swap";
@@ -370,6 +386,9 @@ export const normalizeStoredPortfolioAssets = (assets: PortfolioAsset[]) => {
       return {
         ...asset,
         symbol,
+        instrumentType: normalizeImportedInstrumentType(asset.instrumentType),
+        positionDirection: normalizePositionDirection(asset.positionDirection),
+        contractMultiplier: normalizeContractMultiplier(asset.contractMultiplier),
         marketCurrency,
         provider,
         providerId:
@@ -444,6 +463,9 @@ const normalizePortfolioSaleAllocation = (
         ? normalizePortfolioSymbol(allocation.symbol, kind)
         : undefined,
     kind,
+    instrumentType: normalizeImportedInstrumentType(allocation.instrumentType),
+    positionDirection: normalizePositionDirection(allocation.positionDirection),
+    contractMultiplier: normalizeContractMultiplier(allocation.contractMultiplier),
     marketCurrency:
       typeof allocation.marketCurrency === "string" && allocation.marketCurrency
         ? toCurrencyCode(allocation.marketCurrency)
@@ -535,7 +557,16 @@ const normalizePortfolioSale = (
           marketCurrency,
         })
       : undefined;
-  const assetKey = getPortfolioAssetGroupKey({ kind, symbol, instrumentIdentity });
+  const instrumentType = normalizeImportedInstrumentType(sale.instrumentType);
+  const positionDirection = normalizePositionDirection(sale.positionDirection);
+  const contractMultiplier = normalizeContractMultiplier(sale.contractMultiplier);
+  const assetKey = getPortfolioAssetGroupKey({
+    kind,
+    symbol,
+    instrumentIdentity,
+    instrumentType,
+    positionDirection,
+  });
 
   return {
     id: sale.id,
@@ -543,6 +574,9 @@ const normalizePortfolioSale = (
     name,
     symbol,
     kind,
+    instrumentType,
+    positionDirection,
+    contractMultiplier,
     transactionKind: isBondTransactionKind(sale.transactionKind)
       ? sale.transactionKind
       : "sale",
@@ -675,6 +709,9 @@ const normalizePortfolioAsset = (
     name,
     symbol,
     kind,
+    instrumentType: normalizeImportedInstrumentType(asset.instrumentType),
+    positionDirection: normalizePositionDirection(asset.positionDirection),
+    contractMultiplier: normalizeContractMultiplier(asset.contractMultiplier),
     purchaseDate: toDateInputValue(asset.purchaseDate, getTodayDateInputValue()),
     quantity: round(asset.quantity, 6),
     purchasePrice: round(asset.purchasePrice, 6),
@@ -763,7 +800,16 @@ const normalizePortfolioRealizedAdjustment = (
     currency: toCurrencyCode(adjustment.currency, "PLN"),
     amountPlnSnapshot: round(adjustment.amountPlnSnapshot),
     date: toDateInputValue(adjustment.date, getTodayDateInputValue()),
-    source: adjustment.source === "bond-coupon" ? "bond-coupon" : "manual",
+    source:
+      adjustment.source === "bond-coupon"
+        ? "bond-coupon"
+        : adjustment.source === "broker-import"
+          ? "broker-import"
+          : "manual",
+    importKey:
+      typeof adjustment.importKey === "string" && adjustment.importKey.trim()
+        ? adjustment.importKey.trim()
+        : undefined,
     bondCode:
       typeof adjustment.bondCode === "string" && adjustment.bondCode
         ? normalizeTreasuryBondCode(adjustment.bondCode)
@@ -1293,6 +1339,9 @@ export const applySaleToPortfolio = ({
       name: lot.name,
       symbol: lot.symbol,
       kind: lot.kind,
+      instrumentType: lot.instrumentType,
+      positionDirection: lot.positionDirection,
+      contractMultiplier: lot.contractMultiplier,
       marketCurrency: lot.marketCurrency,
       provider: lot.provider,
       providerId: lot.providerId,
@@ -1329,9 +1378,42 @@ export const applySaleToPortfolio = ({
   const realizedInvestedPln = round(
     allocations.reduce((total, allocation) => total + allocation.investedPln, 0)
   );
-  const realizedProceedsPln = round(
-    convertToPln(saleQuantity * salePrice, saleCurrency, fxRates) - saleFeePln
+  const positionDirection = group.lots[0]?.positionDirection === "SHORT" ? "SHORT" : "LONG";
+  const contractMultiplier =
+    group.lots[0]?.contractMultiplier && group.lots[0].contractMultiplier > 0
+      ? group.lots[0].contractMultiplier
+      : 1;
+  const realizedEntryNotionalPln = round(
+    allocations.reduce(
+      (total, allocation) => total + allocation.investedPln - allocation.allocatedBuyFeePln,
+      0
+    )
   );
+  const realizedProceedsPln =
+    positionDirection === "SHORT"
+      ? round(
+          realizedEntryNotionalPln +
+            convertToPln(
+              allocations.reduce(
+                (total, allocation) =>
+                  total +
+                  (allocation.purchasePrice - salePrice) *
+                    allocation.quantity *
+                    (allocation.contractMultiplier ?? contractMultiplier),
+                0
+              ),
+              saleCurrency,
+              fxRates
+            ) -
+            saleFeePln
+        )
+      : round(
+          convertToPln(
+            saleQuantity * salePrice * contractMultiplier,
+            saleCurrency,
+            fxRates
+          ) - saleFeePln
+        );
 
   if (realizedProceedsPln < 0) {
     throw new Error("Prowizja nie moze byc wyzsza niz wartosc sprzedazy.");
@@ -1375,6 +1457,9 @@ export const applySaleToPortfolio = ({
     name: group.name,
     symbol: group.symbol,
     kind: group.kind,
+    instrumentType: group.lots[0]?.instrumentType,
+    positionDirection,
+    contractMultiplier,
     transactionKind: "sale",
     quantity: saleQuantity,
     salePrice,
@@ -1459,6 +1544,9 @@ const createRestoredAssetFromAllocation = ({
   name: allocation.name ?? sale.name,
   symbol: allocation.symbol ?? sale.symbol,
   kind: allocation.kind ?? sale.kind,
+  instrumentType: allocation.instrumentType ?? sale.instrumentType,
+  positionDirection: allocation.positionDirection ?? sale.positionDirection,
+  contractMultiplier: allocation.contractMultiplier ?? sale.contractMultiplier,
   purchaseDate: allocation.purchaseDate,
   quantity: round(allocation.quantity, 6),
   purchasePrice: round(allocation.purchasePrice, 6),

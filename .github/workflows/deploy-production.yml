@@ -45,6 +45,12 @@ jobs:
 
           ssh \
             -i ~/.ssh/mexo-production \
+            -o BatchMode=yes \
+            -o ConnectTimeout=30 \
+            -o ConnectionAttempts=3 \
+            -o ServerAliveInterval=20 \
+            -o ServerAliveCountMax=30 \
+            -o TCPKeepAlive=yes \
             "$ORACLE_USER@$ORACLE_HOST" \
             'bash -se' <<'REMOTE'
 
@@ -73,10 +79,16 @@ jobs:
           git reset --hard "origin/$BRANCH"
 
           echo "Installing dependencies..."
-          npm ci
+          npm ci --no-audit --no-fund
 
           echo "Building Mexo..."
-          NODE_OPTIONS="--max-old-space-size=1536" npm run build
+          # Oracle Free is deliberately small. A heap limit larger than the
+          # machine can sustain lets the kernel kill Node (and sometimes the
+          # SSH session) before Next can report a useful build error.
+          CIRCLE_NODE_TOTAL=2 \
+          NEXT_TELEMETRY_DISABLED=1 \
+          NODE_OPTIONS="--max-old-space-size=768" \
+            npm run build
 
           echo "Restarting Mexo..."
           sudo -n systemctl restart mexo

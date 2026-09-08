@@ -513,6 +513,8 @@ const schemaStatements = [
       is_correction BOOLEAN NOT NULL DEFAULT FALSE,
       correction_target_report_number TEXT,
       correction_of_report_id TEXT,
+      corporate_events_projection_status TEXT,
+      corporate_events_projected_at TEXT,
       discovered_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       FOREIGN KEY (issuer_id) REFERENCES corporate_event_instruments(id) ON DELETE SET NULL,
@@ -521,6 +523,8 @@ const schemaStatements = [
       UNIQUE (source_url)
     )
   `,
+  "ALTER TABLE espi_reports ADD COLUMN IF NOT EXISTS corporate_events_projection_status TEXT",
+  "ALTER TABLE espi_reports ADD COLUMN IF NOT EXISTS corporate_events_projected_at TEXT",
   "CREATE INDEX IF NOT EXISTS idx_espi_reports_published ON espi_reports(published_at DESC, id DESC)",
   "CREATE INDEX IF NOT EXISTS idx_espi_reports_issuer_published ON espi_reports(issuer_id, published_at DESC)",
   "CREATE INDEX IF NOT EXISTS idx_espi_reports_isin_published ON espi_reports(source_isin, published_at DESC)",
@@ -559,6 +563,7 @@ const schemaStatements = [
       status TEXT NOT NULL,
       last_checked_at TEXT,
       last_success_at TEXT,
+      last_overlap_at TEXT,
       last_error_code TEXT,
       next_backfill_page INTEGER NOT NULL DEFAULT 1,
       backfill_complete BOOLEAN NOT NULL DEFAULT FALSE,
@@ -568,6 +573,7 @@ const schemaStatements = [
       updated_at TEXT NOT NULL
     )
   `,
+  "ALTER TABLE espi_sync_state ADD COLUMN IF NOT EXISTS last_overlap_at TEXT",
   `
     CREATE TABLE IF NOT EXISTS portfolio_engine_cache (
       "key" TEXT PRIMARY KEY,

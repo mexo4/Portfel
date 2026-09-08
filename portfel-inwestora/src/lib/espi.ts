@@ -86,6 +86,13 @@ export type PapEspiListCandidate = {
   sourceUrl: string;
   sourceTitle: string;
   sourcePublishedAt?: string;
+  issuerName?: string;
+  sourceTicker?: string;
+  sourceIsin?: string;
+  reportNumber?: string;
+  reportType?: EspiReportType;
+  title?: string;
+  sourceKind?: "GPW" | "NEWCONNECT" | "PAP_MEDIAROOM";
 };
 
 export type ParsedPapEspiReport = {
@@ -192,22 +199,24 @@ const extractClassBlock = (document: string, className: string) => {
 };
 
 export const toWarsawIso = (value: string) => {
-  const match = value.match(/(\d{1,2})[.\-/](\d{1,2})[.\-/](20\d{2})(?:,?\s*(\d{1,2}):(\d{2}))?/);
+  const match = value.match(/(\d{1,2})[.\-/](\d{1,2})[.\-/](20\d{2})(?:,?\s*(\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
   if (!match) return undefined;
-  const [, day, month, year, hour = "00", minute = "00"] = match;
+  const [, day, month, year, hour = "00", minute = "00", second = "00"] = match;
   const components = {
     year: Number(year),
     month: Number(month),
     day: Number(day),
     hour: Number(hour),
     minute: Number(minute),
+    second: Number(second),
   };
   const utcGuess = Date.UTC(
     components.year,
     components.month - 1,
     components.day,
     components.hour,
-    components.minute
+    components.minute,
+    components.second
   );
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Europe/Warsaw",
@@ -224,7 +233,8 @@ export const toWarsawIso = (value: string) => {
     Number(zoned.month) - 1,
     Number(zoned.day),
     Number(zoned.hour),
-    Number(zoned.minute)
+    Number(zoned.minute),
+    components.second
   );
   return new Date(utcGuess - (representedAsUtc - utcGuess)).toISOString();
 };
@@ -250,12 +260,92 @@ export const parsePapEspiList = (document: string) => {
       sourceUrl,
       sourceTitle: espHtmlToText(sourceTitleHtml),
       sourcePublishedAt: toWarsawIso(espHtmlToText(dateHtml)),
+      sourceKind: "PAP_MEDIAROOM",
     });
   }
 
   return {
     candidates: Array.from(new Map(candidates.map((item) => [item.sourceId, item])).values()),
     hasNextPage: /rel="next"/i.test(document),
+  };
+};
+
+const GPW_ESPI_BASE_URL = "https://www.gpw.pl";
+const GPW_ESPI_ATTACHMENT_BASE_URL = "https://espiebi.pap.pl/espi/pl/reports/view/";
+
+const getGpwReportType = (value: string, title: string): EspiReportType => {
+  const normalized = normalizeForRules(value);
+  if (/current|biezacy|rb/.test(normalized)) return "CURRENT";
+  if (/half|polrocz|\bps?r\b/.test(normalized)) return "PERIODIC_HALF_YEAR";
+  if (/quarter|kwartal|\bqsr?\b/.test(normalized)) return "PERIODIC_QUARTERLY";
+  if (/annual|roczn|\brsr?\b|\brr\b/.test(normalized)) return "PERIODIC_ANNUAL";
+  return classifyEspiReportType(title);
+};
+
+/**
+ * Parse the public, official GPW ESPI result fragment returned by
+ * `GPWEspiReportUnion`. The exchange-issued `geru_id` is the stable source id;
+ * ISIN is retained so issuer matching never depends on a fuzzy company name.
+ */
+export const parseGpwEspiList = (
+  document: string,
+  options: {
+    baseUrl?: string;
+    sourcePrefix?: "gpw" | "newconnect";
+    sourceKind?: "GPW" | "NEWCONNECT";
+  } = {}
+) => {
+  const candidates: PapEspiListCandidate[] = [];
+  const baseUrl = options.baseUrl ?? GPW_ESPI_BASE_URL;
+  const sourcePrefix = options.sourcePrefix ?? "gpw";
+  const sourceKind = options.sourceKind ?? "GPW";
+
+  for (const item of document.matchAll(/<li\b[^>]*>([\s\S]*?)<\/li>/gi)) {
+    const segment = item[1] ?? "";
+    const metadata = espHtmlToText(
+      segment.match(/<span[^>]*class="[^"]*date[^"]*"[^>]*>([\s\S]*?)<\/span>/i)?.[1] ?? ""
+    );
+    if (!/(?:^|\|)\s*ESPI\s*(?:\||$)/i.test(metadata)) continue;
+
+    const href = decodeEspiHtml(
+      segment.match(/<a\s+[^>]*href="([^"]*\bgeru_id=\d+[^"]*)"/i)?.[1] ?? ""
+    );
+    const geruId = href.match(/[?&]geru_id=(\d+)/i)?.[1];
+    if (!geruId) continue;
+
+    const issuerLabel = espHtmlToText(
+      segment.match(/<strong[^>]*class="[^"]*name[^"]*"[^>]*>[\s\S]*?<a[^>]*>([\s\S]*?)<\/a>/i)?.[1] ?? ""
+    );
+    const issuerMatch = issuerLabel.match(/^(.*?)\s*\(([A-Z]{2}[A-Z0-9]{10})\)\s*$/i);
+    const issuerName = (issuerMatch?.[1] ?? issuerLabel).trim();
+    const sourceIsin = issuerMatch?.[2]?.toUpperCase();
+    const title = espHtmlToText(segment.match(/<p[^>]*>([\s\S]*?)<\/p>/i)?.[1] ?? "");
+    const parts = metadata.split("|").map((part) => part.trim());
+    const publishedAt = toWarsawIso(parts[0] ?? "");
+    const reportKind = parts[1] ?? "";
+    const reportNumber = parts[3] && parts[3] !== "-" ? parts[3] : undefined;
+    if (!issuerName || !title || !publishedAt) continue;
+
+    const reportType = getGpwReportType(reportKind, title);
+    candidates.push({
+      sourceId: `${sourcePrefix}:${geruId}`,
+      sourceUrl: new URL(href, baseUrl).toString(),
+      sourceTitle: reportType === "CURRENT" && reportNumber
+        ? `${issuerName} (${reportNumber}) ${title}`
+        : `${issuerName} ${title}`,
+      sourcePublishedAt: publishedAt,
+      issuerName,
+      sourceIsin,
+      reportNumber,
+      reportType,
+      title,
+      sourceKind,
+    });
+  }
+
+  return {
+    candidates: Array.from(new Map(candidates.map((item) => [item.sourceId, item])).values()),
+    hasNextPage: candidates.length > 0,
   };
 };
 
@@ -466,6 +556,90 @@ export const parsePapEspiReport = (
       ? findCorrectionTarget(`${sourceTitle}\n${body}`, reportNumber)
       : undefined,
     attachments: extractAttachments(article),
+  };
+};
+
+const extractGpwAttachments = (reportData: string) => {
+  const attachments = new Map<string, Omit<EspiAttachment, "id">>();
+
+  for (const match of reportData.matchAll(/<a\s+[^>]*href="(attachment\/[^\"]+)"[^>]*>([\s\S]*?)<\/a>/gi)) {
+    try {
+      const relativePath = decodeEspiHtml(match[1] ?? "");
+      const sourceUrl = new URL(relativePath, GPW_ESPI_ATTACHMENT_BASE_URL).toString();
+      const name = espHtmlToText(match[2] ?? "");
+      if (!name || attachments.has(sourceUrl)) continue;
+      attachments.set(sourceUrl, {
+        name,
+        mediaType: inferMediaType(sourceUrl),
+        sourceUrl,
+      });
+    } catch {
+      // A malformed attachment must not make the whole ESPI report disappear.
+    }
+  }
+
+  return Array.from(attachments.values());
+};
+
+const extractGpwReportData = (document: string) => {
+  const marker = /<div[^>]*class="[^"]*report-data[^"]*"[^>]*>/i.exec(document);
+  if (!marker) return "";
+  const start = marker.index + marker[0].length;
+  const scriptStart = document.indexOf("<script", start);
+  return document.slice(start, scriptStart >= 0 ? scriptStart : document.length);
+};
+
+/** Parse a report detail from the public official GPW ESPI publication. */
+export const parseGpwEspiReport = (
+  document: string,
+  candidate: PapEspiListCandidate
+): ParsedPapEspiReport | null => {
+  const reportData = extractGpwReportData(document);
+  const pageMeta = espHtmlToText(
+    document.match(/<span[^>]*class="[^"]*date[^"]*"[^>]*>([\s\S]*?)<\/span>/i)?.[1] ?? ""
+  );
+  if (!reportData || !/(?:^|\|)\s*ESPI\s*(?:\||$)/i.test(pageMeta)) return null;
+
+  const publishedAt = toWarsawIso(pageMeta) ?? candidate.sourcePublishedAt;
+  const issuerName = candidate.issuerName?.trim();
+  const title = candidate.sourceTitle
+    ? extractIssuerAndSubject(candidate.sourceTitle, issuerName).title
+    : "";
+  if (!publishedAt || !issuerName || !title) return null;
+
+  const firstSheet = reportData.match(
+    /<H4>\s*Nazwa arkusza:[\s\S]*?(?:RAPORT BIEŻĄCY|RAPORT OKRESOWY)[\s\S]*?<\/H4>([\s\S]*?)(?=<H4>\s*Nazwa arkusza:|$)/i
+  )?.[1];
+  const body = espHtmlToText(firstSheet ?? reportData)
+    .replace(/\n?Serwis Ekonomiczny Polskiej Agencji Prasowej SA[\s\S]*$/i, "")
+    .trim();
+  if (!body) return null;
+
+  const reportType = candidate.reportType ?? classifyEspiReportType(candidate.sourceTitle);
+  const reportNumber = candidate.reportNumber ??
+    pageMeta.split("|").map((part) => part.trim())[3] ??
+    undefined;
+  const isCorrection = /\bkorekt/i.test(normalizeForRules(`${candidate.sourceTitle}\n${body.slice(0, 1000)}`));
+
+  return {
+    sourceId: candidate.sourceId,
+    sourceUrl: candidate.sourceUrl,
+    sourceTitle: candidate.sourceTitle,
+    issuerName,
+    sourceTicker: candidate.sourceTicker,
+    sourceIsin: candidate.sourceIsin,
+    reportNumber,
+    reportType,
+    publishedAt,
+    title,
+    body,
+    legalBasis: findLegalBasis(body),
+    category: classifyEspiCategory({ title: candidate.sourceTitle, body, reportType }),
+    isCorrection,
+    correctionTargetReportNumber: isCorrection
+      ? findCorrectionTarget(`${candidate.sourceTitle}\n${body}`, reportNumber)
+      : undefined,
+    attachments: extractGpwAttachments(reportData),
   };
 };
 

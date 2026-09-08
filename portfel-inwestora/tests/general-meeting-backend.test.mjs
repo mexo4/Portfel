@@ -127,3 +127,22 @@ test("source failures update checks without deleting last valid corporate events
   assert.doesNotMatch(refresh, /DELETE FROM corporate_events/);
   assert.doesNotMatch(refresh, /SET active = FALSE/);
 });
+
+test("global WZA projection is independent from portfolio membership and logs synchronization counts", async () => {
+  const provider = await readFile(
+    new URL("../src/lib/server/corporate-events.ts", import.meta.url),
+    "utf8"
+  );
+  const api = await readFile(
+    new URL("../src/app/api/general-meetings/route.ts", import.meta.url),
+    "utf8"
+  );
+
+  assert.match(provider, /synchronizeGlobalGeneralMeetings/);
+  assert.match(provider, /corporate_events_projection_status/);
+  assert.match(provider, /\[WZA SYNC\] fetched=/);
+  assert.match(provider, /for \(const report of reports\)/);
+  assert.match(api, /scope === "all"\s*\? \[\]/);
+  assert.match(api, /instrument\.watched/);
+  assert.match(api, /instrument\.held/);
+});

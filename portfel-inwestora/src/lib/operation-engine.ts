@@ -919,6 +919,201 @@ const getTradeOperationIdentity = (operation: PortfolioOperation) => {
   ].join(":");
 };
 
+const areStatementTradeAmountsEquivalent = (cashAmount: number, marketAmount: number) => {
+  if (!Number.isFinite(cashAmount) || !Number.isFinite(marketAmount) || marketAmount <= 0) {
+    return false;
+  }
+
+  const tolerance = Math.max(0.02, marketAmount * 0.0005);
+  return Math.abs(Math.abs(cashAmount) - Math.abs(marketAmount)) <= tolerance;
+};
+
+/**
+ * Older XTB imports inferred a listing currency from the venue suffix. That
+ * created a synthetic FX conversion when an LSE instrument such as a USD
+ * line used the broker suffix `.UK`. The cash statement contains enough
+ * evidence to repair only those bad records: cash and market amounts are
+ * equal and the generated conversion rate is effectively 1:1.
+ *
+ * The repair is deterministic and idempotent. Real cross-currency trades keep
+ * their FX operation because their statement amounts are not equivalent.
+ */
+export const repairMisclassifiedXtbListingCurrencies = (
+  portfolio: InvestmentPortfolio
+): InvestmentPortfolio => {
+  const operations = Array.isArray(portfolio.operations) ? portfolio.operations : [];
+  const correctionByOperationId = new Map<
+    string,
+    { cashCurrency: CurrencyCode; previousMarketCurrency: CurrencyCode; lotId?: string; saleId?: string; assetId?: string }
+  >();
+
+  operations.forEach((operation) => {
+    const metadata = asRecord(operation.metadata);
+    const importSource = getString(metadata.importSource).toUpperCase();
+    const marketCurrency = getString(metadata.marketCurrency);
+    const cashCurrency = getString(metadata.cashCurrency);
+    const marketAmount =
+      hasFiniteNumber(metadata.marketAmount)
+        ? metadata.marketAmount
+        : operation.quantity && operation.price
+          ? operation.quantity * operation.price
+          : 0;
+    const cashAmount = hasFiniteNumber(metadata.cashAmount)
+      ? metadata.cashAmount
+      : operation.amount;
+    const exchangeRateIsParity =
+      operation.exchangeRate === null ||
+      operation.exchangeRate === undefined ||
+      Math.abs(operation.exchangeRate - 1) <= 0.0005;
+
+    if (
+      importSource !== "XTB" ||
+      (operation.operationType !== "BUY" && operation.operationType !== "SELL") ||
+      metadata.autoFxConversion !== true ||
+      !marketCurrency ||
+      !cashCurrency ||
+      marketCurrency === cashCurrency ||
+      !exchangeRateIsParity ||
+      !areStatementTradeAmountsEquivalent(cashAmount, marketAmount)
+    ) {
+      return;
+    }
+
+    correctionByOperationId.set(operation.id, {
+      cashCurrency: toCurrencyCode(cashCurrency, BASE_CURRENCY),
+      previousMarketCurrency: toCurrencyCode(marketCurrency, BASE_CURRENCY),
+      lotId: getString(metadata.lotId) || undefined,
+      saleId: getString(metadata.saleId) || undefined,
+      assetId: operation.assetId ?? undefined,
+    });
+  });
+
+  if (correctionByOperationId.size === 0) {
+    return portfolio;
+  }
+
+  const correctedOperationIds = new Set(correctionByOperationId.keys());
+  const correctedOperations = operations
+    .filter((operation) => {
+      const linkedTradeId = getString(asRecord(operation.metadata).autoFxForOperationId);
+      return !linkedTradeId || !correctedOperationIds.has(linkedTradeId);
+    })
+    .map((operation) => {
+      const correction = correctionByOperationId.get(operation.id);
+
+      if (!correction) {
+        return operation;
+      }
+
+      const metadata = asRecord(operation.metadata);
+      const cashAmount = hasFiniteNumber(metadata.cashAmount)
+        ? Math.abs(metadata.cashAmount)
+        : Math.abs(operation.amount);
+
+      return {
+        ...operation,
+        currency: correction.cashCurrency,
+        exchangeRate: 1,
+        amount: round(cashAmount, 8),
+        metadata: {
+          ...metadata,
+          marketCurrency: correction.cashCurrency,
+          marketAmount: round(cashAmount, 8),
+          autoFxConversion: false,
+          autoFxTradeNormalized: false,
+          listingCurrencyCorrectedFrom: correction.previousMarketCurrency,
+          listingCurrencyCorrection: "XTB_STATEMENT_SAME_CURRENCY",
+        },
+      } satisfies PortfolioOperation;
+    });
+
+  const correctionByLotId = new Map(
+    Array.from(correctionByOperationId.values())
+      .filter((correction) => correction.lotId)
+      .map((correction) => [correction.lotId!, correction] as const)
+  );
+  const correctionBySaleId = new Map(
+    Array.from(correctionByOperationId.values())
+      .filter((correction) => correction.saleId)
+      .map((correction) => [correction.saleId!, correction] as const)
+  );
+  const correctionByInstrumentId = new Map(
+    Array.from(correctionByOperationId.values())
+      .filter((correction) => correction.assetId)
+      .map((correction) => [correction.assetId!, correction] as const)
+  );
+
+  const correctedAssets = portfolio.assets.map((asset) => {
+    const correction = correctionByLotId.get(asset.id);
+
+    if (!correction || asset.marketCurrency !== correction.previousMarketCurrency) {
+      return asset;
+    }
+
+    return {
+      ...asset,
+      marketCurrency: correction.cashCurrency,
+      purchasePriceCurrency:
+        asset.purchasePriceCurrency === correction.previousMarketCurrency
+          ? correction.cashCurrency
+          : asset.purchasePriceCurrency,
+      purchaseFxRateToPln:
+        asset.purchasePriceCurrency === correction.previousMarketCurrency &&
+        hasFiniteNumber(asset.purchaseSettlementFxRateToPln)
+          ? asset.purchaseSettlementFxRateToPln
+          : asset.purchaseFxRateToPln,
+      latestPrice: undefined,
+      latestPriceDate: undefined,
+      latestPriceMarketTimestamp: undefined,
+      latestPriceFetchedAt: undefined,
+      previousClose: undefined,
+      lastUpdatedAt: undefined,
+    };
+  });
+
+  const correctedSales = portfolio.sales.map((sale) => {
+    const correction = correctionBySaleId.get(sale.id);
+
+    if (!correction || sale.marketCurrency !== correction.previousMarketCurrency) {
+      return sale;
+    }
+
+    return {
+      ...sale,
+      marketCurrency: correction.cashCurrency,
+      realizedValueCurrency:
+        sale.realizedValueCurrency === correction.previousMarketCurrency
+          ? correction.cashCurrency
+          : sale.realizedValueCurrency,
+    };
+  });
+
+  const correctedInstruments = (portfolio.instruments ?? []).map((instrument) => {
+    const correction = correctionByInstrumentId.get(instrument.id);
+
+    if (!correction || instrument.marketCurrency !== correction.previousMarketCurrency) {
+      return instrument;
+    }
+
+    return {
+      ...instrument,
+      marketCurrency: correction.cashCurrency,
+      instrumentIdentity: instrument.instrumentIdentity
+        ? { ...instrument.instrumentIdentity, currency: correction.cashCurrency }
+        : instrument.instrumentIdentity,
+      updatedAt: new Date().toISOString(),
+    };
+  });
+
+  return {
+    ...portfolio,
+    assets: correctedAssets,
+    sales: correctedSales,
+    instruments: correctedInstruments,
+    operations: correctedOperations,
+  };
+};
+
 const normalizeAutomaticBrokerFxOperations = (operations: PortfolioOperation[]) => {
   const existingAutomaticConversionIds = new Set(
     operations
@@ -1248,37 +1443,43 @@ export const collectPortfolioCurrencies = (
 export const ensurePortfolioCoreModel = (
   portfolio: InvestmentPortfolio
 ): InvestmentPortfolio => {
+  const repairedPortfolio = repairMisclassifiedXtbListingCurrencies(portfolio);
   const now = new Date().toISOString();
-  const baseCurrency = toCurrencyCode(portfolio.baseCurrency, BASE_CURRENCY);
-  const accounts = normalizePortfolioAccounts(portfolio.id, portfolio.accounts, baseCurrency, now);
+  const baseCurrency = toCurrencyCode(repairedPortfolio.baseCurrency, BASE_CURRENCY);
+  const accounts = normalizePortfolioAccounts(
+    repairedPortfolio.id,
+    repairedPortfolio.accounts,
+    baseCurrency,
+    now
+  );
   const instruments = normalizePortfolioInstruments(
-    portfolio.id,
-    portfolio.instruments,
-    portfolio,
+    repairedPortfolio.id,
+    repairedPortfolio.instruments,
+    repairedPortfolio,
     now
   );
   const operations = normalizePortfolioOperations(
-    portfolio.id,
-    portfolio.operations,
+    repairedPortfolio.id,
+    repairedPortfolio.operations,
     accounts,
     instruments,
-    portfolio,
+    repairedPortfolio,
     now
   );
-  const tags = normalizePortfolioTags(portfolio.id, portfolio.tags, now);
-  const accountType = normalizePortfolioAccountType(portfolio.accountType);
+  const tags = normalizePortfolioTags(repairedPortfolio.id, repairedPortfolio.tags, now);
+  const accountType = normalizePortfolioAccountType(repairedPortfolio.accountType);
 
   return {
-    ...portfolio,
+    ...repairedPortfolio,
     accountType,
     accountConfiguration: normalizePortfolioAccountConfiguration(
-      portfolio.accountConfiguration,
+      repairedPortfolio.accountConfiguration,
       accountType
     ),
     schemaVersion: 2,
     baseCurrency,
-    subPortfolios: Array.isArray(portfolio.subPortfolios)
-      ? portfolio.subPortfolios
+    subPortfolios: Array.isArray(repairedPortfolio.subPortfolios)
+      ? repairedPortfolio.subPortfolios
           .map((subPortfolio) => {
             const rawSubPortfolio = asRecord(subPortfolio);
             const id = getString(rawSubPortfolio.id);
@@ -1290,7 +1491,7 @@ export const ensurePortfolioCoreModel = (
 
             return {
               id,
-              portfolioId: portfolio.id,
+              portfolioId: repairedPortfolio.id,
               name: name.slice(0, 64),
               currency: normalizeCurrency(rawSubPortfolio.currency),
               metadata: asRecord(rawSubPortfolio.metadata),
@@ -1308,15 +1509,15 @@ export const ensurePortfolioCoreModel = (
     operations,
     tags,
     tagAssignments: normalizePortfolioTagAssignments(
-      portfolio.id,
-      portfolio.tagAssignments,
+      repairedPortfolio.id,
+      repairedPortfolio.tagAssignments,
       tags,
       operations,
       instruments,
       now
     ),
-    benchmarks: normalizePortfolioBenchmarks(portfolio.benchmarks),
-    metadata: asRecord(portfolio.metadata),
+    benchmarks: normalizePortfolioBenchmarks(repairedPortfolio.benchmarks),
+    metadata: asRecord(repairedPortfolio.metadata),
   };
 };
 

@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-require-imports */
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";

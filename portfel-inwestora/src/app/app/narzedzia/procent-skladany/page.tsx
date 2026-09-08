@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import CompoundInterestCalculator from "./CompoundInterestCalculator";
 
 const SITE_URL = "https://mexo.com.pl";
@@ -66,7 +67,7 @@ export default function CompoundInterestPage() {
 
       <section className="border-b border-zinc-200 bg-white">
         <div className="mx-auto max-w-7xl px-4 py-5 sm:px-6 lg:px-8">
-          <a
+          <Link
             href="/"
             className="inline-flex items-center gap-2 text-sm font-medium text-zinc-700 transition hover:text-zinc-950"
           >
@@ -74,7 +75,7 @@ export default function CompoundInterestPage() {
               M
             </span>
             Mexo
-          </a>
+          </Link>
         </div>
       </section>
 
@@ -165,12 +166,12 @@ export default function CompoundInterestPage() {
                 rynkowe w jednym miejscu.
               </p>
             </div>
-            <a
+            <Link
               href="/"
               className="inline-flex min-h-11 items-center justify-center rounded-xl bg-white px-5 text-sm font-semibold text-zinc-950 transition hover:bg-zinc-100"
             >
               Przejdź do Mexo
-            </a>
+            </Link>
           </div>
         </div>
       </section>

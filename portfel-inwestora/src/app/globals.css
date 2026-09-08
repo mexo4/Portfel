@@ -5639,6 +5639,35 @@ textarea {
   gap: 16px;
 }
 
+.corporate-events-scope {
+  display: inline-flex;
+  align-self: flex-start;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.54);
+}
+
+.corporate-events-scope button {
+  min-height: 34px;
+  padding: 0 13px;
+  border: 0;
+  border-radius: 9px;
+  color: var(--muted);
+  background: transparent;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.corporate-events-scope button.is-active {
+  color: var(--ink);
+  background: var(--surface);
+  box-shadow: 0 1px 5px rgba(22, 34, 46, 0.1);
+}
+
 .corporate-events-state {
   margin: 0;
   color: var(--muted);
@@ -5807,6 +5836,16 @@ textarea {
 @media (max-width: 560px) {
   .corporate-events-head {
     align-items: center;
+  }
+
+  .corporate-events-scope {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    width: 100%;
+  }
+
+  .corporate-events-scope button {
+    padding-inline: 7px;
   }
 
   .corporate-event-row {
@@ -8152,9 +8191,8 @@ textarea {
   margin-top: 8px;
 }
 
-.espi-report-meta span + span::before {
-  content: "·";
-  margin-right: 10px;
+.espi-report-meta-separator {
+  color: var(--muted);
 }
 
 .espi-report-card h2 {

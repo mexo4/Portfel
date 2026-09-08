@@ -4,6 +4,7 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { FREE_PLAN_ASSET_LIMIT, MEXO_TESTER_MODE } from "@/lib/constants";
 import { assertUniquePortfolioNames, normalizePortfolioBook, normalizePortfolioState } from "@/lib/portfolio-state";
+import { repairMisclassifiedXtbListingCurrencies } from "@/lib/operation-engine";
 import type { NextResponse } from "next/server";
 import { createFreshUserProfile, normalizeUserProfile } from "@/lib/profile";
 import { isForcedProEmail } from "@/lib/server/access";
@@ -16,6 +17,7 @@ import {
 } from "@/lib/server/portfolio-quote-snapshots";
 import type {
   AuthenticatedUser,
+  InvestmentPortfolio,
   PortfolioBook,
   PortfolioState,
   SubscriptionPlan,
@@ -160,6 +162,16 @@ const hasPortfolioV2Shape = (value: unknown) => {
   );
 };
 
+const needsXtbListingCurrencyRepair = (value: unknown) => {
+  if (!hasPortfolioV2Shape(value)) {
+    return false;
+  }
+
+  return (value as { portfolios: InvestmentPortfolio[] }).portfolios.some(
+    (portfolio) => repairMisclassifiedXtbListingCurrencies(portfolio) !== portfolio
+  );
+};
+
 const parsePortfolioBook = (portfolioJson: string): {
   portfolioBook: PortfolioBook;
   needsMigration: boolean;
@@ -169,7 +181,8 @@ const parsePortfolioBook = (portfolioJson: string): {
 
     return {
       portfolioBook: normalizePortfolioBook(rawPortfolio),
-      needsMigration: !hasPortfolioV2Shape(rawPortfolio),
+      needsMigration:
+        !hasPortfolioV2Shape(rawPortfolio) || needsXtbListingCurrencyRepair(rawPortfolio),
     };
   } catch {
     return {

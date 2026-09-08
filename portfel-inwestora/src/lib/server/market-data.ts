@@ -1718,13 +1718,15 @@ export const fetchAssetQuoteServer = async ({
   providerId?: string;
   priceScale?: number;
 }) => {
+  const requestedSymbol = normalizeSymbol(symbol);
+  const hasMappedXtbLondonVenue = requestedSymbol.endsWith(".UK");
+
   // An OpenFIGI ETF listing may deliberately have no price-provider mapping.
   // Do not turn its display ticker into a guessed quote request on another venue.
-  if (kind === "etf" && !providerId?.trim()) {
+  if (kind === "etf" && !providerId?.trim() && !hasMappedXtbLondonVenue) {
     return null;
   }
 
-  const requestedSymbol = normalizeSymbol(symbol);
   const identity = resolveTickerIdentity({
     symbol: requestedSymbol,
     kind,
@@ -1815,6 +1817,16 @@ export const fetchAssetQuoteServer = async ({
   const fetchFinnhubQuoteFromLookup = () =>
     firstNonNull(
       lookupSymbols.map((candidate) => fetchFinnhubQuote(candidate, resolvedMarketCurrency))
+    );
+  const fetchYahooQuoteFromLookup = () =>
+    firstNonNull(
+      providerIdCandidates.map((candidateProviderId) =>
+        fetchYahooQuote({
+          symbol: normalizedSymbol,
+          providerId: candidateProviderId,
+          fallbackCurrency: resolvedMarketCurrency,
+        })
+      )
     );
   const isGpwStockRequest = shouldUseGpwStooqQuote({
     symbol: normalizedSymbol,
@@ -1994,20 +2006,20 @@ export const fetchAssetQuoteServer = async ({
     );
   }
 
-  const autoQuote =
-    (await fetchFinnhubQuoteFromLookup()) ??
-    (await firstNonNull(
-      providerIdCandidates.map((candidateProviderId) =>
-        fetchYahooQuote({
-          symbol: normalizedSymbol,
-          providerId: candidateProviderId,
-          fallbackCurrency: resolvedMarketCurrency,
-        })
-      )
-    )) ??
-    (await firstNonNull(
-      lookupSymbols.map((candidate) => fetchStooqQuote(candidate, resolvedMarketCurrency))
-    ));
+  // XTB's `.UK` is a broker venue suffix. Its exact quote mapping is Yahoo
+  // `.L` / EODHD `.LSE`, so trying those before bare-symbol Finnhub avoids a
+  // slow global lookup and preserves the provider-returned listing currency.
+  const autoQuote = hasMappedXtbLondonVenue
+    ? (await fetchYahooQuoteFromLookup()) ??
+      (await fetchFinnhubQuoteFromLookup()) ??
+      (await firstNonNull(
+        lookupSymbols.map((candidate) => fetchStooqQuote(candidate, resolvedMarketCurrency))
+      ))
+    : (await fetchFinnhubQuoteFromLookup()) ??
+      (await fetchYahooQuoteFromLookup()) ??
+      (await firstNonNull(
+        lookupSymbols.map((candidate) => fetchStooqQuote(candidate, resolvedMarketCurrency))
+      ));
 
   return autoQuote;
 };

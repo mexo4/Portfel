@@ -77,11 +77,15 @@ test("market navigation exposes a dedicated general-meetings view backed by the 
     readSource("src/components/AppWorkspaceShell.tsx"),
     readSource("src/components/WorkspaceRouteViews.tsx"),
     readSource("src/components/CorporateEventsPanel.tsx"),
-    readSource("src/app/api/corporate-events/route.ts"),
+    readSource("src/app/api/general-meetings/route.ts"),
   ]);
 
   assert.match(shell, /href: "\/market\/general-meetings"/);
   assert.match(views, /variant="general-meetings"/);
-  assert.match(panel, /eventTypes: variant === "general-meetings" \? \["GENERAL_MEETING"\]/);
-  assert.match(api, /eventTypes: requestedEventTypes\.length > 0 \? requestedEventTypes : undefined/);
+  assert.match(panel, /fetchGeneralMeetings/);
+  assert.match(panel, /\["all", "Wszystkie"\]/);
+  assert.match(panel, /\["watchlist", "Obserwowane"\]/);
+  assert.match(panel, /\["portfolio", "W portfelu"\]/);
+  assert.match(api, /scope === "all"/);
+  assert.match(api, /getGlobalGeneralMeetings/);
 });

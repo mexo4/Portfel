@@ -143,6 +143,18 @@ export type CorporateEventsResponse = {
   };
 };
 
+export type GeneralMeetingScope = "all" | "watchlist" | "portfolio";
+
+export type GeneralMeetingsResponse = {
+  events: CorporateEvent[];
+  scope: GeneralMeetingScope;
+  sourceState: {
+    status: CorporateEventSourceStatus | "NOT_SYNCED";
+    lastCheckedAt?: string;
+    isRefreshing?: boolean;
+  };
+};
+
 export const getCorporateEventIdentityKey = (event: Pick<
   ParsedCorporateEvent,
   "eventType" | "fiscalPeriod" | "fiscalYear" | "eventIdentity"

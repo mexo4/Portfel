@@ -78,6 +78,16 @@ const trackingLabel = (report: EspiReportSummary) => {
   return null;
 };
 
+const formatAttachmentsCount = (count: number) => {
+  if (count === 1) return "1 załącznik";
+  const lastTwo = count % 100;
+  const last = count % 10;
+  if (last >= 2 && last <= 4 && (lastTwo < 12 || lastTwo > 14)) {
+    return `${count} załączniki`;
+  }
+  return `${count} załączników`;
+};
+
 function ReportCard({ report }: { report: EspiReportSummary }) {
   const workspace = usePortfolioWorkspace();
   const tracking = trackingLabel(report);
@@ -93,7 +103,12 @@ function ReportCard({ report }: { report: EspiReportSummary }) {
       </div>
       <div className="espi-report-meta">
         <span>{reportLabel}{report.reportNumber ? ` ${report.reportNumber}` : ""}</span>
-        {report.attachmentsCount > 0 ? <span>{report.attachmentsCount === 1 ? "1 załącznik" : `${report.attachmentsCount} załączniki`}</span> : null}
+        {report.attachmentsCount > 0 ? (
+          <>
+            <span className="espi-report-meta-separator" aria-hidden="true">·</span>
+            <span>{formatAttachmentsCount(report.attachmentsCount)}</span>
+          </>
+        ) : null}
       </div>
       <h2><Link href={workspace.getReadHref(`/market/espi/${report.id}`)}>{report.title}</Link></h2>
       {report.excerpt ? <p>{report.excerpt}</p> : null}

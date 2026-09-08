@@ -7,8 +7,9 @@ import {
   isCorporateEventSourceUnavailable,
   type CorporateEvent,
   type CorporateEventsResponse,
+  type GeneralMeetingScope,
 } from "@/lib/corporate-events";
-import { fetchCorporateEvents } from "@/lib/api";
+import { fetchCorporateEvents, fetchGeneralMeetings } from "@/lib/api";
 
 type CorporateEventsPanelProps = {
   portfolioId: string;
@@ -53,16 +54,27 @@ export default function CorporateEventsPanel({ portfolioId, variant = "all" }: C
   const [data, setData] = useState<CorporateEventsResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [hasError, setHasError] = useState(false);
+  const [meetingScope, setMeetingScope] = useState<GeneralMeetingScope>("all");
+  const isMeetingView = variant === "general-meetings";
 
   useEffect(() => {
     const controller = new AbortController();
 
-    void fetchCorporateEvents({
-      portfolioId,
-      days: 60,
-      eventTypes: variant === "general-meetings" ? ["GENERAL_MEETING"] : undefined,
-      signal: controller.signal,
-    })
+    const request = isMeetingView
+      ? fetchGeneralMeetings({ scope: meetingScope, days: 365, signal: controller.signal })
+          .then((response): CorporateEventsResponse => ({
+            events: response.events,
+            sourceStates: [{
+              instrumentId: "global-gpw",
+              ticker: "GPW",
+              status: response.sourceState.status === "NOT_SYNCED" ? "NOT_FOUND" : response.sourceState.status,
+              lastCheckedAt: response.sourceState.lastCheckedAt,
+            }],
+            scope: "OK",
+          }))
+      : fetchCorporateEvents({ portfolioId, days: 60, signal: controller.signal });
+
+    void request
       .then((response) => {
         if (!controller.signal.aborted) {
           setData(response);
@@ -80,7 +92,13 @@ export default function CorporateEventsPanel({ portfolioId, variant = "all" }: C
       });
 
     return () => controller.abort();
-  }, [portfolioId, variant]);
+  }, [isMeetingView, meetingScope, portfolioId]);
+
+  const changeMeetingScope = (scope: GeneralMeetingScope) => {
+    setIsLoading(true);
+    setHasError(false);
+    setMeetingScope(scope);
+  };
 
   const allSourcesUnavailable =
     data?.sourceStates.length &&
@@ -92,8 +110,6 @@ export default function CorporateEventsPanel({ portfolioId, variant = "all" }: C
       event.active !== false &&
       event.status !== "CANCELLED"
   );
-  const isMeetingView = variant === "general-meetings";
-
   return (
     <section className="panel panel-compact corporate-events-panel" aria-busy={isLoading}>
       <div className="corporate-events-head">
@@ -101,15 +117,35 @@ export default function CorporateEventsPanel({ portfolioId, variant = "all" }: C
           <p className="eyebrow">Kalendarz GPW</p>
           <h2 className="section-title">{isMeetingView ? "Walne zgromadzenia" : "Wydarzenia GPW"}</h2>
         </div>
-        <span className="tag">{isMeetingView ? "ZWZ i NWZ · 60 dni" : "raporty · WZA · 60 dni"}</span>
+        <span className="tag">{isMeetingView ? "ZWZ i NWZ · 12 miesięcy" : "raporty · WZA · 60 dni"}</span>
       </div>
+
+      {isMeetingView ? (
+        <div className="corporate-events-scope" role="group" aria-label="Zakres walnych zgromadzeń">
+          {([
+            ["all", "Wszystkie"],
+            ["watchlist", "Obserwowane"],
+            ["portfolio", "W portfelu"],
+          ] as const).map(([scope, label]) => (
+            <button
+              className={meetingScope === scope ? "is-active" : undefined}
+              key={scope}
+              type="button"
+              aria-pressed={meetingScope === scope}
+              onClick={() => changeMeetingScope(scope)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      ) : null}
 
       {isLoading ? <p className="corporate-events-state">Sprawdzanie zapisanych wydarzeń…</p> : null}
       {hasError ? (
         <p className="field-note field-note-error mt-4">Nie udało się pobrać wydarzeń GPW. Spróbuj ponownie później.</p>
       ) : null}
 
-      {!isLoading && !hasError && data?.scope === "NO_GPW_INSTRUMENTS" ? (
+      {!isMeetingView && !isLoading && !hasError && data?.scope === "NO_GPW_INSTRUMENTS" ? (
         <p className="corporate-events-state">Brak obecnie posiadanych lub obserwowanych spółek GPW.</p>
       ) : null}
 
@@ -118,7 +154,11 @@ export default function CorporateEventsPanel({ portfolioId, variant = "all" }: C
           {allSourcesUnavailable
             ? "Źródła wydarzeń są chwilowo niedostępne. Zachowamy ostatnie potwierdzone terminy, gdy będą dostępne."
             : isMeetingView
-              ? "Brak nadchodzących walnych zgromadzeń dla posiadanych lub obserwowanych spółek."
+              ? meetingScope === "all"
+                ? "Brak nadchodzących walnych zgromadzeń w aktualnie obsługiwanym rynku GPW."
+                : meetingScope === "watchlist"
+                  ? "Brak nadchodzących walnych zgromadzeń dla obserwowanych spółek."
+                  : "Brak nadchodzących walnych zgromadzeń dla spółek w portfelu."
               : "Brak potwierdzonych przyszłych wydarzeń dla śledzonych spółek."}
         </p>
       ) : null}

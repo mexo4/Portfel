@@ -6,10 +6,13 @@ import {
   classifyEspiReportType,
   parsePapEspiList,
   parsePapEspiReport,
+  parseGpwEspiList,
+  parseGpwEspiReport,
 } from "../src/lib/espi.ts";
 import {
   buildTrackedGpwInstruments,
   classifyEspiHttpStatus,
+  getEspiSourcePriority,
   validateEspiFeedFilters,
 } from "../src/lib/server/espi.ts";
 
@@ -85,6 +88,49 @@ test("PAP detail parser reads issuer identity, full body, report metadata and at
   }]);
 });
 
+test("official GPW list/detail parsing preserves geru id, ISIN, seconds and normalized content", () => {
+  const list = parseGpwEspiList(`
+    <li>
+      <span class="date">05-09-2026 13:32:03 | Current | ESPI | 25/2026</span>
+      <strong class="name"><a href="/espi-ebi-report?geru_id=496523">TOWER INVESTMENTS SPÓŁKA AKCYJNA (PLTWRNV00013)</a></strong>
+      <p>Zawarcie aneksu do umowy przedwstępnej zawartej przez spółki zależne</p>
+    </li>
+  `);
+  assert.equal(list.candidates.length, 1);
+  assert.equal(list.candidates[0].sourceId, "gpw:496523");
+  assert.equal(list.candidates[0].sourceIsin, "PLTWRNV00013");
+  assert.equal(list.candidates[0].sourcePublishedAt, "2026-09-05T11:32:03.000Z");
+
+  const report = parseGpwEspiReport(`
+    <span class="date">05-09-2026 13:32:03 | Current | ESPI | 25/2026</span>
+    <div class="report-data">
+      <H4>Nazwa arkusza: RAPORT BIEŻĄCY</H4>
+      <p>Podstawa prawna: Art. 17 ust. 1 MAR</p>
+      <p>Treść raportu: Emitent zawarł istotny aneks do umowy.</p>
+      <a href="attachment/496523/example.pdf">Aneks.pdf</a>
+    </div><script></script>
+  `, list.candidates[0]);
+  assert.ok(report);
+  assert.equal(report.publishedAt, "2026-09-05T11:32:03.000Z");
+  assert.equal(report.category, "CONTRACTS");
+  assert.equal(report.attachments.length, 1);
+  assert.doesNotMatch(report.body, /<p>/);
+});
+
+test("NewConnect uses a separate stable source namespace while retaining ESPI-only rows", () => {
+  const parsed = parseGpwEspiList(`
+    <li><span class="date">06-09-2026 11:26:16 | Bieżący | ESPI | 10/2026</span>
+      <strong class="name"><a href="/komunikat?geru_id=243663">GAMIVO S.A. (PLGMV0000016)</a></strong>
+      <p>Otrzymanie przez Emitenta pozwu</p></li>
+    <li><span class="date">06-09-2026 10:00:00 | Bieżący | EBI | 9/2026</span>
+      <strong class="name"><a href="/komunikat?geru_id=243662">TEST S.A. (PLTEST000001)</a></strong>
+      <p>Raport EBI</p></li>
+  `, { baseUrl: "https://newconnect.pl", sourcePrefix: "newconnect", sourceKind: "NEWCONNECT" });
+  assert.equal(parsed.candidates.length, 1);
+  assert.equal(parsed.candidates[0].sourceId, "newconnect:243663");
+  assert.equal(parsed.candidates[0].sourceUrl, "https://newconnect.pl/komunikat?geru_id=243663");
+});
+
 test("periodic report classification wins over incidental dividend words in its body", () => {
   const title = "SEKO SA Raport okresowy półroczny za 2026 SA-P";
   const reportType = classifyEspiReportType(title);
@@ -142,6 +188,22 @@ test("list parsing deduplicates repeated source records by the stable PAP node i
       <a href="/node/607780#downloadMaterialBlock">Pobierz</a>
     </div>`;
   assert.equal(parsePapEspiList(`${article}${article}`).candidates.length, 1);
+});
+
+test("cross-channel ESPI identity prefers the official market publication over its PAP copy", async () => {
+  assert.equal(getEspiSourcePriority("gpw:496600"), 0);
+  assert.equal(getEspiSourcePriority("newconnect:243700"), 1);
+  assert.equal(getEspiSourcePriority("pap:607900"), 2);
+
+  const serverSource = await readFile(
+    new URL("../src/lib/server/espi.ts", import.meta.url),
+    "utf8"
+  );
+  assert.match(serverSource, /preferred\.issuer_id = report\.issuer_id/);
+  assert.match(serverSource, /preferred\.report_number = report\.report_number/);
+  assert.match(serverSource, /preferred\.is_correction = report\.is_correction/);
+  assert.match(serverSource, /getEspiSourcePriority\(report\.sourceId\)/);
+  assert.doesNotMatch(serverSource, /"issuer\.id IS NOT NULL"/);
 });
 
 test("My companies universe uses open GPW holdings plus watchlist and deduplicates both sources", () => {

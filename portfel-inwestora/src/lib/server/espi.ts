@@ -16,6 +16,8 @@ import {
   isEspiReportType,
   parsePapEspiList,
   parsePapEspiReport,
+  parseGpwEspiList,
+  parseGpwEspiReport,
   toWarsawIso,
   type PapEspiListCandidate,
   type ParsedPapEspiReport,
@@ -35,8 +37,18 @@ import type { WatchlistItem } from "@/lib/watchlist";
 import type { InvestmentPortfolio, PortfolioInstrument } from "@/types/portfolio";
 
 const PAP_SOURCE = "PAP_ESPI" as const;
+export const getEspiSourcePriority = (sourceId: string) => {
+  if (sourceId.startsWith("gpw:")) return 0;
+  if (sourceId.startsWith("newconnect:")) return 1;
+  return 2;
+};
 export const PAP_ESPI_FEED_URL = "https://pap-mediaroom.pl/zrodlo/ESPI";
+export const GPW_ESPI_FEED_URL = "https://www.gpw.pl/espi-ebi-reports";
+const GPW_ESPI_SEARCH_URL = "https://www.gpw.pl/ajaxindex.php";
+const NEWCONNECT_ESPI_BASE_URL = "https://newconnect.pl";
+const NEWCONNECT_ESPI_SEARCH_URL = `${NEWCONNECT_ESPI_BASE_URL}/ajaxindex.php`;
 const ESPI_REFRESH_TTL_MS = 10 * 60 * 1_000;
+const ESPI_OVERLAP_TTL_MS = 24 * 60 * 60 * 1_000;
 const ESPI_SOURCE_TIMEOUT_MS = 15_000;
 const ESPI_LOCK_TTL_MS = 3 * 60 * 1_000;
 const ESPI_DEFAULT_LIMIT = 20;
@@ -46,12 +58,15 @@ const INITIAL_BACKFILL_PAGES = 2;
 // attempting a multi-year archive import on first use. New publications are
 // always ingested from page zero.
 const ESPI_BACKFILL_PAGE_LIMIT = 12;
+const ESPI_OVERLAP_DAYS = 4;
+const ESPI_FETCH_ATTEMPTS = 2;
 const ARTICLE_CONCURRENCY = 4;
 
 type EspiSyncStateRow = {
   status: EspiSourceStatus;
   last_checked_at: string | null;
   last_success_at: string | null;
+  last_overlap_at: string | null;
   next_backfill_page: number;
   backfill_complete: boolean;
   lock_token: string | null;
@@ -112,6 +127,7 @@ export type EspiSynchronizationResult = {
   parsed: number;
   pagesRead: number;
   locked: boolean;
+  errors?: number;
 };
 
 export type StoredEspiCorporateEventReport = {
@@ -142,33 +158,125 @@ export const classifyEspiHttpStatus = (status: number): EspiSourceStatus => {
   return "PARSE_ERROR";
 };
 
-const fetchPapHtml = async (url: string) => {
-  try {
-    const response = await fetchWithSystemTrust(url, {
+const wait = (delayMs: number) => new Promise((resolve) => setTimeout(resolve, delayMs));
+
+const fetchOfficialHtml = async (url: string, init: RequestInit = {}) => {
+  let lastStatus: EspiSourceStatus = "TEMPORARILY_UNAVAILABLE";
+  for (let attempt = 0; attempt < ESPI_FETCH_ATTEMPTS; attempt += 1) {
+    try {
+      const response = await fetchWithSystemTrust(url, {
+        ...init,
       headers: {
         Accept: "text/html,application/xhtml+xml",
         "User-Agent": "Mexo/1.0 (+https://mexo.com.pl; public ESPI feed)",
+        ...init.headers,
       },
       cache: "no-store",
       redirect: "follow",
       signal: AbortSignal.timeout(ESPI_SOURCE_TIMEOUT_MS),
-    });
-    if (!response.ok) {
-      return { status: classifyEspiHttpStatus(response.status), document: "" };
+      });
+      if (response.ok) {
+        return { status: "SUCCESS" as const, document: await response.text() };
+      }
+      lastStatus = classifyEspiHttpStatus(response.status);
+      if (lastStatus !== "TEMPORARILY_UNAVAILABLE" || attempt + 1 >= ESPI_FETCH_ATTEMPTS) {
+        return { status: lastStatus, document: "" };
+      }
+    } catch {
+      lastStatus = "TEMPORARILY_UNAVAILABLE";
+      if (attempt + 1 >= ESPI_FETCH_ATTEMPTS) {
+        return { status: lastStatus, document: "" };
+      }
     }
-    return { status: "SUCCESS" as const, document: await response.text() };
-  } catch {
-    return { status: "TEMPORARILY_UNAVAILABLE" as const, document: "" };
+    await wait(200 * (attempt + 1));
   }
+  return { status: lastStatus, document: "" };
+};
+
+const fetchPapHtml = (url: string) => fetchOfficialHtml(url);
+
+const getGpwSearchBody = ({
+  offset = 0,
+  date,
+  page = "espi-ebi-reports",
+}: {
+  offset?: number;
+  date?: string;
+  page?: "espi-ebi-reports" | "spolki-komunikaty-spolek";
+} = {}) => {
+  const body = new URLSearchParams({
+    action: "GPWEspiReportUnion",
+    start: "ajaxSearch",
+    page,
+    format: "html",
+    lang: "PL",
+    letter: "",
+    offset: String(offset),
+    limit: "50",
+    searchText: "",
+    date: date ?? "",
+  });
+  body.append("categoryRaports[]", "ESPI");
+  for (const reportType of ["RB", "P", "Q", "O", "R"]) {
+    body.append("typeRaports[]", reportType);
+  }
+  return body;
+};
+
+const fetchGpwList = ({ offset = 0, date }: { offset?: number; date?: string } = {}) =>
+  fetchOfficialHtml(GPW_ESPI_SEARCH_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },
+    body: getGpwSearchBody({ offset, date }).toString(),
+  });
+
+const fetchNewConnectList = ({ offset = 0, date }: { offset?: number; date?: string } = {}) => {
+  const body = getGpwSearchBody({ offset, date, page: "spolki-komunikaty-spolek" });
+  // The NewConnect union endpoint expects both market channels to be present;
+  // parseNewConnectEspiList still accepts only rows explicitly marked ESPI.
+  body.append("categoryRaports[]", "EBI");
+  return fetchOfficialHtml(NEWCONNECT_ESPI_SEARCH_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },
+    body: body.toString(),
+  });
+};
+
+const parseNewConnectEspiList = (document: string) => parseGpwEspiList(document, {
+  baseUrl: NEWCONNECT_ESPI_BASE_URL,
+  sourcePrefix: "newconnect",
+  sourceKind: "NEWCONNECT",
+});
+
+const toGpwDate = (isoDate: string) => {
+  const [year, month, day] = isoDate.split("-");
+  return year && month && day ? `${day}-${month}-${year}` : isoDate;
+};
+
+const getWarsawDate = (date = new Date()) => {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/Warsaw",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${value.year}-${value.month}-${value.day}`;
+};
+
+const addDays = (isoDate: string, days: number) => {
+  const date = new Date(`${isoDate}T12:00:00.000Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
 };
 
 const getFeedPageUrl = (page: number) =>
   page > 0 ? `${PAP_ESPI_FEED_URL}?page=${page}` : PAP_ESPI_FEED_URL;
 
-export const getEspiSyncState = async (): Promise<EspiSyncMeta & { nextBackfillPage: number; backfillComplete: boolean }> => {
+export const getEspiSyncState = async (): Promise<EspiSyncMeta & { nextBackfillPage: number; backfillComplete: boolean; lastOverlapAt?: string }> => {
   const row = await queryOne<EspiSyncStateRow>(
     `
-      SELECT status, last_checked_at, last_success_at, next_backfill_page,
+      SELECT status, last_checked_at, last_success_at, last_overlap_at, next_backfill_page,
              backfill_complete, lock_token, lock_expires_at
       FROM espi_sync_state
       WHERE source = $1
@@ -184,6 +292,7 @@ export const getEspiSyncState = async (): Promise<EspiSyncMeta & { nextBackfillP
     isRefreshing,
     nextBackfillPage: row?.next_backfill_page ?? 1,
     backfillComplete: row?.backfill_complete ?? false,
+    lastOverlapAt: row?.last_overlap_at ? normalizeIso(row.last_overlap_at) : undefined,
   };
 };
 
@@ -217,12 +326,14 @@ const releaseSyncLock = async ({
   errorCode,
   nextBackfillPage,
   backfillComplete,
+  lastOverlapAt,
 }: {
   token: string;
   status: EspiSourceStatus;
   errorCode?: string;
   nextBackfillPage?: number;
   backfillComplete?: boolean;
+  lastOverlapAt?: string;
 }) => {
   const now = new Date().toISOString();
   await execute(
@@ -234,12 +345,13 @@ const releaseSyncLock = async ({
           last_error_code = $3,
           next_backfill_page = COALESCE($4, next_backfill_page),
           backfill_complete = COALESCE($5, backfill_complete),
+          last_overlap_at = COALESCE($6, last_overlap_at),
           lock_token = NULL,
           lock_expires_at = NULL,
           updated_at = $2
-      WHERE source = $6 AND lock_token = $7
+      WHERE source = $7 AND lock_token = $8
     `,
-    [status, now, errorCode ?? null, nextBackfillPage ?? null, backfillComplete ?? null, PAP_SOURCE, token]
+    [status, now, errorCode ?? null, nextBackfillPage ?? null, backfillComplete ?? null, lastOverlapAt ?? null, PAP_SOURCE, token]
   );
 };
 
@@ -330,21 +442,56 @@ const resolveGpwIssuer = async (
 
 const upsertEspiReport = async (report: ParsedPapEspiReport) => {
   const issuer = await resolveGpwIssuer(report);
-  const existing = await queryOne<{ id: string }>(
+  const existing = await queryOne<{ id: string; source_id: string }>(
     `
-      SELECT id
+      SELECT id, source_id
       FROM espi_reports
-      WHERE (source = $1 AND source_id = $2) OR source_url = $3
-      ORDER BY CASE WHEN source = $1 AND source_id = $2 THEN 0 ELSE 1 END
+      WHERE (source = $1 AND source_id = $2)
+         OR source_url = $3
+         OR (
+           $4::text IS NOT NULL
+           AND source_isin = $4
+           AND report_number IS NOT DISTINCT FROM $5
+           AND report_type = $6
+           AND is_correction = $7
+         )
+         OR (
+           $8::text IS NOT NULL
+           AND issuer_id = $8
+           AND report_number IS NOT DISTINCT FROM $5
+           AND report_type = $6
+           AND is_correction = $7
+         )
+      ORDER BY
+        CASE WHEN source = $1 AND source_id = $2 THEN 0 ELSE 1 END,
+        CASE
+          WHEN source_id LIKE 'gpw:%' THEN 0
+          WHEN source_id LIKE 'newconnect:%' THEN 1
+          ELSE 2
+        END,
+        published_at DESC
       LIMIT 1
     `,
-    [PAP_SOURCE, report.sourceId, report.sourceUrl]
+    [
+      PAP_SOURCE,
+      report.sourceId,
+      report.sourceUrl,
+      report.sourceIsin ?? null,
+      report.reportNumber ?? null,
+      report.reportType,
+      report.isCorrection,
+      issuer?.id ?? null,
+    ]
   );
   const now = new Date().toISOString();
   const id = existing?.id ?? randomUUID();
+  const shouldRefreshStoredReport =
+    !existing ||
+    existing.source_id === report.sourceId ||
+    getEspiSourcePriority(report.sourceId) < getEspiSourcePriority(existing.source_id);
 
   await withTransaction(async (transaction) => {
-    if (existing) {
+    if (existing && shouldRefreshStoredReport) {
       await transaction.execute(
         `
           UPDATE espi_reports
@@ -362,6 +509,21 @@ const upsertEspiReport = async (report: ParsedPapEspiReport) => {
           report.legalBasis ?? null, report.category, report.sourceUrl, report.isCorrection,
           report.correctionTargetReportNumber ?? null, now, id,
         ]
+      );
+    } else if (existing) {
+      // Preserve the richer official GPW/NewConnect publication when a lower
+      // priority PAP copy confirms the same formal report. Missing identity
+      // metadata may still be completed and attachments are merged below.
+      await transaction.execute(
+        `
+          UPDATE espi_reports
+          SET issuer_id = COALESCE(issuer_id, $1),
+              source_ticker = COALESCE(source_ticker, $2),
+              source_isin = COALESCE(source_isin, $3),
+              updated_at = $4
+          WHERE id = $5
+        `,
+        [issuer?.id ?? null, report.sourceTicker ?? null, report.sourceIsin ?? null, now, id]
       );
     } else {
       await transaction.execute(
@@ -403,7 +565,7 @@ const upsertEspiReport = async (report: ParsedPapEspiReport) => {
     }
   });
 
-  return { id, issuerId: issuer?.id ?? null };
+  return { id, issuerId: issuer?.id ?? null, created: !existing };
 };
 
 const linkCorrection = async (reportId: string, report: ParsedPapEspiReport, issuerId: string | null) => {
@@ -434,11 +596,57 @@ const linkCorrection = async (reportId: string, report: ParsedPapEspiReport, iss
 
 const getStoredSourceIds = async (candidates: PapEspiListCandidate[]) => {
   if (candidates.length === 0) return new Set<string>();
-  const rows = await query<{ source_id: string }>(
-    "SELECT source_id FROM espi_reports WHERE source = $1 AND source_id = ANY($2::text[])",
-    [PAP_SOURCE, candidates.map((candidate) => candidate.sourceId)]
+  const rows = await query<{
+    source_id: string;
+    source_isin: string | null;
+    report_number: string | null;
+    report_type: EspiReportType;
+    published_at: string;
+    is_correction: boolean;
+  }>(
+    `
+      SELECT source_id, source_isin, report_number, report_type, published_at, is_correction
+      FROM espi_reports
+      WHERE source = $1
+        AND (
+          source_id = ANY($2::text[])
+          OR (
+            source_isin = ANY($3::text[])
+            AND published_at >= $4
+            AND published_at <= $5
+          )
+        )
+    `,
+    [
+      PAP_SOURCE,
+      candidates.map((candidate) => candidate.sourceId),
+      candidates.flatMap((candidate) => candidate.sourceIsin ? [candidate.sourceIsin] : []),
+      candidates.map((candidate) => candidate.sourcePublishedAt).filter(Boolean).sort()[0] ?? "1970-01-01T00:00:00.000Z",
+      candidates.map((candidate) => candidate.sourcePublishedAt).filter(Boolean).sort().at(-1) ?? "2999-12-31T23:59:59.999Z",
+    ]
   );
-  return new Set(rows.map((row) => row.source_id));
+  const stored = new Set(rows.map((row) => row.source_id));
+  for (const candidate of candidates) {
+    if (!candidate.sourceIsin || !candidate.sourcePublishedAt || !candidate.reportType) continue;
+    const naturalMatch = rows.some((row) => {
+      if (
+        row.source_isin !== candidate.sourceIsin ||
+        row.report_number !== (candidate.reportNumber ?? null) ||
+        row.report_type !== candidate.reportType ||
+        row.is_correction !== /korekt/i.test(candidate.sourceTitle)
+      ) {
+        return false;
+      }
+
+      // A formal report number is unique for an issuer and year. GPW and PAP
+      // may publish the same report a minute apart, so the source timestamp is
+      // only needed as a fallback when no report number exists.
+      return Boolean(candidate.reportNumber) ||
+        normalizeIso(row.published_at).slice(0, 16) === candidate.sourcePublishedAt!.slice(0, 16);
+    });
+    if (naturalMatch) stored.add(candidate.sourceId);
+  }
+  return stored;
 };
 
 /**
@@ -593,26 +801,112 @@ const reconcileCorrectionLinks = async () => {
 export const synchronizePapEspi = async ({
   force = false,
   backfillPages,
+  backfillFrom,
 }: {
   force?: boolean;
   backfillPages?: number;
+  backfillFrom?: string;
 } = {}): Promise<EspiSynchronizationResult> => {
   const startedAt = Date.now();
   const state = await getEspiSyncState();
   if (!force && !state.isStale) {
-    return { status: state.status === "NOT_SYNCED" ? "NOT_FOUND" : state.status, insertedOrUpdated: 0, skippedExisting: 0, parsed: 0, pagesRead: 0, locked: false };
+    console.info("[ESPI SYNC] fetched=0 new=0 duplicates=0 saved=0 errors=0");
+    return { status: state.status === "NOT_SYNCED" ? "NOT_FOUND" : state.status, insertedOrUpdated: 0, skippedExisting: 0, parsed: 0, pagesRead: 0, locked: false, errors: 0 };
   }
   const token = await acquireSyncLock();
   if (!token) {
-    return { status: state.status === "NOT_SYNCED" ? "NOT_FOUND" : state.status, insertedOrUpdated: 0, skippedExisting: 0, parsed: 0, pagesRead: 0, locked: true };
+    console.info("[ESPI SYNC] fetched=0 new=0 duplicates=0 saved=0 errors=0");
+    return { status: state.status === "NOT_SYNCED" ? "NOT_FOUND" : state.status, insertedOrUpdated: 0, skippedExisting: 0, parsed: 0, pagesRead: 0, locked: true, errors: 0 };
   }
 
   let status: EspiSourceStatus = "SUCCESS";
   let pagesRead = 0;
   let skippedExisting = 0;
+  let errors = 0;
   let nextBackfillPage = state.nextBackfillPage;
   let backfillComplete = state.backfillComplete;
+  let lastOverlapAt: string | undefined;
   try {
+    const candidates: PapEspiListCandidate[] = [];
+    const officialSources = [
+      { fetchList: fetchGpwList, parseList: parseGpwEspiList },
+      { fetchList: fetchNewConnectList, parseList: parseNewConnectEspiList },
+    ];
+    const mainResponses = await Promise.all(officialSources.map((source) => source.fetchList()));
+    const officialSourcesAvailable = mainResponses.some((response) => response.status === "SUCCESS");
+    const availableOfficialSources = officialSources.filter((_, index) => mainResponses[index]?.status === "SUCCESS");
+
+    for (let index = 0; index < officialSources.length; index += 1) {
+      const response = mainResponses[index]!;
+      if (response.status !== "SUCCESS") {
+        errors += 1;
+        continue;
+      }
+      pagesRead += 1;
+      candidates.push(...officialSources[index]!.parseList(response.document).candidates);
+    }
+
+    if (!officialSourcesAvailable) {
+      const fallback = await fetchPapHtml(PAP_ESPI_FEED_URL);
+      if (fallback.status !== "SUCCESS") {
+        status = fallback.status;
+        throw new Error(`ESPI_LIST_${status}`);
+      }
+      pagesRead += 1;
+      candidates.push(...parsePapEspiList(fallback.document).candidates);
+    }
+
+    const today = getWarsawDate();
+    const requestedFrom = /^20\d{2}-\d{2}-\d{2}$/.test(backfillFrom ?? "")
+      ? backfillFrom!
+      : undefined;
+    const boundedEarliest = addDays(today, -14);
+    const overlapFrom = requestedFrom && requestedFrom > boundedEarliest
+      ? requestedFrom
+      : requestedFrom
+        ? boundedEarliest
+        : addDays(today, -(ESPI_OVERLAP_DAYS - 1));
+    const overlapDue = force || Boolean(requestedFrom) || !isFresh(state.lastOverlapAt ?? null, ESPI_OVERLAP_TTL_MS);
+    let overlapSucceeded = true;
+
+    if (officialSourcesAvailable && overlapDue) {
+      // Date-specific GPW filtering is useful but has historically omitted an
+      // occasional non-session day. Page overlap is therefore the completeness
+      // guard: it walks only until reaching records older than the repair window.
+      for (const source of availableOfficialSources) {
+        for (let offset = 50; offset <= 150; offset += 50) {
+          const response = await source.fetchList({ offset });
+          if (response.status !== "SUCCESS") {
+            errors += 1;
+            overlapSucceeded = false;
+            break;
+          }
+          pagesRead += 1;
+          const pageCandidates = source.parseList(response.document).candidates;
+          candidates.push(...pageCandidates);
+          const oldest = pageCandidates
+            .map((candidate) => candidate.sourcePublishedAt?.slice(0, 10))
+            .filter((value): value is string => Boolean(value))
+            .sort()[0];
+          if (pageCandidates.length < 50 || (oldest && oldest < overlapFrom)) break;
+        }
+        for (let date = overlapFrom; date <= today; date = addDays(date, 1)) {
+          const response = await source.fetchList({ date: toGpwDate(date) });
+          if (response.status !== "SUCCESS") {
+            errors += 1;
+            overlapSucceeded = false;
+            continue;
+          }
+          pagesRead += 1;
+          candidates.push(...source.parseList(response.document).candidates);
+        }
+      }
+      if (overlapSucceeded) lastOverlapAt = new Date().toISOString();
+    }
+
+    // Preserve the bounded PAP archive bootstrap for installations which have
+    // not finished it yet. It is secondary to GPW and never replaces the
+    // rolling official-date overlap used for gap repair.
     const requestedBackfill = Math.min(
       Math.max(
         backfillPages ?? (state.lastSuccessAt ? (state.backfillComplete ? 0 : 1) : INITIAL_BACKFILL_PAGES),
@@ -620,7 +914,7 @@ export const synchronizePapEspi = async ({
       ),
       4
     );
-    const pages = [0];
+    const pages: number[] = [];
     if (!backfillComplete) {
       for (let index = 0; index < requestedBackfill; index += 1) {
         const page = nextBackfillPage + index;
@@ -632,14 +926,10 @@ export const synchronizePapEspi = async ({
       }
     }
 
-    const candidates: PapEspiListCandidate[] = [];
     for (const page of Array.from(new Set(pages))) {
       const response = await fetchPapHtml(getFeedPageUrl(page));
       if (response.status !== "SUCCESS") {
-        if (page === 0) {
-          status = response.status;
-          throw new Error(`PAP_LIST_${response.status}`);
-        }
+        errors += 1;
         break;
       }
       pagesRead += 1;
@@ -660,15 +950,28 @@ export const synchronizePapEspi = async ({
     const pending = uniqueCandidates.filter((candidate) => !storedIds.has(candidate.sourceId));
     skippedExisting = uniqueCandidates.length - pending.length;
     const fetched = await mapWithConcurrency(pending, ARTICLE_CONCURRENCY, async (candidate) => {
-      const response = await fetchPapHtml(candidate.sourceUrl);
-      if (response.status !== "SUCCESS") return { status: response.status, report: null };
-      return { status: "SUCCESS" as const, report: parsePapEspiReport(response.document, candidate) };
+      try {
+        const response = await fetchOfficialHtml(candidate.sourceUrl);
+        if (response.status !== "SUCCESS") return { status: response.status, report: null };
+        const report = candidate.sourceKind === "GPW" || candidate.sourceKind === "NEWCONNECT"
+          ? parseGpwEspiReport(response.document, candidate)
+          : parsePapEspiReport(response.document, candidate);
+        return { status: report ? "SUCCESS" as const : "PARSE_ERROR" as const, report };
+      } catch {
+        return { status: "PARSE_ERROR" as const, report: null };
+      }
     });
     const parsedReports = fetched.flatMap((entry) => entry.report ? [entry.report] : []);
-    const storedReports: Array<{ report: ParsedPapEspiReport; id: string; issuerId: string | null }> = [];
+    errors += fetched.filter((entry) => entry.status !== "SUCCESS" || !entry.report).length;
+    const storedReports: Array<{ report: ParsedPapEspiReport; id: string; issuerId: string | null; created: boolean }> = [];
     for (const report of parsedReports) {
-      const stored = await upsertEspiReport(report);
-      storedReports.push({ report, ...stored });
+      try {
+        const stored = await upsertEspiReport(report);
+        storedReports.push({ report, ...stored });
+      } catch (error) {
+        errors += 1;
+        diagnose({ provider: PAP_SOURCE, phase: "store", sourceId: report.sourceId, error: error instanceof Error ? error.name : "unknown" });
+      }
     }
     for (const stored of storedReports) {
       await linkCorrection(stored.id, stored.report, stored.issuerId);
@@ -676,13 +979,11 @@ export const synchronizePapEspi = async ({
     const metadataChanges = await reconcileStoredEspiMetadata();
     await reconcileCorrectionLinks();
 
-    if (pending.length > 0 && parsedReports.length === 0) {
-      const failure = fetched.find((entry) => entry.status !== "SUCCESS")?.status;
-      status = failure ?? "PARSE_ERROR";
-      throw new Error(`PAP_ARTICLES_${status}`);
+    if (pending.length > 0 && storedReports.length === 0) {
+      status = fetched.find((entry) => entry.status !== "SUCCESS")?.status ?? "PARSE_ERROR";
     }
 
-    await releaseSyncLock({ token, status: "SUCCESS", nextBackfillPage, backfillComplete });
+    await releaseSyncLock({ token, status, nextBackfillPage, backfillComplete, lastOverlapAt });
     diagnose({
       provider: PAP_SOURCE,
       status: "SUCCESS",
@@ -693,13 +994,17 @@ export const synchronizePapEspi = async ({
       metadataChanges,
       durationMs: Date.now() - startedAt,
     });
+    const created = storedReports.filter((entry) => entry.created).length;
+    const duplicates = skippedExisting + storedReports.length - created;
+    console.info(`[ESPI SYNC] fetched=${uniqueCandidates.length} new=${created} duplicates=${duplicates} saved=${storedReports.length} errors=${errors}`);
     return {
-      status: "SUCCESS",
+      status,
       insertedOrUpdated: storedReports.length,
       skippedExisting,
       parsed: parsedReports.length,
       pagesRead,
       locked: false,
+      errors,
     };
   } catch (error) {
     await releaseSyncLock({
@@ -716,7 +1021,8 @@ export const synchronizePapEspi = async ({
       skippedExisting,
       durationMs: Date.now() - startedAt,
     });
-    return { status, insertedOrUpdated: 0, skippedExisting, parsed: 0, pagesRead, locked: false };
+    console.info(`[ESPI SYNC] fetched=0 new=0 duplicates=${skippedExisting} saved=0 errors=${Math.max(errors, 1)}`);
+    return { status, insertedOrUpdated: 0, skippedExisting, parsed: 0, pagesRead, locked: false, errors: Math.max(errors, 1) };
   }
 };
 
@@ -870,7 +1176,65 @@ export const getEspiFeed = async ({
     return { items: [], hasMore: false, sync: await getEspiSyncState() };
   }
 
-  const clauses = ["report.source = 'PAP_ESPI'", "issuer.id IS NOT NULL"];
+  const clauses = [
+    "report.source = 'PAP_ESPI'",
+    `NOT EXISTS (
+      SELECT 1
+      FROM espi_reports preferred
+      WHERE preferred.id <> report.id
+        AND preferred.source = report.source
+        AND (
+          preferred.issuer_id = report.issuer_id
+          OR (
+            report.issuer_id IS NULL
+            AND preferred.issuer_id IS NULL
+            AND report.source_isin IS NOT NULL
+            AND UPPER(preferred.source_isin) = UPPER(report.source_isin)
+          )
+        )
+        AND preferred.report_type = report.report_type
+        AND preferred.is_correction = report.is_correction
+        AND (
+          (
+            report.report_number IS NOT NULL
+            AND preferred.report_number = report.report_number
+          )
+          OR (
+            report.report_number IS NULL
+            AND preferred.report_number IS NULL
+            AND LEFT(preferred.published_at, 16) = LEFT(report.published_at, 16)
+            AND LOWER(preferred.title) = LOWER(report.title)
+          )
+        )
+        AND (
+          CASE
+            WHEN preferred.source_id LIKE 'gpw:%' THEN 0
+            WHEN preferred.source_id LIKE 'newconnect:%' THEN 1
+            ELSE 2
+          END
+          <
+          CASE
+            WHEN report.source_id LIKE 'gpw:%' THEN 0
+            WHEN report.source_id LIKE 'newconnect:%' THEN 1
+            ELSE 2
+          END
+          OR (
+            CASE
+              WHEN preferred.source_id LIKE 'gpw:%' THEN 0
+              WHEN preferred.source_id LIKE 'newconnect:%' THEN 1
+              ELSE 2
+            END
+            =
+            CASE
+              WHEN report.source_id LIKE 'gpw:%' THEN 0
+              WHEN report.source_id LIKE 'newconnect:%' THEN 1
+              ELSE 2
+            END
+            AND preferred.id < report.id
+          )
+        )
+    )`,
+  ];
   const parameters: Array<string | number | string[]> = [];
   const add = (value: string | number | string[]) => {
     parameters.push(value);
@@ -968,7 +1332,7 @@ export const getEspiReport = async ({ userId, reportId }: { userId: string; repo
                (SELECT COUNT(*) FROM espi_report_attachments attachment WHERE attachment.espi_report_id = report.id) AS attachments_count
         FROM espi_reports report
         LEFT JOIN corporate_event_instruments issuer ON issuer.id = report.issuer_id
-        WHERE report.id = $1 AND report.source = 'PAP_ESPI' AND issuer.id IS NOT NULL
+        WHERE report.id = $1 AND report.source = 'PAP_ESPI'
       `,
       [reportId]
     ),

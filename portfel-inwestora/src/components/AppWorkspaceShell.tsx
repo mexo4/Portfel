@@ -146,7 +146,7 @@ const routeMeta: Record<WorkspaceRouteKey, { eyebrow: string; title: string; bre
   watchlist: { eyebrow: "Rynek", title: "Obserwowane", breadcrumb: "Rynek / Obserwowane", description: "Spółki śledzone niezależnie od aktualnych pozycji." },
   espi: { eyebrow: "Rynek", title: "Raporty ESPI", breadcrumb: "Rynek / Raporty ESPI", description: "Oficjalne komunikaty emitentów GPW." },
   events: { eyebrow: "Rynek", title: "Wydarzenia GPW", breadcrumb: "Rynek / Wydarzenia GPW", description: "Nadchodzące raporty, dywidendy i walne zgromadzenia śledzonych spółek." },
-  meetings: { eyebrow: "Rynek", title: "Walne zgromadzenia", breadcrumb: "Rynek / Walne zgromadzenia", description: "Nadchodzące zwyczajne i nadzwyczajne walne zgromadzenia śledzonych spółek GPW." },
+  meetings: { eyebrow: "Rynek", title: "Walne zgromadzenia", breadcrumb: "Rynek / Walne zgromadzenia", description: "Nadchodzące zwyczajne i nadzwyczajne walne zgromadzenia spółek GPW." },
   portfolios: { eyebrow: "Portfel", title: "Portfele", breadcrumb: "Portfel / Portfele", description: "Zarządzaj realnymi portfelami i typami rachunków." },
   wealth: { eyebrow: "Portfel", title: "Majątek", breadcrumb: "Portfel / Majątek", description: "Łączny obraz aktywów ujętych w Mexo." },
   settings: { eyebrow: "Ustawienia", title: "Konto i preferencje", breadcrumb: "Ustawienia", description: "Ustawienia konta i preferencje aplikacji." },

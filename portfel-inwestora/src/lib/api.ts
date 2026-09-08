@@ -230,6 +230,22 @@ export const fetchCorporateEvents = async ({
   );
 };
 
+export const fetchGeneralMeetings = async ({
+  scope = "all",
+  days = 365,
+  signal,
+}: {
+  scope?: import("@/lib/corporate-events").GeneralMeetingScope;
+  days?: number;
+  signal?: AbortSignal;
+}) => {
+  const params = new URLSearchParams({ scope, days: String(days) });
+  return requestJson<import("@/lib/corporate-events").GeneralMeetingsResponse>(
+    `/api/general-meetings?${params.toString()}`,
+    { signal }
+  );
+};
+
 export const fetchWatchlist = async (signal?: AbortSignal) =>
   requestJson<{ items: WatchlistItem[] }>("/api/watchlist", { signal });
 

@@ -1789,6 +1789,41 @@ const parseXtbTradeComment = (comment: string) => {
   };
 };
 
+const isEffectivelySameTradeAmount = (cashAmount: number, marketAmount: number) => {
+  if (!Number.isFinite(cashAmount) || !Number.isFinite(marketAmount) || marketAmount <= 0) {
+    return false;
+  }
+
+  // XTB rounds the cash ledger independently from quantity * unit price.
+  // A tiny absolute/relative allowance covers that rounding without treating
+  // a real currency conversion as a same-currency trade.
+  const tolerance = Math.max(0.02, marketAmount * 0.0005);
+  return Math.abs(cashAmount - marketAmount) <= tolerance;
+};
+
+export const inferXtbListingCurrency = ({
+  symbol,
+  accountCurrency,
+  cashAmount,
+  marketAmount,
+}: {
+  symbol: string;
+  accountCurrency: CurrencyCode;
+  cashAmount: number;
+  marketAmount: number;
+}) => {
+  const normalizedAccountCurrency = toCurrencyCode(accountCurrency, "PLN");
+
+  // An exchange suffix identifies a venue, not the currency of a particular
+  // listing. When XTB debits exactly the trade's unit-price value from the
+  // account, the broker statement itself is the strongest currency signal.
+  if (isEffectivelySameTradeAmount(Math.abs(cashAmount), Math.abs(marketAmount))) {
+    return normalizedAccountCurrency;
+  }
+
+  return inferCurrencyFromSymbol(symbol, normalizedAccountCurrency);
+};
+
 type XtbHeader = {
   indexes: Map<string, number>;
   rowIndex: number;
@@ -2566,9 +2601,15 @@ const parseXtbCashOperationRows = (
       const kind = cryptoIdentity
         ? "crypto"
         : inferKind(row.rawType, row.rawSymbol, row.instrumentName || row.rawSymbol);
-      const marketCurrency =
-        cryptoIdentity?.quoteCurrency ?? inferCurrencyFromSymbol(row.rawSymbol, accountCurrency);
       const grossMarketValue = trade.quantity * trade.price;
+      const marketCurrency =
+        cryptoIdentity?.quoteCurrency ??
+        inferXtbListingCurrency({
+          symbol: row.rawSymbol,
+          accountCurrency,
+          cashAmount: absoluteAmount,
+          marketAmount: grossMarketValue,
+        });
       const matchingCloseTradeRow =
         side === "sell" ? closeTradeRowsBySaleId.get(row.id) : undefined;
       const brokerRealizedProfitLoss = matchingCloseTradeRow?.amount;

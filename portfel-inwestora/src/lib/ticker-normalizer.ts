@@ -269,8 +269,14 @@ const getLookupVariantsForSymbol = (
   }
 
   const baseTicker = normalized.split(".")[0] ?? normalized;
-  const variants = [normalized];
+  const isXtbLondonSymbol = normalized.endsWith(".UK");
+  const variants = isXtbLondonSymbol && baseTicker
+    ? [`${baseTicker}.L`, `${baseTicker}.LSE`, normalized]
+    : [normalized];
 
+  // XTB uses `.UK` for London listings, while quote providers commonly use
+  // `.L` (Yahoo) or `.LSE` (EODHD). This is a venue-symbol translation only:
+  // London has both GBP and USD lines, so it must not imply a currency.
   if (baseTicker && baseTicker !== normalized) {
     variants.push(baseTicker);
   }
@@ -329,11 +335,11 @@ export const getTickerLookupCandidates = ({
     [
       { value: alias?.isin ?? "", source: "isin" as const },
       { value: isin ?? "", source: "isin" as const },
-      ...baseTickerVariants.map((value) => ({
+      ...exchangeTickerVariants.map((value) => ({
         value,
         source: "normalized" as const,
       })),
-      ...exchangeTickerVariants.map((value) => ({
+      ...baseTickerVariants.map((value) => ({
         value,
         source: "normalized" as const,
       })),

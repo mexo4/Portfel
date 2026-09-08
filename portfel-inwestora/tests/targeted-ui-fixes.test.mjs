@@ -100,11 +100,11 @@ test("current positions omit the quote column and keep desktop-sized column budg
   );
 });
 
-test("OpenFIGI transport retains TLS verification while including the system trust store", async () => {
+test("OpenFIGI transport retains TLS verification while local Node uses the system trust store", async () => {
   const source = await readSource("src/lib/server/openfigi.ts");
+  const packageJson = await readSource("package.json");
 
-  assert.match(source, /getCACertificates\?\s*:/);
-  assert.match(source, /readCertificates\("system"\)/);
+  assert.match(packageJson, /node --use-system-ca/);
   assert.match(source, /fetcher: FetchLike = fetchOpenFigiWithSystemTrust/);
   assert.doesNotMatch(source, /rejectUnauthorized\s*:\s*false/);
 });

@@ -45,11 +45,14 @@ export async function POST(request: Request) {
   if (!user) return NextResponse.json({ error: "Brak autoryzacji." }, { status: 401 });
 
   try {
-    const payload = await request.json().catch(() => ({})) as { backfillPages?: unknown };
+    const payload = await request.json().catch(() => ({})) as { backfillPages?: unknown; backfillFrom?: unknown };
     const backfillPages = typeof payload.backfillPages === "number"
       ? Math.min(Math.max(Math.trunc(payload.backfillPages), 0), 4)
       : 1;
-    return NextResponse.json(await synchronizePapEspi({ force: true, backfillPages }));
+    const backfillFrom = typeof payload.backfillFrom === "string" && /^20\d{2}-\d{2}-\d{2}$/.test(payload.backfillFrom)
+      ? payload.backfillFrom
+      : undefined;
+    return NextResponse.json(await synchronizePapEspi({ force: true, backfillPages, backfillFrom }));
   } catch (error) {
     console.error("POST /api/espi failed", {
       error: error instanceof Error ? error.name : "unknown",
@@ -57,4 +60,3 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Nie udało się odświeżyć raportów ESPI." }, { status: 500 });
   }
 }
-

@@ -13,9 +13,10 @@ import {
   type ParsedCorporateEvent,
 } from "@/lib/corporate-events";
 import { getGpwTickerCore, isGpwSymbol, normalizeGpwSymbol } from "@/lib/ticker";
-import { query, queryOne, withTransaction, type DatabaseTransaction } from "@/lib/server/db";
+import { execute, query, queryOne, withTransaction, type DatabaseTransaction } from "@/lib/server/db";
 import {
   getStoredEspiReportsForCorporateEvents,
+  getEspiSyncState,
   PAP_ESPI_FEED_URL,
   synchronizePapEspi,
   type StoredEspiCorporateEventReport,
@@ -34,7 +35,7 @@ const PAP_TAXONOMY_CACHE_TTL_MS = 90 * 24 * 60 * 60 * 1_000;
 const PAP_MAX_ISSUER_PAGES = 6;
 const PAP_BASE_URL = "https://pap-mediaroom.pl";
 
-type GpwCorporateEventInstrumentInput = Pick<
+export type GpwCorporateEventInstrumentInput = Pick<
   PortfolioInstrument,
   "id" | "symbol" | "name" | "isin" | "assetKind" | "marketCurrency"
 >;
@@ -909,7 +910,11 @@ const upsertParsedEvents = async (
   instrument: CanonicalInstrument,
   batch: ProviderEventBatch
 ) => {
-  if (batch.events.length === 0) return;
+  if (batch.events.length === 0) return { created: 0, duplicates: 0, saved: 0 };
+
+  let created = 0;
+  let duplicates = 0;
+  let saved = 0;
 
   for (const parsed of batch.events) {
     const eventIdentity = getCorporateEventIdentityKey(parsed);
@@ -999,6 +1004,7 @@ const upsertParsedEvents = async (
     const sourceId = randomUUID();
 
     if (!existing) {
+      created += 1;
       await transaction.execute(
         `
           INSERT INTO corporate_events (
@@ -1038,6 +1044,7 @@ const upsertParsedEvents = async (
         ]
       );
     } else if (apply) {
+      duplicates += 1;
       await transaction.execute(
         `
           UPDATE corporate_events
@@ -1089,6 +1096,8 @@ const upsertParsedEvents = async (
           eventId,
         ]
       );
+    } else {
+      duplicates += 1;
     }
 
     await transaction.execute(
@@ -1123,6 +1132,7 @@ const upsertParsedEvents = async (
         [randomUUID(), eventId, existing.event_date, parsed.eventDate, batch.source.sourceUrl, now]
       );
     }
+    saved += 1;
   }
 
   const completeInstallmentGroups = new Map<number, string[]>();
@@ -1154,6 +1164,7 @@ const upsertParsedEvents = async (
       [new Date().toISOString(), instrument.id, fiscalYear, expectedIdentities]
     );
   }
+  return { created, duplicates, saved };
 };
 
 const recordSourceCheck = async (
@@ -1290,12 +1301,12 @@ const toCorporateEvent = (row: EventRow): CorporateEvent => ({
 });
 
 const getStoredEvents = async (
-  instrumentIds: string[],
+  instrumentIds: string[] | null,
   fromDate: string,
   toDate: string,
   eventTypes?: CorporateEventType[]
 ) => {
-  if (instrumentIds.length === 0) return [];
+  if (instrumentIds && instrumentIds.length === 0) return [];
   const rows = await query<EventRow>(
     `
       SELECT event.id, event.instrument_id, instrument.ticker, instrument.company_name,
@@ -1317,7 +1328,7 @@ const getStoredEvents = async (
         ORDER BY source_priority DESC, source_published_at DESC NULLS LAST, discovered_at DESC
         LIMIT 1
       ) AS source ON TRUE
-      WHERE event.instrument_id = ANY($1::text[])
+      WHERE ($1::text[] IS NULL OR event.instrument_id = ANY($1::text[]))
         AND event.active = TRUE
         AND ($4::text[] IS NULL OR event.event_type = ANY($4::text[]))
         AND (
@@ -1334,6 +1345,196 @@ const getStoredEvents = async (
   );
   return rows.map(toCorporateEvent);
 };
+
+type GlobalGeneralMeetingReportRow = {
+  id: string;
+  source_id: string;
+  issuer_id: string | null;
+  source_title: string;
+  title: string;
+  body_text: string;
+  published_at: string;
+  source_url: string;
+  projection_status: string | null;
+  canonical_key: string | null;
+  ticker: string | null;
+  company_name: string | null;
+  isin: string | null;
+  last_checked_at: string | null;
+  last_source_status: CorporateEventSourceStatus | null;
+};
+
+export type GlobalGeneralMeetingSyncResult = {
+  fetched: number;
+  created: number;
+  duplicates: number;
+  saved: number;
+  unmatched: number;
+  errors: number;
+};
+
+let globalGeneralMeetingSyncInFlight: Promise<GlobalGeneralMeetingSyncResult> | null = null;
+
+const updateGeneralMeetingProjectionStatus = (
+  reportId: string,
+  status: "SUCCESS" | "NO_EVENT" | "UNMATCHED" | "PARSE_ERROR"
+) => execute(
+  `
+    UPDATE espi_reports
+    SET corporate_events_projection_status = $1,
+        corporate_events_projected_at = $2
+    WHERE id = $3
+  `,
+  [status, new Date().toISOString(), reportId]
+);
+
+/**
+ * Projects the shared ESPI cache into shared WZA events. The projection is
+ * deliberately global: portfolio/watchlist membership is applied only when
+ * reading, never while ingesting public market data.
+ */
+export const synchronizeGlobalGeneralMeetings = ({
+  force = false,
+  refreshSource = true,
+}: {
+  force?: boolean;
+  refreshSource?: boolean;
+} = {}) => {
+  if (globalGeneralMeetingSyncInFlight) return globalGeneralMeetingSyncInFlight;
+
+  globalGeneralMeetingSyncInFlight = (async () => {
+    if (refreshSource) await synchronizeCorporateEventsEspi();
+    const publishedAfter = new Date(Date.now() - 730 * 24 * 60 * 60 * 1_000).toISOString();
+    const reports = await query<GlobalGeneralMeetingReportRow>(
+      `
+        SELECT report.id, report.source_id, report.issuer_id, report.source_title,
+               report.title, report.body_text, report.published_at, report.source_url,
+               report.corporate_events_projection_status AS projection_status,
+               instrument.canonical_key, instrument.ticker, instrument.company_name,
+               instrument.isin, instrument.last_checked_at, instrument.last_source_status
+        FROM espi_reports AS report
+        LEFT JOIN corporate_event_instruments AS instrument ON instrument.id = report.issuer_id
+        WHERE report.source = 'PAP_ESPI'
+          AND report.published_at >= $1
+          AND (
+            report.category = 'GENERAL_MEETING'
+            OR report.source_title ILIKE '%waln%zgromadz%'
+            OR report.title ILIKE '%waln%zgromadz%'
+            OR report.source_title ~* '(^|[^[:alnum:]])(ZWZ|NWZ)([^[:alnum:]]|$)'
+            OR report.title ~* '(^|[^[:alnum:]])(ZWZ|NWZ)([^[:alnum:]]|$)'
+          )
+        ORDER BY report.published_at ASC, report.source_id ASC
+        LIMIT 1000
+      `,
+      [publishedAfter]
+    );
+
+    let created = 0;
+    let duplicates = 0;
+    let saved = 0;
+    let unmatched = 0;
+    let errors = 0;
+
+    for (const report of reports) {
+      if (!force && (report.projection_status === "SUCCESS" || report.projection_status === "NO_EVENT")) {
+        duplicates += 1;
+        continue;
+      }
+      if (!report.issuer_id || !report.canonical_key || !report.ticker || !report.company_name) {
+        unmatched += 1;
+        await updateGeneralMeetingProjectionStatus(report.id, "UNMATCHED");
+        diagnose({ provider: "global-espi-wza", sourceId: report.source_id, status: "UNMATCHED" });
+        continue;
+      }
+
+      try {
+        const events = parseCorporateEventDocument(`${report.source_title}\n${report.title}\n${report.body_text}`)
+          .filter((event) => event.eventType === "GENERAL_MEETING");
+        if (events.length === 0) {
+          await updateGeneralMeetingProjectionStatus(report.id, "NO_EVENT");
+          continue;
+        }
+
+        const instrument: CanonicalInstrument = {
+          id: report.issuer_id,
+          canonical_key: report.canonical_key,
+          ticker: report.ticker,
+          company_name: report.company_name,
+          isin: report.isin,
+          last_checked_at: report.last_checked_at,
+          last_source_status: report.last_source_status,
+        };
+        const result = await withTransaction(async (transaction) => {
+          await transaction.query<{ locked: number }>(
+            "SELECT pg_advisory_xact_lock(hashtext($1)) AS locked",
+            [`corporate-events:${instrument.canonical_key}`]
+          );
+          const upsert = await upsertParsedEvents(transaction, instrument, {
+            events,
+            source: {
+              sourceType: "PAP_ESPI",
+              sourceUrl: report.source_url,
+              sourcePublishedAt: report.published_at,
+            },
+          });
+          await transaction.execute(
+            `
+              UPDATE espi_reports
+              SET corporate_events_projection_status = 'SUCCESS',
+                  corporate_events_projected_at = $1
+              WHERE id = $2
+            `,
+            [new Date().toISOString(), report.id]
+          );
+          return upsert;
+        });
+        created += result.created;
+        duplicates += result.duplicates;
+        saved += result.saved;
+      } catch (error) {
+        errors += 1;
+        await updateGeneralMeetingProjectionStatus(report.id, "PARSE_ERROR");
+        diagnose({
+          provider: "global-espi-wza",
+          sourceId: report.source_id,
+          status: "PARSE_ERROR",
+          error: error instanceof Error ? error.name : "unknown",
+          message: error instanceof Error ? error.message.slice(0, 160) : undefined,
+        });
+      }
+    }
+
+    console.info(`[WZA SYNC] fetched=${reports.length} new=${created} duplicates=${duplicates} saved=${saved} unmatched=${unmatched} errors=${errors}`);
+    return { fetched: reports.length, created, duplicates, saved, unmatched, errors };
+  })().finally(() => {
+    globalGeneralMeetingSyncInFlight = null;
+  });
+
+  return globalGeneralMeetingSyncInFlight;
+};
+
+export const getGlobalGeneralMeetings = async ({
+  fromDate,
+  toDate,
+  canonicalKeys,
+}: {
+  fromDate: string;
+  toDate: string;
+  canonicalKeys?: string[];
+}) => {
+  let instrumentIds: string[] | null = null;
+  if (canonicalKeys) {
+    if (canonicalKeys.length === 0) return [];
+    const instruments = await query<{ id: string }>(
+      "SELECT id FROM corporate_event_instruments WHERE market = 'GPW' AND canonical_key = ANY($1::text[])",
+      [canonicalKeys]
+    );
+    instrumentIds = instruments.map((instrument) => instrument.id);
+  }
+  return getStoredEvents(instrumentIds, fromDate, toDate, ["GENERAL_MEETING"]);
+};
+
+export const getGlobalGeneralMeetingSourceState = getEspiSyncState;
 
 export const getCorporateEventsForGpwPortfolio = async ({
   instruments,

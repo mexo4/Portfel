@@ -499,6 +499,7 @@ const schemaStatements = [
       source_id TEXT NOT NULL,
       issuer_id TEXT,
       issuer_name TEXT NOT NULL,
+      market TEXT NOT NULL DEFAULT 'UNKNOWN',
       source_ticker TEXT,
       source_isin TEXT,
       report_number TEXT,
@@ -525,7 +526,18 @@ const schemaStatements = [
   `,
   "ALTER TABLE espi_reports ADD COLUMN IF NOT EXISTS corporate_events_projection_status TEXT",
   "ALTER TABLE espi_reports ADD COLUMN IF NOT EXISTS corporate_events_projected_at TEXT",
+  "ALTER TABLE espi_reports ADD COLUMN IF NOT EXISTS market TEXT NOT NULL DEFAULT 'UNKNOWN'",
+  `
+    UPDATE espi_reports
+    SET market = CASE
+      WHEN source_id LIKE 'newconnect:%' THEN 'NEWCONNECT'
+      WHEN source_id LIKE 'gpw:%' THEN 'GPW'
+      ELSE COALESCE((SELECT market FROM corporate_event_instruments issuer WHERE issuer.id = espi_reports.issuer_id), 'UNKNOWN')
+    END
+    WHERE market IS NULL OR market = 'UNKNOWN'
+  `,
   "CREATE INDEX IF NOT EXISTS idx_espi_reports_published ON espi_reports(published_at DESC, id DESC)",
+  "CREATE INDEX IF NOT EXISTS idx_espi_reports_market_published ON espi_reports(market, published_at DESC, id DESC)",
   "CREATE INDEX IF NOT EXISTS idx_espi_reports_issuer_published ON espi_reports(issuer_id, published_at DESC)",
   "CREATE INDEX IF NOT EXISTS idx_espi_reports_isin_published ON espi_reports(source_isin, published_at DESC)",
   "CREATE INDEX IF NOT EXISTS idx_espi_reports_ticker_published ON espi_reports(source_ticker, published_at DESC)",

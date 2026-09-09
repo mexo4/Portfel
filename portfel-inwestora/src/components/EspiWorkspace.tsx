@@ -9,12 +9,14 @@ import {
   ESPI_CATEGORY_LABELS,
   ESPI_REPORT_TYPES,
   ESPI_REPORT_TYPE_LABELS,
+  type EspiMarket,
   type EspiFeedResponse,
   type EspiReportSummary,
   type EspiSourceStatus,
 } from "@/lib/espi";
 
-type FeedScope = "mine" | "all";
+type FeedScope = "all" | "watchlist" | "portfolio";
+type MarketScope = Exclude<EspiMarket, "UNKNOWN">;
 type FilterState = {
   query: string;
   company: string;
@@ -113,6 +115,7 @@ function ReportCard({ report }: { report: EspiReportSummary }) {
       <h2><Link href={workspace.getReadHref(`/market/espi/${report.id}`)}>{report.title}</Link></h2>
       {report.excerpt ? <p>{report.excerpt}</p> : null}
       <div className="espi-report-badges">
+        <span className="espi-tracking-badge">{report.market === "NEWCONNECT" ? "NEWCONNECT" : "GPW"}</span>
         <span className={`espi-category-badge espi-category-badge--${report.category.toLowerCase()}`}>
           {ESPI_CATEGORY_LABELS[report.category]}
         </span>
@@ -124,7 +127,8 @@ function ReportCard({ report }: { report: EspiReportSummary }) {
 }
 
 export default function EspiWorkspace() {
-  const [scope, setScope] = useState<FeedScope>("mine");
+  const [market, setMarket] = useState<MarketScope>("GPW");
+  const [scope, setScope] = useState<FeedScope>("all");
   const [draftFilters, setDraftFilters] = useState<FilterState>(EMPTY_FILTERS);
   const [filters, setFilters] = useState<FilterState>(EMPTY_FILTERS);
   const [feed, setFeed] = useState<EspiFeedResponse | null>(null);
@@ -134,7 +138,7 @@ export default function EspiWorkspace() {
   const [applicationError, setApplicationError] = useState<string | null>(null);
   const generation = useRef(0);
   const requestController = useRef<AbortController | null>(null);
-  const requestIdentity = useMemo(() => JSON.stringify({ scope, filters }), [filters, scope]);
+  const requestIdentity = useMemo(() => JSON.stringify({ market, scope, filters }), [filters, market, scope]);
 
   const load = useCallback(async ({ cursor, append = false }: { cursor?: string; append?: boolean } = {}) => {
     const currentGeneration = ++generation.current;
@@ -149,6 +153,7 @@ export default function EspiWorkspace() {
     try {
       const value = await fetchEspiFeed({
         scope,
+        market,
         cursor,
         query: filters.query || undefined,
         company: filters.company || undefined,
@@ -173,7 +178,7 @@ export default function EspiWorkspace() {
         setIsLoadingMore(false);
       }
     }
-  }, [filters, scope]);
+  }, [filters, market, scope]);
 
   useEffect(() => {
     void load();
@@ -207,18 +212,24 @@ export default function EspiWorkspace() {
         <div>
           <p className="eyebrow">Oficjalne informacje rynkowe · PAP / ESPI</p>
           <h2 className="section-title">Raporty ESPI</h2>
-          <p className="section-copy">Bieżące i archiwalne komunikaty emitentów GPW, zapisane raz i filtrowane dla Twojego portfela oraz obserwowanych.</p>
+          <p className="section-copy">Bieżące i archiwalne komunikaty emitentów, zapisane raz i filtrowane według rynku, portfela oraz obserwowanych.</p>
         </div>
         <div className="espi-feed-header-actions">
-          <div className="espi-scope-switch" role="group" aria-label="Zakres raportów ESPI">
-            <button type="button" className={scope === "mine" ? "is-active" : ""} onClick={() => setScope("mine")}>Moje spółki</button>
-            <button type="button" className={scope === "all" ? "is-active" : ""} onClick={() => setScope("all")}>Wszystkie GPW</button>
+          <div className="espi-scope-switch" role="group" aria-label="Rynek raportów ESPI">
+            <button type="button" className={market === "GPW" ? "is-active" : ""} onClick={() => setMarket("GPW")}>GPW</button>
+            <button type="button" className={market === "NEWCONNECT" ? "is-active" : ""} onClick={() => setMarket("NEWCONNECT")}>NewConnect</button>
           </div>
           <button type="button" className="ghost-button" onClick={() => void handleRefresh()} disabled={isRefreshing}>
             {isRefreshing ? "Odświeżanie…" : "Odśwież feed"}
           </button>
         </div>
       </section>
+
+      <div className="espi-scope-switch espi-market-filter" role="group" aria-label="Zakres spółek">
+        <button type="button" className={scope === "all" ? "is-active" : ""} onClick={() => setScope("all")}>Wszystkie</button>
+        <button type="button" className={scope === "watchlist" ? "is-active" : ""} onClick={() => setScope("watchlist")}>Obserwowane</button>
+        <button type="button" className={scope === "portfolio" ? "is-active" : ""} onClick={() => setScope("portfolio")}>W portfelu</button>
+      </div>
 
       <form className="panel panel-compact espi-filter-panel" onSubmit={(event) => {
         event.preventDefault();
@@ -244,8 +255,8 @@ export default function EspiWorkspace() {
       {!isLoading && feed && feed.items.length === 0 && !applicationError ? (
         <section className="panel espi-empty-state">
           <p className="eyebrow">{sourceUnavailable ? "Źródło niedostępne" : "Brak wyników"}</p>
-          <h2 className="section-title">{sourceUnavailable ? "Nie udało się jeszcze pobrać raportów." : scope === "mine" ? "Brak raportów dla śledzonych spółek." : "Brak raportów dla wybranych filtrów."}</h2>
-          <p className="section-copy">{scope === "mine" ? "Moje spółki obejmują otwarte pozycje ze wszystkich realnych portfeli oraz Obserwowane." : "Zmień zakres dat lub wyczyść filtry."}</p>
+          <h2 className="section-title">{sourceUnavailable ? "Nie udało się jeszcze pobrać raportów." : scope === "all" ? "Brak raportów dla wybranych filtrów." : "Brak raportów dla wybranych spółek."}</h2>
+          <p className="section-copy">{scope === "all" ? "Zmień zakres dat lub wyczyść filtry." : scope === "watchlist" ? "Dodaj spółkę do Obserwowanych, aby zobaczyć jej raporty." : "Pokazujemy spółki z otwartą pozycją we wszystkich realnych portfelach."}</p>
         </section>
       ) : null}
       {feed?.items.length ? <section className="espi-feed-list" aria-live="polite">{feed.items.map((report) => <ReportCard key={report.id} report={report} />)}</section> : null}

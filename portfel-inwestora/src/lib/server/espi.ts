@@ -4,6 +4,7 @@ import {
   type EspiAttachment,
   type EspiCategory,
   type EspiFeedResponse,
+  type EspiMarket,
   type EspiReport,
   type EspiReportSummary,
   type EspiReportType,
@@ -59,6 +60,11 @@ const INITIAL_BACKFILL_PAGES = 2;
 // always ingested from page zero.
 const ESPI_BACKFILL_PAGE_LIMIT = 12;
 const ESPI_OVERLAP_DAYS = 4;
+// The official exchange endpoints paginate their newest reports. Walk the
+// pages until the requested rolling repair horizon is reached; a generous
+// circuit breaker only protects a degraded source from an endless response.
+const ESPI_OFFICIAL_OVERLAP_PAGE_LIMIT = 24;
+const ESPI_OFFICIAL_REPAIR_DAYS = 370;
 const ESPI_FETCH_ATTEMPTS = 2;
 const ARTICLE_CONCURRENCY = 4;
 
@@ -78,6 +84,7 @@ type EspiReportRow = {
   issuer_name: string;
   issuer_ticker: string | null;
   issuer_canonical_key: string | null;
+  market: EspiMarket;
   source_ticker: string | null;
   source_isin: string | null;
   report_number: string | null;
@@ -106,9 +113,11 @@ export type TrackedGpwInstrument = {
   held: boolean;
   watched: boolean;
 };
+export type TrackedEspiInstrument = TrackedGpwInstrument;
 
 export type EspiFeedFilters = {
-  scope: "mine" | "all";
+  scope: "mine" | "all" | "watchlist" | "portfolio";
+  market: Exclude<EspiMarket, "UNKNOWN">;
   cursor?: string;
   limit?: number;
   query?: string;
@@ -383,9 +392,10 @@ const findExistingIssuer = async (isin?: string, ticker?: string) =>
     ticker: string;
     company_name: string;
     isin: string | null;
+    market: EspiMarket;
   }>(
     `
-      SELECT id, canonical_key, ticker, company_name, isin
+      SELECT id, canonical_key, ticker, company_name, isin, market
       FROM corporate_event_instruments
       WHERE market = 'GPW'
         AND (($1::text IS NOT NULL AND isin = $1) OR ($2::text IS NOT NULL AND ticker = $2))
@@ -393,6 +403,26 @@ const findExistingIssuer = async (isin?: string, ticker?: string) =>
       LIMIT 1
     `,
     [isin ?? null, ticker ?? null]
+  );
+
+const findExistingIssuerForMarket = async (market: EspiMarket, isin?: string, ticker?: string) =>
+  queryOne<{
+    id: string;
+    canonical_key: string;
+    ticker: string;
+    company_name: string;
+    isin: string | null;
+    market: EspiMarket;
+  }>(
+    `
+      SELECT id, canonical_key, ticker, company_name, isin, market
+      FROM corporate_event_instruments
+      WHERE market = $1
+        AND (($2::text IS NOT NULL AND isin = $2) OR ($3::text IS NOT NULL AND ticker = $3))
+      ORDER BY CASE WHEN $2::text IS NOT NULL AND isin = $2 THEN 0 ELSE 1 END, updated_at DESC
+      LIMIT 1
+    `,
+    [market, isin ?? null, ticker ?? null]
   );
 
 const resolveGpwIssuer = async (
@@ -423,6 +453,7 @@ const resolveGpwIssuer = async (
     ticker: string;
     company_name: string;
     isin: string | null;
+    market: EspiMarket;
   }>(
     `
       INSERT INTO corporate_event_instruments (
@@ -434,14 +465,70 @@ const resolveGpwIssuer = async (
         ticker = EXCLUDED.ticker,
         company_name = EXCLUDED.company_name,
         updated_at = EXCLUDED.updated_at
-      RETURNING id, canonical_key, ticker, company_name, isin
+      RETURNING id, canonical_key, ticker, company_name, isin, market
     `,
     [id, canonicalKey, catalogEntry.isin ?? sourceIsin ?? null, ticker, catalogEntry.name, now]
   );
 };
 
+const resolveEspiIssuer = async (report: Pick<ParsedPapEspiReport, "issuerName" | "sourceIsin" | "sourceTicker" | "market">) => {
+  const sourceIsin = report.sourceIsin?.trim().toUpperCase();
+  const sourceTicker = report.sourceTicker?.trim().toUpperCase();
+  if (report.market === "GPW") return resolveGpwIssuer(report);
+
+  const exact = report.market !== "UNKNOWN"
+    ? await findExistingIssuerForMarket(
+      report.market,
+      sourceIsin,
+      isReliableTicker(sourceTicker) ? sourceTicker : undefined
+    )
+    : null;
+  if (exact) return exact;
+
+  // PAP may omit market metadata. Preserve the historical GPW resolver as a
+  // strict catalog/ISIN/ticker fallback, but never infer NewConnect from a
+  // ticker suffix or a fuzzy company name.
+  if (report.market === "UNKNOWN") return resolveGpwIssuer(report);
+  if (report.market !== "NEWCONNECT") return null;
+
+  const ticker = isReliableTicker(sourceTicker) ? sourceTicker : undefined;
+  const canonicalKey = sourceIsin
+    ? `newconnect:isin:${sourceIsin}`
+    : ticker
+      ? `newconnect:ticker:${ticker}`
+      : null;
+  if (!canonicalKey) return null;
+  const now = new Date().toISOString();
+  const id = `corporate-event-instrument:${canonicalKey}`;
+  return queryOne<{
+    id: string;
+    canonical_key: string;
+    ticker: string;
+    company_name: string;
+    isin: string | null;
+    market: EspiMarket;
+  }>(
+    `
+      INSERT INTO corporate_event_instruments (
+        id, canonical_key, market, isin, ticker, company_name, created_at, updated_at
+      )
+      VALUES ($1, $2, 'NEWCONNECT', $3, $4, $5, $6, $6)
+      ON CONFLICT (canonical_key) DO UPDATE SET
+        isin = COALESCE(corporate_event_instruments.isin, EXCLUDED.isin),
+        ticker = COALESCE(NULLIF(EXCLUDED.ticker, ''), corporate_event_instruments.ticker),
+        company_name = COALESCE(NULLIF(EXCLUDED.company_name, ''), corporate_event_instruments.company_name),
+        updated_at = EXCLUDED.updated_at
+      RETURNING id, canonical_key, ticker, company_name, isin, market
+    `,
+    [id, canonicalKey, sourceIsin ?? null, ticker ?? "", report.issuerName, now]
+  );
+};
+
 const upsertEspiReport = async (report: ParsedPapEspiReport) => {
-  const issuer = await resolveGpwIssuer(report);
+  const issuer = await resolveEspiIssuer(report);
+  const storedMarket: EspiMarket = report.market === "UNKNOWN"
+    ? issuer?.market ?? "UNKNOWN"
+    : report.market;
   const existing = await queryOne<{ id: string; source_id: string }>(
     `
       SELECT id, source_id
@@ -496,16 +583,16 @@ const upsertEspiReport = async (report: ParsedPapEspiReport) => {
         `
           UPDATE espi_reports
           SET source_id = $1, issuer_id = COALESCE($2, issuer_id), issuer_name = $3,
-              source_ticker = $4, source_isin = $5, report_number = $6,
-              report_type = $7, published_at = $8, source_title = $9, title = $10,
-              body_text = $11, legal_basis = $12, category = $13, source_url = $14,
-              is_correction = $15, correction_target_report_number = $16, updated_at = $17
-          WHERE id = $18
+              market = $4, source_ticker = $5, source_isin = $6, report_number = $7,
+              report_type = $8, published_at = $9, source_title = $10, title = $11,
+              body_text = $12, legal_basis = $13, category = $14, source_url = $15,
+              is_correction = $16, correction_target_report_number = $17, updated_at = $18
+          WHERE id = $19
         `,
         [
-          report.sourceId, issuer?.id ?? null, report.issuerName, report.sourceTicker ?? null,
-          report.sourceIsin ?? null, report.reportNumber ?? null, report.reportType,
-          report.publishedAt, report.sourceTitle, report.title, report.body,
+          report.sourceId, issuer?.id ?? null, report.issuerName, storedMarket,
+          report.sourceTicker ?? null, report.sourceIsin ?? null, report.reportNumber ?? null,
+          report.reportType, report.publishedAt, report.sourceTitle, report.title, report.body,
           report.legalBasis ?? null, report.category, report.sourceUrl, report.isCorrection,
           report.correctionTargetReportNumber ?? null, now, id,
         ]
@@ -518,31 +605,32 @@ const upsertEspiReport = async (report: ParsedPapEspiReport) => {
         `
           UPDATE espi_reports
           SET issuer_id = COALESCE(issuer_id, $1),
-              source_ticker = COALESCE(source_ticker, $2),
-              source_isin = COALESCE(source_isin, $3),
-              updated_at = $4
-          WHERE id = $5
+              market = CASE WHEN market = 'UNKNOWN' THEN $2 ELSE market END,
+              source_ticker = COALESCE(source_ticker, $3),
+              source_isin = COALESCE(source_isin, $4),
+              updated_at = $5
+          WHERE id = $6
         `,
-        [issuer?.id ?? null, report.sourceTicker ?? null, report.sourceIsin ?? null, now, id]
+        [issuer?.id ?? null, storedMarket, report.sourceTicker ?? null, report.sourceIsin ?? null, now, id]
       );
     } else {
       await transaction.execute(
         `
           INSERT INTO espi_reports (
             id, source, source_id, issuer_id, issuer_name, source_ticker, source_isin,
-            report_number, report_type, published_at, source_title, title, body_text,
+            market, report_number, report_type, published_at, source_title, title, body_text,
             legal_basis, category, source_url, is_correction,
             correction_target_report_number, discovered_at, updated_at
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-                  $11, $12, $13, $14, $15, $16, $17, $18, $19, $19)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+                  $12, $13, $14, $15, $16, $17, $18, $19, $20, $20)
         `,
         [
           id, PAP_SOURCE, report.sourceId, issuer?.id ?? null, report.issuerName,
-          report.sourceTicker ?? null, report.sourceIsin ?? null, report.reportNumber ?? null,
-          report.reportType, report.publishedAt, report.sourceTitle, report.title, report.body,
-          report.legalBasis ?? null, report.category, report.sourceUrl, report.isCorrection,
-          report.correctionTargetReportNumber ?? null, now,
+          report.sourceTicker ?? null, report.sourceIsin ?? null, storedMarket,
+          report.reportNumber ?? null, report.reportType, report.publishedAt, report.sourceTitle,
+          report.title, report.body, report.legalBasis ?? null, report.category, report.sourceUrl,
+          report.isCorrection, report.correctionTargetReportNumber ?? null, now,
         ]
       );
     }
@@ -708,6 +796,7 @@ export const getStoredEspiReportsForCorporateEvents = async ({
 const reconcileStoredEspiMetadata = async () => {
   const rows = await query<{
     id: string;
+    source_id: string;
     issuer_id: string | null;
     source_title: string;
     body_text: string;
@@ -717,10 +806,11 @@ const reconcileStoredEspiMetadata = async () => {
     source_isin: string | null;
     source_ticker: string | null;
     issuer_name: string;
+    market: EspiMarket;
   }>(
     `
-      SELECT id, issuer_id, source_title, body_text, report_number, report_type, category,
-             source_isin, source_ticker, issuer_name
+      SELECT id, source_id, issuer_id, source_title, body_text, report_number, report_type, category,
+             source_isin, source_ticker, issuer_name, market
       FROM espi_reports
       WHERE source = $1
       ORDER BY published_at DESC
@@ -741,22 +831,27 @@ const reconcileStoredEspiMetadata = async () => {
     });
     const issuer = row.issuer_id
       ? null
-      : await resolveGpwIssuer({
+      : await resolveEspiIssuer({
           sourceIsin: row.source_isin ?? undefined,
           sourceTicker: row.source_ticker ?? undefined,
           issuerName: row.issuer_name,
+          market: row.market,
         });
-    if (reportType === row.report_type && category === row.category && !issuer) continue;
+    const inferredMarket: EspiMarket = row.market === "UNKNOWN"
+      ? issuer?.market ?? (row.source_id.startsWith("newconnect:") ? "NEWCONNECT" : "UNKNOWN")
+      : row.market;
+    if (reportType === row.report_type && category === row.category && !issuer && inferredMarket === row.market) continue;
     await execute(
       `
         UPDATE espi_reports
         SET report_type = $1,
             category = $2,
             issuer_id = COALESCE(issuer_id, $3),
-            updated_at = $4
-        WHERE id = $5
+            market = $4,
+            updated_at = $5
+        WHERE id = $6
       `,
-      [reportType, category, issuer?.id ?? null, new Date().toISOString(), row.id]
+      [reportType, category, issuer?.id ?? null, inferredMarket, new Date().toISOString(), row.id]
     );
     changed += 1;
   }
@@ -872,9 +967,12 @@ export const synchronizePapEspi = async ({
     if (officialSourcesAvailable && overlapDue) {
       // Date-specific GPW filtering is useful but has historically omitted an
       // occasional non-session day. Page overlap is therefore the completeness
-      // guard: it walks only until reaching records older than the repair window.
+      // guard: it walks until reaching the full WZA repair horizon, instead of
+      // the old fixed first three pages.
+      const officialRepairFrom = addDays(today, -ESPI_OFFICIAL_REPAIR_DAYS);
       for (const source of availableOfficialSources) {
-        for (let offset = 50; offset <= 150; offset += 50) {
+        for (let page = 1; page <= ESPI_OFFICIAL_OVERLAP_PAGE_LIMIT; page += 1) {
+          const offset = page * 50;
           const response = await source.fetchList({ offset });
           if (response.status !== "SUCCESS") {
             errors += 1;
@@ -888,7 +986,7 @@ export const synchronizePapEspi = async ({
             .map((candidate) => candidate.sourcePublishedAt?.slice(0, 10))
             .filter((value): value is string => Boolean(value))
             .sort()[0];
-          if (pageCandidates.length < 50 || (oldest && oldest < overlapFrom)) break;
+          if (pageCandidates.length < 50 || (oldest && oldest < officialRepairFrom)) break;
         }
         for (let date = overlapFrom; date <= today; date = addDays(date, 1)) {
           const response = await source.fetchList({ date: toGpwDate(date) });
@@ -1094,6 +1192,86 @@ export const getUserTrackedGpwInstruments = async (userId: string): Promise<Trac
   return buildTrackedGpwInstruments(portfolios, watchlist);
 };
 
+/**
+ * Resolve tracking for a market without guessing from a ticker suffix. GPW
+ * keeps the legacy, catalog-backed resolver above. NewConnect is matched only
+ * against the issuer mappings already persisted from the official source and
+ * exact ISIN/ticker metadata present in the user's portfolio/watchlist.
+ */
+export const getUserTrackedEspiInstruments = async (
+  userId: string,
+  market: Exclude<EspiMarket, "UNKNOWN">
+): Promise<TrackedEspiInstrument[]> => {
+  if (market === "GPW") return getUserTrackedGpwInstruments(userId);
+  const [stored, watchlist] = await Promise.all([
+    queryOne<StoredPortfolioRow>("SELECT portfolio_json FROM users WHERE id = $1", [userId]),
+    getUserWatchlist(userId),
+  ]);
+  const heldRefs: Array<{ isin?: string; ticker?: string; instrumentId?: string; name?: string }> = [];
+  try {
+    const portfolios = stored?.portfolio_json
+      ? normalizePortfolioBook(JSON.parse(stored.portfolio_json)).portfolios
+      : [];
+    for (const portfolio of portfolios) {
+      const normalized = ensurePortfolioCoreModel(portfolio);
+      const instruments = new Map((normalized.instruments ?? []).map((instrument) => [instrument.id, instrument]));
+      for (const asset of normalized.assets) {
+        if (asset.kind !== "stock" || asset.quantity <= 1e-8) continue;
+        const instrumentId = getPortfolioInstrumentId(normalized.id, asset);
+        const instrument = instruments.get(instrumentId);
+        const isin = instrument?.isin?.trim().toUpperCase();
+        const ticker = instrument?.symbol?.trim().toUpperCase() || asset.symbol?.trim().toUpperCase();
+        if (isin || ticker) heldRefs.push({ isin, ticker, instrumentId, name: instrument?.name ?? asset.name });
+      }
+    }
+  } catch {
+    // A malformed legacy portfolio must not make the public-market feed fail.
+  }
+  const watchedRefs = watchlist.map((item) => ({
+    isin: item.isin?.trim().toUpperCase(),
+    ticker: item.symbol?.trim().toUpperCase(),
+    instrumentId: item.coreInstrumentId,
+    name: item.name,
+  }));
+  const refs = [...heldRefs, ...watchedRefs];
+  if (refs.length === 0) return [];
+  const isins = Array.from(new Set(refs.flatMap((ref) => ref.isin ? [ref.isin] : [])));
+  const tickers = Array.from(new Set(refs.flatMap((ref) => ref.ticker ? [ref.ticker] : [])));
+  if (isins.length === 0 && tickers.length === 0) return [];
+  const rows = await query<{
+    canonical_key: string;
+    ticker: string;
+    company_name: string;
+    isin: string | null;
+  }>(
+    `
+      SELECT canonical_key, ticker, company_name, isin
+      FROM corporate_event_instruments
+      WHERE market = $1
+        AND (($2::text[] <> '{}'::text[] AND UPPER(COALESCE(isin, '')) = ANY($2::text[]))
+          OR ($3::text[] <> '{}'::text[] AND UPPER(COALESCE(ticker, '')) = ANY($3::text[])))
+    `,
+    [market, isins, tickers]
+  );
+  return rows.map((row) => {
+    const matchingHeld = heldRefs.find((ref) =>
+      (row.isin && ref.isin === row.isin.toUpperCase()) || row.ticker.toUpperCase() === ref.ticker
+    );
+    const matchingWatched = watchedRefs.find((ref) =>
+      (row.isin && ref.isin === row.isin.toUpperCase()) || row.ticker.toUpperCase() === ref.ticker
+    );
+    return {
+      canonicalKey: row.canonical_key,
+      ticker: row.ticker.toUpperCase(),
+      name: row.company_name,
+      isin: row.isin ?? undefined,
+      mexoInstrumentId: matchingHeld?.instrumentId ?? matchingWatched?.instrumentId,
+      held: Boolean(matchingHeld),
+      watched: Boolean(matchingWatched),
+    };
+  });
+};
+
 const getTrackingSource = (tracked: TrackedGpwInstrument): EspiTrackingSource =>
   tracked.held && tracked.watched
     ? "PORTFOLIO_AND_WATCHLIST"
@@ -1101,7 +1279,7 @@ const getTrackingSource = (tracked: TrackedGpwInstrument): EspiTrackingSource =>
       ? "PORTFOLIO"
       : "WATCHLIST";
 
-const findTracking = (row: Pick<EspiReportRow, "issuer_canonical_key" | "source_isin" | "source_ticker">, tracked: TrackedGpwInstrument[]) => {
+const findTracking = (row: Pick<EspiReportRow, "issuer_canonical_key" | "source_isin" | "source_ticker">, tracked: TrackedEspiInstrument[]) => {
   const sourceTicker = isReliableTicker(row.source_ticker) ? row.source_ticker!.toUpperCase() : null;
   return tracked.find((item) =>
     (row.issuer_canonical_key && item.canonicalKey === row.issuer_canonical_key) ||
@@ -1130,12 +1308,13 @@ const toExcerpt = (body: string, title: string) => {
   return value.length > 260 ? `${value.slice(0, 257).trimEnd()}…` : value;
 };
 
-const mapSummary = (row: EspiReportRow, tracked: TrackedGpwInstrument[]): EspiReportSummary => {
+const mapSummary = (row: EspiReportRow, tracked: TrackedEspiInstrument[]): EspiReportSummary => {
   const tracking = findTracking(row, tracked);
   return {
     id: row.id,
     issuerName: row.issuer_name,
     ticker: row.issuer_ticker ?? (isReliableTicker(row.source_ticker) ? row.source_ticker! : undefined),
+    market: row.market,
     mexoInstrumentId: tracking?.mexoInstrumentId,
     reportNumber: row.report_number ?? undefined,
     reportType: row.report_type,
@@ -1171,8 +1350,15 @@ export const getEspiFeed = async ({
   userId: string;
   filters: EspiFeedFilters;
 }): Promise<EspiFeedResponse> => {
-  const tracked = await getUserTrackedGpwInstruments(userId);
-  if (filters.scope === "mine" && tracked.length === 0) {
+  const tracked = await getUserTrackedEspiInstruments(userId, filters.market);
+  const scopedTracked = filters.scope === "watchlist"
+    ? tracked.filter((item) => item.watched)
+    : filters.scope === "portfolio"
+      ? tracked.filter((item) => item.held)
+      : filters.scope === "mine"
+        ? tracked.filter((item) => item.held || item.watched)
+        : tracked;
+  if (filters.scope !== "all" && scopedTracked.length === 0) {
     return { items: [], hasMore: false, sync: await getEspiSyncState() };
   }
 
@@ -1241,10 +1427,11 @@ export const getEspiFeed = async ({
     return `$${parameters.length}`;
   };
 
-  if (filters.scope === "mine") {
-    const keys = tracked.map((item) => item.canonicalKey);
-    const isins = tracked.flatMap((item) => item.isin ? [item.isin.toUpperCase()] : []);
-    const tickers = tracked.map((item) => item.ticker);
+  clauses.push(`report.market = ${add(filters.market)}`);
+  if (filters.scope !== "all") {
+    const keys = scopedTracked.map((item) => item.canonicalKey);
+    const isins = scopedTracked.flatMap((item) => item.isin ? [item.isin.toUpperCase()] : []);
+    const tickers = scopedTracked.map((item) => item.ticker.toUpperCase());
     const keysParam = add(keys);
     const isinsParam = add(isins);
     const tickersParam = add(tickers);
@@ -1271,7 +1458,9 @@ export const getEspiFeed = async ({
   }
   if (filters.company?.trim()) clauses.push(`report.issuer_name ILIKE ${add(`%${filters.company.trim().slice(0, 100)}%`)}`);
   if (filters.ticker?.trim()) {
-    const ticker = getGpwTickerCore(filters.ticker).slice(0, 8);
+    const ticker = filters.market === "GPW"
+      ? getGpwTickerCore(filters.ticker).slice(0, 8)
+      : filters.ticker.trim().toUpperCase().slice(0, 16);
     clauses.push(`UPPER(COALESCE(issuer.ticker, report.source_ticker, '')) = ${add(ticker)}`);
   }
   if (filters.category) clauses.push(`report.category = ${add(filters.category)}`);
@@ -1296,7 +1485,7 @@ export const getEspiFeed = async ({
     `
       SELECT report.id, report.issuer_name, issuer.ticker AS issuer_ticker,
              issuer.canonical_key AS issuer_canonical_key,
-             report.source_ticker, report.source_isin, report.report_number,
+             report.market, report.source_ticker, report.source_isin, report.report_number,
              report.report_type, report.published_at, report.title, report.body_text,
              report.legal_basis, report.category, report.source_id, report.source_url,
              report.is_correction, report.correction_target_report_number, report.correction_of_report_id,
@@ -1312,7 +1501,7 @@ export const getEspiFeed = async ({
   const hasMore = rows.length > limit;
   const selected = rows.slice(0, limit);
   return {
-    items: selected.map((row) => mapSummary(row, tracked)),
+    items: selected.map((row) => mapSummary(row, scopedTracked)),
     hasMore,
     nextCursor: hasMore && selected.length ? encodeCursor(selected.at(-1)!) : undefined,
     sync: await getEspiSyncState(),
@@ -1320,12 +1509,11 @@ export const getEspiFeed = async ({
 };
 
 export const getEspiReport = async ({ userId, reportId }: { userId: string; reportId: string }): Promise<EspiReport | null> => {
-  const [row, tracked] = await Promise.all([
-    queryOne<EspiReportRow>(
+  const row = await queryOne<EspiReportRow>(
       `
         SELECT report.id, report.issuer_name, issuer.ticker AS issuer_ticker,
                issuer.canonical_key AS issuer_canonical_key,
-               report.source_ticker, report.source_isin, report.report_number,
+               report.market, report.source_ticker, report.source_isin, report.report_number,
                report.report_type, report.published_at, report.title, report.body_text,
                report.legal_basis, report.category, report.source_id, report.source_url,
                report.is_correction, report.correction_target_report_number, report.correction_of_report_id,
@@ -1335,10 +1523,12 @@ export const getEspiReport = async ({ userId, reportId }: { userId: string; repo
         WHERE report.id = $1 AND report.source = 'PAP_ESPI'
       `,
       [reportId]
-    ),
-    getUserTrackedGpwInstruments(userId),
-  ]);
+    );
   if (!row) return null;
+  const tracked = await getUserTrackedEspiInstruments(
+    userId,
+    row.market === "NEWCONNECT" ? "NEWCONNECT" : "GPW"
+  );
   const attachments = await query<{
     id: string;
     name: string;
@@ -1375,8 +1565,14 @@ export const validateEspiFeedFilters = (searchParams: URLSearchParams): EspiFeed
   const reportType = searchParams.get("reportType");
   const datePattern = /^20\d{2}-\d{2}-\d{2}$/;
   const requestedLimit = Number(searchParams.get("limit") ?? ESPI_DEFAULT_LIMIT);
+  const requestedMarket = searchParams.get("market");
+  const market: Exclude<EspiMarket, "UNKNOWN"> = requestedMarket === "NEWCONNECT" ? "NEWCONNECT" : "GPW";
+  const requestedScope = searchParams.get("scope");
   return {
-    scope: searchParams.get("scope") === "all" ? "all" : "mine",
+    scope: requestedScope === "all" || requestedScope === "watchlist" || requestedScope === "portfolio"
+      ? requestedScope
+      : "mine",
+    market,
     cursor: searchParams.get("cursor")?.trim() || undefined,
     limit: Number.isFinite(requestedLimit)
       ? Math.min(Math.max(Math.trunc(requestedLimit), 1), ESPI_MAX_LIMIT)

@@ -1422,9 +1422,8 @@ export const synchronizeGlobalGeneralMeetings = ({
             OR report.title ILIKE '%waln%zgromadz%'
             OR report.source_title ~* '(^|[^[:alnum:]])(ZWZ|NWZ)([^[:alnum:]]|$)'
             OR report.title ~* '(^|[^[:alnum:]])(ZWZ|NWZ)([^[:alnum:]]|$)'
-          )
+        )
         ORDER BY report.published_at ASC, report.source_id ASC
-        LIMIT 1000
       `,
       [publishedAfter]
     );
@@ -1522,15 +1521,20 @@ export const getGlobalGeneralMeetings = async ({
   toDate: string;
   canonicalKeys?: string[];
 }) => {
-  let instrumentIds: string[] | null = null;
-  if (canonicalKeys) {
-    if (canonicalKeys.length === 0) return [];
-    const instruments = await query<{ id: string }>(
+  if (canonicalKeys && canonicalKeys.length === 0) return [];
+  // The public WZA board is intentionally the Main Market GPW board. Scope is
+  // only an optional user-side filter; an unrestricted request must not leak
+  // NewConnect events into the GPW view.
+  const instruments = canonicalKeys
+    ? await query<{ id: string }>(
       "SELECT id FROM corporate_event_instruments WHERE market = 'GPW' AND canonical_key = ANY($1::text[])",
       [canonicalKeys]
+    )
+    : await query<{ id: string }>(
+      "SELECT id FROM corporate_event_instruments WHERE market = 'GPW'"
     );
-    instrumentIds = instruments.map((instrument) => instrument.id);
-  }
+  const instrumentIds = instruments.map((instrument) => instrument.id);
+  if (instrumentIds.length === 0) return [];
   return getStoredEvents(instrumentIds, fromDate, toDate, ["GENERAL_MEETING"]);
 };
 

@@ -1015,6 +1015,7 @@ export const fetchPoloniaRates = async (signal?: AbortSignal) =>
 
 export const fetchEspiFeed = async ({
   scope = "mine",
+  market = "GPW",
   cursor,
   limit = 20,
   query,
@@ -1026,7 +1027,8 @@ export const fetchEspiFeed = async ({
   dateTo,
   signal,
 }: {
-  scope?: "mine" | "all";
+  scope?: "mine" | "all" | "watchlist" | "portfolio";
+  market?: "GPW" | "NEWCONNECT";
   cursor?: string;
   limit?: number;
   query?: string;
@@ -1038,7 +1040,7 @@ export const fetchEspiFeed = async ({
   dateTo?: string;
   signal?: AbortSignal;
 }) => {
-  const params = new URLSearchParams({ scope, limit: String(limit) });
+  const params = new URLSearchParams({ scope, market, limit: String(limit) });
   for (const [key, value] of Object.entries({ cursor, query, company, ticker, category, reportType, dateFrom, dateTo })) {
     if (value) params.set(key, value);
   }

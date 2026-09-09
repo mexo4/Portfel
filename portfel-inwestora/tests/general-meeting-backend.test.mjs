@@ -142,7 +142,10 @@ test("global WZA projection is independent from portfolio membership and logs sy
   assert.match(provider, /corporate_events_projection_status/);
   assert.match(provider, /\[WZA SYNC\] fetched=/);
   assert.match(provider, /for \(const report of reports\)/);
+  assert.doesNotMatch(provider, /ORDER BY report\.published_at ASC, report\.source_id ASC\s+LIMIT 1000/);
+  assert.match(provider, /SELECT id FROM corporate_event_instruments WHERE market = 'GPW'/);
   assert.match(api, /scope === "all"\s*\? \[\]/);
+  assert.match(api, /addCalendarMonths\(today, 12\)/);
   assert.match(api, /instrument\.watched/);
   assert.match(api, /instrument\.held/);
 });

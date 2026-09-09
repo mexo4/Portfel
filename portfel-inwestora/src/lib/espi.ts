@@ -22,6 +22,8 @@ export const ESPI_REPORT_TYPES = [
 ] as const;
 
 export type EspiReportType = (typeof ESPI_REPORT_TYPES)[number];
+export const ESPI_MARKETS = ["GPW", "NEWCONNECT", "UNKNOWN"] as const;
+export type EspiMarket = (typeof ESPI_MARKETS)[number];
 export type EspiTrackingSource = "PORTFOLIO" | "WATCHLIST" | "PORTFOLIO_AND_WATCHLIST";
 export type EspiSourceStatus =
   | "SUCCESS"
@@ -42,6 +44,7 @@ export type EspiReportSummary = {
   id: string;
   issuerName: string;
   ticker?: string;
+  market: EspiMarket;
   mexoInstrumentId?: string;
   reportNumber?: string;
   reportType: EspiReportType;
@@ -93,6 +96,7 @@ export type PapEspiListCandidate = {
   reportType?: EspiReportType;
   title?: string;
   sourceKind?: "GPW" | "NEWCONNECT" | "PAP_MEDIAROOM";
+  market?: EspiMarket;
 };
 
 export type ParsedPapEspiReport = {
@@ -102,6 +106,7 @@ export type ParsedPapEspiReport = {
   issuerName: string;
   sourceTicker?: string;
   sourceIsin?: string;
+  market: EspiMarket;
   reportNumber?: string;
   reportType: EspiReportType;
   publishedAt: string;
@@ -340,6 +345,7 @@ export const parseGpwEspiList = (
       reportType,
       title,
       sourceKind,
+      market: sourceKind,
     });
   }
 
@@ -544,6 +550,7 @@ export const parsePapEspiReport = (
     issuerName: identity.issuerName,
     sourceTicker: taggedIssuer.ticker,
     sourceIsin: taggedIssuer.isin,
+    market: candidate.market ?? "UNKNOWN",
     reportNumber,
     reportType,
     publishedAt,
@@ -628,6 +635,7 @@ export const parseGpwEspiReport = (
     issuerName,
     sourceTicker: candidate.sourceTicker,
     sourceIsin: candidate.sourceIsin,
+    market: candidate.market ?? "UNKNOWN",
     reportNumber,
     reportType,
     publishedAt,

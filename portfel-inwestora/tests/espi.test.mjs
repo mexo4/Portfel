@@ -98,6 +98,7 @@ test("official GPW list/detail parsing preserves geru id, ISIN, seconds and norm
   `);
   assert.equal(list.candidates.length, 1);
   assert.equal(list.candidates[0].sourceId, "gpw:496523");
+  assert.equal(list.candidates[0].market, "GPW");
   assert.equal(list.candidates[0].sourceIsin, "PLTWRNV00013");
   assert.equal(list.candidates[0].sourcePublishedAt, "2026-09-05T11:32:03.000Z");
 
@@ -128,6 +129,7 @@ test("NewConnect uses a separate stable source namespace while retaining ESPI-on
   `, { baseUrl: "https://newconnect.pl", sourcePrefix: "newconnect", sourceKind: "NEWCONNECT" });
   assert.equal(parsed.candidates.length, 1);
   assert.equal(parsed.candidates[0].sourceId, "newconnect:243663");
+  assert.equal(parsed.candidates[0].market, "NEWCONNECT");
   assert.equal(parsed.candidates[0].sourceUrl, "https://newconnect.pl/komunikat?geru_id=243663");
 });
 
@@ -237,11 +239,14 @@ test("source failures and pagination filters are normalized without unbounded li
   assert.equal(classifyEspiHttpStatus(404), "NOT_FOUND");
   assert.equal(classifyEspiHttpStatus(429), "TEMPORARILY_UNAVAILABLE");
   assert.equal(classifyEspiHttpStatus(502), "TEMPORARILY_UNAVAILABLE");
-  const filters = validateEspiFeedFilters(new URLSearchParams("scope=all&limit=not-a-number&category=DIVIDEND&dateFrom=2026-08-01"));
+  const filters = validateEspiFeedFilters(new URLSearchParams("scope=all&market=NEWCONNECT&limit=not-a-number&category=DIVIDEND&dateFrom=2026-08-01"));
   assert.equal(filters.scope, "all");
+  assert.equal(filters.market, "NEWCONNECT");
   assert.equal(filters.category, "DIVIDEND");
   assert.equal(filters.dateFrom, "2026-08-01");
   assert.equal(filters.limit, 20);
+  assert.equal(validateEspiFeedFilters(new URLSearchParams("scope=watchlist")).scope, "watchlist");
+  assert.equal(validateEspiFeedFilters(new URLSearchParams("scope=portfolio")).scope, "portfolio");
 });
 
 test("ESPI is exposed as a Tester market route and an optional, non-default Dashboard 2.0 widget", async () => {
@@ -262,5 +267,7 @@ test("ESPI is exposed as a Tester market route and an optional, non-default Dash
   assert.match(detail, /correctionOfReportId/);
   assert.match(apiRoute, /after\(async \(\) =>/);
   assert.match(db, /UNIQUE \(source, source_id\)/);
+  assert.match(db, /market TEXT NOT NULL DEFAULT 'UNKNOWN'/);
+  assert.match(db, /idx_espi_reports_market_published/);
   assert.match(db, /idx_espi_reports_search/);
 });

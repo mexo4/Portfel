@@ -61,9 +61,9 @@ const INITIAL_BACKFILL_PAGES = 2;
 const ESPI_BACKFILL_PAGE_LIMIT = 12;
 const ESPI_OVERLAP_DAYS = 4;
 // The official exchange endpoints paginate their newest reports. Walk the
-// pages until the requested rolling repair horizon is reached; a generous
-// circuit breaker only protects a degraded source from an endless response.
-const ESPI_OFFICIAL_OVERLAP_PAGE_LIMIT = 24;
+// pages until the requested rolling repair horizon is reached. A repeated
+// page is treated as an exhausted/degraded pagination stream, so this never
+// relies on an arbitrary first-N-pages limit.
 const ESPI_OFFICIAL_REPAIR_DAYS = 370;
 const ESPI_FETCH_ATTEMPTS = 2;
 const ARTICLE_CONCURRENCY = 4;
@@ -971,8 +971,8 @@ export const synchronizePapEspi = async ({
       // the old fixed first three pages.
       const officialRepairFrom = addDays(today, -ESPI_OFFICIAL_REPAIR_DAYS);
       for (const source of availableOfficialSources) {
-        for (let page = 1; page <= ESPI_OFFICIAL_OVERLAP_PAGE_LIMIT; page += 1) {
-          const offset = page * 50;
+        const seenPageIds = new Set<string>();
+        for (let offset = 50; ; offset += 50) {
           const response = await source.fetchList({ offset });
           if (response.status !== "SUCCESS") {
             errors += 1;
@@ -982,11 +982,20 @@ export const synchronizePapEspi = async ({
           pagesRead += 1;
           const pageCandidates = source.parseList(response.document).candidates;
           candidates.push(...pageCandidates);
+          const introducedNewCandidate = pageCandidates.some((candidate) => {
+            if (seenPageIds.has(candidate.sourceId)) return false;
+            seenPageIds.add(candidate.sourceId);
+            return true;
+          });
           const oldest = pageCandidates
             .map((candidate) => candidate.sourcePublishedAt?.slice(0, 10))
             .filter((value): value is string => Boolean(value))
             .sort()[0];
-          if (pageCandidates.length < 50 || (oldest && oldest < officialRepairFrom)) break;
+          if (
+            pageCandidates.length < 50 ||
+            !introducedNewCandidate ||
+            (oldest && oldest < officialRepairFrom)
+          ) break;
         }
         for (let date = overlapFrom; date <= today; date = addDays(date, 1)) {
           const response = await source.fetchList({ date: toGpwDate(date) });

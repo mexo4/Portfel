@@ -87,17 +87,39 @@ jobs:
           # SSH session) before Next can report a useful build error.
           CIRCLE_NODE_TOTAL=2 \
           NEXT_TELEMETRY_DISABLED=1 \
+          MEXO_BUILD_REVISION="$(git rev-parse HEAD)" \
           NODE_OPTIONS="--max-old-space-size=768" \
             npm run build
+
+          test -f "$REPO/portfel-inwestora/.next/BUILD_ID"
 
           echo "Restarting Mexo..."
           sudo -n systemctl restart mexo
 
+          expected_revision="$(git rev-parse HEAD)"
+          service_pid="$(sudo -n systemctl show --property MainPID --value mexo)"
+
+          if [ -z "$service_pid" ] || [ "$service_pid" = "0" ]; then
+            echo "ERROR: Mexo service has no running MainPID after restart."
+            exit 1
+          fi
+
+          service_cwd="$(readlink -f "/proc/$service_pid/cwd")"
+          case "$service_cwd" in
+            "$REPO"/*) ;;
+            *)
+              echo "ERROR: Mexo service is running outside the deployed repository."
+              exit 1
+              ;;
+          esac
+
           echo "Waiting for application..."
 
           for attempt in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:3000/login >/dev/null; then
-              echo "Mexo health check passed."
+            running_revision="$(curl -fsSI http://127.0.0.1:3000/login | tr -d '\r' | awk -F': ' 'tolower($1) == "x-mexo-revision" { print $2 }')"
+
+            if [ "$running_revision" = "$expected_revision" ]; then
+              echo "Mexo health check passed for revision $running_revision."
               exit 0
             fi
 

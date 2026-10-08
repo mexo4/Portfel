@@ -109,7 +109,9 @@ jobs:
           # coupling deploy success to private loopback/proxy topology on the
           # Oracle host while still requiring the exact newly built revision.
           for attempt in $(seq 1 180); do
-            running_revision="$(curl -fsSI --max-time 15 https://mexo.com.pl/login | tr -d '\r' | awk -F': ' 'tolower($1) == "x-mexo-revision" { print $2 }')"
+            # A restart briefly yields a connection error or 5xx. That is an
+            # expected transient state, not a reason to abort the retry loop.
+            running_revision="$(curl -fsSI --max-time 15 https://mexo.com.pl/login 2>/dev/null | tr -d '\r' | awk -F': ' 'tolower($1) == "x-mexo-revision" { print $2 }' || true)"
 
             if [ "$running_revision" = "$EXPECTED_REVISION" ]; then
               echo "Mexo public health check passed for revision $running_revision."

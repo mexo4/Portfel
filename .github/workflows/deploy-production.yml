@@ -96,34 +96,28 @@ jobs:
           echo "Restarting Mexo..."
           sudo -n systemctl restart mexo
 
-          expected_revision="$(git rev-parse HEAD)"
+          echo "Mexo restart requested."
+          REMOTE
 
-          # The deployment user is deliberately granted only the restart
-          # operation. Do not depend on broader systemd/PID inspection here:
-          # the running application's revision header below is the direct,
-          # least-privilege proof that the intended build is serving traffic.
+      - name: Verify public revision
+        env:
+          EXPECTED_REVISION: ${{ github.sha }}
+        run: |
+          set -euo pipefail
 
-          echo "Waiting for application..."
-
-          # A production cold start can take longer than one minute after a
-          # dependency install and restart on the small Oracle instance. Keep
-          # waiting for the exact build revision rather than marking an
-          # otherwise successful rollout as failed.
+          # Verify the public route users actually receive. This avoids
+          # coupling deploy success to private loopback/proxy topology on the
+          # Oracle host while still requiring the exact newly built revision.
           for attempt in $(seq 1 180); do
-            running_revision="$(curl -fsSI http://127.0.0.1:3000/login | tr -d '\r' | awk -F': ' 'tolower($1) == "x-mexo-revision" { print $2 }')"
+            running_revision="$(curl -fsSI --max-time 15 https://mexo.com.pl/login | tr -d '\r' | awk -F': ' 'tolower($1) == "x-mexo-revision" { print $2 }')"
 
-            if [ "$running_revision" = "$expected_revision" ]; then
-              echo "Mexo health check passed for revision $running_revision."
+            if [ "$running_revision" = "$EXPECTED_REVISION" ]; then
+              echo "Mexo public health check passed for revision $running_revision."
               exit 0
             fi
 
             sleep 2
           done
 
-          echo "ERROR: Mexo health check failed."
-
-          sudo -n systemctl status mexo --no-pager || true
-          sudo -n journalctl -u mexo -n 100 --no-pager || true
-
+          echo "ERROR: public Mexo revision did not reach $EXPECTED_REVISION."
           exit 1
-          REMOTE

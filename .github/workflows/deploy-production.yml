@@ -104,14 +104,10 @@ jobs:
             exit 1
           fi
 
-          service_cwd="$(readlink -f "/proc/$service_pid/cwd")"
-          case "$service_cwd" in
-            "$REPO"/*) ;;
-            *)
-              echo "ERROR: Mexo service is running outside the deployed repository."
-              exit 1
-              ;;
-          esac
+          # MainPID may point at the systemd/npm wrapper rather than the Node
+          # process, so its working directory is not a reliable deployment
+          # signal. The revision header checked below is emitted by the
+          # running Next application and verifies the exact built code.
 
           echo "Waiting for application..."
 

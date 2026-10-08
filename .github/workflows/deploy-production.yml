@@ -97,17 +97,11 @@ jobs:
           sudo -n systemctl restart mexo
 
           expected_revision="$(git rev-parse HEAD)"
-          service_pid="$(sudo -n systemctl show --property MainPID --value mexo)"
 
-          if [ -z "$service_pid" ] || [ "$service_pid" = "0" ]; then
-            echo "ERROR: Mexo service has no running MainPID after restart."
-            exit 1
-          fi
-
-          # MainPID may point at the systemd/npm wrapper rather than the Node
-          # process, so its working directory is not a reliable deployment
-          # signal. The revision header checked below is emitted by the
-          # running Next application and verifies the exact built code.
+          # The deployment user is deliberately granted only the restart
+          # operation. Do not depend on broader systemd/PID inspection here:
+          # the running application's revision header below is the direct,
+          # least-privilege proof that the intended build is serving traffic.
 
           echo "Waiting for application..."
 
@@ -115,7 +109,7 @@ jobs:
           # dependency install and restart on the small Oracle instance. Keep
           # waiting for the exact build revision rather than marking an
           # otherwise successful rollout as failed.
-          for attempt in $(seq 1 90); do
+          for attempt in $(seq 1 180); do
             running_revision="$(curl -fsSI http://127.0.0.1:3000/login | tr -d '\r' | awk -F': ' 'tolower($1) == "x-mexo-revision" { print $2 }')"
 
             if [ "$running_revision" = "$expected_revision" ]; then

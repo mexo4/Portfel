@@ -41,10 +41,10 @@ test("asset submission has a synchronous single-flight guard and immediate acces
 test("local scripts use the system trust store, bind to IPv4 and retain stable webpack", () => {
   assert.equal(
     packageJson.scripts.dev,
-    "node --use-system-ca ./node_modules/next/dist/bin/next dev --webpack --hostname 127.0.0.1"
+    "node --use-system-ca ../node_modules/next/dist/bin/next dev --webpack --hostname 127.0.0.1"
   );
   assert.equal(
     packageJson.scripts.start,
-    "node --use-system-ca ./node_modules/next/dist/bin/next start --hostname 127.0.0.1"
+    "node --use-system-ca ../node_modules/next/dist/bin/next start --hostname 127.0.0.1"
   );
 });

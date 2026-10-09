@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "node --use-system-ca ./node_modules/next/dist/bin/next dev --webpack --hostname 127.0.0.1",
+    "dev": "node --use-system-ca ../node_modules/next/dist/bin/next dev --webpack --hostname 127.0.0.1",
     "build": "next build",
     "start": "node --use-system-ca ../node_modules/next/dist/bin/next start --hostname 127.0.0.1",
     "test": "node --experimental-strip-types --import ./tests/register-alias-loader.mjs --test tests/**/*.test.mjs",

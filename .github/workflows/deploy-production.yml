@@ -98,11 +98,23 @@ jobs:
           REPO="/opt/mexo/repo"
           APP="/opt/mexo/repo/portfel-inwestora"
           EXPECTED_BRANCH="najlepsza-wersja"
+          APPROVED_MIGRATION_BRANCH="migration/oracle-arm64-security"
+          APPROVED_MIGRATION_REVISION="ee8eefd77c558f1620822438de8d100e24a41b74"
           CURRENT_BRANCH="$(git -C "$REPO" branch --show-current)"
           if [ "$CURRENT_BRANCH" != "$EXPECTED_BRANCH" ]; then
-            echo "ERROR: target repository is on ${CURRENT_BRANCH:-detached HEAD}, expected $EXPECTED_BRANCH; no production files were changed."
+            CURRENT_REVISION="$(git -C "$REPO" rev-parse HEAD)"
+            if [ "$CURRENT_BRANCH" != "$APPROVED_MIGRATION_BRANCH" ] || [ "$CURRENT_REVISION" != "$APPROVED_MIGRATION_REVISION" ]; then
+              echo "ERROR: target repository is on ${CURRENT_BRANCH:-detached HEAD} at ${CURRENT_REVISION:0:12}; it is neither $EXPECTED_BRANCH nor the verified Oracle migration starting point. No production files were changed."
+              exit 1
+            fi
+            echo "Verified clean, approved Oracle migration starting point; deployment will preserve its branch and rollback revision."
+          fi
+          SOURCE_REVISION="$(git -C "$REPO" ls-remote origin "refs/heads/$EXPECTED_BRANCH" | awk 'NR == 1 { print $1 }')"
+          if ! [[ "$SOURCE_REVISION" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "ERROR: Oracle cannot safely read the requested GitHub source branch; no production files were changed."
             exit 1
           fi
+          echo "Verified read-only GitHub access to $EXPECTED_BRANCH at ${SOURCE_REVISION:0:12}."
           if [ -n "$(git -C "$REPO" status --porcelain --untracked-files=no)" ]; then
             echo "ERROR: target repository contains tracked local changes; no production files were changed."
             exit 1
@@ -271,14 +283,20 @@ jobs:
             exit 1
           fi
           CURRENT_BRANCH="$(git branch --show-current)"
+          PREVIOUS_REVISION="$(git rev-parse HEAD)"
           if [ "$CURRENT_BRANCH" != "$BRANCH" ]; then
-            echo "ERROR: expected production branch $BRANCH, found ${CURRENT_BRANCH:-detached HEAD}; refusing to deploy."
-            exit 1
+            APPROVED_MIGRATION_BRANCH="migration/oracle-arm64-security"
+            APPROVED_MIGRATION_REVISION="ee8eefd77c558f1620822438de8d100e24a41b74"
+            if [ "$CURRENT_BRANCH" != "$APPROVED_MIGRATION_BRANCH" ] || [ "$PREVIOUS_REVISION" != "$APPROVED_MIGRATION_REVISION" ]; then
+              echo "ERROR: expected production branch $BRANCH or the exact verified Oracle migration start, found ${CURRENT_BRANCH:-detached HEAD} at ${PREVIOUS_REVISION:0:12}; refusing to deploy."
+              exit 1
+            fi
+            echo "Preserving verified migration branch $CURRENT_BRANCH at $PREVIOUS_REVISION while switching to $BRANCH."
+          else
+            echo "Preflight passed: production branch is $CURRENT_BRANCH."
           fi
-          echo "Preflight passed: production branch is $CURRENT_BRANCH."
 
           git fetch origin "$BRANCH"
-          PREVIOUS_REVISION="$(git rev-parse HEAD)"
           BUILD_REVISION="$(git rev-parse "origin/$BRANCH")"
           if ! git -C "$REPO" diff --quiet "$PREVIOUS_REVISION" "$BUILD_REVISION" -- package.json package-lock.json portfel-inwestora/package.json; then
             echo "ERROR: dependency manifests changed. Refusing an in-place npm install while the old release is live."

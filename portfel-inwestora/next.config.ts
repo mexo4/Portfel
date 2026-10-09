@@ -22,9 +22,6 @@ const nextConfig: NextConfig = {
       headers: [{ key: "X-Mexo-Revision", value: releaseRevision }],
     },
   ],
-  experimental: {
-    turbopackUseSystemTlsCerts: true,
-  },
   turbopack: {
     root: workspaceRoot,
   },

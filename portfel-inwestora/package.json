@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "node --use-system-ca ./node_modules/next/dist/bin/next dev --webpack --hostname 127.0.0.1",
     "build": "next build",
-    "start": "node --use-system-ca ./node_modules/next/dist/bin/next start --hostname 127.0.0.1",
+    "start": "node --use-system-ca ../node_modules/next/dist/bin/next start --hostname 127.0.0.1",
     "test": "node --experimental-strip-types --import ./tests/register-alias-loader.mjs --test tests/**/*.test.mjs",
     "migrate:sqlite-to-postgres": "node --experimental-strip-types scripts/migrate-sqlite-to-postgres.ts",
     "migrate:sqlite-to-postgres:apply": "node --experimental-strip-types scripts/migrate-sqlite-to-postgres.ts --apply",
@@ -25,7 +25,7 @@
     "@dnd-kit/utilities": "^3.2.2",
     "bcryptjs": "^3.0.3",
     "fflate": "^0.8.3",
-    "next": "16.1.6",
+    "next": "16.4.0",
     "pdfjs-dist": "^6.2.108",
     "pg": "^8.22.0",
     "react": "^19.2.6",
@@ -35,6 +35,7 @@
     "tesseract.js": "^7.0.0"
   },
   "optionalDependencies": {
+    "@tailwindcss/oxide-linux-arm64-gnu": "4.2.1",
     "@tailwindcss/oxide-linux-x64-gnu": "4.2.1",
     "lightningcss-linux-x64-gnu": "1.31.1"
   },
@@ -48,7 +49,7 @@
     "@vinext/cloudflare": "^1.0.0-beta.7",
     "@vitejs/plugin-rsc": "^0.5.34",
     "eslint": "^9",
-    "eslint-config-next": "16.1.6",
+    "eslint-config-next": "16.4.0",
     "react-server-dom-webpack": "^19.2.6",
     "tailwindcss": "^4",
     "typescript": "^5",

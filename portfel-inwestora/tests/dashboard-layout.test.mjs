@@ -92,7 +92,9 @@ test("shared read model calculates daily percentage once and supplies every widg
   };
   const dividend = {
     id: "dividend-1", instrumentId: "instrument-1", ticker: "DNP.PL", companyName: "Dino Polska",
-    eventType: "UPCOMING_DIVIDEND", eventDate: "2027-09-10", paymentDate: "2027-09-12",
+    eventType: "UPCOMING_DIVIDEND",
+    eventDate: new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10),
+    paymentDate: new Date(Date.now() + 37 * 86400000).toISOString().slice(0, 10),
     status: "CONFIRMED", active: true, discoveredAt: "2026-01-01", updatedAt: "2026-01-01",
     trackingSource: "HELD_AND_WATCHLIST",
   };

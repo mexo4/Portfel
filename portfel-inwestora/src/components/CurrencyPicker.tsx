@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { CurrencyCode } from "@/types/portfolio";
 
 type CurrencyPickerProps = {
@@ -86,7 +87,7 @@ export default function CurrencyPicker({
         <span className="import-platform-trigger-action">Zmien</span>
       </button>
 
-      {isOpen ? (
+      {isOpen ? createPortal(
         <div
           className="import-platform-modal-backdrop"
           role="presentation"
@@ -124,7 +125,7 @@ export default function CurrencyPicker({
               />
             </label>
 
-            <div className="import-platform-card-grid currency-picker-grid">
+            <div className="import-platform-card-grid currency-picker-grid mexo-option-scroll-area">
               {filteredOptions.map((currency) => (
                 <button
                   key={currency}
@@ -154,7 +155,8 @@ export default function CurrencyPicker({
               ) : null}
             </div>
           </section>
-        </div>
+        </div>,
+        document.body
       ) : null}
     </div>
   );

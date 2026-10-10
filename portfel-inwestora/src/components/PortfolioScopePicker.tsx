@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { getPortfolioScopeLabel, normalizePortfolioScope, type PortfolioScopeSelection } from "@/lib/portfolio-selection";
 import { PORTFOLIO_ACCOUNT_TYPE_LABELS, normalizePortfolioAccountType } from "@/lib/portfolio-account-rules";
 import type { InvestmentPortfolio } from "@/types/portfolio";
@@ -91,10 +92,10 @@ export default function PortfolioScopePicker({ portfolios, selection, disabled =
       <span className="portfolio-scope-trigger-chevron" aria-hidden="true">⌄</span>
     </button>
 
-    {isOpen ? <div className="portfolio-scope-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) close(); }}>
+    {isOpen ? createPortal(<div className={`portfolio-scope-backdrop${mobile ? " is-mobile" : ""}`} role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) close(); }}>
       <section ref={dialogRef} tabIndex={-1} className="portfolio-scope-dialog" role="dialog" aria-modal="true" aria-labelledby="portfolio-scope-title">
         <header className="portfolio-scope-dialog-head"><span className="portfolio-scope-dialog-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M4 7h16M4 12h16M4 17h16" /><circle cx="8" cy="7" r="2" /><circle cx="15" cy="12" r="2" /></svg></span><div><p className="eyebrow">Zakres analizy</p><h2 id="portfolio-scope-title">Wybierz portfele</h2><p>Wspólny widok pozycji, wyników, wykresów i przepływów.</p></div><button type="button" className="portfolio-scope-close" onClick={close} aria-label="Zamknij wybór portfeli">×</button></header>
-        <div className="portfolio-scope-list">
+        <div className="portfolio-scope-list mexo-option-scroll-area">
           <label className={`portfolio-scope-option portfolio-scope-option-all${draftAll ? " is-selected" : ""}`}>
             <input type="radio" name="portfolio-scope" checked={draftAll} onChange={() => setDraftAll(true)} />
             <span className="portfolio-scope-option-check" aria-hidden="true">✓</span>
@@ -116,6 +117,6 @@ export default function PortfolioScopePicker({ portfolios, selection, disabled =
         </div>
         <footer className="portfolio-scope-dialog-foot"><span aria-live="polite">{draftAll ? portfolios.length : draftIds.length} {draftAll || draftIds.length > 1 ? "portfeli" : draftIds.length === 1 ? "portfel" : "wybranych"}</span><div><button type="button" className="ghost-button" onClick={close}>Anuluj</button><button type="button" className="primary-button" onClick={apply} disabled={!draftAll && draftIds.length === 0}>Zastosuj</button></div></footer>
       </section>
-    </div> : null}
+    </div>, document.body) : null}
   </div>;
 }

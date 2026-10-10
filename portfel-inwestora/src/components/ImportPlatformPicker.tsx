@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { CRYPTO_UI_ENABLED } from "@/lib/constants";
 import type { BrokerImportPreset } from "@/lib/import-operations";
 
@@ -859,7 +860,7 @@ export default function ImportPlatformPicker({
         <span className="import-platform-trigger-action">Zmien</span>
       </button>
 
-      {isOpen ? (
+      {isOpen ? createPortal(
         <div
           className="import-platform-modal-backdrop"
           role="presentation"
@@ -897,7 +898,7 @@ export default function ImportPlatformPicker({
               />
             </label>
 
-            <div className="import-platform-sections">
+            <div className="import-platform-sections mexo-option-scroll-area">
               {recentPlatforms.length > 0 ? (
                 <div className="import-platform-section">
                   <div className="import-platform-section-head">
@@ -946,7 +947,8 @@ export default function ImportPlatformPicker({
               ) : null}
             </div>
           </section>
-        </div>
+        </div>,
+        document.body
       ) : null}
     </div>
   );

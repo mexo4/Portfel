@@ -71,6 +71,42 @@ test("the global portfolio scope picker replaces the legacy single-portfolio dro
   assert.match(shell, /onPortfolioScopeChange: \(selection: PortfolioScopeSelection\)/);
 });
 
+test("portfolio and currency overlays escape transformed ancestors and use contained option scrolling", async () => {
+  const [portfolioPicker, currencyPicker, importPicker, styles] = await Promise.all([
+    readSource("src/components/PortfolioScopePicker.tsx"),
+    readSource("src/components/CurrencyPicker.tsx"),
+    readSource("src/components/ImportPlatformPicker.tsx"),
+    readSource("src/app/globals.css"),
+  ]);
+
+  assert.match(portfolioPicker, /import\s*\{\s*createPortal\s*\}\s*from "react-dom"/);
+  assert.match(portfolioPicker, /createPortal\([\s\S]*?document\.body\)/);
+  assert.match(portfolioPicker, /portfolio-scope-backdrop\$\{mobile \? " is-mobile"/);
+  assert.match(currencyPicker, /import\s*\{\s*createPortal\s*\}\s*from "react-dom"/);
+  assert.match(currencyPicker, /createPortal\([\s\S]*?document\.body/);
+  assert.match(currencyPicker, /currency-picker-grid mexo-option-scroll-area/);
+  assert.match(importPicker, /import\s*\{\s*createPortal\s*\}\s*from "react-dom"/);
+  assert.match(importPicker, /createPortal\([\s\S]*?document\.body/);
+  assert.match(importPicker, /import-platform-sections mexo-option-scroll-area/);
+  assert.match(styles, /\.mexo-option-scroll-area\s*\{[\s\S]*?overflow-x:\s*hidden;[\s\S]*?overflow-y:\s*auto;[\s\S]*?overscroll-behavior:\s*contain;[\s\S]*?scrollbar-gutter:\s*stable;/);
+  assert.match(styles, /\.currency-picker-grid\s*\{[\s\S]*?padding:\s*8px;/);
+  assert.match(styles, /\.import-platform-card-grid\s*\{[^}]*grid-template-columns:\s*repeat\(auto-fit,\s*minmax\(min\(260px,\s*100%\),\s*1fr\)\)/);
+});
+
+test("aggregate overview metrics use scoped stacked label and value styling", async () => {
+  const [view, styles] = await Promise.all([
+    readSource("src/components/WorkspaceRouteViews.tsx"),
+    readSource("src/app/globals.css"),
+  ]);
+
+  assert.match(view, /workspace-performance-metric-grid portfolio-scope-overview-metrics mt-5/);
+  assert.match(styles, /\.portfolio-scope-overview-metrics\s*\{[^}]*display:\s*grid/);
+  assert.match(styles, /\.portfolio-scope-overview-metrics > article > span\s*\{[^}]*display:\s*block/);
+  assert.match(styles, /\.portfolio-scope-overview-metrics > article > strong\s*\{[^}]*display:\s*block/);
+  assert.match(styles, /\.portfolio-scope-overview-metrics > article > strong\s*\{[^}]*font-variant-numeric:\s*tabular-nums/);
+  assert.match(styles, /\.portfolio-scope-overview-metrics > article > strong:not\(\.tone-positive\):not\(\.tone-negative\)\s*\{[^}]*color:\s*var\(--text\)/);
+});
+
 test("dividend payment columns have a complete fixed-table budget", async () => {
   const styles = await readSource("src/app/globals.css");
 

@@ -2649,13 +2649,38 @@ textarea {
   color: #8493a3;
 }
 
+.mexo-option-scroll-area {
+  min-width: 0;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  scrollbar-color: var(--line-strong) transparent;
+  scrollbar-width: thin;
+  -webkit-overflow-scrolling: touch;
+}
+
+.mexo-option-scroll-area::-webkit-scrollbar {
+  width: 8px;
+}
+
+.mexo-option-scroll-area::-webkit-scrollbar-track {
+  margin-block: 8px;
+  background: transparent;
+}
+
+.mexo-option-scroll-area::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: var(--line-strong);
+  background-clip: padding-box;
+}
+
 .import-platform-sections {
   display: grid;
   gap: 18px;
-  min-height: 0;
-  overflow-y: auto;
-  padding-right: 4px;
-  overscroll-behavior: contain;
+  padding: 4px 8px;
 }
 
 .import-platform-section {
@@ -2698,7 +2723,17 @@ textarea {
 .import-platform-card-grid {
   display: grid;
   gap: 10px;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr));
+}
+
+.currency-picker-modal {
+  border-radius: 18px;
+}
+
+.currency-picker-grid {
+  align-content: start;
+  padding: 8px;
+  scroll-padding-block: 8px;
 }
 
 .import-platform-card {
@@ -9193,7 +9228,7 @@ textarea {
   cursor: pointer;
 }
 
-.portfolio-scope-list { min-height: 0; overflow: auto; padding: 13px 16px; overscroll-behavior: contain; }
+.portfolio-scope-list { padding: 13px 16px; scroll-padding-block: 13px; }
 .portfolio-scope-option { position: relative; display: flex; min-height: 58px; align-items: center; gap: 11px; border: 1px solid transparent; border-radius: 11px; padding: 8px 10px; cursor: pointer; }
 .portfolio-scope-option:hover { background: var(--surface-soft); }
 .portfolio-scope-option.is-selected { border-color: rgba(15, 118, 110, .2); background: var(--accent-soft); }
@@ -9819,10 +9854,10 @@ textarea {
   .portfolio-scope-control.is-mobile .portfolio-scope-trigger-icon { flex-basis: 27px; width: 27px; height: 27px; }
   .portfolio-scope-control.is-mobile .portfolio-scope-trigger-copy strong { font-size: .72rem; }
   .portfolio-scope-control.is-mobile .portfolio-scope-trigger-copy small { display: none; }
-  .portfolio-scope-control.is-mobile .portfolio-scope-backdrop { align-items: end; padding: 8px 0 0; }
-  .portfolio-scope-control.is-mobile .portfolio-scope-dialog { width: 100%; max-height: min(88dvh, 740px); border-right: 0; border-bottom: 0; border-left: 0; border-radius: 18px 18px 0 0; padding-bottom: env(safe-area-inset-bottom, 0px); }
-  .portfolio-scope-control.is-mobile .portfolio-scope-dialog-head { padding: 17px 16px 14px; }
-  .portfolio-scope-control.is-mobile .portfolio-scope-dialog-foot { padding-inline: 16px; }
+  .portfolio-scope-backdrop.is-mobile { align-items: end; padding: 8px 0 0; }
+  .portfolio-scope-backdrop.is-mobile .portfolio-scope-dialog { width: 100%; max-height: min(88dvh, 740px); border-right: 0; border-bottom: 0; border-left: 0; border-radius: 18px 18px 0 0; padding-bottom: env(safe-area-inset-bottom, 0px); }
+  .portfolio-scope-backdrop.is-mobile .portfolio-scope-dialog-head { padding: 17px 16px 14px; }
+  .portfolio-scope-backdrop.is-mobile .portfolio-scope-dialog-foot { padding-inline: 16px; }
 
   .workspace-mobile-quick-action {
     display: grid;
@@ -9928,7 +9963,11 @@ textarea {
 .portfolio-scope-overview-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
 .portfolio-scope-overview-head > div { min-width: 0; }
 .portfolio-scope-overview-head > span { flex: 0 0 auto; border: 1px solid var(--line); border-radius: 999px; padding: 6px 10px; color: var(--muted); background: var(--surface-soft); font-size: .7rem; font-weight: 750; }
-.portfolio-scope-overview .workspace-performance-metric-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.portfolio-scope-overview-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.portfolio-scope-overview-metrics > article { display: grid; min-width: 0; align-content: start; gap: 8px; border: 1px solid var(--line); border-radius: 14px; padding: 15px 16px; background: var(--surface-soft); }
+.portfolio-scope-overview-metrics > article > span { display: block; color: var(--muted); font-size: .72rem; font-weight: 700; line-height: 1.35; }
+.portfolio-scope-overview-metrics > article > strong { display: block; min-width: 0; font-size: clamp(1.05rem, 2vw, 1.35rem); font-variant-numeric: tabular-nums; font-weight: 800; letter-spacing: -.035em; line-height: 1.2; overflow-wrap: anywhere; }
+.portfolio-scope-overview-metrics > article > strong:not(.tone-positive):not(.tone-negative) { color: var(--text); }
 .portfolio-scope-breakdown { display: grid; gap: 6px; }
 .portfolio-scope-breakdown > button { display: grid; grid-template-columns: minmax(130px, 1.3fr) minmax(100px, 1fr) 18px; align-items: center; gap: 12px; border: 1px solid transparent; border-radius: 10px; padding: 9px 10px; color: inherit; background: transparent; text-align: left; cursor: pointer; }
 .portfolio-scope-breakdown > button:hover { border-color: var(--line); background: var(--surface-soft); }
@@ -9947,8 +9986,9 @@ textarea {
 .workspace-aggregate-dividend-list small { color: var(--muted); font-size: .7rem; }
 
 @media (max-width: 640px) {
-  .portfolio-scope-overview .workspace-performance-metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .portfolio-scope-overview .workspace-performance-metric-grid > article:last-child { grid-column: 1 / -1; }
+  .portfolio-scope-overview-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+  .portfolio-scope-overview-metrics > article { gap: 7px; padding: 13px 12px; }
+  .portfolio-scope-overview-metrics > article:last-child { grid-column: 1 / -1; }
   .portfolio-scope-breakdown > button { grid-template-columns: minmax(0, 1fr) minmax(70px, .65fr) 14px; gap: 8px; padding-inline: 6px; }
   .workspace-aggregate-dividend-list > li { align-items: flex-start; gap: 8px; }
   .workspace-aggregate-dividend-list > li > span:last-child { max-width: 46%; }

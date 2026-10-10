@@ -147,7 +147,7 @@ function SelectedPortfolioOverview() {
   const totalValuePln = workspace.selectedPortfolioSummaries.reduce((sum, item) => sum + item.summary.totalValuePln, 0);
   return <section className="panel portfolio-scope-overview" aria-busy={isLoading}>
     <div className="portfolio-scope-overview-head"><div><p className="eyebrow">Analizowany zakres</p><h2 className="section-title">{workspace.portfolioScopeLabel}</h2><p className="section-copy">Wirtualny widok tylko do odczytu; rzeczywiste rachunki i ich transakcje pozostają rozdzielone.</p></div><span>{workspace.selectedPortfolios.length} {workspace.selectedPortfolios.length === 1 ? "portfel" : "portfeli"}</span></div>
-    <div className="workspace-performance-metric-grid mt-5">
+    <div className="workspace-performance-metric-grid portfolio-scope-overview-metrics mt-5">
       <article><span>Łączna wartość</span><strong>{formatCurrency(workspace.summaryTotalValue, workspace.activeBaseCurrency)}</strong></article>
       <article><span>Zysk / strata</span><strong className={workspace.summaryCombinedProfitLoss >= 0 ? "tone-positive" : "tone-negative"}>{formatCurrency(workspace.summaryCombinedProfitLoss, workspace.activeBaseCurrency)}</strong></article>
       <article><span>Łączna stopa zwrotu · TWR</span><strong>{isLoading ? "Wczytywanie…" : hasError ? "Niedostępna" : returnPercent === null ? "Brak wiarygodnej historii" : `${returnPercent >= 0 ? "+" : ""}${returnPercent.toLocaleString("pl-PL", { maximumFractionDigits: 2 })}%`}</strong></article>

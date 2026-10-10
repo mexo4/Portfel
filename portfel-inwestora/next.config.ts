@@ -9,6 +9,12 @@ const workspaceRoot = path.resolve(configDirectory, "..");
 const releaseRevision = process.env.MEXO_BUILD_REVISION?.trim() || "local";
 
 const nextConfig: NextConfig = {
+  // Production deploys build into a separate directory and atomically switch
+  // the runtime .next symlink only after the staged build has passed checks.
+  distDir: process.env.MEXO_BUILD_DIST_DIR?.trim() || ".next",
+  // Revision is public release metadata, embedded at build time so the health
+  // endpoint remains reliable even when systemd does not inherit build env.
+  env: { MEXO_BUILD_REVISION: releaseRevision },
   outputFileTracingRoot: workspaceRoot,
   headers: async () => [
     {

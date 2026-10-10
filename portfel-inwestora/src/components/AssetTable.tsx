@@ -21,6 +21,11 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import { useMemo, useState, type CSSProperties } from "react";
 import TruncatedText from "@/components/TruncatedText";
+import ManualAssetPriceDialog, {
+  getManualAssetPriceUpdatedAt,
+  hasManualAssetPrice,
+  isManualAssetPriceGroup,
+} from "@/components/ManualAssetPriceDialog";
 import { KIND_LABELS } from "@/lib/constants";
 import { sortPortfolioAssetGroups } from "@/lib/portfolio-position-sort";
 import {
@@ -28,10 +33,9 @@ import {
   getAssetProfitLoss,
   getAssetPurchasePriceCurrency,
   getGroupedPortfolioAssets,
-  hasAssetLivePrice,
   type PortfolioAssetGroup,
 } from "@/lib/pricing";
-import { formatCurrency, formatDate, formatNumber } from "@/lib/utils";
+import { formatCurrency, formatDate, formatDateTime, formatNumber } from "@/lib/utils";
 import type {
   AssetTableSortMode,
   CurrencyCode,
@@ -53,6 +57,11 @@ type AssetTableProps = {
   onSortModeChange: (mode: AssetTableSortMode) => void;
   onReorderGroups: (nextGroupKeys: string[]) => void;
   onRemove: (assetId: string) => void;
+  isReadOnly?: boolean;
+  isManualPricePending?: boolean;
+  manualPriceError?: string | null;
+  onUpdateManualPrice?: (group: PortfolioAssetGroup, price: number, currency: CurrencyCode) => Promise<void>;
+  onClearManualPrice?: (group: PortfolioAssetGroup) => Promise<void>;
 };
 
 type SortableGroupSectionProps = {
@@ -64,6 +73,9 @@ type SortableGroupSectionProps = {
   isManualReorderLocked: boolean;
   onToggleGroup: (groupKey: string) => void;
   onRemove: (assetId: string) => void;
+  canSetManualPrice: boolean;
+  isManualPricePending: boolean;
+  onOpenManualPrice: (group: PortfolioAssetGroup) => void;
 };
 
 const SORT_OPTIONS: Array<{
@@ -139,6 +151,9 @@ const SortableGroupSection = ({
   isManualReorderLocked,
   onToggleGroup,
   onRemove,
+  canSetManualPrice,
+  isManualPricePending,
+  onOpenManualPrice,
 }: SortableGroupSectionProps) => {
   const canDrag = isManualSortMode && !isManualReorderLocked;
   const {
@@ -157,9 +172,11 @@ const SortableGroupSection = ({
     group.currentUnitPrice !== undefined
       ? formatCurrency(group.currentUnitPrice, group.marketCurrency)
       : "brak kursu";
-  const marketValueBaseLabel = group.hasLivePrice
+  const marketValueBaseLabel = group.hasBaseValuation
     ? formatCurrency(group.marketValueBase, baseCurrency)
-    : "brak kursu";
+    : group.hasCompleteQuote ? "brak przeliczenia FX" : "brak kursu";
+  const isManualPrice = hasManualAssetPrice(group);
+  const manualPriceUpdatedAt = isManualPrice ? getManualAssetPriceUpdatedAt(group) : undefined;
   const style: CSSProperties = {
     transform: CSS.Transform.toString(transform),
     transition,
@@ -251,7 +268,7 @@ const SortableGroupSection = ({
                 {formatCurrency(group.averagePurchasePrice, group.averagePurchasePriceCurrency)}
               </span>
               <div className="table-note">
-                koszt: <span className="financial-value portfolio-number">{formatCurrency(group.costBasisBase, baseCurrency)}</span>
+                koszt: <span className="financial-value portfolio-number">{group.hasBaseValuation ? formatCurrency(group.costBasisBase, baseCurrency) : "brak przeliczenia FX"}</span>
               </div>
             </>
           )}
@@ -262,34 +279,39 @@ const SortableGroupSection = ({
           ) : (
             <>
               <span className="financial-value portfolio-financial-primary portfolio-number">{currentUnitPriceLabel}</span>
+              {isManualPrice ? (
+                <div className="table-note">
+                  Cena ręczna{manualPriceUpdatedAt ? ` · ${formatDateTime(manualPriceUpdatedAt)}` : ""}
+                </div>
+              ) : null}
               <div className="table-note">Wartość: <span className="financial-value portfolio-number">{marketValueBaseLabel}</span></div>
             </>
           )}
         </td>
         <td
           className={`portfolio-cell-profit-loss ${
-            group.hasLivePrice ? getValueTone(group.profitLossBase) : ""
+            group.hasBaseValuation ? getValueTone(group.profitLossBase) : ""
           }`}
         >
           {isDragging ? (
             <DragRowPlaceholder />
-          ) : group.hasLivePrice ? (
+          ) : group.hasBaseValuation ? (
             <span className="financial-value portfolio-number">{formatCurrency(group.profitLossBase, baseCurrency)}</span>
           ) : (
-            "brak kursu"
+            group.hasCompleteQuote ? "brak przeliczenia FX" : "brak kursu"
           )}
         </td>
         <td
           className={`portfolio-cell-profit-percent ${
-            group.hasLivePrice ? getValueTone(group.profitLossPercent) : ""
+            group.hasBaseValuation ? getValueTone(group.profitLossPercent) : ""
           }`}
         >
           {isDragging ? (
             <DragRowPlaceholder />
-          ) : group.hasLivePrice ? (
+          ) : group.hasBaseValuation ? (
             <span className="portfolio-number">{formatSignedPercent(group.profitLossPercent)}</span>
           ) : (
-            "brak kursu"
+            group.hasCompleteQuote ? "brak przeliczenia FX" : "brak kursu"
           )}
         </td>
         <td className={`portfolio-cell-daily-result ${getValueTone(group.dailyChangeBase)}`}>
@@ -336,10 +358,31 @@ const SortableGroupSection = ({
         <tr className="portfolio-detail-row">
           <td colSpan={10} className="portfolio-detail-cell">
             <div className="lot-list">
+              {canSetManualPrice && isManualAssetPriceGroup(group) ? (
+                <div className="lot-card-header">
+                  <div>
+                    <p className="table-title">Wycena rynkowa</p>
+                    <p className="table-note">
+                      {isManualPrice ? "Ręczna cena zastępuje automatyczny kurs." : "Uzupełnij brakujący kurs bez zmiany historii transakcji."}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    className="ghost-button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onOpenManualPrice(group);
+                    }}
+                    disabled={isManualPricePending}
+                    aria-label={`${isManualPrice ? "Zmień" : "Ustaw"} cenę ręczną dla ${group.name}`}
+                  >
+                    {isManualPricePending ? "Zapisywanie…" : isManualPrice ? "Zmień cenę ręczną" : "Ustaw cenę ręcznie"}
+                  </button>
+                </div>
+              ) : null}
               {group.lots.map((lot, index) => {
                 const lotProfitLoss = getAssetProfitLoss(lot, fxRates, baseCurrency);
                 const latestLotPrice = getAssetLatestUnitPrice(lot);
-                const lotHasLivePrice = hasAssetLivePrice(lot);
 
                 return (
                   <article key={lot.id} className="lot-card">
@@ -387,16 +430,16 @@ const SortableGroupSection = ({
                         <p className="table-note">Zysk</p>
                         <strong
                           className={
-                            lotHasLivePrice
+                            group.hasBaseValuation
                               ? lotProfitLoss >= 0
                                 ? "tone-positive"
                                 : "tone-negative"
                               : ""
                           }
                         >
-                          {lotHasLivePrice
+                          {group.hasBaseValuation
                             ? formatCurrency(lotProfitLoss, baseCurrency)
-                            : "brak kursu"}
+                            : group.hasCompleteQuote ? "brak przeliczenia FX" : "brak kursu"}
                         </strong>
                       </div>
                     </div>
@@ -422,9 +465,15 @@ export default function AssetTable({
   onSortModeChange,
   onReorderGroups,
   onRemove,
+  isReadOnly = false,
+  isManualPricePending = false,
+  manualPriceError = null,
+  onUpdateManualPrice,
+  onClearManualPrice,
 }: AssetTableProps) {
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
   const [activeGroupKey, setActiveGroupKey] = useState<string | null>(null);
+  const [manualPriceGroupKey, setManualPriceGroupKey] = useState<string | null>(null);
   const normalizedFilter = filter.trim().toLowerCase();
   const isManualSortMode = sortMode === "manual";
   const isManualReorderLocked = isManualSortMode && normalizedFilter.length > 0;
@@ -454,6 +503,10 @@ export default function AssetTable({
   const activeGroup = activeGroupKey
     ? filteredGroups.find((group) => group.key === activeGroupKey) ?? null
     : null;
+  const manualPriceGroup = manualPriceGroupKey
+    ? filteredGroups.find((group) => group.key === manualPriceGroupKey) ?? null
+    : null;
+  const canSetManualPrice = !isReadOnly && Boolean(onUpdateManualPrice && onClearManualPrice);
 
   const toggleGroup = (groupKey: string) => {
     setExpandedGroups((currentGroups) => ({
@@ -594,6 +647,9 @@ export default function AssetTable({
                     isManualReorderLocked={isManualReorderLocked}
                     onToggleGroup={toggleGroup}
                     onRemove={onRemove}
+                    canSetManualPrice={canSetManualPrice}
+                    isManualPricePending={isManualPricePending}
+                    onOpenManualPrice={(group) => setManualPriceGroupKey(group.key)}
                   />
                 ))}
               </SortableContext>
@@ -605,6 +661,16 @@ export default function AssetTable({
           </DragOverlay>
         </DndContext>
       </div>
+      {manualPriceGroup && onUpdateManualPrice && onClearManualPrice ? (
+        <ManualAssetPriceDialog
+          group={manualPriceGroup}
+          pending={isManualPricePending}
+          error={manualPriceError}
+          onUpdate={onUpdateManualPrice}
+          onClear={onClearManualPrice}
+          onClose={() => setManualPriceGroupKey(null)}
+        />
+      ) : null}
     </section>
   );
 }

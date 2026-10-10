@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import TruncatedText from "@/components/TruncatedText";
-import { convertFromPln } from "@/lib/pricing";
+import { convertFromPln, getRealizedProfitLossPercent } from "@/lib/pricing";
 import { formatCurrency, formatDate, formatNumber, normalizeText } from "@/lib/utils";
 import type { CurrencyCode, FxRates, PortfolioSale } from "@/types/portfolio";
 
@@ -316,6 +316,7 @@ export default function SalesHistoryPanel({
                   baseCurrency,
                   fxRates
                 );
+                const realizedReturnPercent = getRealizedProfitLossPercent(baseProfit, baseInvested);
                 const baseProceeds = convertFromPln(
                   isBondSettlement
                     ? sale.grossProceedsPln ?? sale.realizedProceedsPln
@@ -366,6 +367,9 @@ export default function SalesHistoryPanel({
                         ) : null}
                         <p className="table-note">
                           Wynik w walucie transakcji: {formatCurrency(displayProfit, displayCurrency)}
+                          {realizedReturnPercent !== undefined
+                            ? ` (${realizedReturnPercent > 0 ? "+" : ""}${realizedReturnPercent.toFixed(2)}% od kosztu FIFO)`
+                            : ""}
                         </p>
                       </div>
 

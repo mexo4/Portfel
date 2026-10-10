@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { getAssetValuation, getGroupedPortfolioAssets } from "../src/lib/portfolio-engine.ts";
+import { getAssetValuation, getGroupedPortfolioAssets, getPortfolioSummary } from "../src/lib/portfolio-engine.ts";
 
 test("keeps the LPP unit quote separate from its PLN position value and P/L", () => {
   const lpp = {
@@ -62,4 +62,69 @@ test("keeps Bitcoin's unit quote, USD position value and PLN P/L distinct", () =
   assert.equal(valuation.marketValueBase, 477.34);
   assert.equal(valuation.costBasisBase, 497.58);
   assert.equal(valuation.profitLossBase, -20.24);
+});
+
+test("supports a manual BTC quote with USD P/L and fees in the cost basis", () => {
+  const btc = {
+    id: "btc-lot",
+    kind: "crypto",
+    instrumentType: "OTHER",
+    name: "Bitcoin",
+    symbol: "BTC",
+    quantity: 0.05,
+    purchasePrice: 50000,
+    purchaseCurrency: "USD",
+    purchasePriceCurrency: "USD",
+    purchaseFxRateToPln: 4,
+    purchaseDate: "2026-01-01",
+    feePln: 100,
+    marketCurrency: "USD",
+    latestPrice: 60000,
+    latestPriceDate: "2026-10-10",
+    latestPriceFetchedAt: "2026-10-10T10:00:00.000Z",
+    priceSource: "MANUAL",
+  };
+
+  const valuation = getAssetValuation(btc, { PLN: 1, USD: 4 }, "USD");
+  const group = getGroupedPortfolioAssets([btc], { PLN: 1, USD: 4 }, "USD")[0];
+  assert.equal(valuation.marketValueQuote, 3000);
+  assert.equal(valuation.marketValueBase, 3000);
+  assert.equal(valuation.costBasisBase, 2525);
+  assert.equal(valuation.profitLossBase, 475);
+  assert.equal(group.profitLossPercent, 18.81);
+  assert.equal(group.hasBaseValuation, true);
+});
+
+test("does not treat an unknown quote or missing FX as a zero-price loss", () => {
+  const unknownQuote = {
+    id: "legacy-asset",
+    kind: "stock",
+    instrumentType: "OTHER",
+    name: "Delisted holding",
+    symbol: "OLD.MARKET",
+    quantity: 10,
+    purchasePrice: 25,
+    purchaseCurrency: "USD",
+    purchasePriceCurrency: "USD",
+    purchaseFxRateToPln: 4,
+    purchaseDate: "2020-01-01",
+    feePln: 0,
+    marketCurrency: "USD",
+  };
+  const unknownFx = {
+    ...unknownQuote,
+    latestPrice: 20,
+    marketCurrency: "ZZZ",
+    purchaseCurrency: "ZZZ",
+    purchasePriceCurrency: "ZZZ",
+    purchaseFxRateToPln: undefined,
+  };
+
+  for (const asset of [unknownQuote, unknownFx]) {
+    const group = getGroupedPortfolioAssets([asset], { PLN: 1, USD: 4 }, "PLN")[0];
+    const summary = getPortfolioSummary([asset], [], [], { PLN: 1, USD: 4 }, "PLN");
+    assert.equal(group.hasBaseValuation, false);
+    assert.equal(summary.unpricedPositionsCount, 1);
+    assert.equal(summary.openProfitLoss, 0);
+  }
 });

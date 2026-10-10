@@ -96,6 +96,10 @@ export type QuoteProvider =
   | "catalog"
   | "obligacjeskarbowe";
 
+/** The quote can be personal to one portfolio when the instrument has no
+ * trustworthy automatic market feed. This never changes a global quote. */
+export type PortfolioPriceSource = "AUTOMATIC" | "MANUAL";
+
 export type SearchSource = "api" | "catalog" | "fallback";
 
 export type TreasuryBondType = "EDO" | "COI" | "ROS";
@@ -292,6 +296,7 @@ export type PortfolioAsset = {
   issuerCountry?: string;
   instrumentIdentity?: InstrumentIdentity;
   latestPrice?: number;
+  priceSource?: PortfolioPriceSource;
   latestPriceDate?: string;
   /** Provider market timestamp for latestPrice, when the provider supplies one. */
   latestPriceMarketTimestamp?: string;
@@ -324,6 +329,7 @@ export type AssetDraft = {
   instrumentIdentity?: InstrumentIdentity;
   marketCurrencyConfirmed?: boolean;
   latestPrice?: number;
+  priceSource?: PortfolioPriceSource;
   latestPriceDate?: string;
   latestPriceMarketTimestamp?: string;
   latestPriceFetchedAt?: string;
@@ -556,6 +562,8 @@ export type PortfolioSummary = {
   positionsCount: number;
   assetsCount: number;
   salesCount: number;
+  /** Open positions without a complete quote/FX valuation; totals are partial. */
+  unpricedPositionsCount: number;
 };
 
 export type BenchmarkInvestment = {

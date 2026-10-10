@@ -44,6 +44,10 @@ export type PortfolioAssetGroup = {
   latestUnitPrice?: number;
   previousClose?: number;
   hasLivePrice: boolean;
+  /** Every open lot has a usable quote (prevents partial lots looking like a complete value). */
+  hasCompleteQuote: boolean;
+  /** Every lot has both a quote and known FX conversions for base-currency P/L. */
+  hasBaseValuation: boolean;
   hasDailyChange: boolean;
   dailyChangePercent?: number;
   /** Today's position-value movement in the selected portfolio currency. */
@@ -192,6 +196,11 @@ export const getAssetPurchaseUnitValuePln = (
 export const hasAssetLivePrice = (asset: PortfolioAsset) =>
   typeof asset.latestPrice === "number" && asset.latestPrice > 0;
 
+export const hasAssetBaseCurrencyValuation = (asset: PortfolioAsset, fxRates: FxRates) =>
+  hasAssetLivePrice(asset) &&
+  getCurrencyConversionRate(asset.marketCurrency, BASE_CURRENCY, fxRates) > 0 &&
+  getAssetPurchaseFxRateToPln(asset, fxRates) > 0;
+
 export const getAssetLatestUnitPrice = (asset: PortfolioAsset) =>
   hasAssetLivePrice(asset) ? asset.latestPrice : undefined;
 
@@ -216,28 +225,37 @@ export const getAssetDailyChangePercent = (asset: PortfolioAsset) => {
 export const getAssetInvestedPln = (asset: PortfolioAsset, fxRates: FxRates) =>
   round(getAssetPurchaseValuePln(asset, fxRates) + asset.feePln);
 
-export const getAssetMarketValuePln = (asset: PortfolioAsset, fxRates: FxRates) =>
-  hasAssetLivePrice(asset)
-    ? getPositionDirection(asset) === "SHORT"
-      ? round(
-          getAssetPurchaseValuePln(asset, fxRates) +
-            convertToPln(
-              (asset.purchasePrice - (asset.latestPrice ?? 0)) *
-                asset.quantity *
-                getContractMultiplier(asset),
-              asset.marketCurrency,
-              fxRates
-            )
-        )
-      : convertToPln(
-          (asset.latestPrice ?? 0) * asset.quantity * getContractMultiplier(asset),
-          asset.marketCurrency,
-          fxRates
-        )
-    : 0;
+export const getAssetMarketValuePln = (asset: PortfolioAsset, fxRates: FxRates) => {
+  if (!hasAssetLivePrice(asset) || getCurrencyConversionRate(asset.marketCurrency, BASE_CURRENCY, fxRates) <= 0) {
+    return 0;
+  }
+  if (
+    getPositionDirection(asset) === "SHORT" &&
+    getAssetPurchaseFxRateToPln(asset, fxRates) <= 0
+  ) {
+    return 0;
+  }
+
+  return getPositionDirection(asset) === "SHORT"
+    ? round(
+        getAssetPurchaseValuePln(asset, fxRates) +
+          convertToPln(
+            (asset.purchasePrice - (asset.latestPrice ?? 0)) *
+              asset.quantity *
+              getContractMultiplier(asset),
+            asset.marketCurrency,
+            fxRates
+          )
+      )
+    : convertToPln(
+        (asset.latestPrice ?? 0) * asset.quantity * getContractMultiplier(asset),
+        asset.marketCurrency,
+        fxRates
+      );
+};
 
 export const getAssetProfitLossPln = (asset: PortfolioAsset, fxRates: FxRates) =>
-  hasAssetLivePrice(asset)
+  hasAssetBaseCurrencyValuation(asset, fxRates)
     ? getPositionDirection(asset) === "SHORT"
       ? round(
           convertToPln(
@@ -268,6 +286,12 @@ export const getAssetProfitLoss = (
   fxRates: FxRates,
   baseCurrency: CurrencyCode = BASE_CURRENCY
 ) => convertFromPln(getAssetProfitLossPln(asset, fxRates), baseCurrency, fxRates);
+
+/** Return on the cost basis of only the units included in the realized result. */
+export const getRealizedProfitLossPercent = (profit: number, invested: number) =>
+  Number.isFinite(profit) && Number.isFinite(invested) && invested > 0
+    ? round((profit / invested) * 100, 2)
+    : undefined;
 
 /**
  * Explicit valuation model for consumers that render a position. Keeping
@@ -321,11 +345,13 @@ export const getGroupedPortfolioAssets = (
     const positionDirection = getPositionDirection(representativeLot);
     const contractMultiplier = getContractMultiplier(representativeLot);
     const hasLivePrice = sortedLots.some(hasAssetLivePrice);
+    const hasCompleteQuote = sortedLots.every(hasAssetLivePrice);
+    const hasBaseValuation = sortedLots.every((lot) => hasAssetBaseCurrencyValuation(lot, fxRates));
     const quantity = round(
       sortedLots.reduce((total, lot) => total + lot.quantity, 0),
       6
     );
-    const weightedLatestUnitPrice = hasLivePrice
+    const weightedLatestUnitPrice = hasCompleteQuote
       ? round(
           sortedLots.reduce((total, lot) => {
             const latestUnitPrice = getAssetLatestUnitPrice(lot);
@@ -456,6 +482,8 @@ export const getGroupedPortfolioAssets = (
       latestUnitPrice: weightedLatestUnitPrice,
       previousClose,
       hasLivePrice,
+      hasCompleteQuote,
+      hasBaseValuation,
       hasDailyChange: dailyChangePercent !== undefined,
       dailyChangePercent,
       dailyChangeBase,
@@ -567,6 +595,8 @@ export const getPortfolioSummary = (
     positionsCount: assets.length,
     assetsCount: new Set(assets.map((asset) => getPortfolioAssetGroupKey(asset))).size,
     salesCount: sales.length,
+    unpricedPositionsCount: getGroupedPortfolioAssets(assets, fxRates, baseCurrency)
+      .filter((group) => !group.hasBaseValuation).length,
   };
 };
 
@@ -593,6 +623,7 @@ export const aggregatePortfolioSummaries = (
       aggregate.positionsCount += summary.positionsCount;
       aggregate.assetsCount += summary.assetsCount;
       aggregate.salesCount += summary.salesCount;
+      aggregate.unpricedPositionsCount += summary.unpricedPositionsCount;
 
       for (const [currency, amount] of Object.entries(summary.realizedProfitLossByCurrency)) {
         aggregate.realizedProfitLossByCurrency[currency] = round(
@@ -615,6 +646,7 @@ export const aggregatePortfolioSummaries = (
       positionsCount: 0,
       assetsCount: 0,
       salesCount: 0,
+      unpricedPositionsCount: 0,
       realizedProfitLossByCurrency: {} as Record<CurrencyCode, number>,
     }
   );

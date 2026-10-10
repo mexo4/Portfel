@@ -463,6 +463,7 @@ export const hasSameStoredQuoteSnapshot = (
   current.symbol === next.symbol &&
   current.name === next.name &&
   current.latestPrice === next.latestPrice &&
+  (current.priceSource ?? "AUTOMATIC") === (next.priceSource ?? "AUTOMATIC") &&
   current.latestPriceDate === next.latestPriceDate &&
   current.latestPriceMarketTimestamp === next.latestPriceMarketTimestamp &&
   current.previousClose === next.previousClose &&
@@ -486,6 +487,10 @@ export const mergeQuoteIntoPortfolioAsset = (
   asset: PortfolioAsset,
   quote: AssetQuote | null | undefined
 ): PortfolioAsset => {
+  // Manual overrides belong to one user's portfolio and must not be replaced
+  // by an automatic provider response until the override is explicitly cleared.
+  if (asset.priceSource === "MANUAL") return asset;
+
   // A failed, malformed or zero-valued response must never replace the last
   // known good price. This is the client-side half of stale-while-revalidate.
   if (!isUsableAssetQuote(quote)) {
@@ -505,6 +510,7 @@ export const mergeQuoteIntoPortfolioAsset = (
 
     return keepExistingAssetForUnchangedQuote(asset, {
       ...asset,
+      priceSource: "AUTOMATIC",
       latestPrice: quote.price,
       latestPriceDate: quote.priceDate ?? asset.latestPriceDate,
       latestPriceMarketTimestamp:
@@ -517,6 +523,7 @@ export const mergeQuoteIntoPortfolioAsset = (
 
   return keepExistingAssetForUnchangedQuote(asset, {
     ...asset,
+    priceSource: "AUTOMATIC",
     symbol: quote.symbol,
     latestPrice: quote.price,
     latestPriceDate: quote.priceDate ?? asset.latestPriceDate,
@@ -544,7 +551,7 @@ export const applyRefreshedPortfolioAssetSnapshot = (
   current: PortfolioAsset,
   refreshed: PortfolioAsset | undefined
 ): PortfolioAsset => {
-  if (!refreshed || !hasUsableStoredUnitPrice(refreshed)) {
+  if (current.priceSource === "MANUAL" || !refreshed || !hasUsableStoredUnitPrice(refreshed)) {
     return current;
   }
 
@@ -605,7 +612,7 @@ export const refreshPortfolioQuotesWithProgress = async (
 
   assets
     .filter(
-      (asset) => asset.instrumentType !== "CFD" && asset.instrumentType !== "OTHER"
+      (asset) => asset.instrumentType !== "CFD" && asset.instrumentType !== "OTHER" && asset.priceSource !== "MANUAL"
     )
     .forEach((asset) => {
     const key = quoteRequestKey(asset);
@@ -754,6 +761,42 @@ export const savePortfolioQuoteSnapshots = async (
     method: "POST",
     body: JSON.stringify({ snapshots }),
   });
+
+export const setManualPortfolioQuote = async (input: {
+  portfolioId: string;
+  assetIds: string[];
+  price: number;
+  currency: PortfolioAsset["marketCurrency"];
+}) => requestJson<{ saved: number; updatedAt: string; priceDate: string }>("/api/portfolio/manual-quote", {
+  method: "PUT",
+  body: JSON.stringify(input),
+});
+
+export const clearManualPortfolioQuote = async (input: {
+  portfolioId: string;
+  assetIds: string[];
+}) => requestJson<{
+  cleared: number;
+  restoredAutomatic: number;
+  restoredSnapshots: Array<{
+    assetId: string;
+    snapshot?: {
+      latestPrice?: number;
+      latestPriceDate?: string;
+      latestPriceMarketTimestamp?: string;
+      latestPriceFetchedAt?: string;
+      previousClose?: number;
+      lastUpdatedAt?: string;
+      marketCurrency?: PortfolioAsset["marketCurrency"];
+      provider?: PortfolioAsset["provider"];
+      providerId?: string;
+      priceScale?: number;
+    };
+  }>;
+}>("/api/portfolio/manual-quote", {
+  method: "DELETE",
+  body: JSON.stringify(input),
+});
 
 export const fetchPortfolioCore = async () => {
   return requestJson<{

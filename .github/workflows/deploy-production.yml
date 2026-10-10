@@ -17,7 +17,7 @@ jobs:
   deploy:
     name: Deploy to Oracle
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 35
 
     steps:
       - name: Configure SSH
@@ -26,24 +26,21 @@ jobs:
           ORACLE_SSH_KEY: ${{ secrets.ORACLE_SSH_KEY }}
         run: |
           set -euo pipefail
-
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
-
           printf '%s\n' "$ORACLE_SSH_KEY" > ~/.ssh/mexo-production
           chmod 600 ~/.ssh/mexo-production
-
           ssh-keyscan -H "$ORACLE_HOST" >> ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
 
-      - name: Deploy Mexo
+      - name: Stage and activate Mexo
+        id: deploy
         env:
           ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
           ORACLE_USER: ${{ secrets.ORACLE_USER }}
         run: |
           set -euo pipefail
-
-          ssh \
+          REMOTE_OUTPUT="$(ssh \
             -i ~/.ssh/mexo-production \
             -o BatchMode=yes \
             -o ConnectTimeout=30 \
@@ -53,74 +50,188 @@ jobs:
             -o TCPKeepAlive=yes \
             "$ORACLE_USER@$ORACLE_HOST" \
             'bash -se' <<'REMOTE'
-
           set -Eeuo pipefail
 
           REPO="/opt/mexo/repo"
+          APP="$REPO/portfel-inwestora"
           BRANCH="najlepsza-wersja"
-
-          echo "== Mexo deploy =="
+          RELEASES="$APP/.mexo-releases"
 
           cd "$REPO"
-
-          echo "Checking production repository..."
-
           if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
-            echo "ERROR: Production repository contains local tracked changes."
+            echo "ERROR: production repository contains tracked local changes; refusing to overwrite them."
             git status --short
             exit 1
           fi
 
-          echo "Fetching GitHub..."
           git fetch origin "$BRANCH"
-
-          echo "Updating production code..."
+          PREVIOUS_REVISION="$(git rev-parse HEAD)"
+          BUILD_REVISION="$(git rev-parse "origin/$BRANCH")"
+          if ! git -C "$REPO" diff --quiet "$PREVIOUS_REVISION" "$BUILD_REVISION" -- package.json package-lock.json portfel-inwestora/package.json; then
+            echo "ERROR: dependency manifests changed. Refusing an in-place npm install while the old release is live."
+            echo "Use a dependency-staged release before deploying package changes."
+            exit 1
+          fi
           git checkout "$BRANCH"
           git reset --hard "origin/$BRANCH"
+          test "$(git rev-parse HEAD)" = "$BUILD_REVISION"
+          BUILD_SUFFIX="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+          STAGING_DIST=".next-mexo-staging-$BUILD_SUFFIX"
+          RELEASE_TARGET=".mexo-releases/$BUILD_REVISION-$BUILD_SUFFIX"
+          PREVIOUS_NEXT_TARGET=""
+          SWITCHED=0
 
-          echo "Installing dependencies..."
-          npm ci --no-audit --no-fund
+          rollback_on_error() {
+            status=$?
+            trap - ERR
+            set +e
+            if [ -n "$PREVIOUS_NEXT_TARGET" ] && [ -d "$APP/$PREVIOUS_NEXT_TARGET" ] && { [ "$SWITCHED" = "1" ] || [ ! -e "$APP/.next" ]; }; then
+              ln -sfn "$PREVIOUS_NEXT_TARGET" "$APP/.next-rollback-$BUILD_SUFFIX"
+              mv -Tf "$APP/.next-rollback-$BUILD_SUFFIX" "$APP/.next"
+            fi
+            git -C "$REPO" reset --hard "$PREVIOUS_REVISION"
+            sudo -n systemctl restart mexo
+            exit "$status"
+          }
+          trap rollback_on_error ERR
 
-          echo "Building Mexo..."
-          # Oracle Free is deliberately small. A heap limit larger than the
-          # machine can sustain lets the kernel kill Node (and sometimes the
-          # SSH session) before Next can report a useful build error.
-          BUILD_REVISION="$(git rev-parse HEAD)"
-          printf '%s\n' "$BUILD_REVISION" > "$REPO/portfel-inwestora/public/mexo-build-revision.txt"
+          mkdir -p "$RELEASES"
+          case "$STAGING_DIST" in .next-mexo-staging-*) ;; *) echo "Invalid staging directory"; exit 1 ;; esac
+          rm -rf "$APP/$STAGING_DIST"
+          # The old workflow generated this file after restart, so Next never
+          # reliably included it in the running artifact. Revision is now a
+          # dynamic no-store API route instead.
+          rm -f "$APP/public/mexo-build-revision.txt"
 
+          cd "$REPO"
+          test -x "$REPO/node_modules/.bin/next"
           CIRCLE_NODE_TOTAL=2 \
           NEXT_TELEMETRY_DISABLED=1 \
           MEXO_BUILD_REVISION="$BUILD_REVISION" \
+          MEXO_BUILD_DIST_DIR="$STAGING_DIST" \
           NODE_OPTIONS="--max-old-space-size=768" \
             npm run build
+          test -f "$APP/$STAGING_DIST/BUILD_ID"
 
-          test -f "$REPO/portfel-inwestora/.next/BUILD_ID"
+          mv "$APP/$STAGING_DIST" "$APP/$RELEASE_TARGET"
+          if [ -L "$APP/.next" ]; then
+            PREVIOUS_NEXT_TARGET="$(readlink "$APP/.next")"
+            case "$PREVIOUS_NEXT_TARGET" in
+              .mexo-releases/*) test -d "$APP/$PREVIOUS_NEXT_TARGET" ;;
+              *) echo "ERROR: current .next symlink points outside managed releases; refusing activation."; exit 1 ;;
+            esac
+          elif [ -d "$APP/.next" ]; then
+            PREVIOUS_NEXT_TARGET=".mexo-releases/previous-$PREVIOUS_REVISION-$BUILD_SUFFIX"
+            mv "$APP/.next" "$APP/$PREVIOUS_NEXT_TARGET"
+          else
+            echo "ERROR: no current Next.js build exists for safe rollback."
+            exit 1
+          fi
 
-          echo "Restarting Mexo..."
+          ln -s "$RELEASE_TARGET" "$APP/.next-new-$BUILD_SUFFIX"
+          SWITCHED=1
+          mv -Tf "$APP/.next-new-$BUILD_SUFFIX" "$APP/.next"
           sudo -n systemctl restart mexo
+          sudo -n systemctl is-active --quiet mexo
 
-          echo "Mexo restart requested."
+          INTERNAL_OK=0
+          for attempt in $(seq 1 60); do
+            response="$(curl -fsS --max-time 5 -H 'Cache-Control: no-cache, no-store' "http://127.0.0.1:3000/api/system/revision?nonce=$BUILD_SUFFIX-$attempt" 2>/dev/null || true)"
+            if printf '%s' "$response" | grep -Fq "\"revision\":\"$BUILD_REVISION\""; then
+              root_code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:3000/ || true)"
+              login_code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:3000/login || true)"
+              if [ "$root_code" = "200" ] && [ "$login_code" = "200" ]; then
+                INTERNAL_OK=1
+                break
+              fi
+            fi
+            sleep 2
+          done
+          test "$INTERNAL_OK" = "1"
+
+          trap - ERR
+          echo "PREVIOUS_REVISION=$PREVIOUS_REVISION"
+          echo "PREVIOUS_NEXT_TARGET=$PREVIOUS_NEXT_TARGET"
+          echo "DEPLOYED_REVISION=$BUILD_REVISION"
           REMOTE
+          )"
 
-      - name: Verify public revision
+          printf '%s\n' "$REMOTE_OUTPUT"
+          previous_revision="$(printf '%s\n' "$REMOTE_OUTPUT" | sed -n 's/^PREVIOUS_REVISION=//p' | tail -n 1)"
+          previous_target="$(printf '%s\n' "$REMOTE_OUTPUT" | sed -n 's/^PREVIOUS_NEXT_TARGET=//p' | tail -n 1)"
+          if [[ ! "$previous_revision" =~ ^[0-9a-f]{40}$ ]] || [[ ! "$previous_target" =~ ^\.mexo-releases/[A-Za-z0-9._-]+$ ]]; then
+            echo "ERROR: deployment did not return a valid rollback target."
+            exit 1
+          fi
+          echo "previous_revision=$previous_revision" >> "$GITHUB_OUTPUT"
+          echo "previous_next_target=$previous_target" >> "$GITHUB_OUTPUT"
+
+      - name: Verify public revision and routes
+        id: verify
         env:
           EXPECTED_REVISION: ${{ github.sha }}
         run: |
           set -euo pipefail
-
-          # Verify an artifact created in the exact build being deployed.
-          # Some serving paths return the fallback X-Mexo-Revision header,
-          # which is not a reliable release signal on this host.
-          for attempt in $(seq 1 180); do
-            running_revision="$(curl -fsS --max-time 15 "https://mexo.com.pl/mexo-build-revision.txt?expected=$EXPECTED_REVISION" 2>/dev/null || true)"
-
-            if [ "$running_revision" = "$EXPECTED_REVISION" ]; then
-              echo "Mexo public health check passed for revision $running_revision."
-              exit 0
+          VERIFIED=0
+          for attempt in $(seq 1 90); do
+            nonce="${GITHUB_RUN_ID}-${attempt}-${RANDOM}"
+            response="$(curl -fsS --max-time 12 \
+              -H 'Cache-Control: no-cache, no-store, max-age=0' \
+              -H 'Pragma: no-cache' \
+              "https://mexo.com.pl/api/system/revision?nonce=$nonce" 2>/dev/null || true)"
+            if printf '%s' "$response" | jq -e --arg expected "$EXPECTED_REVISION" '.revision == $expected' >/dev/null 2>&1; then
+              root_code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 12 "https://mexo.com.pl/?health=$nonce" || true)"
+              login_code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 12 "https://mexo.com.pl/login?health=$nonce" || true)"
+              if [ "$root_code" = "200" ] && [ "$login_code" = "200" ]; then
+                echo "Verified deployed revision $EXPECTED_REVISION; public dashboard and login routes are healthy."
+                VERIFIED=1
+                break
+              fi
             fi
-
             sleep 2
           done
+          test "$VERIFIED" = "1"
 
-          echo "ERROR: public Mexo revision did not reach $EXPECTED_REVISION."
+      - name: Roll back if public verification failed
+        if: ${{ failure() && steps.deploy.outcome == 'success' && steps.verify.outcome == 'failure' }}
+        env:
+          ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
+          ORACLE_USER: ${{ secrets.ORACLE_USER }}
+          PREVIOUS_REVISION: ${{ steps.deploy.outputs.previous_revision }}
+          PREVIOUS_NEXT_TARGET: ${{ steps.deploy.outputs.previous_next_target }}
+        run: |
+          set -euo pipefail
+          [[ "$PREVIOUS_REVISION" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$PREVIOUS_NEXT_TARGET" =~ ^\.mexo-releases/[A-Za-z0-9._-]+$ ]]
+          ssh \
+            -i ~/.ssh/mexo-production \
+            -o BatchMode=yes \
+            -o ConnectTimeout=30 \
+            -o ConnectionAttempts=3 \
+            "$ORACLE_USER@$ORACLE_HOST" \
+            "bash -se" <<REMOTE
+          set -euo pipefail
+          REPO="/opt/mexo/repo"
+          APP="\$REPO/portfel-inwestora"
+          PREVIOUS_REVISION="$PREVIOUS_REVISION"
+          PREVIOUS_NEXT_TARGET="$PREVIOUS_NEXT_TARGET"
+          case "\$PREVIOUS_NEXT_TARGET" in .mexo-releases/*) ;; *) exit 1 ;; esac
+          test -d "\$APP/\$PREVIOUS_NEXT_TARGET"
+          cd "\$REPO"
+          git reset --hard "\$PREVIOUS_REVISION"
+          ln -sfn "\$PREVIOUS_NEXT_TARGET" "\$APP/.next-rollback-\$GITHUB_RUN_ID"
+          mv -Tf "\$APP/.next-rollback-\$GITHUB_RUN_ID" "\$APP/.next"
+          sudo -n systemctl restart mexo
+          sudo -n systemctl is-active --quiet mexo
+          for attempt in \$(seq 1 45); do
+            root_code="\$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:3000/ || true)"
+            login_code="\$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:3000/login || true)"
+            if [ "\$root_code" = "200" ] && [ "\$login_code" = "200" ]; then
+              echo "Previous release restored and healthy."
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "ERROR: rollback restarted, but local routes did not become healthy."
           exit 1
+          REMOTE

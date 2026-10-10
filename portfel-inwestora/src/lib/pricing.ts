@@ -17,6 +17,7 @@ export {
   getAssetPreviousClose,
   getAssetProfitLoss,
   getAssetProfitLossPln,
+  getRealizedProfitLossPercent,
   getBaseCurrency,
   getCurrencyConversionRate,
   getGroupedPortfolioAssets,

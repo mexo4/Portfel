@@ -50,6 +50,10 @@ export type PortfolioWorkspaceValue = {
   filter: string;
   assetSortMode: "manual" | "value-desc" | "value-asc" | "profit-desc" | "loss-asc" | "profit-percent-desc" | "profit-percent-asc" | "daily-gain-desc" | "daily-loss-asc";
   isRefreshing: boolean;
+  isManualPricePending: boolean;
+  manualPriceError: string | null;
+  onUpdateManualPrice: (group: PortfolioAssetGroup, price: number, currency: CurrencyCode) => Promise<void>;
+  onClearManualPrice: (group: PortfolioAssetGroup) => Promise<void>;
   summaryTotalValue: number;
   summaryCombinedProfitLoss: number;
   summaryTotalInvested: number;

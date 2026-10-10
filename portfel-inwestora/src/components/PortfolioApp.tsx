@@ -28,6 +28,7 @@ import {
   fetchTreasuryBondSeries,
   fetchTreasuryBondSwap,
   logoutUser,
+  clearManualPortfolioQuote,
   refreshPortfolioQuotesWithProgress,
   removeWatchlistItem,
   requestEmailVerification,
@@ -37,6 +38,7 @@ import {
   saveUserProfile,
   searchAssets,
   searchEtfInstruments,
+  setManualPortfolioQuote,
 } from "@/lib/api";
 import {
   applySaleToPortfolio,
@@ -60,6 +62,7 @@ import {
   getAllPortfolioScopedGroups,
   getGroupedPortfolioAssets,
   getPortfolioSummary,
+  type PortfolioAssetGroup,
 } from "@/lib/pricing";
 import {
   buildCashImpactBuyOperation,
@@ -205,6 +208,7 @@ const getQuoteSnapshotPayload = (
     portfolio.assets
       .filter(
         (asset) =>
+          asset.priceSource !== "MANUAL" &&
           (!refreshedAssetIds || refreshedAssetIds.has(asset.id)) &&
           typeof asset.latestPrice === "number" &&
           Number.isFinite(asset.latestPrice) &&
@@ -1017,6 +1021,7 @@ export default function PortfolioApp({
   const quoteRefreshPendingRef = useRef(0);
   const quoteRefreshInFlightRef = useRef<Promise<void> | null>(null);
   const quoteRequestSeqRef = useRef(0);
+  const manualPriceMutationRef = useRef(false);
   const lastPreviewRequestKeyRef = useRef("");
   const isManualSymbolRef = useRef(false);
   const assetAddInFlightRef = useRef(false);
@@ -1060,6 +1065,8 @@ export default function PortfolioApp({
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [isSendingVerification, setIsSendingVerification] = useState(false);
   const [isQuoteLoading, setIsQuoteLoading] = useState(false);
+  const [isManualPricePending, setIsManualPricePending] = useState(false);
+  const [manualPriceError, setManualPriceError] = useState<string | null>(null);
   const [isAssetAddPending, setIsAssetAddPending] = useState(false);
   const [isWatchlistTogglePending, setIsWatchlistTogglePending] = useState(false);
   const [isWatchlistLoading, setIsWatchlistLoading] = useState(true);
@@ -1332,6 +1339,135 @@ export default function PortfolioApp({
         assets: updater(workspaceRef.current.assets),
       }),
     [replaceWorkspace]
+  );
+
+  const applyManualQuoteToPortfolio = useCallback(
+    (
+      portfolioId: string,
+      assetIds: ReadonlySet<string>,
+      update: (asset: PortfolioAsset) => PortfolioAsset
+    ) => {
+      const nextPortfolios = portfoliosRef.current.map((portfolio) =>
+        portfolio.id === portfolioId
+          ? {
+              ...portfolio,
+              assets: portfolio.assets.map((asset) =>
+                assetIds.has(asset.id) ? update(asset) : asset
+              ),
+            }
+          : portfolio
+      );
+      portfoliosRef.current = nextPortfolios;
+      setPortfolios(nextPortfolios);
+
+      const nextBook: PortfolioBook = {
+        schemaVersion: 2,
+        portfolios: nextPortfolios,
+        activePortfolioId: activePortfolioIdRef.current,
+      };
+      // Quote snapshots are persisted separately from source-of-truth
+      // portfolio state. Suppress a full portfolio write for this cache-only
+      // mutation, just as for provider quote refreshes.
+      quoteOnlyPortfolioFingerprintRef.current = getPortfolioSaveFingerprint(nextBook);
+      if (activePortfolioIdRef.current === portfolioId) {
+        const updatedPortfolio = nextPortfolios.find((portfolio) => portfolio.id === portfolioId);
+        if (updatedPortfolio) {
+          replaceWorkspace({ ...workspaceRef.current, assets: updatedPortfolio.assets });
+        }
+      }
+    },
+    [replaceWorkspace]
+  );
+
+  const handleUpdateManualPrice = useCallback(
+    async (group: PortfolioAssetGroup, price: number, currency: CurrencyCode) => {
+      const portfolioId = activePortfolioIdRef.current;
+      if (isAllPortfoliosSelected) {
+        throw new Error("Wybierz konkretny portfel, aby ustawić własną wycenę.");
+      }
+      if (manualPriceMutationRef.current) {
+        throw new Error("Trwa już aktualizacja ceny tej pozycji.");
+      }
+      const assetIds = group.lots.map((lot) => lot.id);
+      if (assetIds.length === 0) throw new Error("Nie znaleziono zakupów tej pozycji.");
+
+      manualPriceMutationRef.current = true;
+      setIsManualPricePending(true);
+      setManualPriceError(null);
+      try {
+        const response = await setManualPortfolioQuote({ portfolioId, assetIds, price, currency });
+        const assetIdSet = new Set(assetIds);
+        applyManualQuoteToPortfolio(portfolioId, assetIdSet, (asset) => ({
+          ...asset,
+          latestPrice: price,
+          latestPriceDate: response.priceDate,
+          latestPriceFetchedAt: response.updatedAt,
+          latestPriceMarketTimestamp: undefined,
+          previousClose: undefined,
+          lastUpdatedAt: response.updatedAt,
+          marketCurrency: currency,
+          priceSource: "MANUAL",
+        }));
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Nie udało się zapisać ręcznej ceny.";
+        setManualPriceError(message);
+        throw error;
+      } finally {
+        manualPriceMutationRef.current = false;
+        setIsManualPricePending(false);
+      }
+    },
+    [applyManualQuoteToPortfolio, isAllPortfoliosSelected]
+  );
+
+  const handleClearManualPrice = useCallback(
+    async (group: PortfolioAssetGroup) => {
+      const portfolioId = activePortfolioIdRef.current;
+      if (isAllPortfoliosSelected) {
+        throw new Error("Wybierz konkretny portfel, aby usunąć ręczną wycenę.");
+      }
+      if (manualPriceMutationRef.current) {
+        throw new Error("Trwa już aktualizacja ceny tej pozycji.");
+      }
+      const assetIds = group.lots.map((lot) => lot.id);
+      if (assetIds.length === 0) throw new Error("Nie znaleziono zakupów tej pozycji.");
+
+      manualPriceMutationRef.current = true;
+      setIsManualPricePending(true);
+      setManualPriceError(null);
+      try {
+        const response = await clearManualPortfolioQuote({ portfolioId, assetIds });
+        const assetIdSet = new Set(assetIds);
+        const fallbackByAssetId = new Map(
+          response.restoredSnapshots.map((item) => [item.assetId, item.snapshot])
+        );
+        applyManualQuoteToPortfolio(portfolioId, assetIdSet, (asset) => {
+          const fallback = fallbackByAssetId.get(asset.id);
+          return {
+            ...asset,
+            latestPrice: fallback?.latestPrice,
+            latestPriceDate: fallback?.latestPriceDate,
+            latestPriceMarketTimestamp: fallback?.latestPriceMarketTimestamp,
+            latestPriceFetchedAt: fallback?.latestPriceFetchedAt,
+            previousClose: fallback?.previousClose,
+            lastUpdatedAt: fallback?.lastUpdatedAt,
+            marketCurrency: fallback?.marketCurrency ?? asset.marketCurrency,
+            provider: fallback?.provider ?? asset.provider,
+            providerId: fallback?.providerId ?? asset.providerId,
+            priceScale: fallback?.priceScale ?? asset.priceScale,
+            priceSource: "AUTOMATIC",
+          };
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Nie udało się usunąć ręcznej ceny.";
+        setManualPriceError(message);
+        throw error;
+      } finally {
+        manualPriceMutationRef.current = false;
+        setIsManualPricePending(false);
+      }
+    },
+    [applyManualQuoteToPortfolio, isAllPortfoliosSelected]
   );
 
   const updateWorkspaceSales = useCallback(
@@ -4960,6 +5096,10 @@ export default function PortfolioApp({
       setWatchlistItems((current) => current.filter((item) => item.canonicalKey !== canonicalKey));
     },
     filter, assetSortMode, isRefreshing,
+    isManualPricePending,
+    manualPriceError,
+    onUpdateManualPrice: handleUpdateManualPrice,
+    onClearManualPrice: handleClearManualPrice,
     summaryTotalValue: summary.totalValue, summaryCombinedProfitLoss: summary.combinedProfitLoss,
     summaryTotalInvested: summary.totalInvested, summaryCashValue: summary.cashValue, refreshRevision,
     activeDividendYtd, activeDividendMonth, activeDividendAnnualIncome, summaryPanel, assetEntryWorkspace, operationsWorkspace, incomeWorkspace, importWorkspace, settingsWorkspace, portfolioManagementWorkspace: portfolioManagement, wealthWorkspace,

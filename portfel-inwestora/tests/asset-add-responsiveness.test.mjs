@@ -45,6 +45,6 @@ test("local scripts use the system trust store, bind to IPv4 and retain stable w
   );
   assert.equal(
     packageJson.scripts.start,
-    "node --use-system-ca ../node_modules/next/dist/bin/next start --hostname 127.0.0.1"
+    "node --use-system-ca ./scripts/start-production.mjs"
   );
 });

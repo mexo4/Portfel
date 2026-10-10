@@ -298,11 +298,29 @@ jobs:
 
           git fetch origin "$BRANCH"
           BUILD_REVISION="$(git rev-parse "origin/$BRANCH")"
-          if ! git -C "$REPO" diff --quiet "$PREVIOUS_REVISION" "$BUILD_REVISION" -- package.json package-lock.json portfel-inwestora/package.json; then
-            echo "ERROR: dependency manifests changed. Refusing an in-place npm install while the old release is live."
-            echo "Use a dependency-staged release before deploying package changes."
+          if ! git -C "$REPO" diff --quiet "$PREVIOUS_REVISION" "$BUILD_REVISION" -- package.json package-lock.json; then
+            echo "ERROR: root dependency manifests changed. Refusing an in-place npm install while the old release is live."
             exit 1
           fi
+          node - "$PREVIOUS_REVISION" "$BUILD_REVISION" <<'NODE'
+          const { execFileSync } = require("node:child_process");
+          const [previousRevision, buildRevision] = process.argv.slice(2);
+          const readManifest = (revision) => JSON.parse(execFileSync("git", ["show", `${revision}:portfel-inwestora/package.json`], { encoding: "utf8" }));
+          const previousManifest = readManifest(previousRevision);
+          const buildManifest = readManifest(buildRevision);
+          if (buildManifest.scripts?.start !== "node --use-system-ca ./scripts/start-production.mjs") {
+            console.error("ERROR: unexpected production start command; refusing activation.");
+            process.exit(1);
+          }
+          previousManifest.scripts = { ...previousManifest.scripts };
+          buildManifest.scripts = { ...buildManifest.scripts };
+          delete previousManifest.scripts.start;
+          delete buildManifest.scripts.start;
+          if (JSON.stringify(previousManifest) !== JSON.stringify(buildManifest)) {
+            console.error("ERROR: application dependencies or manifest fields changed. Refusing in-place install.");
+            process.exit(1);
+          }
+          NODE
           git checkout "$BRANCH"
           git reset --hard "origin/$BRANCH"
           RESET_REVISION="$(git rev-parse HEAD)"
@@ -312,9 +330,9 @@ jobs:
           fi
           echo "Repository is staged at ${BUILD_REVISION:0:12}; previous revision was ${PREVIOUS_REVISION:0:12}."
           BUILD_SUFFIX="$(date -u +%Y%m%dT%H%M%SZ)-$$"
-          STAGING_DIST=".next-mexo-staging-$BUILD_SUFFIX"
           RELEASE_TARGET=".mexo-releases/$BUILD_REVISION-$BUILD_SUFFIX"
           PREVIOUS_NEXT_TARGET=""
+          PREVIOUS_NEXT_IS_DIRECTORY=0
           SWITCHED=0
 
           rollback_on_error() {
@@ -324,8 +342,17 @@ jobs:
             set +e
             echo "ERROR: remote deployment failed at script line $failed_line (exit $status); restoring the previous source and build."
             if [ -n "$PREVIOUS_NEXT_TARGET" ] && [ -d "$APP/$PREVIOUS_NEXT_TARGET" ] && { [ "$SWITCHED" = "1" ] || [ ! -e "$APP/.next" ]; }; then
-              ln -sfn "$PREVIOUS_NEXT_TARGET" "$APP/.next-rollback-$BUILD_SUFFIX"
-              mv -Tf "$APP/.next-rollback-$BUILD_SUFFIX" "$APP/.next"
+              if [ "$PREVIOUS_NEXT_IS_DIRECTORY" = "1" ]; then
+                if [ -L "$APP/.next" ]; then
+                  rm "$APP/.next"
+                elif [ -e "$APP/.next" ]; then
+                  mv "$APP/.next" "$APP/.mexo-releases/failed-$BUILD_SUFFIX"
+                fi
+                mv "$APP/$PREVIOUS_NEXT_TARGET" "$APP/.next"
+              else
+                ln -sfn "$PREVIOUS_NEXT_TARGET" "$APP/.next-rollback-$BUILD_SUFFIX"
+                mv -Tf "$APP/.next-rollback-$BUILD_SUFFIX" "$APP/.next"
+              fi
             fi
             git -C "$REPO" reset --hard "$PREVIOUS_REVISION"
             sudo -n systemctl restart mexo
@@ -334,8 +361,8 @@ jobs:
           trap rollback_on_error ERR
 
           mkdir -p "$RELEASES"
-          case "$STAGING_DIST" in .next-mexo-staging-*) ;; *) echo "Invalid staging directory"; exit 1 ;; esac
-          rm -rf "$APP/$STAGING_DIST"
+          if [[ ! "$RELEASE_TARGET" =~ ^\.mexo-releases/[a-f0-9]{40}-[0-9]{8}T[0-9]{6}Z-[0-9]+$ ]]; then echo "Invalid release directory"; exit 1; fi
+          if [ -e "$APP/$RELEASE_TARGET" ]; then echo "Release directory already exists; refusing to overwrite it."; exit 1; fi
           # The old workflow generated this file after restart, so Next never
           # reliably included it in the running artifact. Revision is now a
           # dynamic no-store API route instead.
@@ -346,14 +373,14 @@ jobs:
             echo "ERROR: Next.js CLI is missing from both repository and application node_modules; no dependency install was attempted."
             exit 1
           fi
-          echo "Next.js CLI is present; building into isolated staging directory $STAGING_DIST."
+          echo "Next.js CLI is present; building directly into immutable release directory $RELEASE_TARGET."
           CIRCLE_NODE_TOTAL=2 \
           NEXT_TELEMETRY_DISABLED=1 \
           MEXO_BUILD_REVISION="$BUILD_REVISION" \
-          MEXO_BUILD_DIST_DIR="$STAGING_DIST" \
+          MEXO_BUILD_DIST_DIR="$RELEASE_TARGET" \
           NODE_OPTIONS="--max-old-space-size=768" \
             npm --workspace portfel-inwestora run build -- --webpack
-          test -f "$APP/$STAGING_DIST/BUILD_ID"
+          test -f "$APP/$RELEASE_TARGET/BUILD_ID"
           if ! git -C "$REPO" diff --quiet "$BUILD_REVISION" -- "$APP/tsconfig.json"; then
             echo "Restoring the tracked tsconfig after Next.js added staging-only type paths."
             git -C "$REPO" restore --source="$BUILD_REVISION" --worktree -- "$APP/tsconfig.json"
@@ -363,7 +390,6 @@ jobs:
             exit 1
           fi
 
-          mv "$APP/$STAGING_DIST" "$APP/$RELEASE_TARGET"
           if [ -L "$APP/.next" ]; then
             PREVIOUS_NEXT_TARGET="$(readlink "$APP/.next")"
             case "$PREVIOUS_NEXT_TARGET" in
@@ -371,7 +397,8 @@ jobs:
               *) echo "ERROR: current .next symlink points outside managed releases; refusing activation."; exit 1 ;;
             esac
           elif [ -d "$APP/.next" ]; then
-            PREVIOUS_NEXT_TARGET=".mexo-releases/previous-$PREVIOUS_REVISION-$BUILD_SUFFIX"
+            PREVIOUS_NEXT_IS_DIRECTORY=1
+            PREVIOUS_NEXT_TARGET=".next-rollback-$BUILD_SUFFIX"
             mv "$APP/.next" "$APP/$PREVIOUS_NEXT_TARGET"
           else
             echo "ERROR: no current Next.js build exists for safe rollback."
@@ -454,7 +481,7 @@ jobs:
           fi
           previous_revision="$(printf '%s\n' "$REMOTE_OUTPUT" | sed -n 's/^PREVIOUS_REVISION=//p' | tail -n 1)"
           previous_target="$(printf '%s\n' "$REMOTE_OUTPUT" | sed -n 's/^PREVIOUS_NEXT_TARGET=//p' | tail -n 1)"
-          if [[ ! "$previous_revision" =~ ^[0-9a-f]{40}$ ]] || [[ ! "$previous_target" =~ ^\.mexo-releases/[A-Za-z0-9._-]+$ ]]; then
+          if [[ ! "$previous_revision" =~ ^[0-9a-f]{40}$ ]] || [[ ! "$previous_target" =~ ^(\.mexo-releases/[A-Za-z0-9._-]+|\.next-rollback-[A-Za-z0-9._-]+)$ ]]; then
             echo "ERROR: deployment did not return a valid rollback target."
             exit 1
           fi
@@ -471,7 +498,7 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$RESTORE_REVISION" =~ ^[0-9a-f]{40}$ ]]
-          [[ "$RESTORE_NEXT_TARGET" =~ ^\.mexo-releases/[A-Za-z0-9._-]+$ ]]
+          [[ "$RESTORE_NEXT_TARGET" =~ ^(\.mexo-releases/[A-Za-z0-9._-]+|\.next-rollback-[A-Za-z0-9._-]+)$ ]]
           ssh \
             -i ~/.ssh/mexo-production \
             -o BatchMode=yes \
@@ -494,8 +521,22 @@ jobs:
           fi
           git cat-file -e "\$RESTORE_REVISION^{commit}"
           git reset --hard "\$RESTORE_REVISION"
-          ln -sfn "\$RESTORE_NEXT_TARGET" "\$APP/.next-rollback-current"
-          mv -Tf "\$APP/.next-rollback-current" "\$APP/.next"
+          case "\$RESTORE_NEXT_TARGET" in
+            .next-rollback-*)
+              if [ -L "\$APP/.next" ]; then
+                rm "\$APP/.next"
+              elif [ -e "\$APP/.next" ]; then
+                mv "\$APP/.next" "\$APP/.mexo-releases/active-before-restore-\$RESTORE_REVISION"
+              fi
+              mv "\$APP/\$RESTORE_NEXT_TARGET" "\$APP/.next"
+              ;;
+            .mexo-releases/*)
+              ln -sfn "\$RESTORE_NEXT_TARGET" "\$APP/.next-rollback-current"
+              mv -Tf "\$APP/.next-rollback-current" "\$APP/.next"
+              ;;
+            *) echo "ERROR: unrecognized rollback build target."; exit 1 ;;
+          esac
+          test -f "\$APP/.next/BUILD_ID"
           sudo -n systemctl restart mexo
           sudo -n systemctl is-active --quiet mexo
           echo "Previous source revision and managed build restored; mexo.service is active."
@@ -551,7 +592,7 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$PREVIOUS_REVISION" =~ ^[0-9a-f]{40}$ ]]
-          [[ "$PREVIOUS_NEXT_TARGET" =~ ^\.mexo-releases/[A-Za-z0-9._-]+$ ]]
+          [[ "$PREVIOUS_NEXT_TARGET" =~ ^(\.mexo-releases/[A-Za-z0-9._-]+|\.next-rollback-[A-Za-z0-9._-]+)$ ]]
           ssh \
             -i ~/.ssh/mexo-production \
             -o BatchMode=yes \
@@ -564,12 +605,26 @@ jobs:
           APP="\$REPO/portfel-inwestora"
           PREVIOUS_REVISION="$PREVIOUS_REVISION"
           PREVIOUS_NEXT_TARGET="$PREVIOUS_NEXT_TARGET"
-          case "\$PREVIOUS_NEXT_TARGET" in .mexo-releases/*) ;; *) exit 1 ;; esac
+          case "\$PREVIOUS_NEXT_TARGET" in .mexo-releases/*|.next-rollback-*) ;; *) exit 1 ;; esac
           test -d "\$APP/\$PREVIOUS_NEXT_TARGET"
           cd "\$REPO"
           git reset --hard "\$PREVIOUS_REVISION"
-          ln -sfn "\$PREVIOUS_NEXT_TARGET" "\$APP/.next-rollback-current"
-          mv -Tf "\$APP/.next-rollback-current" "\$APP/.next"
+          case "\$PREVIOUS_NEXT_TARGET" in
+            .next-rollback-*)
+              if [ -L "\$APP/.next" ]; then
+                rm "\$APP/.next"
+              elif [ -e "\$APP/.next" ]; then
+                mv "\$APP/.next" "\$APP/.mexo-releases/active-before-restore-\$PREVIOUS_REVISION"
+              fi
+              mv "\$APP/\$PREVIOUS_NEXT_TARGET" "\$APP/.next"
+              ;;
+            .mexo-releases/*)
+              ln -sfn "\$PREVIOUS_NEXT_TARGET" "\$APP/.next-rollback-current"
+              mv -Tf "\$APP/.next-rollback-current" "\$APP/.next"
+              ;;
+            *) echo "ERROR: unrecognized rollback build target."; exit 1 ;;
+          esac
+          test -f "\$APP/.next/BUILD_ID"
           sudo -n systemctl restart mexo
           sudo -n systemctl is-active --quiet mexo
           echo "Previous code and build restored; mexo.service is active. Public landing/login routes will be checked by the runner."

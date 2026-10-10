@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "node --use-system-ca ../node_modules/next/dist/bin/next dev --webpack --hostname 127.0.0.1",
     "build": "next build",
-    "start": "node --use-system-ca ../node_modules/next/dist/bin/next start --hostname 127.0.0.1",
+    "start": "node --use-system-ca ./scripts/start-production.mjs",
     "test": "node --experimental-strip-types --import ./tests/register-alias-loader.mjs --test tests/**/*.test.mjs",
     "migrate:sqlite-to-postgres": "node --experimental-strip-types scripts/migrate-sqlite-to-postgres.ts",
     "migrate:sqlite-to-postgres:apply": "node --experimental-strip-types scripts/migrate-sqlite-to-postgres.ts --apply",

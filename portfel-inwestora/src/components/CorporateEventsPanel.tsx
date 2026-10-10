@@ -13,6 +13,7 @@ import { fetchCorporateEvents, fetchGeneralMeetings } from "@/lib/api";
 
 type CorporateEventsPanelProps = {
   portfolioId: string;
+  portfolioIds?: string[];
   variant?: "all" | "general-meetings";
 };
 
@@ -50,12 +51,13 @@ const getEventStatusLabel = (event: CorporateEvent) => {
   return null;
 };
 
-export default function CorporateEventsPanel({ portfolioId, variant = "all" }: CorporateEventsPanelProps) {
+export default function CorporateEventsPanel({ portfolioId, portfolioIds, variant = "all" }: CorporateEventsPanelProps) {
   const [data, setData] = useState<CorporateEventsResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [hasError, setHasError] = useState(false);
   const [meetingScope, setMeetingScope] = useState<GeneralMeetingScope>("all");
   const isMeetingView = variant === "general-meetings";
+  const portfolioIdsKey = portfolioIds?.join(",") ?? "";
 
   useEffect(() => {
     const controller = new AbortController();
@@ -72,7 +74,7 @@ export default function CorporateEventsPanel({ portfolioId, variant = "all" }: C
             }],
             scope: "OK",
           }))
-      : fetchCorporateEvents({ portfolioId, days: 60, signal: controller.signal });
+      : fetchCorporateEvents({ portfolioId, portfolioIds: portfolioIdsKey ? portfolioIdsKey.split(",") : undefined, days: 60, signal: controller.signal });
 
     void request
       .then((response) => {
@@ -92,7 +94,7 @@ export default function CorporateEventsPanel({ portfolioId, variant = "all" }: C
       });
 
     return () => controller.abort();
-  }, [isMeetingView, meetingScope, portfolioId]);
+  }, [isMeetingView, meetingScope, portfolioId, portfolioIdsKey]);
 
   const changeMeetingScope = (scope: GeneralMeetingScope) => {
     setIsLoading(true);

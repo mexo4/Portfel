@@ -1,8 +1,10 @@
 import { NextResponse } from "next/server";
 import { buildAutomaticBondCouponAdjustments, normalizePortfolioState } from "@/lib/portfolio-state";
-import { getCurrentAuthenticatedUser } from "@/lib/server/auth";
+import { getCurrentAccountData } from "@/lib/server/auth";
 import { buildAggregatePortfolioHistory, buildPortfolioHistory } from "@/lib/server/portfolio-history";
 import { getSortedPortfolioRealizedAdjustments } from "@/lib/portfolio-state";
+import { ensurePortfolioCoreModel } from "@/lib/operation-engine";
+import { getAuthorizedPortfolioScopeIds } from "@/lib/portfolio-selection";
 import type {
   PortfolioAccount,
   PortfolioAccountType,
@@ -26,9 +28,9 @@ const mergeRealizedAdjustments = (
   );
 
 export async function POST(request: Request) {
-  const user = await getCurrentAuthenticatedUser();
+  const accountData = await getCurrentAccountData();
 
-  if (!user) {
+  if (!accountData) {
     return NextResponse.json({ error: "Brak autoryzacji." }, { status: 401 });
   }
 
@@ -42,24 +44,36 @@ export async function POST(request: Request) {
       accountType?: PortfolioAccountType;
       benchmarks?: PortfolioBenchmarkDefinition[];
       portfolioScopes?: PortfolioHistoryScope[];
+      portfolioScopeIds?: string[];
     };
     const benchmarks = Array.isArray(payload.benchmarks) ? payload.benchmarks : [];
     const rawScopes = Array.isArray(payload.portfolioScopes) ? payload.portfolioScopes : [];
 
-    if (rawScopes.length > 0) {
-      const portfolioScopes = rawScopes.slice(0, 50).flatMap((scope) => {
-        if (!scope || typeof scope.portfolioId !== "string" || !scope.portfolioId.trim()) {
-          return [];
-        }
+    if (Array.isArray(payload.portfolioScopeIds) || rawScopes.length > 0) {
+      // Client-supplied histories are not trusted for aggregate requests. Only
+      // use their IDs, intersected with the authenticated user's server book.
+      const requestedIds = Array.isArray(payload.portfolioScopeIds)
+        ? payload.portfolioScopeIds
+        : rawScopes.flatMap((scope) => typeof scope?.portfolioId === "string" ? [scope.portfolioId] : []);
+      const authorizedIds = getAuthorizedPortfolioScopeIds(
+        requestedIds,
+        accountData.portfolios.map(({ id }) => id)
+      );
+      if (!authorizedIds) {
+        return NextResponse.json({ error: "Zakres zawiera portfel spoza konta użytkownika." }, { status: 403 });
+      }
+      const selectedIds = new Set(authorizedIds);
+      const portfolioScopes = accountData.portfolios.flatMap((portfolio) => {
+        if (!selectedIds.has(portfolio.id)) return [];
+        const corePortfolio = ensurePortfolioCoreModel(portfolio);
         const state = normalizePortfolioState({
-          assets: Array.isArray(scope.assets) ? scope.assets : [],
-          sales: Array.isArray(scope.sales) ? scope.sales : [],
-          realizedAdjustments: Array.isArray(scope.realizedAdjustments)
-            ? scope.realizedAdjustments
-            : [],
+          assets: corePortfolio.assets,
+          sales: corePortfolio.sales,
+          realizedAdjustments: corePortfolio.realizedAdjustments,
         });
         return [{
-          portfolioId: scope.portfolioId,
+          portfolioId: corePortfolio.id,
+          accountType: corePortfolio.accountType,
           assets: state.assets,
           sales: state.sales,
           realizedAdjustments: mergeRealizedAdjustments(
@@ -67,11 +81,11 @@ export async function POST(request: Request) {
             buildAutomaticBondCouponAdjustments(
               state.assets,
               state.sales,
-              scope.accountType
+              corePortfolio.accountType
             )
           ),
-          operations: Array.isArray(scope.operations) ? scope.operations : [],
-          accounts: Array.isArray(scope.accounts) ? scope.accounts : [],
+          operations: corePortfolio.operations ?? [],
+          accounts: corePortfolio.accounts ?? [],
         }];
       });
       return NextResponse.json(await buildAggregatePortfolioHistory({ portfolioScopes, benchmarks }));

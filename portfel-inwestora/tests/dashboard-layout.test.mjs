@@ -61,7 +61,7 @@ test("layout preserves safe reorder and size choices without financial payloads"
   assert.equal(JSON.stringify(layout).includes("operations"), false);
 });
 
-test("desktop and mobile remain independent per real portfolio or all scope", () => {
+test("desktop and mobile keep independent safe layouts and valid scope key normalization", () => {
   const layouts = normalizeDashboardScopeLayouts({
     desktop: { version: 1, widgets: [{ id: "portfolio-chart", size: "full" }] },
     mobile: { version: 1, widgets: [{ id: "daily-result", size: "small" }] },
@@ -70,7 +70,19 @@ test("desktop and mobile remain independent per real portfolio or all scope", ()
   assert.equal(dashboardScopeLayoutsEqual(layouts, normalizeDashboardScopeLayouts(layouts)), true);
   assert.equal(getDashboardScopeKey("portfolio-1", false), "portfolio:portfolio-1");
   assert.equal(getDashboardScopeKey("portfolio-1", true), "all");
+  assert.equal(getDashboardScopeKey("portfolio-1", true, ["portfolio-3", "portfolio-1"]), "portfolios:portfolio-1,portfolio-3");
+  assert.equal(getAuthorizedDashboardScope(new Request("https://mexo.test/api/dashboard-layout?scope=portfolios%3Aportfolio-1%2Cportfolio-3"), new Set(["portfolio-1", "portfolio-2", "portfolio-3"])), "portfolios:portfolio-1,portfolio-3");
+  assert.equal(getAuthorizedDashboardScope(new Request("https://mexo.test/api/dashboard-layout?scope=portfolios%3Aportfolio-1%2Cforeign"), new Set(["portfolio-1", "portfolio-2"])), null);
   assert.deepEqual(normalizeDashboardScopeLayouts(null).mobile, DEFAULT_MOBILE_DASHBOARD_LAYOUT);
+});
+
+test("dashboard arrangement is shared while its data follows the global portfolio selection", async () => {
+  const source = await readSource("src/components/ConfigurableDashboard.tsx");
+  assert.match(source, /const layoutScopeKey = "all"/);
+  assert.match(source, /fetchDashboardLayout\(layoutScopeKey/);
+  assert.match(source, /saveDashboardLayout\(savingScope/);
+  assert.match(source, /DashboardDataProvider scopeKey=\{scopeKey\}/);
+  assert.match(source, /getDashboardScopeKey\(workspace\.activePortfolioId/);
 });
 
 test("presets return independent non-empty desktop and mobile clones", () => {
@@ -229,6 +241,6 @@ test("dashboard shared data source has one request owner per resource and suppre
   assert.equal((`${dashboard}\n${portfolioApp}\n${watchlistWorkspace}`.match(/fetchWatchlist\(/g) ?? []).length, 1);
   assert.match(dashboard, /watchlist: workspace\.watchlistItems/);
   assert.match(dashboard, /generation === requestGenerationRef\.current/);
-  assert.match(dashboard, /response\.scopeKey !== scopeKey/);
+  assert.match(dashboard, /response\.scopeKey !== layoutScopeKey/);
   assert.doesNotMatch(dashboard.slice(dashboard.indexOf("const getHistorySignature"), dashboard.indexOf("type DashboardData")), /refreshRevision/);
 });

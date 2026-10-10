@@ -1839,38 +1839,49 @@ export const buildPortfolioHistory = async ({
 export const aggregatePortfolioHistoryPoints = (
   histories: Array<Pick<PortfolioHistoryResponse, "points">>
 ): PortfolioHistoryPoint[] => {
-  const pointsByDate = new Map<string, PortfolioHistoryPoint[]>();
-
-  for (const history of histories) {
-    for (const point of history.points) {
-      const points = pointsByDate.get(point.date) ?? [];
-      points.push(point);
-      pointsByDate.set(point.date, points);
-    }
-  }
-
-  const dates = Array.from(pointsByDate.keys()).sort((left, right) => left.localeCompare(right));
-  let previousValuePln: number | null = null;
-  let previousProfitLossPln: number | null = null;
+  const scopedPoints = histories.map(({ points }) =>
+    [...points].sort((left, right) => left.date.localeCompare(right.date))
+  );
+  const dates = Array.from(new Set(scopedPoints.flatMap((points) => points.map(({ date }) => date))))
+    .sort((left, right) => left.localeCompare(right));
+  const pointIndices = scopedPoints.map(() => -1);
   let cumulativeTimeWeightedReturnFactor = 1;
 
   return dates.map((date) => {
-    const scopedPoints = pointsByDate.get(date) ?? [];
-    const portfolioValuePln = round(scopedPoints.reduce((total, point) => total + point.portfolioValuePln, 0));
-    const netInvestedPln = round(scopedPoints.reduce((total, point) => total + point.netInvestedPln, 0));
-    const profitLossPln = round(scopedPoints.reduce((total, point) => total + point.profitLossPln, 0));
+    let previousAggregateValuePln = 0;
+    let aggregateProfitLossDeltaPln = 0;
+    const currentPoints = scopedPoints.flatMap((points, scopeIndex) => {
+      const previousPointIndex = pointIndices[scopeIndex] ?? -1;
+      let pointIndex = pointIndices[scopeIndex] ?? -1;
+      while (pointIndex + 1 < points.length && points[pointIndex + 1]!.date <= date) {
+        pointIndex += 1;
+      }
+      pointIndices[scopeIndex] = pointIndex;
+      const currentPoint = pointIndex >= 0 ? points[pointIndex] : undefined;
+      const previousPoint = previousPointIndex >= 0 ? points[previousPointIndex] : undefined;
+      if (currentPoint && previousPoint && previousPoint.portfolioValuePln > 0) {
+        // Combine constituent daily TWR numerators over the value that was
+        // actually invested at the start of this interval. A portfolio whose
+        // first history point falls on this date is an inception, not a gain
+        // on the other selected portfolios.
+        previousAggregateValuePln += previousPoint.portfolioValuePln;
+        aggregateProfitLossDeltaPln += currentPoint.profitLossPln - previousPoint.profitLossPln;
+      }
+      return pointIndex >= 0 ? [points[pointIndex]!] : [];
+    });
+    const portfolioValuePln = round(currentPoints.reduce((total, point) => total + point.portfolioValuePln, 0));
+    const netInvestedPln = round(currentPoints.reduce((total, point) => total + point.netInvestedPln, 0));
+    const profitLossPln = round(currentPoints.reduce((total, point) => total + point.profitLossPln, 0));
 
-    if (previousValuePln !== null && previousValuePln > 0 && previousProfitLossPln !== null) {
-      // P/L delta is exactly the existing daily return numerator: portfolio
-      // value change minus external cash flow plus realized adjustment.
-      const dailyReturn = (profitLossPln - previousProfitLossPln) / previousValuePln;
+    if (previousAggregateValuePln > 0) {
+      // Per-portfolio P/L deltas already remove deposits/withdrawals and add
+      // realized adjustments. Weight their returns by prior portfolio values.
+      const dailyReturn = aggregateProfitLossDeltaPln / previousAggregateValuePln;
       if (Number.isFinite(dailyReturn)) {
         cumulativeTimeWeightedReturnFactor *= 1 + dailyReturn;
       }
     }
 
-    previousValuePln = portfolioValuePln;
-    previousProfitLossPln = profitLossPln;
     return {
       date,
       portfolioValuePln,

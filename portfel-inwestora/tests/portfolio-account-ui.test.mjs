@@ -57,6 +57,8 @@ test("portfolio history keeps account rules per real portfolio and deduplicates 
   ]);
   assert.match(route, /mergeRealizedAdjustments/);
   assert.match(route, /new Map/);
-  assert.match(route, /scope\.accountType/);
+  assert.match(route, /getAuthorizedPortfolioScopeIds/);
+  assert.match(route, /accountType: corePortfolio\.accountType/);
+  assert.match(route, /buildAutomaticBondCouponAdjustments\([\s\S]*corePortfolio\.accountType/);
   assert.match(workspace, /accountType: portfolio\.accountType/);
 });

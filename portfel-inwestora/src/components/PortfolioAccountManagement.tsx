@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import type { FormEvent, KeyboardEvent } from "react";
 import {
   OKI_EFFECTIVE_DATE,
   OKI_ANNUAL_RULES,
@@ -44,7 +45,7 @@ type Props = {
     name: string;
     accountType: PortfolioAccountType;
     accountConfiguration: PortfolioAccountConfiguration;
-  }) => void;
+  }) => Promise<void>;
   onUpdateAccount: (input: {
     accountType: PortfolioAccountType;
     accountConfiguration: PortfolioAccountConfiguration;
@@ -293,16 +294,130 @@ export default function PortfolioAccountManagement({
   onUpdateAccount,
 }: Props) {
   const [isCreating, setIsCreating] = useState(false);
+  const [isSubmittingCreate, setIsSubmittingCreate] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
   const [createDraft, setCreateDraft] = useState<CreateDraft>({
     name: `Portfel ${portfolios.length + 1}`,
     ...createAccountDraft(),
   });
+  const createTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const createDialogRef = useRef<HTMLElement | null>(null);
+  const createNameInputRef = useRef<HTMLInputElement | null>(null);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
+  const createSubmittingRef = useRef(false);
   const okiPortfolios = portfolios.filter(
     (portfolio) => normalizePortfolioAccountType(portfolio.accountType) === "OKI"
   );
   const summaryByPortfolioId = new Map(
     summaries.map(({ portfolio, summary }) => [portfolio.id, summary] as const)
   );
+
+  useEffect(() => {
+    if (!isCreating) return;
+
+    const previousBodyOverflow = document.body.style.overflow;
+    const focusTimeout = window.setTimeout(() => createNameInputRef.current?.focus(), 0);
+    document.body.style.overflow = "hidden";
+
+    return () => {
+      document.body.style.overflow = previousBodyOverflow;
+      window.clearTimeout(focusTimeout);
+      const returnTarget = returnFocusRef.current;
+      returnFocusRef.current = null;
+      if (returnTarget?.isConnected) {
+        window.requestAnimationFrame(() => returnTarget.focus());
+      }
+    };
+  }, [isCreating]);
+
+  const openCreateModal = () => {
+    if (isPending) return;
+    returnFocusRef.current =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : createTriggerRef.current;
+    setCreateDraft({ name: `Portfel ${portfolios.length + 1}`, ...createAccountDraft() });
+    setCreateError(null);
+    setIsCreating(true);
+  };
+
+  const closeCreateModal = () => {
+    if (createSubmittingRef.current) return;
+    setCreateError(null);
+    setIsCreating(false);
+  };
+
+  const handleCreateKeyDown = (event: KeyboardEvent<HTMLElement>) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeCreateModal();
+      return;
+    }
+
+    if (event.key !== "Tab" || !createDialogRef.current) return;
+
+    const focusable = Array.from(
+      createDialogRef.current.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])'
+      )
+    ).filter((element) => !element.hidden && element.getAttribute("aria-hidden") !== "true");
+    if (focusable.length === 0) {
+      event.preventDefault();
+      createDialogRef.current.focus();
+      return;
+    }
+
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    const active = document.activeElement;
+    if (event.shiftKey && (active === first || !createDialogRef.current.contains(active))) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && (active === last || !createDialogRef.current.contains(active))) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
+
+  const handleCreateSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (createSubmittingRef.current || isPending) return;
+
+    const name = createDraft.name.trim();
+    if (!name) {
+      setCreateError("Wpisz nazwę portfela, aby kontynuować.");
+      createNameInputRef.current?.focus();
+      return;
+    }
+    if (name.length > 64) {
+      setCreateError("Nazwa portfela może mieć maksymalnie 64 znaki.");
+      createNameInputRef.current?.focus();
+      return;
+    }
+
+    createSubmittingRef.current = true;
+    setIsSubmittingCreate(true);
+    setCreateError(null);
+    try {
+      await onCreate({
+        name,
+        accountType: createDraft.accountType,
+        accountConfiguration: toConfiguration(createDraft),
+      });
+      setCreateDraft({ name: `Portfel ${portfolios.length + 2}`, ...createAccountDraft() });
+      setIsCreating(false);
+    } catch (error) {
+      const message = error instanceof Error ? error.message.trim() : "";
+      setCreateError(
+        message && message.length <= 220
+          ? message
+          : "Nie udało się utworzyć portfela. Spróbuj ponownie za chwilę."
+      );
+    } finally {
+      createSubmittingRef.current = false;
+      setIsSubmittingCreate(false);
+    }
+  };
 
   return (
     <section className="portfolio-account-management">
@@ -316,37 +431,94 @@ export default function PortfolioAccountManagement({
           <div className="portfolio-hub-actions">
             <button className="ghost-button" type="button" onClick={onRename} disabled={isPending || isAllPortfoliosSelected}>Zmień nazwę</button>
             <button className="ghost-button admin-danger-button" type="button" onClick={onDelete} disabled={portfolios.length <= 1 || isPending || isAllPortfoliosSelected}>{isPending ? "Zapisywanie…" : "Usuń portfel"}</button>
-            <button className="primary-button" type="button" onClick={() => setIsCreating((current) => !current)} disabled={isPending}>{isCreating ? "Zamknij formularz" : "Dodaj portfel"}</button>
+            <button ref={createTriggerRef} className="primary-button" type="button" onClick={openCreateModal} disabled={isPending}>Dodaj portfel</button>
           </div>
         </div>
 
         {isCreating ? (
-          <form
-            className="portfolio-account-form mt-5"
-            onSubmit={(event) => {
-              event.preventDefault();
-              if (!createDraft.name.trim()) return;
-              onCreate({
-                name: createDraft.name.trim(),
-                accountType: createDraft.accountType,
-                accountConfiguration: toConfiguration(createDraft),
-              });
-              setIsCreating(false);
-              setCreateDraft({ name: `Portfel ${portfolios.length + 2}`, ...createAccountDraft() });
+          <div
+            className="portfolio-create-backdrop"
+            role="presentation"
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget) closeCreateModal();
             }}
           >
-            <div className="portfolio-account-form-copy">
-              <p className="eyebrow">Nowy rachunek</p>
-              <h3>Dodaj portfel</h3>
-              <p>Typ rachunku wpływa na limity i opis podatkowy, nie na sposób liczenia wyniku.</p>
-            </div>
-            <label className="field"><span>Nazwa portfela</span><input value={createDraft.name} onChange={(event) => setCreateDraft((current) => ({ ...current, name: event.target.value }))} maxLength={64} autoFocus /></label>
-            <AccountTypeFields draft={createDraft} onChange={(next) => setCreateDraft((current) => ({ ...current, ...next }))} idPrefix="create-account" />
-            <div className="sprint-action-row portfolio-account-form-actions">
-              <button type="button" className="ghost-button" onClick={() => setIsCreating(false)}>Anuluj</button>
-              <button type="submit" className="primary-button" disabled={isPending || !createDraft.name.trim()}>{isPending ? "Zapisywanie…" : "Utwórz portfel"}</button>
-            </div>
-          </form>
+            <section
+              ref={createDialogRef}
+              className="portfolio-create-modal"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="portfolio-create-title"
+              aria-describedby="portfolio-create-description"
+              tabIndex={-1}
+              onKeyDown={handleCreateKeyDown}
+            >
+              <header className="portfolio-create-header">
+                <div className="portfolio-create-heading-mark" aria-hidden="true">+</div>
+                <div>
+                  <p className="eyebrow">Portfele</p>
+                  <h2 id="portfolio-create-title">Nowy portfel</h2>
+                  <p id="portfolio-create-description">Utwórz osobną przestrzeń do śledzenia inwestycji i wyników.</p>
+                </div>
+                <button
+                  type="button"
+                  className="portfolio-create-close"
+                  aria-label="Zamknij okno tworzenia portfela"
+                  onClick={closeCreateModal}
+                  disabled={isSubmittingCreate}
+                >
+                  <span aria-hidden="true">×</span>
+                </button>
+              </header>
+
+              <form className="portfolio-create-form" onSubmit={(event) => void handleCreateSubmit(event)}>
+                <div className="portfolio-create-body">
+                  <label className="field portfolio-create-name" htmlFor="portfolio-create-name">
+                    <span>Nazwa portfela</span>
+                    <input
+                      ref={createNameInputRef}
+                      id="portfolio-create-name"
+                      value={createDraft.name}
+                      onChange={(event) => {
+                        setCreateDraft((current) => ({ ...current, name: event.target.value }));
+                        if (createError) setCreateError(null);
+                      }}
+                      maxLength={64}
+                      autoComplete="off"
+                      placeholder="np. Inwestycje długoterminowe"
+                      aria-invalid={createError ? "true" : undefined}
+                      aria-describedby={createError ? "portfolio-create-error" : undefined}
+                      disabled={isSubmittingCreate}
+                    />
+                    <small>{createDraft.name.trim().length}/64 znaków</small>
+                  </label>
+
+                  <div className="portfolio-create-account-fields">
+                    <AccountTypeFields
+                      draft={createDraft}
+                      onChange={(next) => setCreateDraft((current) => ({ ...current, ...next }))}
+                      idPrefix="create-account"
+                    />
+                  </div>
+
+                  {createError ? (
+                    <p id="portfolio-create-error" className="portfolio-create-error" role="alert">
+                      <span aria-hidden="true">!</span>{createError}
+                    </p>
+                  ) : null}
+                </div>
+
+                <footer className="portfolio-create-footer">
+                  <button type="button" className="ghost-button" onClick={closeCreateModal} disabled={isSubmittingCreate}>
+                    Anuluj
+                  </button>
+                  <button type="submit" className="primary-button" disabled={isSubmittingCreate || isPending}>
+                    {isSubmittingCreate ? "Tworzenie…" : "Utwórz portfel"}
+                  </button>
+                </footer>
+              </form>
+            </section>
+          </div>
         ) : null}
 
         <div className="portfolio-card-grid mt-5">

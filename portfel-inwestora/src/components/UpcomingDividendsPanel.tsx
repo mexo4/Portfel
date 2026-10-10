@@ -13,6 +13,7 @@ import { formatCurrency, formatDate, formatNumber } from "@/lib/utils";
 
 type UpcomingDividendsPanelProps = {
   portfolioId: string;
+  portfolioIds?: string[];
 };
 
 const getStatusLabel = (event: CorporateEvent) => {
@@ -28,16 +29,17 @@ const getStatusClassName = (event: CorporateEvent) =>
       ? "upcoming-dividend-status is-proposed"
       : "upcoming-dividend-status";
 
-export default function UpcomingDividendsPanel({ portfolioId }: UpcomingDividendsPanelProps) {
+export default function UpcomingDividendsPanel({ portfolioId, portfolioIds }: UpcomingDividendsPanelProps) {
   const [data, setData] = useState<CorporateEventsResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [hasError, setHasError] = useState(false);
   const reloadRequestedRef = useRef(false);
+  const portfolioIdsKey = portfolioIds?.join(",") ?? "";
 
   useEffect(() => {
     const controller = new AbortController();
 
-    void fetchCorporateEvents({ portfolioId, days: 183, signal: controller.signal })
+    void fetchCorporateEvents({ portfolioId, portfolioIds: portfolioIdsKey ? portfolioIdsKey.split(",") : undefined, days: 183, signal: controller.signal })
       .then((response) => {
         if (!controller.signal.aborted) {
           if (
@@ -62,7 +64,7 @@ export default function UpcomingDividendsPanel({ portfolioId }: UpcomingDividend
       });
 
     return () => controller.abort();
-  }, [portfolioId]);
+  }, [portfolioId, portfolioIdsKey]);
 
   const dividends = useMemo(
     () =>

@@ -201,12 +201,14 @@ export const searchEtfInstruments = async ({ query, signal }: Pick<SearchParams,
 
 export const fetchCorporateEvents = async ({
   portfolioId,
+  portfolioIds,
   instrumentId,
   days = 60,
   eventTypes,
   signal,
 }: {
   portfolioId: string;
+  portfolioIds?: string[];
   instrumentId?: string;
   days?: number;
   eventTypes?: CorporateEventType[];
@@ -216,6 +218,7 @@ export const fetchCorporateEvents = async ({
     portfolio: portfolioId,
     days: String(days),
   });
+  if (portfolioIds?.length) params.set("portfolioIds", portfolioIds.join(","));
 
   if (instrumentId) {
     params.set("instrumentId", instrumentId);
@@ -1034,19 +1037,13 @@ export const fetchPortfolioHistory = async ({
   portfolioScopes?: PortfolioHistoryScope[];
   signal?: AbortSignal;
 }) => {
+  const body = portfolioScopes !== undefined
+    ? { portfolioScopeIds: portfolioScopes.map(({ portfolioId }) => portfolioId), benchmarks }
+    : { assets, sales, realizedAdjustments, operations, accounts, accountType, benchmarks };
   return requestJson<PortfolioHistoryResponse>("/api/portfolio-history", {
     method: "POST",
     signal,
-    body: JSON.stringify({
-      assets,
-      sales,
-      realizedAdjustments,
-      operations,
-      accounts,
-      accountType,
-      benchmarks,
-      portfolioScopes,
-    }),
+    body: JSON.stringify(body),
   });
 };
 

@@ -5,8 +5,8 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { getWorkspaceRoute, type WorkspaceRouteKey } from "@/lib/workspace-routes";
-import { ALL_PORTFOLIOS_ID, getWorkspaceReadHref, isAllPortfoliosSelection } from "@/lib/portfolio-selection";
-import { PORTFOLIO_ACCOUNT_TYPE_LABELS, normalizePortfolioAccountType } from "@/lib/portfolio-account-rules";
+import { getWorkspaceReadHref, type PortfolioScopeSelection } from "@/lib/portfolio-selection";
+import PortfolioScopePicker from "@/components/PortfolioScopePicker";
 import type { AuthenticatedUser, CurrencyCode, InvestmentPortfolio } from "@/types/portfolio";
 import { MEXO_TESTER_MODE } from "@/lib/constants";
 
@@ -16,11 +16,12 @@ type AppWorkspaceShellProps = {
   account: AuthenticatedUser;
   portfolios: InvestmentPortfolio[];
   selectedPortfolioId: string;
+  portfolioScope: PortfolioScopeSelection;
   activeBaseCurrency: CurrencyCode;
   isPortfolioMutationPending: boolean;
   isLoggingOut: boolean;
   isAdmin: boolean;
-  onPortfolioChange: (portfolioId: string) => void;
+  onPortfolioScopeChange: (selection: PortfolioScopeSelection) => void;
   onBaseCurrencyChange: (currency: string) => void;
   onQuickAdd: () => void;
   onLogout: () => void;
@@ -159,7 +160,7 @@ function NavigationLink({ item, active, compact = false }: { item: NavigationIte
   return <Link href={item.href} className={active ? "workspace-nav-link is-active" : "workspace-nav-link"} aria-current={active ? "page" : undefined} title={compact ? item.label : undefined}><span className="workspace-nav-glyph"><WorkspaceIcon name={item.icon} /></span><span>{item.label}</span></Link>;
 }
 
-export default function AppWorkspaceShell({ account, portfolios, selectedPortfolioId, activeBaseCurrency, isPortfolioMutationPending, isLoggingOut, isAdmin, onPortfolioChange, onBaseCurrencyChange, onQuickAdd, onLogout, children }: AppWorkspaceShellProps) {
+export default function AppWorkspaceShell({ account, portfolios, selectedPortfolioId, portfolioScope, activeBaseCurrency, isPortfolioMutationPending, isLoggingOut, isAdmin, onPortfolioScopeChange, onBaseCurrencyChange, onQuickAdd, onLogout, children }: AppWorkspaceShellProps) {
   const pathname = usePathname();
   const router = useRouter();
   const route = getWorkspaceRoute(pathname);
@@ -181,17 +182,14 @@ export default function AppWorkspaceShell({ account, portfolios, selectedPortfol
   const quickActionsTriggerRef = useRef<HTMLButtonElement | null>(null);
   const commandTriggerRef = useRef<HTMLButtonElement | null>(null);
   const meta = routeMeta[route];
-  const hasAllPortfoliosSelected = isAllPortfoliosSelection(selectedPortfolioId);
-  const selectedPortfolio = portfolios.find((portfolio) => portfolio.id === selectedPortfolioId);
-  const selectedAccountTypeLabel = hasAllPortfoliosSelected ? "Widok łączny" : selectedPortfolio ? PORTFOLIO_ACCOUNT_TYPE_LABELS[normalizePortfolioAccountType(selectedPortfolio.accountType)] : "Portfel";
+  const hasAllPortfoliosSelected = portfolioScope.mode !== "SINGLE";
   const visibleNavigationGroups = navigationGroups.map((group) => ({ ...group, items: group.items.filter((item) => !item.testerOnly || MEXO_TESTER_MODE) }));
   const currentNavigationGroup = visibleNavigationGroups.find((group) => isGroupActive(route, group));
   const showSectionTabs = currentNavigationGroup && currentNavigationGroup.id !== "tools";
 
   // The virtual aggregate is URL state, not a persisted portfolio. Preserve it on read routes.
-  const getWorkspaceHref = (href: string) => getWorkspaceReadHref(href, selectedPortfolioId, activeBaseCurrency);
+  const getWorkspaceHref = (href: string) => getWorkspaceReadHref(href, selectedPortfolioId, activeBaseCurrency, portfolioScope);
   const withWorkspaceContext = (item: NavigationItem): NavigationItem => ({ ...item, href: getWorkspaceHref(item.href) });
-  const getPortfolioOptionLabel = (portfolio: InvestmentPortfolio) => `${portfolio.name} · ${PORTFOLIO_ACCOUNT_TYPE_LABELS[normalizePortfolioAccountType(portfolio.accountType)]}`;
 
   const pageCommands = [...directNavigation, ...visibleNavigationGroups.flatMap((group) => group.items), { key: "settings" as const, href: "/settings", label: "Ustawienia", icon: "settings" as const, keywords: "konto preferencje" }].map((item) => ({
     id: `page:${item.key}`,
@@ -299,7 +297,7 @@ export default function AppWorkspaceShell({ account, portfolios, selectedPortfol
 
     <header className="workspace-mobile-header">
       <Link href={getWorkspaceHref("/dashboard")} className="workspace-mobile-brand" aria-label="Mexo — pulpit"><Image src="/mexo-mark-transparent.png" alt="" width={34} height={34} priority /></Link>
-      <label className="workspace-mobile-portfolio"><span className="sr-only">Aktywny portfel</span><select value={selectedPortfolioId} onChange={(event) => onPortfolioChange(event.target.value)} aria-label="Wybierz aktywny portfel" disabled={isPortfolioMutationPending}><option value={ALL_PORTFOLIOS_ID}>Wszystkie portfele</option>{portfolios.map((portfolio) => <option key={portfolio.id} value={portfolio.id}>{getPortfolioOptionLabel(portfolio)}</option>)}</select><small>{selectedAccountTypeLabel}</small></label>
+      <PortfolioScopePicker portfolios={portfolios} selection={portfolioScope} disabled={isPortfolioMutationPending} mobile onApply={onPortfolioScopeChange} />
       <button ref={quickAddTriggerRef} type="button" className="workspace-mobile-quick-action" onClick={() => openQuickActions(true)} aria-label="Otwórz szybkie działania" aria-haspopup="dialog" aria-expanded={isQuickAddOpen}><WorkspaceIcon name="plus" /></button>
     </header>
 
@@ -307,7 +305,7 @@ export default function AppWorkspaceShell({ account, portfolios, selectedPortfol
       <header className="workspace-topbar">
         <button ref={commandTriggerRef} type="button" className="workspace-global-search-trigger" onClick={openCommand} aria-haspopup="dialog" aria-expanded={isCommandOpen}><WorkspaceIcon name="search" /><span>Przejdź do…</span><kbd>Ctrl K</kbd></button>
         <div className="workspace-topbar-actions">
-          <label className="workspace-portfolio-select"><span>Aktywny portfel</span><select value={selectedPortfolioId} onChange={(event) => onPortfolioChange(event.target.value)} disabled={isPortfolioMutationPending}><option value={ALL_PORTFOLIOS_ID}>Wszystkie portfele</option>{portfolios.map((portfolio) => <option key={portfolio.id} value={portfolio.id}>{portfolio.name}</option>)}</select><small className="workspace-account-badge">{selectedAccountTypeLabel}</small></label>
+          <PortfolioScopePicker portfolios={portfolios} selection={portfolioScope} disabled={isPortfolioMutationPending} onApply={onPortfolioScopeChange} />
           <label className="workspace-currency-select"><span>Waluta</span><select value={activeBaseCurrency} onChange={(event) => onBaseCurrencyChange(event.target.value)} disabled={isPortfolioMutationPending}><option value="PLN">PLN</option><option value="USD">USD</option><option value="EUR">EUR</option><option value="GBP">GBP</option></select></label>
           <button ref={quickActionsTriggerRef} type="button" className="workspace-topbar-add" onClick={() => openQuickActions(false)} aria-label="Otwórz szybkie działania" aria-haspopup="dialog" aria-expanded={isQuickActionsOpen}><WorkspaceIcon name="plus" /><span>Szybkie działania</span></button>
           <Link href={getWorkspaceHref("/settings")} className="workspace-profile-link" aria-label="Ustawienia konta">{(account.email[0] ?? "M").toUpperCase()}</Link>

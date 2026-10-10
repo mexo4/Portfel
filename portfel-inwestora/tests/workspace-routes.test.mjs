@@ -68,7 +68,8 @@ test("dashboard route delegates aggregate data views to the configurable dashboa
   assert.match(routes, /export function WorkspaceDashboardPage\(\) \{\s*return <ConfigurableDashboard \/>;\s*\}/);
   assert.match(dashboard, /workspace\.isAllPortfoliosSelected[\s\S]*workspace\.portfolios\.map/);
   assert.match(dashboard, /portfolioScopes: getHistoryScopes\(workspace\)/);
-  assert.match(dashboard, /fetchCorporateEvents\(\{ portfolioId, days: 183/);
+  assert.match(dashboard, /fetchCorporateEvents\(\{ portfolioId, portfolioIds: workspace\.portfolioScope\.mode === "CUSTOM"/);
+  assert.match(dashboard, /workspace\.selectedPortfolioIds/);
   assert.match(dashboard, /watchlist: workspace\.watchlistItems/);
   assert.doesNotMatch(dashboard, /fetchWatchlist\(/);
   assert.doesNotMatch(source, /Historia łączna wymaga osobnego modelu/);

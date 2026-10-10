@@ -61,7 +61,7 @@ const OPERATION_LABELS: Record<PortfolioOperation["operationType"], string> = {
 };
 
 const getHistoryScopes = (workspace: ReturnType<typeof usePortfolioWorkspace>) =>
-  workspace.isAllPortfoliosSelected ? workspace.portfolios.map((portfolio) => ({
+  workspace.isAllPortfoliosSelected ? workspace.selectedPortfolios.map((portfolio) => ({
     portfolioId: portfolio.id,
     accountType: portfolio.accountType,
     assets: portfolio.assets,
@@ -79,7 +79,7 @@ const getHistoryAssetSignature = (asset: ReturnType<typeof usePortfolioWorkspace
 });
 
 const getHistorySignature = (workspace: ReturnType<typeof usePortfolioWorkspace>) => JSON.stringify({
-  scope: getDashboardScopeKey(workspace.activePortfolioId, workspace.isAllPortfoliosSelected),
+  scope: getDashboardScopeKey(workspace.activePortfolioId, workspace.isAllPortfoliosSelected, workspace.portfolioScope.mode === "CUSTOM" ? workspace.selectedPortfolioIds : undefined),
   accountType: workspace.isAllPortfoliosSelected
     ? undefined
     : workspace.activePortfolio?.accountType,
@@ -163,8 +163,8 @@ function DashboardDataProvider({ children, scopeKey }: { children: ReactNode; sc
       .catch(() => { if (isCurrent()) setErrors((current) => ({ ...current, history: true })); })
       .finally(() => { if (isCurrent()) setStatus((current) => ({ ...current, history: false })); });
 
-    const portfolioId = workspace.isAllPortfoliosSelected ? "all" : workspace.activePortfolioId;
-    void fetchCorporateEvents({ portfolioId, days: 183, signal: controller.signal })
+    const portfolioId = workspace.portfolioScope.mode === "CUSTOM" ? "custom" : workspace.isAllRealPortfoliosSelected ? "all" : workspace.activePortfolioId;
+    void fetchCorporateEvents({ portfolioId, portfolioIds: workspace.portfolioScope.mode === "CUSTOM" ? workspace.selectedPortfolioIds : undefined, days: 183, signal: controller.signal })
       .then((value) => { if (isCurrent()) setEvents(value); })
       .catch(() => { if (isCurrent()) setErrors((current) => ({ ...current, events: true })); })
       .finally(() => { if (isCurrent()) setStatus((current) => ({ ...current, events: false })); });
@@ -181,7 +181,7 @@ function DashboardDataProvider({ children, scopeKey }: { children: ReactNode; sc
     watchlist: workspace.watchlistItems,
     groups: workspace.groupedAssets,
     portfolios: workspace.isAllPortfoliosSelected
-      ? workspace.portfolios
+      ? workspace.selectedPortfolios
       : workspace.activePortfolio ? [workspace.activePortfolio] : [],
     fallbackProfitLoss: workspace.summaryCombinedProfitLoss,
     fallbackInvested: workspace.summaryTotalInvested,
@@ -192,7 +192,7 @@ function DashboardDataProvider({ children, scopeKey }: { children: ReactNode; sc
     workspace.activePortfolio,
     workspace.groupedAssets,
     workspace.isAllPortfoliosSelected,
-    workspace.portfolios,
+    workspace.selectedPortfolios,
     workspace.summaryCombinedProfitLoss,
     workspace.summaryCashValue,
     workspace.summaryTotalInvested,
@@ -634,8 +634,11 @@ function DashboardCategoryIcon({ category }: { category: DashboardWidgetCategory
 
 export default function ConfigurableDashboard() {
   const workspace = usePortfolioWorkspace();
-  const scopeKey = getDashboardScopeKey(workspace.activePortfolioId, workspace.isAllPortfoliosSelected);
-  const scopeName = workspace.isAllPortfoliosSelected ? "Wszystkie portfele" : workspace.activePortfolio?.name ?? "Portfel";
+  const scopeKey = getDashboardScopeKey(workspace.activePortfolioId, workspace.isAllPortfoliosSelected, workspace.portfolioScope.mode === "CUSTOM" ? workspace.selectedPortfolioIds : undefined);
+  // Widget configuration is one user-level dashboard; only widget data follows
+  // the currently selected portfolio scope.
+  const layoutScopeKey = "all";
+  const scopeName = workspace.portfolioScopeLabel;
   const [layouts, setLayouts] = useState<DashboardScopeLayouts>(() => normalizeDashboardScopeLayouts(null));
   const [draft, setDraft] = useState<DashboardScopeLayouts>(() => normalizeDashboardScopeLayouts(null));
   const [displayDevice, setDisplayDevice] = useState<DashboardDevice>("desktop");
@@ -663,22 +666,22 @@ export default function ConfigurableDashboard() {
   }, []);
 
   useEffect(() => {
-    mutationCoordinatorRef.current.enterScope(scopeKey);
+    mutationCoordinatorRef.current.enterScope(layoutScopeKey);
     copyAbortRef.current?.abort();
     copyAbortRef.current = null;
     const controller = new AbortController();
     const generation = ++loadGenerationRef.current;
     setIsLoading(true); setError(null); setIsEditing(false); setIsLibraryOpen(false);
     setIsSaving(false); setIsCopying(false); setCopySource("");
-    void fetchDashboardLayout(scopeKey, controller.signal).then((response) => {
-      if (controller.signal.aborted || generation !== loadGenerationRef.current || response.scopeKey !== scopeKey) return;
+    void fetchDashboardLayout(layoutScopeKey, controller.signal).then((response) => {
+      if (controller.signal.aborted || generation !== loadGenerationRef.current || response.scopeKey !== layoutScopeKey) return;
       const normalized = normalizeDashboardScopeLayouts(response.layouts);
       setLayouts(normalized); setDraft(normalized);
     }).catch((reason: unknown) => {
       if (!controller.signal.aborted && !(reason instanceof DOMException && reason.name === "AbortError")) setError("Nie udało się wczytać układu tego portfela. Pokazujemy układ domyślny.");
     }).finally(() => { if (!controller.signal.aborted && generation === loadGenerationRef.current) setIsLoading(false); });
     return () => { controller.abort(); copyAbortRef.current?.abort(); };
-  }, [scopeKey]);
+  }, [layoutScopeKey]);
 
   const displayed = (isEditing ? draft : layouts)[displayDevice];
   const existing = useMemo(() => new Set(draft[displayDevice].widgets.map((item) => item.id)), [draft, displayDevice]);
@@ -698,11 +701,11 @@ export default function ConfigurableDashboard() {
 
   const persist = useCallback((next: DashboardScopeLayouts, close = false) => {
     const coordinator = mutationCoordinatorRef.current;
-    const inFlight = coordinator.getSave(scopeKey);
+    const inFlight = coordinator.getSave(layoutScopeKey);
     if (inFlight) return inFlight;
     const normalized = normalizeDashboardScopeLayouts(next);
     if (dashboardScopeLayoutsEqual(layouts, normalized)) { if (close) setIsEditing(false); return Promise.resolve(true); }
-    const savingScope = scopeKey; const previous = layouts; const token = coordinator.capture(savingScope);
+    const savingScope = layoutScopeKey; const previous = layouts; const token = coordinator.capture(savingScope);
     setIsSaving(true); setError(null); setLayouts(normalized);
     const request = saveDashboardLayout(savingScope, normalized).then((response) => {
       if (!coordinator.isCurrent(token) || response.scopeKey !== savingScope) return false;
@@ -713,7 +716,7 @@ export default function ConfigurableDashboard() {
       return false;
     }).finally(() => { if (coordinator.isCurrent(token)) setIsSaving(false); });
     return coordinator.trackSave(savingScope, request);
-  }, [layouts, scopeKey]);
+  }, [layouts, layoutScopeKey]);
 
   const handleDragEnd = ({ active, over }: DragEndEvent) => {
     if (!over || active.id === over.id) return;
@@ -740,9 +743,9 @@ export default function ConfigurableDashboard() {
   }, [closeLibrary, isLibraryOpen]);
 
   const copyLayout = async () => {
-    if (!copySource || copySource === scopeKey || isSaving || isCopying) return;
+    if (!copySource || copySource === layoutScopeKey || isSaving || isCopying) return;
     const coordinator = mutationCoordinatorRef.current;
-    const token = coordinator.capture(scopeKey);
+    const token = coordinator.capture(layoutScopeKey);
     const controller = new AbortController();
     copyAbortRef.current?.abort();
     copyAbortRef.current = controller;
@@ -764,7 +767,7 @@ export default function ConfigurableDashboard() {
     const index = current.widgets.findIndex((item) => item.id === id); const target = index + direction;
     return index < 0 || target < 0 || target >= current.widgets.length ? current : { ...current, widgets: arrayMove(current.widgets, index, target) };
   });
-  const portfolioScopes = [{ key: "all", label: "Wszystkie portfele" }, ...workspace.portfolios.map((item) => ({ key: `portfolio:${item.id}`, label: item.name }))].filter((item) => item.key !== scopeKey);
+  const portfolioScopes = workspace.portfolios.map((item) => ({ key: `portfolio:${item.id}`, label: item.name }));
 
   return <DashboardDataProvider scopeKey={scopeKey}><div className="workspace-page dashboard-builder" aria-busy={isLoading}>
     <section className="workspace-dashboard-intro dashboard-builder-intro"><div><p className="eyebrow">Aktualny zakres · {scopeName}</p><h2>Najważniejsze dzisiaj</h2><p className="section-copy">Wynik, struktura i najbliższe wydarzenia w Twoim zapisanym układzie.</p></div><div className="dashboard-builder-actions">

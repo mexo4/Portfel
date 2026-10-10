@@ -3,6 +3,7 @@
 import { createContext, useContext, type ReactNode } from "react";
 import type { PortfolioAssetGroup } from "@/lib/pricing";
 import type { WatchlistItem } from "@/lib/watchlist";
+import type { PortfolioScopeSelection } from "@/lib/portfolio-selection";
 import type {
   AuthenticatedUser,
   CurrencyCode,
@@ -13,16 +14,27 @@ import type {
   PortfolioSale,
   AssetSearchResult,
   PortfolioBenchmarkDefinition,
+  PortfolioSummary,
 } from "@/types/portfolio";
 
 export type PortfolioWorkspaceValue = {
   account: AuthenticatedUser;
   isAdmin: boolean;
   portfolios: InvestmentPortfolio[];
+  /** The real portfolios included by the global read-only scope. */
+  selectedPortfolios: InvestmentPortfolio[];
+  portfolioSummaries: Array<{ portfolio: InvestmentPortfolio; summary: PortfolioSummary }>;
+  selectedPortfolioSummaries: Array<{ portfolio: InvestmentPortfolio; summary: PortfolioSummary }>;
   activePortfolio?: InvestmentPortfolio;
   /** The persisted active portfolio always remains a real record. */
   activePortfolioId: string;
   selectedPortfolioId: string;
+  portfolioScope: PortfolioScopeSelection;
+  portfolioScopeLabel: string;
+  selectedPortfolioIds: string[];
+  isPortfolioScopeAggregate: boolean;
+  isAllRealPortfoliosSelected: boolean;
+  onPortfolioScopeChange: (selection: PortfolioScopeSelection) => void;
   isAllPortfoliosSelected: boolean;
   activeBaseCurrency: CurrencyCode;
   isPortfolioMutationPending: boolean;

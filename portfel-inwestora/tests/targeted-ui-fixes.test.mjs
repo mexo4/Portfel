@@ -62,12 +62,13 @@ test("current-position primary prices reuse the exact dividend-report hierarchy"
   assert.match(selector[1], /font-variant-numeric:\s*normal/);
 });
 
-test("the active portfolio selector has one visible selected-portfolio label", async () => {
+test("the global portfolio scope picker replaces the legacy single-portfolio dropdown", async () => {
   const shell = await readSource("src/components/AppWorkspaceShell.tsx");
 
-  assert.match(shell, /<span>Aktywny portfel<\/span><select/);
-  assert.doesNotMatch(shell, /selectedPortfolioLabel/);
-  assert.doesNotMatch(shell, /<small>\{selectedPortfolioLabel\}<\/small>/);
+  assert.equal((shell.match(/<PortfolioScopePicker /g) ?? []).length, 2);
+  assert.doesNotMatch(shell, /Aktywny portfel<\/span><select/);
+  assert.match(shell, /portfolioScope: PortfolioScopeSelection/);
+  assert.match(shell, /onPortfolioScopeChange: \(selection: PortfolioScopeSelection\)/);
 });
 
 test("dividend payment columns have a complete fixed-table budget", async () => {

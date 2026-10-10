@@ -189,7 +189,15 @@ export const dashboardLayoutsEqual = (left: DashboardLayout, right: DashboardLay
 export const dashboardScopeLayoutsEqual = (left: DashboardScopeLayouts, right: DashboardScopeLayouts) =>
   dashboardLayoutsEqual(left.desktop, right.desktop) && dashboardLayoutsEqual(left.mobile, right.mobile);
 
-export const getDashboardScopeKey = (portfolioId: string, isAll: boolean) =>
-  isAll ? "all" : `portfolio:${portfolioId}`;
+export const getDashboardScopeKey = (
+  portfolioId: string,
+  isAll: boolean,
+  selectedPortfolioIds?: ReadonlyArray<string>
+) => isAll
+  ? selectedPortfolioIds && selectedPortfolioIds.length > 1
+    ? `portfolios:${[...selectedPortfolioIds].sort().join(",")}`
+    : "all"
+  : `portfolio:${portfolioId}`;
 
-export const isDashboardScopeKey = (value: string) => value === "all" || /^portfolio:[^:]+$/.test(value);
+export const isDashboardScopeKey = (value: string) =>
+  value === "all" || /^portfolio:[^:,]+$/.test(value) || /^portfolios:[^:,]+(?:,[^:,]+)+$/.test(value);

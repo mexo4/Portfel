@@ -128,6 +128,78 @@ test("all-portfolios PLN aggregate feeds the same cash-flow-neutral daily result
   assert.equal(daily[0]?.rawValueChangePln, 530);
 });
 
+test("custom aggregate carries each selected portfolio's last observation across different dates", () => {
+  const points = aggregatePortfolioHistoryPoints([
+    { points: [
+      { date: "2026-08-10", portfolioValuePln: 100, netInvestedPln: 100, profitLossPln: 0, timeWeightedReturnPercent: 0 },
+      { date: "2026-08-12", portfolioValuePln: 110, netInvestedPln: 100, profitLossPln: 10, timeWeightedReturnPercent: 10 },
+    ] },
+    { points: [
+      { date: "2026-08-11", portfolioValuePln: 50, netInvestedPln: 50, profitLossPln: 0, timeWeightedReturnPercent: 0 },
+      { date: "2026-08-12", portfolioValuePln: 55, netInvestedPln: 50, profitLossPln: 5, timeWeightedReturnPercent: 10 },
+    ] },
+  ]);
+
+  assert.deepEqual(points.map(({ date, portfolioValuePln, profitLossPln }) => ({ date, portfolioValuePln, profitLossPln })), [
+    { date: "2026-08-10", portfolioValuePln: 100, profitLossPln: 0 },
+    { date: "2026-08-11", portfolioValuePln: 150, profitLossPln: 0 },
+    { date: "2026-08-12", portfolioValuePln: 165, profitLossPln: 15 },
+  ]);
+  assert.equal(points.at(-1)?.timeWeightedReturnPercent, 10);
+});
+
+test("custom aggregate TWR does not count a later portfolio's inception profit as a return", () => {
+  const points = aggregatePortfolioHistoryPoints([
+    { points: [
+      { date: "2026-08-10", portfolioValuePln: 100, netInvestedPln: 100, profitLossPln: 0, timeWeightedReturnPercent: 0 },
+      { date: "2026-08-11", portfolioValuePln: 110, netInvestedPln: 100, profitLossPln: 10, timeWeightedReturnPercent: 10 },
+      { date: "2026-08-12", portfolioValuePln: 121, netInvestedPln: 100, profitLossPln: 21, timeWeightedReturnPercent: 21 },
+    ] },
+    { points: [
+      { date: "2026-08-11", portfolioValuePln: 200, netInvestedPln: 180, profitLossPln: 20, timeWeightedReturnPercent: 0 },
+      { date: "2026-08-12", portfolioValuePln: 220, netInvestedPln: 180, profitLossPln: 40, timeWeightedReturnPercent: 10 },
+    ] },
+  ]);
+
+  assert.equal(points[1]?.timeWeightedReturnPercent, 10);
+  assert.equal(points[2]?.timeWeightedReturnPercent, 21);
+  assert.equal(points[2]?.profitLossPln, 61);
+});
+
+test("custom aggregate weights returns by capital rather than averaging portfolio percentages", () => {
+  const points = aggregatePortfolioHistoryPoints([
+    { points: [
+      { date: "2026-08-10", portfolioValuePln: 10_000, netInvestedPln: 10_000, profitLossPln: 0, timeWeightedReturnPercent: 0 },
+      { date: "2026-08-11", portfolioValuePln: 11_000, netInvestedPln: 10_000, profitLossPln: 1_000, timeWeightedReturnPercent: 10 },
+    ] },
+    { points: [
+      { date: "2026-08-10", portfolioValuePln: 2_000, netInvestedPln: 2_000, profitLossPln: 0, timeWeightedReturnPercent: 0 },
+      { date: "2026-08-11", portfolioValuePln: 2_600, netInvestedPln: 2_000, profitLossPln: 600, timeWeightedReturnPercent: 30 },
+    ] },
+  ]);
+
+  assert.equal(points.at(-1)?.timeWeightedReturnPercent, 13.33);
+  assert.notEqual(points.at(-1)?.timeWeightedReturnPercent, 20);
+});
+
+test("a selected portfolio-to-portfolio transfer does not create aggregate profit", () => {
+  const points = aggregatePortfolioHistoryPoints([
+    { points: [
+      { date: "2026-08-10", portfolioValuePln: 1_000, netInvestedPln: 1_000, profitLossPln: 0, timeWeightedReturnPercent: 0 },
+      { date: "2026-08-11", portfolioValuePln: 0, netInvestedPln: 0, profitLossPln: 0, timeWeightedReturnPercent: 0 },
+    ] },
+    { points: [
+      { date: "2026-08-10", portfolioValuePln: 500, netInvestedPln: 500, profitLossPln: 0, timeWeightedReturnPercent: 0 },
+      { date: "2026-08-11", portfolioValuePln: 1_500, netInvestedPln: 1_500, profitLossPln: 0, timeWeightedReturnPercent: 0 },
+    ] },
+  ]);
+
+  assert.equal(points[0]?.portfolioValuePln, 1_500);
+  assert.equal(points[1]?.portfolioValuePln, 1_500);
+  assert.equal(points[1]?.profitLossPln, 0);
+  assert.equal(points[1]?.timeWeightedReturnPercent, 0);
+});
+
 test("charts render cash-flow-neutral daily-result bars only inside the shared sixth mode", async () => {
   const source = await readSource("src/components/PortfolioLineCharts.tsx");
 

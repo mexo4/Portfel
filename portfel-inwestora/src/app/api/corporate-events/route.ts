@@ -15,6 +15,7 @@ import {
   projectDividendEventsForPortfolios,
 } from "@/lib/automatic-gpw-dividends";
 import { normalizePortfolioBook } from "@/lib/portfolio-state";
+import { getAuthorizedPortfolioScopeIds } from "@/lib/portfolio-selection";
 import { getUserWatchlist, getWatchlistCorporateEventInputs } from "@/lib/server/watchlist";
 import { CORPORATE_EVENT_TYPES, type CorporateEvent, type CorporateEventType } from "@/lib/corporate-events";
 import type { InvestmentPortfolio, PortfolioBook } from "@/types/portfolio";
@@ -196,18 +197,28 @@ export async function GET(request: Request) {
 
   const { searchParams } = new URL(request.url);
   const requestedPortfolioId = searchParams.get("portfolio")?.trim();
+  const requestedPortfolioIds = searchParams.get("portfolioIds")?.split(",").map((id) => id.trim()).filter(Boolean);
   const requestedInstrumentId = searchParams.get("instrumentId")?.trim();
   const requestedEventTypes = searchParams
     .getAll("eventType")
     .filter((eventType): eventType is CorporateEventType => CORPORATE_EVENT_TYPES.includes(eventType as CorporateEventType));
-  const isAggregateRequest = requestedPortfolioId === "all";
+  const isAggregateRequest = requestedPortfolioId === "all" || requestedPortfolioId === "custom";
   const initialBook = normalizePortfolioBook({
     portfolios: accountData.portfolios,
     activePortfolioId: accountData.activePortfolioId,
   });
-  const portfolios = isAggregateRequest
-    ? initialBook.portfolios
-    : initialBook.portfolios.filter(
+  const authorizedCustomIds = requestedPortfolioId === "custom"
+    ? getAuthorizedPortfolioScopeIds(requestedPortfolioIds ?? [], initialBook.portfolios.map(({ id }) => id))
+    : null;
+  if (requestedPortfolioId === "custom" && !authorizedCustomIds) {
+    return NextResponse.json({ error: "Nieprawidłowy zakres portfeli." }, { status: 403 });
+  }
+  const selectedPortfolioIds = requestedPortfolioId === "custom" ? new Set(authorizedCustomIds ?? []) : null;
+  const portfolios = requestedPortfolioId === "custom"
+    ? initialBook.portfolios.filter(({ id }) => selectedPortfolioIds?.has(id))
+    : requestedPortfolioId === "all"
+      ? initialBook.portfolios
+      : initialBook.portfolios.filter(
         (candidate) => candidate.id === (requestedPortfolioId || accountData.activePortfolioId)
       );
 
@@ -251,9 +262,11 @@ export async function GET(request: Request) {
       events: payableEvents.events,
       today: fromDate,
     });
-    const projectedPortfolios = isAggregateRequest
-      ? synchronization.portfolioBook.portfolios
-      : synchronization.portfolioBook.portfolios.filter(
+    const projectedPortfolios = requestedPortfolioId === "custom"
+      ? synchronization.portfolioBook.portfolios.filter(({ id }) => selectedPortfolioIds?.has(id))
+      : requestedPortfolioId === "all"
+        ? synchronization.portfolioBook.portfolios
+        : synchronization.portfolioBook.portfolios.filter(
           (candidate) => candidate.id === (requestedPortfolioId || synchronization.portfolioBook.activePortfolioId)
         );
     const projectedEvents = projectTrackedEvents({
@@ -272,13 +285,13 @@ export async function GET(request: Request) {
         manualMatchesCount: synchronization.manualMatchesCount,
         requiresPortfolioReload: synchronization.requiresPortfolioReload,
       },
-      portfolioId: isAggregateRequest ? "all" : portfolios[0]!.id,
+      portfolioId: requestedPortfolioId === "custom" ? "custom" : isAggregateRequest ? "all" : portfolios[0]!.id,
       fromDate,
       toDate: addDays(fromDate, days),
     });
   } catch (error) {
     console.error("GET /api/corporate-events failed", {
-      portfolioId: isAggregateRequest ? "all" : portfolios[0]!.id,
+      portfolioId: requestedPortfolioId === "custom" ? "custom" : isAggregateRequest ? "all" : portfolios[0]!.id,
       error: error instanceof Error ? error.name : "unknown",
     });
     return NextResponse.json(

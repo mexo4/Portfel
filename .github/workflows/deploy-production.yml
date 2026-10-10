@@ -40,6 +40,7 @@ jobs:
           ORACLE_USER: ${{ secrets.ORACLE_USER }}
         run: |
           set -euo pipefail
+          set +e
           REMOTE_OUTPUT="$(ssh \
             -i ~/.ssh/mexo-production \
             -o BatchMode=yes \
@@ -170,8 +171,14 @@ jobs:
           echo "DEPLOYED_REVISION=$BUILD_REVISION"
           REMOTE
           )"
+          SSH_STATUS=$?
+          set -e
 
           printf '%s\n' "$REMOTE_OUTPUT"
+          if [ "$SSH_STATUS" -ne 0 ]; then
+            echo "ERROR: remote stage/activation command exited with status $SSH_STATUS; see the last safe checkpoint above."
+            exit "$SSH_STATUS"
+          fi
           previous_revision="$(printf '%s\n' "$REMOTE_OUTPUT" | sed -n 's/^PREVIOUS_REVISION=//p' | tail -n 1)"
           previous_target="$(printf '%s\n' "$REMOTE_OUTPUT" | sed -n 's/^PREVIOUS_NEXT_TARGET=//p' | tail -n 1)"
           if [[ ! "$previous_revision" =~ ^[0-9a-f]{40}$ ]] || [[ ! "$previous_target" =~ ^\.mexo-releases/[A-Za-z0-9._-]+$ ]]; then

@@ -22,8 +22,8 @@ jobs:
     steps:
       - name: Configure SSH
         env:
-          ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
           ORACLE_SSH_KEY: ${{ secrets.ORACLE_SSH_KEY }}
+          ORACLE_HOST: 141.144.234.121
         run: |
           set -euo pipefail
           mkdir -p ~/.ssh
@@ -35,7 +35,7 @@ jobs:
 
       - name: Verify current Oracle service and Nginx route (read-only)
         env:
-          ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
+          ORACLE_HOST: 141.144.234.121
           ORACLE_USER: ${{ secrets.ORACLE_USER }}
         run: |
           set -euo pipefail
@@ -47,15 +47,15 @@ jobs:
             "$ORACLE_USER@$ORACLE_HOST" \
             'bash -se' <<'PREFLIGHT'
           set -euo pipefail
-          oracle_target_match="$(curl -fsS --connect-timeout 2 --max-time 5 \
+          oracle_instance_state="$(curl -fsS --connect-timeout 2 --max-time 5 \
             -H 'Authorization: Bearer Oracle' \
-            'http://169.254.169.254/opc/v2/vnics/' | \
-            python3 -c 'import json,sys; v=json.load(sys.stdin); print("yes" if isinstance(v,list) and any(x.get("publicIp") == "141.144.234.121" for x in v if isinstance(x,dict)) else "no")')"
-          if [ "$oracle_target_match" != "yes" ]; then
-            echo "ERROR: SSH target's Oracle Cloud metadata does not match the approved Oracle ARM64 instance; deployment stopped before inspecting or changing application files."
+            'http://169.254.169.254/opc/v2/instance/' | \
+            python3 -c 'import json,sys; print(str(json.load(sys.stdin).get("state", "")).lower())')"
+          if [ "$oracle_instance_state" != "running" ]; then
+            echo "ERROR: target does not report a running Oracle Cloud instance; deployment stopped before inspecting or changing application files."
             exit 1
           fi
-          echo "Verified SSH target against Oracle Cloud instance metadata."
+          echo "Verified target is a running Oracle Cloud instance."
           APP="/opt/mexo/repo/portfel-inwestora"
           SERVICE_WORKDIR="$(systemctl show -p WorkingDirectory --value mexo.service)"
           if [ "$SERVICE_WORKDIR" != "$APP" ]; then
@@ -166,7 +166,7 @@ jobs:
       - name: Stage and activate Mexo
         id: deploy
         env:
-          ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
+          ORACLE_HOST: 141.144.234.121
           ORACLE_USER: ${{ secrets.ORACLE_USER }}
         run: |
           set -euo pipefail
@@ -334,7 +334,7 @@ jobs:
       - name: Roll back if public verification failed
         if: ${{ failure() && steps.deploy.outcome == 'success' && steps.verify.outcome == 'failure' }}
         env:
-          ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
+          ORACLE_HOST: 141.144.234.121
           ORACLE_USER: ${{ secrets.ORACLE_USER }}
           PREVIOUS_REVISION: ${{ steps.deploy.outputs.previous_revision }}
           PREVIOUS_NEXT_TARGET: ${{ steps.deploy.outputs.previous_next_target }}

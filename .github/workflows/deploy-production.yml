@@ -63,6 +63,12 @@ jobs:
             git status --short
             exit 1
           fi
+          CURRENT_BRANCH="$(git branch --show-current)"
+          if [ "$CURRENT_BRANCH" != "$BRANCH" ]; then
+            echo "ERROR: expected production branch $BRANCH, found ${CURRENT_BRANCH:-detached HEAD}; refusing to deploy."
+            exit 1
+          fi
+          echo "Preflight passed: production branch is $CURRENT_BRANCH."
 
           git fetch origin "$BRANCH"
           PREVIOUS_REVISION="$(git rev-parse HEAD)"
@@ -74,7 +80,12 @@ jobs:
           fi
           git checkout "$BRANCH"
           git reset --hard "origin/$BRANCH"
-          test "$(git rev-parse HEAD)" = "$BUILD_REVISION"
+          RESET_REVISION="$(git rev-parse HEAD)"
+          if [ "$RESET_REVISION" != "$BUILD_REVISION" ]; then
+            echo "ERROR: repository reset did not reach requested revision (current ${RESET_REVISION:0:12}, expected ${BUILD_REVISION:0:12})."
+            exit 1
+          fi
+          echo "Repository is staged at ${BUILD_REVISION:0:12}; previous revision was ${PREVIOUS_REVISION:0:12}."
           BUILD_SUFFIX="$(date -u +%Y%m%dT%H%M%SZ)-$$"
           STAGING_DIST=".next-mexo-staging-$BUILD_SUFFIX"
           RELEASE_TARGET=".mexo-releases/$BUILD_REVISION-$BUILD_SUFFIX"
@@ -104,7 +115,11 @@ jobs:
           rm -f "$APP/public/mexo-build-revision.txt"
 
           cd "$REPO"
-          test -x "$REPO/node_modules/.bin/next"
+          if [ ! -x "$REPO/node_modules/.bin/next" ] && [ ! -x "$APP/node_modules/.bin/next" ]; then
+            echo "ERROR: Next.js CLI is missing from both repository and application node_modules; no dependency install was attempted."
+            exit 1
+          fi
+          echo "Next.js CLI is present; building into isolated staging directory $STAGING_DIST."
           CIRCLE_NODE_TOTAL=2 \
           NEXT_TELEMETRY_DISABLED=1 \
           MEXO_BUILD_REVISION="$BUILD_REVISION" \

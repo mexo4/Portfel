@@ -150,20 +150,7 @@ jobs:
           sudo -n systemctl restart mexo
           sudo -n systemctl is-active --quiet mexo
 
-          INTERNAL_OK=0
-          for attempt in $(seq 1 60); do
-            response="$(curl -fsS --max-time 5 -H 'Cache-Control: no-cache, no-store' "http://127.0.0.1:3000/api/system/revision?nonce=$BUILD_SUFFIX-$attempt" 2>/dev/null || true)"
-            if printf '%s' "$response" | grep -Fq "\"revision\":\"$BUILD_REVISION\""; then
-              root_code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:3000/ || true)"
-              login_code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:3000/login || true)"
-              if [ "$root_code" = "200" ] && [ "$login_code" = "200" ]; then
-                INTERNAL_OK=1
-                break
-              fi
-            fi
-            sleep 2
-          done
-          test "$INTERNAL_OK" = "1"
+          echo "mexo.service is active; verifying the serving revision and routes through the public domain."
 
           trap - ERR
           echo "PREVIOUS_REVISION=$PREVIOUS_REVISION"

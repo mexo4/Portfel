@@ -331,6 +331,8 @@ jobs:
           echo "Repository is staged at ${BUILD_REVISION:0:12}; previous revision was ${PREVIOUS_REVISION:0:12}."
           BUILD_SUFFIX="$(date -u +%Y%m%dT%H%M%SZ)-$$"
           RELEASE_TARGET=".mexo-releases/$BUILD_REVISION-$BUILD_SUFFIX"
+          TEMP_TSCONFIG=".mexo-tsconfig-$BUILD_SUFFIX.json"
+          TEMP_TSCONFIG_CREATED=0
           PREVIOUS_NEXT_TARGET=""
           PREVIOUS_NEXT_IS_DIRECTORY=0
           SWITCHED=0
@@ -341,6 +343,9 @@ jobs:
             trap - ERR
             set +e
             echo "ERROR: remote deployment failed at script line $failed_line (exit $status); restoring the previous source and build."
+            if [ "$TEMP_TSCONFIG_CREATED" = "1" ] && [[ "$TEMP_TSCONFIG" =~ ^\.mexo-tsconfig-[A-Za-z0-9._-]+\.json$ ]]; then
+              rm -f -- "$APP/$TEMP_TSCONFIG"
+            fi
             if [ -n "$PREVIOUS_NEXT_TARGET" ] && [ -d "$APP/$PREVIOUS_NEXT_TARGET" ] && { [ "$SWITCHED" = "1" ] || [ ! -e "$APP/.next" ]; }; then
               if [ "$PREVIOUS_NEXT_IS_DIRECTORY" = "1" ]; then
                 if [ -L "$APP/.next" ]; then
@@ -374,17 +379,18 @@ jobs:
             exit 1
           fi
           echo "Next.js CLI is present; building directly into immutable release directory $RELEASE_TARGET."
+          node "$APP/scripts/create-staging-tsconfig.mjs" "$TEMP_TSCONFIG" "$RELEASE_TARGET"
+          TEMP_TSCONFIG_CREATED=1
           CIRCLE_NODE_TOTAL=2 \
           NEXT_TELEMETRY_DISABLED=1 \
           MEXO_BUILD_REVISION="$BUILD_REVISION" \
           MEXO_BUILD_DIST_DIR="$RELEASE_TARGET" \
+          MEXO_BUILD_TSCONFIG="$TEMP_TSCONFIG" \
           NODE_OPTIONS="--max-old-space-size=768" \
             npm --workspace portfel-inwestora run build -- --webpack
           test -f "$APP/$RELEASE_TARGET/BUILD_ID"
-          if ! git -C "$REPO" diff --quiet "$BUILD_REVISION" -- "$APP/tsconfig.json"; then
-            echo "Restoring the tracked tsconfig after Next.js added staging-only type paths."
-            git -C "$REPO" restore --source="$BUILD_REVISION" --worktree -- "$APP/tsconfig.json"
-          fi
+          rm -f -- "$APP/$TEMP_TSCONFIG"
+          TEMP_TSCONFIG_CREATED=0
           if [ -n "$(git -C "$REPO" status --porcelain --untracked-files=no)" ]; then
             echo "ERROR: build changed tracked production source outside the generated staging config; refusing activation."
             exit 1

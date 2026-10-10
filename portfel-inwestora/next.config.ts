@@ -15,6 +15,13 @@ const nextConfig: NextConfig = {
   // Revision is public release metadata, embedded at build time so the health
   // endpoint remains reliable even when systemd does not inherit build env.
   env: { MEXO_BUILD_REVISION: releaseRevision },
+  // A staged production release may live below `.mexo-releases/`, where the
+  // active `.next` symlink still points at the previous build. The deploy
+  // workflow supplies an isolated tsconfig so Next checks this release's
+  // generated route types instead of following that old symlink.
+  typescript: {
+    tsconfigPath: process.env.MEXO_BUILD_TSCONFIG?.trim() || "tsconfig.json",
+  },
   outputFileTracingRoot: workspaceRoot,
   headers: async () => [
     {

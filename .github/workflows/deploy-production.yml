@@ -257,7 +257,7 @@ jobs:
           MEXO_BUILD_REVISION="$BUILD_REVISION" \
           MEXO_BUILD_DIST_DIR="$STAGING_DIST" \
           NODE_OPTIONS="--max-old-space-size=768" \
-            npm run build
+            npm run build -- --webpack
           test -f "$APP/$STAGING_DIST/BUILD_ID"
 
           mv "$APP/$STAGING_DIST" "$APP/$RELEASE_TARGET"

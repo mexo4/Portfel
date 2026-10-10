@@ -166,6 +166,72 @@ test("XTB XLSX London USD listing does not fabricate GBP or 1:1 conversion", asy
   }
 });
 
+test("XTB cash-history comments recover ticker and executed partial-fill quantity when Symbol column is blank", async () => {
+  const transactions = [
+    // The actual cash-history export layout leaves column E (Symbol) empty;
+    // ticker, executed fill/original volume and unit price live in Comment.
+    row("comment-buy", "Stock purchase", "OPEN BUY DNP.PL 0,5/20,5 @ 34,330", "", "-17,165", "01.09.2026 10:00:00", "Dino Polska S.A."),
+    row("comment-sell", "Stock sell", "CLOSE BUY DNP.PL 0.25/20.5 @ 35.00", "", "8.75", "02.09.2026 10:00:00", "Dino Polska S.A."),
+    row("comment-fee", "Commission", "Commission DNP.PL", "DNP.PL", "-0.15", "02.09.2026 10:00:00", "Dino Polska S.A."),
+  ];
+  const result = await parse("PLN", transactions);
+  assert.deepEqual(result.skippedRows, []);
+  assert.equal(result.operations.length, 3);
+  const repeatedImport = await parse("PLN", transactions);
+  assert.deepEqual(repeatedImport.operations.map((operation) => operation.importKey), result.operations.map((operation) => operation.importKey));
+  assert.equal(new Set(result.operations.map((operation) => operation.importKey)).size, result.operations.length);
+  const prepared = prepareXtbImportOperations(result.operations);
+  const buy = prepared.find((operation) => operation.brokerOperationId === "comment-buy");
+  const sell = prepared.find((operation) => operation.brokerOperationId === "comment-sell");
+  const fee = prepared.find((operation) => operation.brokerOperationId === "comment-fee");
+  assert.deepEqual([buy.symbol, buy.quantity, buy.price, buy.currency, buy.marketAmount, buy.cashAmount], ["DNP.PL", 0.5, 34.33, "PLN", 17.165, 17.165]);
+  assert.deepEqual([sell.symbol, sell.quantity, sell.price, sell.currency, sell.marketAmount, sell.cashAmount], ["DNP.PL", 0.25, 35, "PLN", 8.75, 8.75]);
+  assert.deepEqual([fee.operationType, fee.fee, getImportedStandaloneExpense(fee)], ["FEE", 0.15, undefined]);
+  assert.equal(fee.linkedFeeImportKey, sell.importKey);
+  assert.equal(balance(result.operations, "PLN"), -8.565);
+
+  const buyValuation = resolveImportedTradeValuation(buy, { PLN: 1 });
+  const sellValuation = resolveImportedTradeValuation(sell, { PLN: 1 });
+  assert.equal(sellValuation.totalFeePln, 0.15);
+  const lot = asset(buy, { feePln: buyValuation.totalFeePln });
+  const group = getGroupedPortfolioAssets([lot], { PLN: 1 })[0];
+  const closed = applySaleToPortfolio({ assets: [lot], group, draft: {
+    ...group, groupKey: group.key, purchaseCurrency: "PLN", marketCurrency: "PLN",
+    quantity: sell.quantity, salePrice: sell.price, saleDate: sell.date,
+    feePln: sellValuation.totalFeePln,
+  }, fxRates: { PLN: 1 } });
+  assert.equal(closed.assets[0].quantity, 0.25);
+  assert.equal(closed.sale.realizedInvestedPln, 8.58);
+  assert.equal(closed.sale.realizedProceedsPln, 8.6);
+  assert.equal(closed.sale.realizedProfitLossPln, 0.02);
+});
+
+test("XTB comment symbols identify the exact USD VWRD/VHYD lines and SEC fee stays an expense", async () => {
+  const result = await parse("USD", [
+    row("vwrd-fill", "Stock purchase", "OPEN BUY VWRD.UK 2/2.3 @ 184.580", "", "-369.16", "01.09.2026 10:00:00", "Vanguard FTSE All-World UCITS ETF"),
+    row("vhyd-fill", "Stock purchase", "OPEN BUY VHYD.UK 0.3/1.3 @ 47.170", "", "-14.151", "01.09.2026 10:01:00", "Vanguard FTSE All-World High Dividend Yield"),
+    row("sec-fee", "SEC fee", "Sec Fee adj REXR.US 20260929", "", "-0.01", "29.09.2026 10:00:00", "Rexford Industrial Realty"),
+  ]);
+  assert.deepEqual(result.skippedRows, []);
+  const vwrd = result.operations.find((operation) => operation.brokerOperationId === "vwrd-fill");
+  const vhyd = result.operations.find((operation) => operation.brokerOperationId === "vhyd-fill");
+  const secFee = result.operations.find((operation) => operation.brokerOperationId === "sec-fee");
+  assert.deepEqual([vwrd.symbol, vwrd.quantity, vwrd.price, vwrd.marketAmount, vwrd.currency, vwrd.cashCurrency, vwrd.cashAmount, vwrd.exchangeRate], ["VWRD.UK", 2, 184.58, 369.16, "USD", "USD", 369.16, 1]);
+  assert.deepEqual([vhyd.symbol, vhyd.quantity, vhyd.price, vhyd.marketAmount, vhyd.currency, vhyd.cashCurrency, vhyd.cashAmount, vhyd.exchangeRate], ["VHYD.UK", 0.3, 47.17, 14.151, "USD", "USD", 14.151, 1]);
+  assert.deepEqual([secFee.operationType, secFee.fee, secFee.amount, getImportedStandaloneExpense(secFee)], ["FEE", 0.01, 0.01, -0.01]);
+  assert.equal(result.operations.filter((operation) => operation.operationType === "BUY" || operation.operationType === "SELL").length, 2);
+  assert.equal(balance(result.operations, "USD"), -383.321);
+  assert.equal(balance(result.operations, "GBP"), 0);
+});
+
+test("XTB comment fill rejects impossible executed volume instead of accepting a fabricated quantity", async () => {
+  const result = await parse("PLN", [
+    row("impossible-fill", "Stock purchase", "OPEN BUY DNP.PL 2/1 @ 10.00", "", -20, "01.09.2026 10:00:00", "Dino Polska"),
+  ]);
+  assert.equal(result.operations.length, 0);
+  assert.deepEqual(result.skippedRows.map(({ reason }) => reason), ["Nie udalo sie odczytac symbolu, ilosci albo ceny z transakcji XTB."]);
+});
+
 test("XTB XLSX decimal and thousands separators do not turn unit price into thousands or truncate it", async () => {
   for (const [price, amount] of [["1 234,56", "-1 234,56"], ["1,234.56", "-1,234.56"], ["1.234,56", "-1.234,56"], ["1234.56", -1234.56]]) {
     const result = await parse("USD", [row(`separators-${price}`, "Stock purchase", `OPEN BUY 1 @ ${price}`, "AAPL.US", amount)]);

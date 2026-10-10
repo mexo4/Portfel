@@ -1916,16 +1916,39 @@ const parseXtbTradeComment = (comment: string) => {
     return null;
   }
 
-  const quantity = parseNumber(match[3].split("/")[0] ?? "");
-  const price = parseNumber(match[4]);
+  // XTB cash-history exports often leave the Symbol column blank and put the
+  // ticker and fill in Comment, e.g. "CLOSE BUY DNP.PL 0.5/20.5 @ 34.30".
+  // The left quantity is the executed fill; the right is the original total
+  // position volume. Do not parse the ticker or slash suffix as part of a
+  // number, and do not fabricate a quantity when the layout is ambiguous.
+  const details = match[3].trim();
+  const quantityMatch = details.match(
+    /(?:^|\s)([+-]?(?:\d{1,3}(?:[ \u00a0\u202f]\d{3})+(?:[.,]\d+)?|\d+(?:[.,]\d+)?|[.,]\d+)(?:[eE][+-]?\d+)?)(?:\s*\/\s*([+-]?(?:\d{1,3}(?:[ \u00a0\u202f]\d{3})+(?:[.,]\d+)?|\d+(?:[.,]\d+)?|[.,]\d+)(?:[eE][+-]?\d+)?))?\s*$/
+  );
+  if (!quantityMatch) return null;
 
-  if (!quantity || quantity <= 0 || !price || price <= 0) {
+  const quantity = parseNumber(quantityMatch[1] ?? "");
+  const originalVolume = quantityMatch[2] ? parseNumber(quantityMatch[2]) : undefined;
+  const price = parseNumber(match[4]);
+  const symbolPrefix = details.slice(0, quantityMatch.index).trim();
+  const symbol = symbolPrefix ? symbolPrefix.split(/\s+/).at(-1) ?? "" : "";
+  const normalizedSymbol = symbol.toUpperCase();
+  const hasValidSymbol = !symbolPrefix || (!/\s/.test(symbolPrefix) && (normalizedSymbol === "BITCOIN" ||
+    (/^(?=.*[A-Z])[A-Z0-9]{1,14}(?:\.[A-Z0-9]{1,5})?$/.test(normalizedSymbol) &&
+      !["PAYU", "BLIK", "ADYEN"].includes(normalizedSymbol))));
+
+  if (
+    !quantity || quantity <= 0 || !price || price <= 0 || !hasValidSymbol ||
+    (quantityMatch[2] && (!originalVolume || originalVolume <= 0 || quantity > originalVolume))
+  ) {
     return null;
   }
 
   return {
     price,
     quantity,
+    ...(symbol ? { symbol: normalizedSymbol } : {}),
+    ...(typeof originalVolume === "number" ? { originalVolume } : {}),
     positionEffect: match[1].toUpperCase() as BrokerPositionEffect,
     tradeSide: match[2].toUpperCase() as "BUY" | "SELL",
     positionDirection: (
@@ -2294,6 +2317,19 @@ const VERIFIED_XTB_LISTINGS: Record<string, { currency: CurrencyCode; priceScale
     priceScale: 1,
     sourceUrl: "https://www.ishares.com/uk/professionals/en/products/258443/ssln",
   },
+  // These are the exact USD-denominated XTB lines confirmed by the account
+  // holder. This is deliberately ticker-specific; other .UK listings remain
+  // unresolved unless the statement provides currency evidence.
+  VWRD: {
+    currency: "USD",
+    priceScale: 1,
+    sourceUrl: "https://www.xtb.com/en/OMI_specification_tables_en.pdf",
+  },
+  VHYD: {
+    currency: "USD",
+    priceScale: 1,
+    sourceUrl: "https://www.xtb.com/en/OMI_specification_tables_en.pdf",
+  },
 };
 
 const getVerifiedXtbListing = (symbol: string) => {
@@ -2368,7 +2404,9 @@ const isXtbFeeType = (normalizedType: string) =>
   normalizedType === "fee" ||
   normalizedType === "fees" ||
   normalizedType === "commission" ||
-  normalizedType === "swap";
+  normalizedType === "swap" ||
+  normalizedType === "sec fee" ||
+  normalizedType === "sec fee adj";
 const isXtbCloseTradeType = (normalizedType: string) => normalizedType === "close trade";
 
 const getXtbExcelSerial = (value: string): number | null => {
@@ -3035,8 +3073,10 @@ export const parseXtbCashOperationRows = (
 
     if (isXtbBuyType(row.normalizedType) || isXtbSellType(row.normalizedType)) {
       const trade = parseXtbTradeComment(row.comment);
+      const tradeSymbol = row.rawSymbol || trade?.symbol || "";
+      const tradeRow = tradeSymbol === row.rawSymbol ? row : { ...row, rawSymbol: tradeSymbol };
 
-      if (!row.rawSymbol || !trade) {
+      if (!tradeSymbol || !trade) {
         skippedRows.push({
           rowNumber: row.rowNumber,
           reason: "Nie udalo sie odczytac symbolu, ilosci albo ceny z transakcji XTB.",
@@ -3056,20 +3096,20 @@ export const parseXtbCashOperationRows = (
         return;
       }
       const cryptoIdentity = getImportedCryptoIdentity(
-        row.rawSymbol,
-        row.instrumentName || row.rawSymbol
+        tradeRow.rawSymbol,
+        tradeRow.instrumentName || tradeRow.rawSymbol
       );
       const kind = cryptoIdentity
         ? "crypto"
-        : inferKind(row.rawType, row.rawSymbol, row.instrumentName || row.rawSymbol);
+        : inferKind(tradeRow.rawType, tradeRow.rawSymbol, tradeRow.instrumentName || tradeRow.rawSymbol);
       const grossMarketValue = trade.quantity * trade.price;
       const marketCurrency = getXtbTradeListingCurrency(
-        row, kind, accountCurrency, absoluteAmount, grossMarketValue
+        tradeRow, kind, accountCurrency, absoluteAmount, grossMarketValue
       );
       if (!marketCurrency) {
         skippedRows.push({
           rowNumber: row.rowNumber,
-          reason: `Nie mozna wiarygodnie ustalic waluty notowania ${row.rawSymbol}. Dodaj kolumne Price Currency / Quote Currency; waluta rachunku ani gielda nie okreslaja waluty tej linii.`,
+          reason: `Nie mozna wiarygodnie ustalic waluty notowania ${tradeRow.rawSymbol}. Dodaj kolumne Price Currency / Quote Currency; waluta rachunku ani gielda nie okreslaja waluty tej linii.`,
         });
         return;
       }
@@ -3101,11 +3141,11 @@ export const parseXtbCashOperationRows = (
 
       operations.push({
         ...buildBaseXtbOperation({
-          row,
+          row: tradeRow,
           accountCurrency,
           operationType: side === "buy" ? "BUY" : "SELL",
-          symbol: row.rawSymbol,
-          name: row.instrumentName || row.rawSymbol,
+          symbol: tradeRow.rawSymbol,
+          name: tradeRow.instrumentName || tradeRow.rawSymbol,
           kind,
           quantity: trade.quantity,
           price: trade.price,

@@ -141,8 +141,9 @@ jobs:
               if not pids.intersection(service_pids):
                   continue
               fields = line.split()
-              if len(fields) > 4:
-                  port = re.search(r":(\d+)$", fields[4])
+              if len(fields) > 3:
+                  # `ss -ltnp` omits the Netid column; Local Address:Port is fields[3].
+                  port = re.search(r":(\d+)$", fields[3])
                   if port:
                       service_ports.add(int(port.group(1)))
 

@@ -319,8 +319,10 @@ jobs:
 
           rollback_on_error() {
             status=$?
+            failed_line="${BASH_LINENO[0]:-unknown}"
             trap - ERR
             set +e
+            echo "ERROR: remote deployment failed at script line $failed_line (exit $status); restoring the previous source and build."
             if [ -n "$PREVIOUS_NEXT_TARGET" ] && [ -d "$APP/$PREVIOUS_NEXT_TARGET" ] && { [ "$SWITCHED" = "1" ] || [ ! -e "$APP/.next" ]; }; then
               ln -sfn "$PREVIOUS_NEXT_TARGET" "$APP/.next-rollback-$BUILD_SUFFIX"
               mv -Tf "$APP/.next-rollback-$BUILD_SUFFIX" "$APP/.next"
@@ -352,6 +354,14 @@ jobs:
           NODE_OPTIONS="--max-old-space-size=768" \
             npm --workspace portfel-inwestora run build -- --webpack
           test -f "$APP/$STAGING_DIST/BUILD_ID"
+          if ! git -C "$REPO" diff --quiet "$BUILD_REVISION" -- "$APP/tsconfig.json"; then
+            echo "Restoring the tracked tsconfig after Next.js added staging-only type paths."
+            git -C "$REPO" restore --source="$BUILD_REVISION" --worktree -- "$APP/tsconfig.json"
+          fi
+          if [ -n "$(git -C "$REPO" status --porcelain --untracked-files=no)" ]; then
+            echo "ERROR: build changed tracked production source outside the generated staging config; refusing activation."
+            exit 1
+          fi
 
           mv "$APP/$STAGING_DIST" "$APP/$RELEASE_TARGET"
           if [ -L "$APP/.next" ]; then

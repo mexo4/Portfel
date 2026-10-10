@@ -19,6 +19,10 @@ on:
         description: Managed .mexo-releases target to restore
         type: string
         required: false
+      target_ip:
+        description: Optional exact approved Oracle IPv4 address for a manual deploy
+        type: string
+        required: false
 
 permissions:
   contents: read
@@ -37,15 +41,25 @@ jobs:
       - name: Configure SSH
         env:
           ORACLE_SSH_KEY: ${{ secrets.ORACLE_SSH_KEY }}
-          ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
+          ORACLE_HOST: ${{ inputs.target_ip || secrets.ORACLE_HOST }}
+          TARGET_IP_OVERRIDE: ${{ inputs.target_ip }}
+          RESTORE_RELEASE: ${{ inputs.restore_release }}
         run: |
           set -euo pipefail
-          resolved_oracle_ips="$(getent ahostsv4 "$ORACLE_HOST" | awk '{print $1}' | sort -u || true)"
-          if ! printf '%s\n' "$resolved_oracle_ips" | grep -Fxq '141.144.234.121'; then
-            echo "ERROR: configured SSH host does not resolve to the approved Oracle IP; no SSH connection or production change was attempted."
-            exit 1
+          if [ "$RESTORE_RELEASE" = "true" ]; then
+            if [ -n "$TARGET_IP_OVERRIDE" ]; then
+              echo "ERROR: rollback-only mode must use the existing recovery host, not a target override."
+              exit 1
+            fi
+            echo "Rollback-only mode: using the existing recovery host to undo the prior incomplete activation."
+          else
+            resolved_oracle_ips="$(getent ahostsv4 "$ORACLE_HOST" | awk '{print $1}' | sort -u || true)"
+            if ! printf '%s\n' "$resolved_oracle_ips" | grep -Fxq '141.144.234.121'; then
+              echo "ERROR: selected SSH host does not resolve to the approved Oracle IP; no SSH connection or production change was attempted."
+              exit 1
+            fi
+            echo "Verified selected SSH host resolves to the approved Oracle IP."
           fi
-          echo "Verified configured SSH host resolves to the approved Oracle IP."
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
           printf '%s\n' "$ORACLE_SSH_KEY" > ~/.ssh/mexo-production
@@ -55,7 +69,7 @@ jobs:
 
       - name: Verify current Oracle service and Nginx route (read-only)
         env:
-          ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
+          ORACLE_HOST: ${{ inputs.target_ip || secrets.ORACLE_HOST }}
           ORACLE_USER: ${{ secrets.ORACLE_USER }}
         run: |
           set -euo pipefail
@@ -188,7 +202,7 @@ jobs:
         id: deploy
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.restore_release != true }}
         env:
-          ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
+          ORACLE_HOST: ${{ inputs.target_ip || secrets.ORACLE_HOST }}
           ORACLE_USER: ${{ secrets.ORACLE_USER }}
         run: |
           set -euo pipefail
@@ -382,7 +396,7 @@ jobs:
       - name: Restore previous production release
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.restore_release == true }}
         env:
-          ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
+          ORACLE_HOST: ${{ inputs.target_ip || secrets.ORACLE_HOST }}
           ORACLE_USER: ${{ secrets.ORACLE_USER }}
           RESTORE_REVISION: ${{ inputs.restore_revision }}
           RESTORE_NEXT_TARGET: ${{ inputs.restore_next_target }}
@@ -462,7 +476,7 @@ jobs:
       - name: Roll back if public verification failed
         if: ${{ failure() && steps.deploy.outcome == 'success' && steps.verify.outcome == 'failure' }}
         env:
-          ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
+          ORACLE_HOST: ${{ inputs.target_ip || secrets.ORACLE_HOST }}
           ORACLE_USER: ${{ secrets.ORACLE_USER }}
           PREVIOUS_REVISION: ${{ steps.deploy.outputs.previous_revision }}
           PREVIOUS_NEXT_TARGET: ${{ steps.deploy.outputs.previous_next_target }}

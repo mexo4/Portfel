@@ -26,12 +26,138 @@ jobs:
           ORACLE_SSH_KEY: ${{ secrets.ORACLE_SSH_KEY }}
         run: |
           set -euo pipefail
+          resolved_hosts="$(getent ahostsv4 "$ORACLE_HOST" | awk '{print $1}' | sort -u || true)"
+          if ! grep -qx '141.144.234.121' <<< "$resolved_hosts"; then
+            echo "ERROR: ORACLE_HOST does not resolve to the approved Oracle ARM64 address; refusing to connect."
+            exit 1
+          fi
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
           printf '%s\n' "$ORACLE_SSH_KEY" > ~/.ssh/mexo-production
           chmod 600 ~/.ssh/mexo-production
           ssh-keyscan -H "$ORACLE_HOST" >> ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
+
+      - name: Verify current Oracle service and Nginx route (read-only)
+        env:
+          ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
+          ORACLE_USER: ${{ secrets.ORACLE_USER }}
+        run: |
+          set -euo pipefail
+          ssh \
+            -i ~/.ssh/mexo-production \
+            -o BatchMode=yes \
+            -o ConnectTimeout=30 \
+            -o ConnectionAttempts=3 \
+            "$ORACLE_USER@$ORACLE_HOST" \
+            'bash -se' <<'PREFLIGHT'
+          set -euo pipefail
+          APP="/opt/mexo/repo/portfel-inwestora"
+          SERVICE_WORKDIR="$(systemctl show -p WorkingDirectory --value mexo.service)"
+          if [ "$SERVICE_WORKDIR" != "$APP" ]; then
+            echo "ERROR: mexo.service WorkingDirectory does not match the approved application directory; deployment stopped before changing files."
+            exit 1
+          fi
+
+          python3 - <<'PY'
+          import pathlib
+          import re
+          import subprocess
+          import sys
+          import urllib.parse
+
+          try:
+              nginx = subprocess.run(
+                  ["sudo", "-n", "nginx", "-T"],
+                  check=True, capture_output=True, text=True
+              ).stdout
+              main_pid = int(subprocess.run(
+                  ["systemctl", "show", "-p", "MainPID", "--value", "mexo.service"],
+                  check=True, capture_output=True, text=True
+              ).stdout.strip())
+              control_group = subprocess.run(
+                  ["systemctl", "show", "-p", "ControlGroup", "--value", "mexo.service"],
+                  check=True, capture_output=True, text=True
+              ).stdout.strip()
+              cgroup_file = pathlib.Path("/sys/fs/cgroup") / control_group.lstrip("/") / "cgroup.procs"
+              service_pids = {int(value) for value in cgroup_file.read_text().split() if value.isdigit()}
+              if main_pid > 0:
+                  service_pids.add(main_pid)
+          except Exception:
+              print("ERROR: unable to inspect the active service and Nginx configuration safely; deployment stopped before changing files.")
+              sys.exit(1)
+
+          upstream_ports = {}
+          for match in re.finditer(r"\bupstream\s+([\w.-]+)\s*\{([^}]*)\}", nginx, re.S):
+              ports = set()
+              for target in re.findall(r"\bserver\s+([^;\s]+)", match.group(2)):
+                  port = re.search(r":(\d+)$", target)
+                  if port:
+                      ports.add(int(port.group(1)))
+              upstream_ports[match.group(1)] = ports
+
+          def server_blocks(config):
+              for match in re.finditer(r"\bserver\s*\{", config):
+                  start = match.end() - 1
+                  depth = 0
+                  for index in range(start, len(config)):
+                      if config[index] == "{":
+                          depth += 1
+                      elif config[index] == "}":
+                          depth -= 1
+                          if depth == 0:
+                              yield config[start:index + 1]
+                              break
+
+          proxy_ports = set()
+          domain_blocks = 0
+          for block in server_blocks(nginx):
+              names = " ".join(re.findall(r"(?m)^\s*server_name\s+([^;]+);", block))
+              if not re.search(r"(?:^|\s)(?:www\.)?mexo\.com\.pl(?:\s|$)", names):
+                  continue
+              domain_blocks += 1
+              for destination in re.findall(r"(?m)^\s*proxy_pass\s+([^;\s]+)", block):
+                  parsed = urllib.parse.urlparse(destination)
+                  if parsed.hostname in upstream_ports:
+                      proxy_ports.update(upstream_ports[parsed.hostname])
+                  elif parsed.port:
+                      proxy_ports.add(parsed.port)
+          if domain_blocks == 0 or not proxy_ports:
+              print("ERROR: no explicit Nginx proxy route for mexo.com.pl was found; deployment stopped before changing files.")
+              sys.exit(1)
+
+          try:
+              ss = subprocess.run(["sudo", "-n", "ss", "-ltnp"], check=True, capture_output=True, text=True).stdout
+          except Exception:
+              print("ERROR: unable to inspect listening service ports safely; deployment stopped before changing files.")
+              sys.exit(1)
+          service_ports = set()
+          for line in ss.splitlines():
+              pids = {int(value) for value in re.findall(r"pid=(\d+)", line)}
+              if not pids.intersection(service_pids):
+                  continue
+              fields = line.split()
+              if len(fields) > 4:
+                  port = re.search(r":(\d+)$", fields[4])
+                  if port:
+                      service_ports.add(int(port.group(1)))
+
+          matched = proxy_ports.intersection(service_ports)
+          if not matched:
+              print("ERROR: Nginx does not proxy mexo.com.pl to a listening port owned by mexo.service; deployment stopped before changing files.")
+              print(f"Diagnostic ports only — Nginx: {sorted(proxy_ports)}; mexo.service: {sorted(service_ports)}")
+              sys.exit(1)
+          print(f"Read-only preflight passed: mexo.service working directory is correct and Nginx reaches its active listener on port(s) {sorted(matched)}.")
+          PY
+          PREFLIGHT
+
+          root_code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 -H 'Cache-Control: no-cache, no-store' 'https://mexo.com.pl/?preflight=1' || true)"
+          login_code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 -H 'Cache-Control: no-cache, no-store' 'https://mexo.com.pl/login?preflight=1' || true)"
+          if [ "$root_code" != "200" ] || [ "$login_code" != "200" ]; then
+            echo "ERROR: public landing/login routes are not healthy before deployment; no production files were changed."
+            exit 1
+          fi
+          echo "Public pre-deploy routes are healthy."
 
       - name: Stage and activate Mexo
         id: deploy
@@ -232,15 +358,12 @@ jobs:
           mv -Tf "\$APP/.next-rollback-\$GITHUB_RUN_ID" "\$APP/.next"
           sudo -n systemctl restart mexo
           sudo -n systemctl is-active --quiet mexo
-          for attempt in \$(seq 1 45); do
-            root_code="\$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:3000/ || true)"
-            login_code="\$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:3000/login || true)"
-            if [ "\$root_code" = "200" ] && [ "\$login_code" = "200" ]; then
-              echo "Previous release restored and healthy."
-              exit 0
-            fi
-            sleep 2
-          done
-          echo "ERROR: rollback restarted, but local routes did not become healthy."
-          exit 1
+          echo "Previous code and build restored; mexo.service is active. Public landing/login routes will be checked by the runner."
           REMOTE
+          root_code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 12 -H 'Cache-Control: no-cache, no-store' "https://mexo.com.pl/?rollback=$GITHUB_RUN_ID" || true)"
+          login_code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 12 -H 'Cache-Control: no-cache, no-store' "https://mexo.com.pl/login?rollback=$GITHUB_RUN_ID" || true)"
+          if [ "$root_code" != "200" ] || [ "$login_code" != "200" ]; then
+            echo "ERROR: previous release is restored and systemd is active, but public landing/login routes are not healthy."
+            exit 1
+          fi
+          echo "Previous release restored; public landing and login routes are healthy."

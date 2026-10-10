@@ -85,9 +85,12 @@ jobs:
           # Oracle Free is deliberately small. A heap limit larger than the
           # machine can sustain lets the kernel kill Node (and sometimes the
           # SSH session) before Next can report a useful build error.
+          BUILD_REVISION="$(git rev-parse HEAD)"
+          printf '%s\n' "$BUILD_REVISION" > "$REPO/portfel-inwestora/public/mexo-build-revision.txt"
+
           CIRCLE_NODE_TOTAL=2 \
           NEXT_TELEMETRY_DISABLED=1 \
-          MEXO_BUILD_REVISION="$(git rev-parse HEAD)" \
+          MEXO_BUILD_REVISION="$BUILD_REVISION" \
           NODE_OPTIONS="--max-old-space-size=768" \
             npm run build
 
@@ -105,13 +108,11 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Verify the public route users actually receive. This avoids
-          # coupling deploy success to private loopback/proxy topology on the
-          # Oracle host while still requiring the exact newly built revision.
+          # Verify an artifact created in the exact build being deployed.
+          # Some serving paths return the fallback X-Mexo-Revision header,
+          # which is not a reliable release signal on this host.
           for attempt in $(seq 1 180); do
-            # A restart briefly yields a connection error or 5xx. That is an
-            # expected transient state, not a reason to abort the retry loop.
-            running_revision="$(curl -fsSI --max-time 15 https://mexo.com.pl/login 2>/dev/null | tr -d '\r' | awk -F': ' 'tolower($1) == "x-mexo-revision" { print $2 }' || true)"
+            running_revision="$(curl -fsS --max-time 15 "https://mexo.com.pl/mexo-build-revision.txt?expected=$EXPECTED_REVISION" 2>/dev/null || true)"
 
             if [ "$running_revision" = "$EXPECTED_REVISION" ]; then
               echo "Mexo public health check passed for revision $running_revision."

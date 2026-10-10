@@ -5,6 +5,20 @@ on:
     branches:
       - najlepsza-wersja
   workflow_dispatch:
+    inputs:
+      restore_release:
+        description: Restore a previously verified release instead of deploying
+        type: boolean
+        required: false
+        default: false
+      restore_revision:
+        description: Full 40-character source commit to restore
+        type: string
+        required: false
+      restore_next_target:
+        description: Managed .mexo-releases target to restore
+        type: string
+        required: false
 
 permissions:
   contents: read
@@ -26,6 +40,12 @@ jobs:
           ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
         run: |
           set -euo pipefail
+          resolved_oracle_ips="$(getent ahostsv4 "$ORACLE_HOST" | awk '{print $1}' | sort -u || true)"
+          if ! printf '%s\n' "$resolved_oracle_ips" | grep -Fxq '141.144.234.121'; then
+            echo "ERROR: configured SSH host does not resolve to the approved Oracle IP; no SSH connection or production change was attempted."
+            exit 1
+          fi
+          echo "Verified configured SSH host resolves to the approved Oracle IP."
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
           printf '%s\n' "$ORACLE_SSH_KEY" > ~/.ssh/mexo-production
@@ -166,6 +186,7 @@ jobs:
 
       - name: Stage and activate Mexo
         id: deploy
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.restore_release != true }}
         env:
           ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
           ORACLE_USER: ${{ secrets.ORACLE_USER }}
@@ -281,7 +302,59 @@ jobs:
           sudo -n systemctl restart mexo
           sudo -n systemctl is-active --quiet mexo
 
-          echo "mexo.service is active; verifying the serving revision and routes through the public domain."
+          LOCAL_SERVICE_PORTS="$(python3 - <<'PY'
+          import pathlib
+          import re
+          import subprocess
+          import sys
+
+          try:
+              control_group = subprocess.run(
+                  ["systemctl", "show", "-p", "ControlGroup", "--value", "mexo.service"],
+                  check=True, capture_output=True, text=True
+              ).stdout.strip()
+              main_pid = int(subprocess.run(
+                  ["systemctl", "show", "-p", "MainPID", "--value", "mexo.service"],
+                  check=True, capture_output=True, text=True
+              ).stdout.strip())
+              cgroup_file = pathlib.Path("/sys/fs/cgroup") / control_group.lstrip("/") / "cgroup.procs"
+              service_pids = {int(value) for value in cgroup_file.read_text().split() if value.isdigit()}
+              if main_pid > 0:
+                  service_pids.add(main_pid)
+              ss = subprocess.run(["sudo", "-n", "ss", "-ltnp"], check=True, capture_output=True, text=True).stdout
+          except Exception:
+              print("ERROR: unable to identify the active mexo.service listener for local revision verification.")
+              sys.exit(1)
+
+          ports = set()
+          for line in ss.splitlines():
+              pids = {int(value) for value in re.findall(r"pid=(\d+)", line)}
+              fields = line.split()
+              if pids.intersection(service_pids) and len(fields) > 3:
+                  match = re.search(r":(\d+)$", fields[3])
+                  if match:
+                      ports.add(int(match.group(1)))
+          if not ports:
+              print("ERROR: mexo.service has no identifiable active TCP listener.")
+              sys.exit(1)
+          print(" ".join(str(port) for port in sorted(ports)))
+          PY
+          )"
+          LOCAL_REVISION_VERIFIED=0
+          for port in $LOCAL_SERVICE_PORTS; do
+            response="$(curl -fsS --max-time 8 -H 'Host: mexo.com.pl' \
+              "http://127.0.0.1:$port/api/system/revision?nonce=$BUILD_SUFFIX" 2>/dev/null || true)"
+            local_revision="$(printf '%s' "$response" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("revision", ""))' 2>/dev/null || true)"
+            if [ "$local_revision" = "$BUILD_REVISION" ]; then
+              LOCAL_REVISION_VERIFIED=1
+              break
+            fi
+          done
+          if [ "$LOCAL_REVISION_VERIFIED" != "1" ]; then
+            echo "ERROR: the active local mexo.service does not serve the staged revision; restoring the previous release before any public verification."
+            false
+          fi
+          echo "Verified local mexo.service revision $BUILD_REVISION; now checking the public domain."
 
           trap - ERR
           echo "PREVIOUS_REVISION=$PREVIOUS_REVISION"
@@ -306,7 +379,61 @@ jobs:
           echo "previous_revision=$previous_revision" >> "$GITHUB_OUTPUT"
           echo "previous_next_target=$previous_target" >> "$GITHUB_OUTPUT"
 
+      - name: Restore previous production release
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.restore_release == true }}
+        env:
+          ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
+          ORACLE_USER: ${{ secrets.ORACLE_USER }}
+          RESTORE_REVISION: ${{ inputs.restore_revision }}
+          RESTORE_NEXT_TARGET: ${{ inputs.restore_next_target }}
+        run: |
+          set -euo pipefail
+          [[ "$RESTORE_REVISION" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$RESTORE_NEXT_TARGET" =~ ^\.mexo-releases/[A-Za-z0-9._-]+$ ]]
+          ssh \
+            -i ~/.ssh/mexo-production \
+            -o BatchMode=yes \
+            -o ConnectTimeout=30 \
+            -o ConnectionAttempts=3 \
+            "$ORACLE_USER@$ORACLE_HOST" \
+            "bash -se" <<REMOTE
+          set -euo pipefail
+          REPO="/opt/mexo/repo"
+          APP="\$REPO/portfel-inwestora"
+          RESTORE_REVISION="$RESTORE_REVISION"
+          RESTORE_NEXT_TARGET="$RESTORE_NEXT_TARGET"
+          SERVICE_WORKDIR="\$(systemctl show -p WorkingDirectory --value mexo.service)"
+          test "\$SERVICE_WORKDIR" = "\$APP"
+          test -d "\$APP/\$RESTORE_NEXT_TARGET"
+          cd "\$REPO"
+          if [ -n "\$(git status --porcelain --untracked-files=no)" ]; then
+            echo "ERROR: tracked production changes exist; refusing to restore over them."
+            exit 1
+          fi
+          git cat-file -e "\$RESTORE_REVISION^{commit}"
+          git reset --hard "\$RESTORE_REVISION"
+          ln -sfn "\$RESTORE_NEXT_TARGET" "\$APP/.next-rollback-current"
+          mv -Tf "\$APP/.next-rollback-current" "\$APP/.next"
+          sudo -n systemctl restart mexo
+          sudo -n systemctl is-active --quiet mexo
+          echo "Previous source revision and managed build restored; mexo.service is active."
+          REMOTE
+
+      - name: Verify restored public routes
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.restore_release == true }}
+        run: |
+          set -euo pipefail
+          nonce="restore-${GITHUB_RUN_ID}-${RANDOM}"
+          root_code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 -H 'Cache-Control: no-cache, no-store' "https://mexo.com.pl/?health=$nonce" || true)"
+          login_code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 -H 'Cache-Control: no-cache, no-store' "https://mexo.com.pl/login?health=$nonce" || true)"
+          if [ "$root_code" != "200" ] || [ "$login_code" != "200" ]; then
+            echo "ERROR: restored release is active, but public dashboard/login health checks failed."
+            exit 1
+          fi
+          echo "Restored release is serving healthy public dashboard and login routes."
+
       - name: Verify public revision and routes
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.restore_release != true }}
         id: verify
         env:
           EXPECTED_REVISION: ${{ github.sha }}
@@ -359,8 +486,8 @@ jobs:
           test -d "\$APP/\$PREVIOUS_NEXT_TARGET"
           cd "\$REPO"
           git reset --hard "\$PREVIOUS_REVISION"
-          ln -sfn "\$PREVIOUS_NEXT_TARGET" "\$APP/.next-rollback-\$GITHUB_RUN_ID"
-          mv -Tf "\$APP/.next-rollback-\$GITHUB_RUN_ID" "\$APP/.next"
+          ln -sfn "\$PREVIOUS_NEXT_TARGET" "\$APP/.next-rollback-current"
+          mv -Tf "\$APP/.next-rollback-current" "\$APP/.next"
           sudo -n systemctl restart mexo
           sudo -n systemctl is-active --quiet mexo
           echo "Previous code and build restored; mexo.service is active. Public landing/login routes will be checked by the runner."

@@ -658,7 +658,7 @@ export const refreshPortfolioQuotesWithProgress = async (
 export const refreshPortfolioQuotes = async (assets: PortfolioAsset[]) =>
   (await refreshPortfolioQuotesWithProgress(assets)).assets;
 
-export const fetchFxRates = async (codes?: string[], date?: string) => {
+export const fetchFxRates = async (codes?: string[], date?: string, historicalOnly = false) => {
   const params = new URLSearchParams();
 
   if (codes && codes.length > 0) {
@@ -667,6 +667,9 @@ export const fetchFxRates = async (codes?: string[], date?: string) => {
 
   if (date) {
     params.set("date", date);
+  }
+  if (historicalOnly) {
+    params.set("historicalOnly", "1");
   }
 
   const url = `/api/fx${params.size > 0 ? `?${params.toString()}` : ""}`;

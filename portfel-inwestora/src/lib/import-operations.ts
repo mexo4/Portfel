@@ -69,6 +69,9 @@ export type ImportedBrokerOperation = {
   rawTime?: string;
   rawSymbol?: string;
   legacyImportKeys?: string[];
+  /** Other source ledger rows merged into this operation. Their presence in
+   * older imports requires explicit reconciliation, not skipping the trade. */
+  consumedSourceImportKeys?: string[];
   isin?: string;
   realizedProfitLoss?: number;
   purchaseValue?: number;
@@ -296,12 +299,20 @@ const parseNumber = (value: string) => {
 
   if (!trimmed) return null;
 
+  // Numeric OOXML cells may use exponent notation. Stripping letters first
+  // turns 1E+05 into 105 and rejects 1E-05, corrupting quantities and amounts.
+  if (/^[+-]?(?:\d+(?:[.,]\d*)?|[.,]\d+)[eE][+-]?\d+$/.test(trimmed)) {
+    const parsed = Number(trimmed.replace(",", "."));
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
   const isNegative = /^\(.+\)$/.test(trimmed) || /^[-−]/.test(trimmed) || /[-−]$/.test(trimmed);
   const numeric = trimmed
     .replace(/\s/g, "")
     .replace(/[^0-9,.-]/g, "")
     .replace(/^[-−]/, "")
     .replace(/[-−]$/, "");
+  if (!/\d/.test(numeric)) return null;
   const lastComma = numeric.lastIndexOf(",");
   const lastDot = numeric.lastIndexOf(".");
   let normalized = numeric;
@@ -313,7 +324,11 @@ const parseNumber = (value: string) => {
       .replaceAll(thousandSeparator, "")
       .replace(decimalSeparator, ".");
   } else if (lastComma >= 0) {
-    normalized = numeric.replaceAll(".", "").replace(",", ".");
+    normalized = /^\d{1,3}(?:,\d{3}){2,}$/.test(numeric)
+      ? numeric.replaceAll(",", "")
+      : numeric.replace(",", ".");
+  } else if (/^\d{1,3}(?:\.\d{3}){2,}$/.test(numeric)) {
+    normalized = numeric.replaceAll(".", "");
   } else {
     normalized = numeric.replaceAll(",", "");
   }
@@ -1894,7 +1909,7 @@ const parseWorksheetRows = async (xmlText: string, sharedStrings: string[]) => {
 
 const parseXtbTradeComment = (comment: string) => {
   const match = comment.match(
-    /^(OPEN|CLOSE)\s+(BUY|SELL)\s+(.+?)\s*@\s*([-+]?\d[\d.,]*)/i
+    /^(OPEN|CLOSE)\s+(BUY|SELL)\s+(.+?)\s*@\s*([-+]?\d(?:[\d.,]|[ \u00a0\u202f](?=\d))*(?:[eE][-+]?\d+)?)/i
   );
 
   if (!match) {
@@ -1991,6 +2006,7 @@ type XtbCashRow = {
   instrumentName: string;
   comment: string;
   amount: number | null;
+  listingCurrency?: CurrencyCode;
 };
 
 const XTB_CASH_HEADER_ALIASES: Record<string, string[]> = {
@@ -2001,6 +2017,7 @@ const XTB_CASH_HEADER_ALIASES: Record<string, string[]> = {
   symbol: ["symbol", "ticker", "instrument"],
   amount: ["amount", "kwota", "wartosc"],
   instrument: ["instrument", "nazwa instrumentu", "name"],
+  listingCurrency: ["price currency", "quote currency", "instrument currency", "waluta ceny", "waluta instrumentu", "waluta notowania"],
 };
 
 const XTB_CLOSED_HEADER_ALIASES: Record<string, string[]> = {
@@ -2125,15 +2142,11 @@ const parseXtbPlainTransferComment = (
 
 const detectXtbAccountCurrency = (
   rows: string[][],
-  accountNumber: string,
-  fallback: CurrencyCode = "PLN"
+  accountNumber: string
 ) => {
-  const currencyVotes = new Map<CurrencyCode, number>();
-  const vote = (currency: CurrencyCode, weight = 1) => {
-    currencyVotes.set(currency, (currencyVotes.get(currency) ?? 0) + weight);
-  };
+  const transferCurrencies = new Set<CurrencyCode>();
 
-  rows.slice(0, 20).forEach((row, rowIndex) => {
+  for (const [rowIndex, row] of rows.slice(0, 20).entries()) {
     const currencyIndex = row.findIndex((cell) => normalizeHeader(cell) === "currency");
     const currency =
       currencyIndex >= 0
@@ -2142,10 +2155,11 @@ const detectXtbAccountCurrency = (
           ) ?? ""
         : "";
 
-    if (currency) {
-      vote(toCurrencyCode(currency, fallback), 10);
-    }
-  });
+    // A statement's explicit account currency is authoritative. Repeated
+    // transfer comments describe counterparties and cannot outvote it.
+    const explicit = getExplicitXtbCurrency(currency);
+    if (explicit) return explicit;
+  }
 
   rows.forEach((row) => {
     const comment = row.join(" ");
@@ -2153,24 +2167,19 @@ const detectXtbAccountCurrency = (
 
     if (transfer && accountNumber) {
       if (transfer.sourceAccountNumber === accountNumber) {
-        vote(transfer.sourceCurrency, 8);
+        transferCurrencies.add(transfer.sourceCurrency);
       }
 
       if (transfer.targetAccountNumber === accountNumber) {
-        vote(transfer.targetCurrency, 8);
+        transferCurrencies.add(transfer.targetCurrency);
       }
     }
 
-    const currencyMatch = comment.match(/\b(PLN|USD|EUR|GBP|CHF|DKK|CZK|CAD|JPY|NOK|SEK)\b/i);
-    if (currencyMatch) {
-      vote(toCurrencyCode(currencyMatch[1], fallback));
-    }
   });
 
-  return (
-    Array.from(currencyVotes.entries()).sort((left, right) => right[1] - left[1])[0]?.[0] ??
-    fallback
-  );
+  // A transfer explicitly referencing this statement account can establish
+  // its currency, but dividend currencies and instrument venues cannot.
+  return transferCurrencies.size === 1 ? [...transferCurrencies][0] : undefined;
 };
 
 const buildXtbOperationImportKey = (
@@ -2209,7 +2218,12 @@ const getXtbOperationImportKeys = (
   );
   const importKeySymbols = symbols.length > 0 ? symbols : [""];
 
-  return importKeySymbols.map((symbol) => buildXtbOperationImportKey(operation, symbol));
+  const legacyKeys = importKeySymbols.map((symbol) => buildXtbOperationImportKey(operation, symbol));
+  // Broker ledger IDs identify operations independently of symbol aliases,
+  // locale/time representation and later currency corrections.
+  return operation.brokerOperationId && operation.accountNumber
+    ? [`xtb:v2:${operation.accountNumber}:${operation.brokerOperationId}`, ...legacyKeys]
+    : legacyKeys;
 };
 
 const getXtbTransferImportKey = (
@@ -2238,10 +2252,85 @@ const getXtbDividendPerShare = (comment: string) => {
   return match?.[1] ? parseNumber(match[1]) : null;
 };
 
+const getConsumedXtbRowImportKeys = (row: XtbCashRow, accountNumber: string) => {
+  const source = {
+    brokerOperationId: row.id,
+    rawTime: row.rawTime,
+    rawType: row.rawType,
+    amount: round(Math.abs(row.amount ?? 0), 6),
+    accountNumber,
+    symbol: row.rawSymbol,
+    rawSymbol: row.rawSymbol,
+  };
+  return [
+    ...getXtbOperationImportKeys(source),
+    ...getXtbOperationImportKeys({ ...source, accountNumber: undefined }),
+  ];
+};
+
 const getXtbCommentCurrency = (comment: string, fallback: CurrencyCode) =>
   toCurrencyCode(comment.match(/\b(PLN|USD|EUR|GBP|CHF|DKK|CZK|CAD|JPY|NOK|SEK)\b/i)?.[1], fallback);
 
 const XTB_AUTO_FX_SPREAD_RATE = 0.005;
+
+const getExplicitXtbCurrency = (value: string): CurrencyCode | undefined => {
+  const code = value.trim().toUpperCase();
+  return /^(PLN|USD|EUR|GBP|CHF|DKK|CZK|CAD|JPY|NOK|SEK|HKD|AUD|SGD|HUF|RON|INR)$/.test(code)
+    ? toCurrencyCode(code)
+    : undefined;
+};
+
+// Import-specific corrections verified against the issuer's exact LSE line.
+// A venue never determines its currency: ISAC/ISLN trade in USD, while their
+// separate sterling lines have different tickers. No search/catalog mutation.
+const VERIFIED_XTB_LISTINGS: Record<string, { currency: CurrencyCode; priceScale: number; sourceUrl: string }> = {
+  ISAC: {
+    currency: "USD",
+    priceScale: 1,
+    sourceUrl: "https://www.ishares.com/uk/individual/en/products/251850/",
+  },
+  ISLN: {
+    currency: "USD",
+    priceScale: 1,
+    sourceUrl: "https://www.ishares.com/uk/professionals/en/products/258443/ssln",
+  },
+};
+
+const getVerifiedXtbListing = (symbol: string) => {
+  const match = normalizeSymbol(symbol).match(/^([A-Z0-9-]+)\.(?:UK|L|LSE)$/);
+  return match ? VERIFIED_XTB_LISTINGS[match[1]] : undefined;
+};
+
+const getXtbTradeListingCurrency = (
+  row: XtbCashRow,
+  kind: AssetKind,
+  accountCurrency: CurrencyCode,
+  cashAmount: number,
+  marketAmount: number
+): CurrencyCode | undefined => {
+  const explicitCommentCurrency = getExplicitXtbCurrency(
+    row.comment.match(/@\s*[-+]?\d(?:[\d.,]|[ \u00a0\u202f](?=\d))*(?:[eE][-+]?\d+)?\s+(PLN|USD|EUR|GBP|CHF|DKK|CZK|CAD|JPY|NOK|SEK)\b/i)?.[1] ?? ""
+  );
+  const exactCurrency =
+    row.listingCurrency ??
+    explicitCommentCurrency ??
+    getVerifiedXtbListing(row.rawSymbol)?.currency ??
+    resolveTickerAlias(row.rawSymbol, kind)?.marketCurrency ??
+    resolveTickerAlias(row.rawSymbol)?.marketCurrency ??
+    getImportedCryptoIdentity(row.rawSymbol, row.instrumentName)?.quoteCurrency;
+
+  if (exactCurrency) return exactCurrency;
+  const symbol = normalizeSymbol(row.rawSymbol);
+  if (isGpwSymbol(symbol)) return "PLN";
+  if (symbol.endsWith(".US")) return "USD";
+  if (isEffectivelySameTradeAmount(cashAmount, marketAmount)) return accountCurrency;
+
+  // London lists USD, GBP and EUR lines (and pence quotes). A cash debit in
+  // another currency alone cannot establish which line the client purchased.
+  if (/\.(UK|L|LSE)$/.test(symbol)) return undefined;
+  const inferred = inferCurrencyFromSymbol(symbol, accountCurrency);
+  return inferred !== accountCurrency || /\.[A-Z]+$/.test(symbol) ? inferred : undefined;
+};
 
 const isLikelyXtbSymbolToken = (value: string) => {
   const normalized = value.trim().toUpperCase();
@@ -2282,19 +2371,22 @@ const isXtbFeeType = (normalizedType: string) =>
   normalizedType === "swap";
 const isXtbCloseTradeType = (normalizedType: string) => normalizedType === "close trade";
 
+const getXtbExcelSerial = (value: string): number | null => {
+  if (!/^\d+(?:[.,]\d+)?$/.test(value.trim())) return null;
+  const serial = parseNumber(value);
+  return serial !== null && serial >= 20_000 && serial <= 80_000 ? serial : null;
+};
+
 const parseXtbCashRows = (rows: string[][], header: XtbHeader): XtbCashRow[] =>
   rows
     .slice(header.rowIndex + 1)
     .map((row, index) => {
       const rawTime = getMappedCell(row, header, "time");
-      const serialTime = parseNumber(rawTime);
+      const serialTime = getXtbExcelSerial(rawTime);
       const rawType = getMappedCell(row, header, "type");
 
       return {
-        rowNumber:
-          typeof serialTime === "number" && Number.isFinite(serialTime)
-            ? Math.round(serialTime * 1_000_000)
-            : header.rowIndex + index + 2,
+        rowNumber: header.rowIndex + index + 2,
         id: getMappedCell(row, header, "id"),
         rawType,
         normalizedType: normalizeHeader(rawType),
@@ -2308,6 +2400,7 @@ const parseXtbCashRows = (rows: string[][], header: XtbHeader): XtbCashRow[] =>
         instrumentName: getMappedCell(row, header, "instrument"),
         comment: getMappedCell(row, header, "comment"),
         amount: parseNumber(getMappedCell(row, header, "amount")),
+        listingCurrency: getExplicitXtbCurrency(getMappedCell(row, header, "listingCurrency")),
       } satisfies XtbCashRow;
     })
     .filter((row) => row.id && row.rawType && row.normalizedType !== "total");
@@ -2359,13 +2452,16 @@ const buildBaseXtbOperation = ({
 }): ImportedBrokerOperation => {
   const identityCurrency = marketCurrency ?? currency;
   const cryptoIdentity = kind === "crypto" ? getImportedCryptoIdentity(symbol, name) : null;
-  const alias = cryptoIdentity || !symbol ? null : resolveTickerAlias(symbol, kind);
+  const alias = cryptoIdentity || !symbol
+    ? null
+    : resolveTickerAlias(symbol, kind) ?? resolveTickerAlias(symbol);
   const resolvedSymbol =
     cryptoIdentity?.symbol ??
     alias?.symbol ??
     (symbol ? normalizeImportedSymbol(symbol, kind, identityCurrency) : "");
   const resolvedKind = cryptoIdentity ? "crypto" : alias?.kind ?? kind;
-  const resolvedCurrency = alias?.marketCurrency ?? identityCurrency;
+  const verifiedListing = getVerifiedXtbListing(symbol);
+  const resolvedCurrency = marketCurrency ?? verifiedListing?.currency ?? alias?.marketCurrency ?? identityCurrency;
   const provider = alias?.provider ?? getProvider(resolvedKind, resolvedSymbol, resolvedCurrency);
   const operation: ImportedBrokerOperation = {
     rowNumber: row.rowNumber,
@@ -2377,8 +2473,8 @@ const buildBaseXtbOperation = ({
     kind: resolvedKind,
     quantity: roundImportedQuantity(quantity, resolvedKind),
     price: round(Math.abs(price), 6),
-    currency: resolvedCurrency,
-    marketCurrency: marketCurrency ? alias?.marketCurrency ?? marketCurrency : undefined,
+    currency: operationType === "BUY" || operationType === "SELL" ? resolvedCurrency : currency,
+    marketCurrency: marketCurrency ? resolvedCurrency : undefined,
     cashCurrency,
     cashAmount: typeof cashAmount === "number" ? round(Math.abs(cashAmount), 6) : undefined,
     marketAmount: typeof marketAmount === "number" ? round(Math.abs(marketAmount), 6) : undefined,
@@ -2402,7 +2498,7 @@ const buildBaseXtbOperation = ({
       cryptoIdentity?.providerId ??
       alias?.providerId ??
       (provider === "yahoo" || provider === "eodhd" ? resolvedSymbol : undefined),
-    priceScale: alias?.priceScale,
+    priceScale: verifiedListing?.priceScale ?? alias?.priceScale,
     isin: alias?.isin,
     warnings: [],
   };
@@ -2489,10 +2585,10 @@ const parseXtbClosedPositionRows = (rows: string[][]): XtbClosedPosition[] => {
       const category = getMappedCell(row, header, "category");
       const ticker = getMappedCell(row, header, "ticker");
       const rawTradeSide = normalizeSymbol(getMappedCell(row, header, "type"));
-      const openSerial = parseNumber(getMappedCell(row, header, "openTime"));
+      const openSerial = getXtbExcelSerial(getMappedCell(row, header, "openTime"));
       const openDate = parseDate(getMappedCell(row, header, "openTime"));
       const openPrice = parseNumber(getMappedCell(row, header, "openPrice"));
-      const closeSerial = parseNumber(getMappedCell(row, header, "closeTime"));
+      const closeSerial = getXtbExcelSerial(getMappedCell(row, header, "closeTime"));
       const closeDate = parseDate(getMappedCell(row, header, "closeTime"));
       const volume = parseNumber(getMappedCell(row, header, "volume"));
       const closePrice = parseNumber(getMappedCell(row, header, "closePrice"));
@@ -2593,10 +2689,7 @@ const enrichXtbSalesWithClosedPositions = (
       return operation;
     }
 
-    const operationTime =
-      operation.rawTime && parseNumber(operation.rawTime)
-        ? parseNumber(operation.rawTime)
-        : null;
+    const operationTime = operation.rawTime ? getXtbExcelSerial(operation.rawTime) : null;
     const operationMatchKeys = new Set([
       ...getXtbTickerMatchKeys(operation.rawSymbol, operation.kind, operation.currency),
       ...getXtbTickerMatchKeys(operation.symbol, operation.kind, operation.currency),
@@ -2865,6 +2958,15 @@ export const parseXtbCashOperationRows = (
 
   const accountNumber = detectXtbAccountNumber(rows);
   const accountCurrency = detectXtbAccountCurrency(rows, accountNumber);
+  if (!accountCurrency) {
+    return {
+      operations: [],
+      skippedRows: [{
+        rowNumber: header.rowIndex + 1,
+        reason: "Brak jednoznacznej waluty rachunku XTB. Dodaj naglowek Currency (PLN/USD/EUR/GBP itd.) lub ponownie wyeksportuj raport; nie zastosowano domyslnego PLN ani FX 1:1.",
+      }],
+    };
+  }
   const cashRowsForProcessing = parseXtbCashRows(rows, header);
   const operations: ImportedBrokerOperation[] = [];
   const skippedRows: BrokerImportParseResult["skippedRows"] = [];
@@ -2921,7 +3023,14 @@ export const parseXtbCashOperationRows = (
       return;
     }
 
-    const signedAmount = row.amount ?? 0;
+    if (row.amount === null) {
+      skippedRows.push({
+        rowNumber: row.rowNumber,
+        reason: "Brak lub nieprawidlowa kwota operacji XTB. Sprawdz pole Amount; nie zastosowano kwoty 0.",
+      });
+      return;
+    }
+    const signedAmount = row.amount;
     const absoluteAmount = Math.abs(signedAmount);
 
     if (isXtbBuyType(row.normalizedType) || isXtbSellType(row.normalizedType)) {
@@ -2935,7 +3044,17 @@ export const parseXtbCashOperationRows = (
         return;
       }
 
-      const side: BrokerOperationSide = trade.tradeSide === "BUY" ? "buy" : "sell";
+      // In XTB, "Stock sell / CLOSE BUY" closes a previously bought position.
+      // BUY in Comment describes the position's entry side, not this cash
+      // operation's direction. Type is the authoritative execution side.
+      const side: BrokerOperationSide = isXtbBuyType(row.normalizedType) ? "buy" : "sell";
+      if ((side === "buy" && signedAmount > 0) || (side === "sell" && signedAmount < 0)) {
+        skippedRows.push({
+          rowNumber: row.rowNumber,
+          reason: "Znak kwoty Amount jest sprzeczny z kupnem/sprzedaza XTB. Sprawdz wiersz przed importem.",
+        });
+        return;
+      }
       const cryptoIdentity = getImportedCryptoIdentity(
         row.rawSymbol,
         row.instrumentName || row.rawSymbol
@@ -2944,14 +3063,16 @@ export const parseXtbCashOperationRows = (
         ? "crypto"
         : inferKind(row.rawType, row.rawSymbol, row.instrumentName || row.rawSymbol);
       const grossMarketValue = trade.quantity * trade.price;
-      const marketCurrency =
-        cryptoIdentity?.quoteCurrency ??
-        inferXtbListingCurrency({
-          symbol: row.rawSymbol,
-          accountCurrency,
-          cashAmount: absoluteAmount,
-          marketAmount: grossMarketValue,
+      const marketCurrency = getXtbTradeListingCurrency(
+        row, kind, accountCurrency, absoluteAmount, grossMarketValue
+      );
+      if (!marketCurrency) {
+        skippedRows.push({
+          rowNumber: row.rowNumber,
+          reason: `Nie mozna wiarygodnie ustalic waluty notowania ${row.rawSymbol}. Dodaj kolumne Price Currency / Quote Currency; waluta rachunku ani gielda nie okreslaja waluty tej linii.`,
         });
+        return;
+      }
       const matchingCloseTradeRow =
         trade.positionEffect === "CLOSE" ? closeTradeRowsBySaleId.get(row.id) : undefined;
       const brokerRealizedProfitLoss = matchingCloseTradeRow?.amount;
@@ -2959,9 +3080,20 @@ export const parseXtbCashOperationRows = (
         side === "sell" && typeof brokerRealizedProfitLoss === "number"
           ? round(absoluteAmount + brokerRealizedProfitLoss, 6)
           : undefined;
+      // Some XTB statements post the disposed acquisition value in Stock sell
+      // and the difference in a separate close trade ledger entry. Once that
+      // entry is consumed here, settlement must include both source amounts.
+      const settlementCashAmount = brokerSaleValue ?? absoluteAmount;
+      if (settlementCashAmount < 0) {
+        skippedRows.push({
+          rowNumber: row.rowNumber,
+          reason: "Suma Stock sell i close trade jest ujemna; nie mozna bezpiecznie ustalic przychodu ze sprzedazy.",
+        });
+        return;
+      }
       const exchangeRate =
-        grossMarketValue > 0 && accountCurrency !== marketCurrency && absoluteAmount > 0
-          ? round(absoluteAmount / grossMarketValue, 8)
+        grossMarketValue > 0 && accountCurrency !== marketCurrency && settlementCashAmount > 0
+          ? round(settlementCashAmount / grossMarketValue, 8)
           : accountCurrency === marketCurrency
             ? 1
             : undefined;
@@ -2983,12 +3115,14 @@ export const parseXtbCashOperationRows = (
           marketCurrency,
           marketAmount: grossMarketValue,
           cashCurrency: accountCurrency,
-          cashAmount: absoluteAmount,
+          cashAmount: settlementCashAmount,
           autoFxConversion: hasAutoFxConversion,
           brokerFxSpreadRate: hasAutoFxConversion ? XTB_AUTO_FX_SPREAD_RATE : undefined,
           side,
         }),
-        positionDirection: trade.positionDirection,
+        // Securities in the cash ledger are long holdings. CFD/short direction
+        // is supplied by the explicit Type in CLOSED POSITION HISTORY below.
+        positionDirection: "LONG",
         positionEffect: trade.positionEffect,
         accountNumber,
         realizedProfitLoss:
@@ -2998,6 +3132,12 @@ export const parseXtbCashOperationRows = (
         purchaseValue:
           typeof brokerRealizedProfitLoss === "number" ? round(absoluteAmount, 6) : undefined,
         saleValue: brokerSaleValue,
+        legacyImportKeys: matchingCloseTradeRow
+          ? getConsumedXtbRowImportKeys(matchingCloseTradeRow, accountNumber)
+          : undefined,
+        consumedSourceImportKeys: matchingCloseTradeRow
+          ? getConsumedXtbRowImportKeys(matchingCloseTradeRow, accountNumber)
+          : undefined,
       });
       tradeRows += 1;
       return;
@@ -3041,6 +3181,12 @@ export const parseXtbCashOperationRows = (
         dividendPerShare: dividendPerShare ?? undefined,
         tax: withholdingTax,
         transactionValue: grossAmount,
+        legacyImportKeys: matchingTaxRow
+          ? getConsumedXtbRowImportKeys(matchingTaxRow, accountNumber)
+          : undefined,
+        consumedSourceImportKeys: matchingTaxRow
+          ? getConsumedXtbRowImportKeys(matchingTaxRow, accountNumber)
+          : undefined,
       });
       dividendRows += 1;
       return;
@@ -3127,7 +3273,7 @@ export const parseXtbCashOperationRows = (
           counterpartyAccountNumber: isCurrentSource
             ? transfer.targetAccountNumber
             : transfer.sourceAccountNumber,
-          sourceAccountNumber: transfer.sourceAccountNumber,
+          sourceAccountNumber: isCurrentSource ? transfer.sourceAccountNumber : undefined,
           sourceCurrency: transfer.sourceCurrency,
           importKey: `${getXtbTransferImportKey(row, transfer)}:${accountNumber}:${currentCurrency}`,
         });
@@ -3181,12 +3327,19 @@ export const parseXtbCashOperationRows = (
         ...buildBaseXtbOperation({
           row,
           accountCurrency,
-          operationType: "FEE",
+          operationType: signedAmount > 0 ? "CUSTOM" : "FEE",
+          symbol: row.rawSymbol,
+          name: row.instrumentName || row.rawSymbol || row.rawType,
+          kind: inferKind(row.rawType, row.rawSymbol, row.instrumentName || row.rawSymbol),
           amount: absoluteAmount,
-          fee: absoluteAmount,
+          fee: signedAmount > 0 ? 0 : absoluteAmount,
         }),
         accountNumber,
-        financing: row.normalizedType === "swap" ? round(absoluteAmount, 6) : undefined,
+        financing: signedAmount < 0 && row.normalizedType === "swap" ? round(absoluteAmount, 6) : undefined,
+        ...(signedAmount > 0 ? {
+          cashAmount: round(signedAmount, 6),
+          realizedProfitLoss: round(signedAmount, 6),
+        } : {}),
       });
       cashRows += 1;
       return;
@@ -3225,10 +3378,6 @@ export const parseXtbCashOperationRows = (
     });
   });
 
-  if (operations.length === 0) {
-    return null;
-  }
-
   const sourceKind = /pdf/i.test(sheetName)
     ? "XTB PDF"
     : /mhtml|html/i.test(sheetName)
@@ -3236,7 +3385,24 @@ export const parseXtbCashOperationRows = (
       : "XTB XLSX";
 
   return {
-    operations,
+    operations: operations.map((operation) => {
+      const keys = getXtbOperationImportKeys(operation);
+      const primaryKey = keys[0];
+      return {
+        ...operation,
+        importKey: primaryKey,
+        legacyImportKeys: uniqueBy(
+          [
+            operation.importKey,
+            ...(operation.legacyImportKeys ?? []),
+            ...keys.slice(1),
+            ...getXtbOperationImportKeys({ ...operation, accountNumber: undefined }),
+          ]
+            .filter((key): key is string => Boolean(key && key !== primaryKey)),
+          (key) => key
+        ),
+      };
+    }),
     skippedRows,
     warnings: [
       `${sourceKind}: odczytano "${sheetName}" jako historie operacji gotowkowych.`,
@@ -3679,6 +3845,7 @@ export const parseBrokerOperationsXlsx = async (
   });
 
   let xtbResult: BrokerImportParseResult | null = null;
+  let additionalXtbCashSheets = 0;
   const closedPositions: XtbClosedPosition[] = [];
 
   for (const worksheet of xtbWorksheetEntries) {
@@ -3693,6 +3860,10 @@ export const parseBrokerOperationsXlsx = async (
 
     if (!xtbResult) {
       xtbResult = parseXtbCashOperationRows(rows, worksheet.sheetName);
+    } else if (findFlexibleHeaderRow(rows, XTB_CASH_HEADER_ALIASES, [
+      "id", "type", "time", "comment", "symbol", "amount",
+    ])) {
+      additionalXtbCashSheets += 1;
     }
 
     await yieldToMainThread();
@@ -3709,6 +3880,9 @@ export const parseBrokerOperationsXlsx = async (
       operations: enrichedOperations,
       warnings: [
         ...(xtbResult.warnings ?? []),
+        additionalXtbCashSheets > 0
+          ? "Plik zawiera kilka arkuszy historii gotowkowej. Zaimportowano pierwszy rachunek; pozostale rachunki wyeksportuj i zaimportuj osobno do wybranego portfela."
+          : "",
         closedPositions.length > 0
           ? `XTB XLSX: odczytano ${closedPositions.length} zamknietych pozycji do weryfikacji wyniku zrealizowanego.`
           : "",

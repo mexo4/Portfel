@@ -2093,7 +2093,8 @@ const fetchNbpHistoricalFxRates = async (codes: CurrencyCode[], date: string) =>
 
 export const fetchFxRatesServer = async (
   codes: CurrencyCode[] = [],
-  date?: string
+  date?: string,
+  options: { historicalOnly?: boolean } = {}
 ): Promise<FxRates> => {
   const normalizedCodes = uniqueBy(
     codes.map((code) => toCurrencyCode(code)).concat("PLN"),
@@ -2102,6 +2103,9 @@ export const fetchFxRatesServer = async (
 
   if (date) {
     const historicalNbpRates = await fetchNbpHistoricalFxRates(normalizedCodes, date);
+    // Historical imports must never silently turn a missing dated fixing into
+    // today's FX rate. Missing currencies stay absent for explicit validation.
+    if (options.historicalOnly) return historicalNbpRates;
     const missingHistoricalCodes = normalizedCodes.filter(
       (code) => historicalNbpRates[code] === undefined
     );

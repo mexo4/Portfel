@@ -91,6 +91,16 @@ import { getGpwWatchlistCanonicalKey, type WatchlistItem } from "@/lib/watchlist
 import { ALL_PORTFOLIOS_ID, getWorkspaceReadHref } from "@/lib/portfolio-selection";
 import { normalizePortfolioAccountType } from "@/lib/portfolio-account-rules";
 import {
+  compareImportedBrokerOperations,
+  getImportedCommissionMetadata,
+  getImportedStatementAccount,
+  getImportedStandaloneExpense,
+  getStoredImportedOperationKeys,
+  prepareXtbImportOperations,
+  requireImportedHistoricalFxRate,
+  resolveImportedTradeValuation,
+} from "@/lib/xtb-import-valuation";
+import {
   getTodayDateInputValue,
   normalizeText,
   round,
@@ -705,6 +715,8 @@ const getImportedOperationMetadata = (
     paymentDate: isDividend ? operation.date : undefined,
     country: isDividend ? (operation.cashCurrency === "PLN" ? "PL" : "Nie ustawiono") : undefined,
     legacyImportKeys: operation.legacyImportKeys,
+    consumedSourceImportKeys: operation.consumedSourceImportKeys,
+    ...getImportedCommissionMetadata(operation),
     instrumentType: operation.instrumentType,
     positionDirection: getImportedPositionDirection(operation),
     positionEffect: getImportedPositionEffect(operation),
@@ -3680,7 +3692,7 @@ export default function PortfolioApp({
   };
 
   const handleImportBrokerOperations = async (
-    operations: ImportedBrokerOperation[]
+    inputOperations: ImportedBrokerOperation[]
   ) => {
     if (!requireConcretePortfolioSelection()) {
       throw new Error("Wybierz konkretny portfel docelowy przed importem.");
@@ -3699,9 +3711,13 @@ export default function PortfolioApp({
         realizedAdjustments,
       });
     const portfolioId = portfolioForImport.id;
+    const existingImportKeys = getStoredImportedOperationKeys(portfolioForImport.operations ?? []);
+    const operations = prepareXtbImportOperations(inputOperations, existingImportKeys);
+    const importWarnings = operations.flatMap((operation) => operation.importWarning ? [operation.importWarning] : []);
     const importCurrencies = Array.from(
       new Set(
         operations
+          .filter((operation) => operation.broker?.toUpperCase() !== "XTB")
           .flatMap((operation) => [
             operation.currency,
             operation.marketCurrency,
@@ -3739,6 +3755,52 @@ export default function PortfolioApp({
       }
     }
 
+    // One dated batch per statement day, shared by its trades and cash rows.
+    // These rates must never include the API's current-rate fallback.
+    const xtbDates = new Map<string, Set<CurrencyCode>>();
+    operations.filter((operation) => operation.broker?.toUpperCase() === "XTB")
+      .forEach((operation) => {
+        const codes = xtbDates.get(operation.date) ?? new Set<CurrencyCode>();
+        const cashCurrency = getImportedStatementAccount(operation).currency;
+        codes.add(cashCurrency);
+        const marketCurrency = toCurrencyCode(operation.marketCurrency ?? operation.currency, cashCurrency);
+        const isTrade = getImportedOperationType(operation) === "BUY" || getImportedOperationType(operation) === "SELL";
+        if (isTrade && (operation.instrumentType === "CFD" ||
+          !(typeof operation.cashAmount === "number" && operation.cashAmount > 0 &&
+            typeof operation.marketAmount === "number" && operation.marketAmount > 0) &&
+          !(typeof operation.exchangeRate === "number" && operation.exchangeRate > 0))) {
+          codes.add(marketCurrency);
+        }
+        xtbDates.set(operation.date, codes);
+      });
+    const historicalRatesByDate = new Map<string, FxRates>();
+    const pendingDates = Array.from(xtbDates.entries());
+    let nextDateIndex = 0;
+    const loadHistoricalImportRates = async () => {
+      while (nextDateIndex < pendingDates.length) {
+        const [date, codes] = pendingDates[nextDateIndex++];
+        const foreignCodes = Array.from(codes).filter((code) => code !== "PLN");
+        if (foreignCodes.length === 0) {
+          historicalRatesByDate.set(date, { PLN: 1 });
+          continue;
+        }
+        let datedRates: FxRates;
+        try {
+          const response = await fetchFxRates(foreignCodes, date, true);
+          datedRates = { ...response.rates, PLN: 1 };
+        } catch {
+          throw new Error(
+            `Nie można zaimportować operacji z ${date}: brak historycznych kursów ` +
+            `${foreignCodes.join(", ")}/PLN. Spróbuj ponownie; nie użyto kursów bieżących ani 1:1.`
+          );
+        }
+        const sample = operations.find((operation) => operation.date === date && operation.broker?.toUpperCase() === "XTB")!;
+        foreignCodes.forEach((code) => requireImportedHistoricalFxRate(code, datedRates, sample));
+        historicalRatesByDate.set(date, datedRates);
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(2, pendingDates.length) }, loadHistoricalImportRates));
+
     let nextAssets: PortfolioAsset[] = normalizeStoredPortfolioAssets(assets);
     let nextSales = getSortedPortfolioSales(sales);
     let nextRealizedAdjustments = getSortedPortfolioRealizedAdjustments(realizedAdjustments);
@@ -3748,21 +3810,6 @@ export default function PortfolioApp({
       (operation) => typeof operation.metadata.legacySource !== "string"
     );
     const existingOperationIds = new Set(nextOperations.map((operation) => operation.id));
-    const existingImportKeys = new Set(
-      nextOperations
-        .flatMap((operation) => {
-          const primaryKey =
-            typeof operation.metadata.importKey === "string" ? operation.metadata.importKey : "";
-          const legacyKeys = Array.isArray(operation.metadata.legacyImportKeys)
-            ? operation.metadata.legacyImportKeys.filter(
-                (key): key is string => typeof key === "string"
-              )
-            : [];
-
-          return [primaryKey, ...legacyKeys];
-        })
-        .filter(Boolean)
-    );
     let importedBuys = 0;
     let importedSells = 0;
     let importedDividends = 0;
@@ -3788,7 +3835,9 @@ export default function PortfolioApp({
         operation.accountCurrency ?? operation.cashCurrency ?? operation.currency,
         "PLN"
       );
-      const rate = getFxRateToPlnSnapshot(currency, importFxRates);
+      const rate = operation.broker?.toUpperCase() === "XTB"
+        ? requireImportedHistoricalFxRate(currency, historicalRatesByDate.get(operation.date) ?? {}, operation)
+        : getFxRateToPlnSnapshot(currency, importFxRates);
 
       if (!rate) return false;
 
@@ -3815,11 +3864,8 @@ export default function PortfolioApp({
       metadataPatch: Record<string, unknown> = {}
     ) => {
       const broker = normalizeImportedBroker(operation.broker);
-      const sourceCurrency = toCurrencyCode(
-        operation.sourceCurrency ?? operation.accountCurrency ?? operation.currency,
-        "PLN"
-      );
-      const sourceAccountNumber = operation.sourceAccountNumber ?? operation.accountNumber;
+      const { currency: sourceCurrency, accountNumber: sourceAccountNumber } =
+        getImportedStatementAccount(operation);
 
       nextAccounts = upsertImportedAccount(
         nextAccounts,
@@ -3876,10 +3922,24 @@ export default function PortfolioApp({
         operation,
         now,
       });
+      const isXtb = operation.broker?.toUpperCase() === "XTB";
+      const historicalRates = historicalRatesByDate.get(operation.date) ?? {};
+      const historicalTrade = isXtb &&
+        (importedOperation.operationType === "BUY" || importedOperation.operationType === "SELL")
+        ? resolveImportedTradeValuation(operation, historicalRates)
+        : undefined;
       const nextOperation = {
         ...importedOperation,
         metadata: {
           ...importedOperation.metadata,
+          ...(isXtb ? {
+            historicalFxVerified: true,
+            historicalFxDate: operation.date,
+            settlementFxRateToPln: requireImportedHistoricalFxRate(sourceCurrency, historicalRates, operation),
+            purchaseFxRateToPln: historicalTrade?.purchaseFxRateToPln,
+            purchasePriceCurrency: historicalTrade?.priceCurrency,
+            feePln: historicalTrade?.totalFeePln,
+          } : {}),
           ...metadataPatch,
         },
       };
@@ -3922,10 +3982,7 @@ export default function PortfolioApp({
       return true;
     };
 
-    const orderedOperations = [...operations].sort(
-      (left, right) =>
-        left.date.localeCompare(right.date) || left.rowNumber - right.rowNumber
-    );
+    const orderedOperations = [...operations].sort(compareImportedBrokerOperations);
 
     for (const [operationIndex, operation] of orderedOperations.entries()) {
       if (operationIndex > 0 && operationIndex % 32 === 0) {
@@ -3960,15 +4017,11 @@ export default function PortfolioApp({
               operation.realizedProfitLoss,
               `Zrealizowany wynik importowany: ${operation.name || operation.symbol}`
             );
-          } else if (
-            operationType === "FEE" &&
-            (typeof operation.financing === "number" ||
-              normalizeText(operation.rawType ?? "") === "swap")
-          ) {
+          } else if (getImportedStandaloneExpense(operation) !== undefined) {
             appendImportedRealizedAdjustment(
               operation,
-              -Math.abs(operation.financing ?? operation.amount ?? operation.fee ?? 0),
-              `Koszt finansowania: ${operation.name || operation.symbol || "pozycja"}`
+              getImportedStandaloneExpense(operation)!,
+              `${typeof operation.financing === "number" ? "Koszt finansowania" : "Prowizja / koszt brokera"}: ${operation.name || operation.symbol || "pozycja"}`
             );
           }
           if (operationType === "DIVIDEND") {
@@ -3982,6 +4035,9 @@ export default function PortfolioApp({
       }
 
       if (!operation.symbol || operation.quantity <= 0 || operation.price <= 0) {
+        if (operation.broker?.toUpperCase() === "XTB") {
+          throw new Error(`Wiersz ${operation.rowNumber}: nieprawidłowy symbol, ilość lub cena transakcji XTB. Import nie został zapisany.`);
+        }
         console.warn("[broker-import] Pomieto nieprawidlowa transakcje.", {
           rowNumber: operation.rowNumber,
           importKey: operation.importKey,
@@ -4026,16 +4082,19 @@ export default function PortfolioApp({
       const importedPriceCurrency = hasImportedMarketUnitPrice
         ? importedMarketCurrency
         : importedCashCurrency;
+      const xtbValuation = operation.broker?.toUpperCase() === "XTB"
+        ? resolveImportedTradeValuation(operation, historicalRatesByDate.get(operation.date) ?? {})
+        : undefined;
       const importedPurchaseFxRateToPln =
-        importedPriceCurrency === "PLN"
+        xtbValuation?.purchaseFxRateToPln ?? (importedPriceCurrency === "PLN"
           ? 1
           : importedCashCurrency === "PLN" &&
               typeof operation.exchangeRate === "number" &&
               Number.isFinite(operation.exchangeRate) &&
               operation.exchangeRate > 0
             ? operation.exchangeRate
-            : getFxRateToPlnSnapshot(importedPriceCurrency, importFxRates);
-      const importedSettlementFxRateToPln = getFxRateToPlnSnapshot(
+            : getFxRateToPlnSnapshot(importedPriceCurrency, importFxRates));
+      const importedSettlementFxRateToPln = xtbValuation?.settlementFxRateToPln ?? getFxRateToPlnSnapshot(
         importedCashCurrency,
         importFxRates
       );
@@ -4058,7 +4117,7 @@ export default function PortfolioApp({
         typeof operation.financing === "number" && Number.isFinite(operation.financing)
           ? Math.abs(operation.financing) * importedSettlementFxRateToPln
           : 0;
-      const importedTotalFeePln = round(operation.feePln + importedFinancingPln, 6);
+      const importedTotalFeePln = xtbValuation?.totalFeePln ?? round(operation.feePln + importedFinancingPln, 6);
 
       const positionDirection = getImportedPositionDirection(operation);
       const positionEffect = getImportedPositionEffect(operation);
@@ -4097,6 +4156,7 @@ export default function PortfolioApp({
           marketCurrency: importedMarketCurrency,
           provider: operation.provider,
           providerId: operation.providerId,
+          priceScale: operation.priceScale,
           groupOrder: existingGroupOrder ?? getNextGroupOrder(nextAssets),
           createdAt: new Date(`${operation.date}T00:00:00.000Z`).toISOString(),
         };
@@ -4134,6 +4194,13 @@ export default function PortfolioApp({
           continue;
         }
 
+        if (operation.broker?.toUpperCase() === "XTB") {
+          throw new Error(
+            `Wiersz ${operation.rowNumber} (${operation.symbol}, ${operation.date}): ` +
+            "brak pasującej otwartej pozycji dla sprzedaży. Zaimportuj pełną historię rachunku; import nie został zapisany."
+          );
+        }
+
         console.warn("[broker-import] Pomieto sprzedaz bez pasujacej otwartej pozycji.", {
           rowNumber: operation.rowNumber,
           importKey: operation.importKey,
@@ -4149,14 +4216,14 @@ export default function PortfolioApp({
           ? importedMarketCurrency
           : importedCashCurrency;
         const importedSaleFxRateToPln =
-          importedSaleCurrency === "PLN"
+          xtbValuation?.purchaseFxRateToPln ?? (importedSaleCurrency === "PLN"
             ? 1
             : importedCashCurrency === "PLN" &&
               typeof operation.exchangeRate === "number" &&
               Number.isFinite(operation.exchangeRate) &&
               operation.exchangeRate > 0
               ? operation.exchangeRate
-              : getFxRateToPlnSnapshot(importedSaleCurrency, importFxRates);
+              : getFxRateToPlnSnapshot(importedSaleCurrency, importFxRates));
 
         if (!importedSaleFxRateToPln) {
           console.warn("[broker-import] Pomieto sprzedaz bez kursu FX.", {
@@ -4192,7 +4259,7 @@ export default function PortfolioApp({
             feePln: importedTotalFeePln,
           },
           fxRates: {
-            ...importFxRates,
+            ...(xtbValuation ? historicalRatesByDate.get(operation.date) : importFxRates),
             [importedSaleCurrency]: importedSaleFxRateToPln,
           },
         });
@@ -4210,6 +4277,12 @@ export default function PortfolioApp({
           importedSells += 1;
         }
       } catch (error) {
+        if (operation.broker?.toUpperCase() === "XTB") {
+          throw new Error(
+            `Wiersz ${operation.rowNumber} (${operation.symbol}, ${operation.date}): ` +
+            `${error instanceof Error ? error.message : "niezgodna historia sprzedaży"}. Import nie został zapisany.`
+          );
+        }
         console.warn("[broker-import] Pomieto sprzedaz z powodu niezgodnej historii.", {
           importKey: operation.importKey,
           symbol: operation.symbol,
@@ -4249,6 +4322,7 @@ export default function PortfolioApp({
         skippedInvalid,
         skippedDuplicates,
         skippedPlanLimit,
+        warnings: importWarnings,
       };
     }
 
@@ -4313,6 +4387,7 @@ export default function PortfolioApp({
         skippedPlanLimit,
         quoteTotal: 0,
         missingQuotes: 0,
+        warnings: importWarnings,
       };
     } catch (error) {
       restoreLastPersistedPortfolioBook();

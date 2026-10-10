@@ -29,6 +29,7 @@ type BrokerImportPanelProps = {
     skippedPlanLimit?: number;
     quoteTotal?: number;
     missingQuotes?: number;
+    warnings?: string[];
   }>;
 };
 
@@ -224,6 +225,7 @@ export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) 
         skippedDuplicates === importableOperations.length;
 
       const resultDetails = [
+        ...(result.warnings ?? []),
         `Pominiete sprzedaze bez pozycji: ${result.skippedSells}.`,
         `Nieprawidlowe rekordy: ${skippedInvalid}.`,
         `Duplikaty: ${skippedDuplicates}.`,

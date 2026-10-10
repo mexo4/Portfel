@@ -26,11 +26,6 @@ jobs:
           ORACLE_SSH_KEY: ${{ secrets.ORACLE_SSH_KEY }}
         run: |
           set -euo pipefail
-          resolved_hosts="$(getent ahostsv4 "$ORACLE_HOST" | awk '{print $1}' | sort -u || true)"
-          if ! grep -qx '141.144.234.121' <<< "$resolved_hosts"; then
-            echo "ERROR: ORACLE_HOST does not resolve to the approved Oracle ARM64 address; refusing to connect."
-            exit 1
-          fi
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
           printf '%s\n' "$ORACLE_SSH_KEY" > ~/.ssh/mexo-production
@@ -52,6 +47,15 @@ jobs:
             "$ORACLE_USER@$ORACLE_HOST" \
             'bash -se' <<'PREFLIGHT'
           set -euo pipefail
+          oracle_target_match="$(curl -fsS --connect-timeout 2 --max-time 5 \
+            -H 'Authorization: Bearer Oracle' \
+            'http://169.254.169.254/opc/v2/vnics/' | \
+            python3 -c 'import json,sys; v=json.load(sys.stdin); print("yes" if isinstance(v,list) and any(x.get("publicIp") == "141.144.234.121" for x in v if isinstance(x,dict)) else "no")')"
+          if [ "$oracle_target_match" != "yes" ]; then
+            echo "ERROR: SSH target's Oracle Cloud metadata does not match the approved Oracle ARM64 instance; deployment stopped before inspecting or changing application files."
+            exit 1
+          fi
+          echo "Verified SSH target against Oracle Cloud instance metadata."
           APP="/opt/mexo/repo/portfel-inwestora"
           SERVICE_WORKDIR="$(systemctl show -p WorkingDirectory --value mexo.service)"
           if [ "$SERVICE_WORKDIR" != "$APP" ]; then

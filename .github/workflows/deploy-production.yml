@@ -23,7 +23,7 @@ jobs:
       - name: Configure SSH
         env:
           ORACLE_SSH_KEY: ${{ secrets.ORACLE_SSH_KEY }}
-          ORACLE_HOST: 141.144.234.121
+          ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
         run: |
           set -euo pipefail
           mkdir -p ~/.ssh
@@ -35,7 +35,7 @@ jobs:
 
       - name: Verify current Oracle service and Nginx route (read-only)
         env:
-          ORACLE_HOST: 141.144.234.121
+          ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
           ORACLE_USER: ${{ secrets.ORACLE_USER }}
         run: |
           set -euo pipefail
@@ -166,7 +166,7 @@ jobs:
       - name: Stage and activate Mexo
         id: deploy
         env:
-          ORACLE_HOST: 141.144.234.121
+          ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
           ORACLE_USER: ${{ secrets.ORACLE_USER }}
         run: |
           set -euo pipefail
@@ -334,7 +334,7 @@ jobs:
       - name: Roll back if public verification failed
         if: ${{ failure() && steps.deploy.outcome == 'success' && steps.verify.outcome == 'failure' }}
         env:
-          ORACLE_HOST: 141.144.234.121
+          ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
           ORACLE_USER: ${{ secrets.ORACLE_USER }}
           PREVIOUS_REVISION: ${{ steps.deploy.outputs.previous_revision }}
           PREVIOUS_NEXT_TARGET: ${{ steps.deploy.outputs.previous_next_target }}

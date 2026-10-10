@@ -34,14 +34,14 @@ concurrency:
 jobs:
   deploy:
     name: Deploy to Oracle
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 35
 
     steps:
       - name: Configure SSH
         env:
           ORACLE_SSH_KEY: ${{ secrets.ORACLE_SSH_KEY }}
-          ORACLE_HOST: ${{ inputs.target_ip || secrets.ORACLE_HOST }}
+          ORACLE_HOST: ${{ inputs.target_ip || '141.144.234.121' }}
           TARGET_IP_OVERRIDE: ${{ inputs.target_ip }}
           RESTORE_RELEASE: ${{ inputs.restore_release }}
         run: |
@@ -69,7 +69,7 @@ jobs:
 
       - name: Verify current Oracle service and Nginx route (read-only)
         env:
-          ORACLE_HOST: ${{ inputs.target_ip || secrets.ORACLE_HOST }}
+          ORACLE_HOST: ${{ inputs.target_ip || '141.144.234.121' }}
           ORACLE_USER: ${{ secrets.ORACLE_USER }}
         run: |
           set -euo pipefail
@@ -202,7 +202,7 @@ jobs:
         id: deploy
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.restore_release != true }}
         env:
-          ORACLE_HOST: ${{ inputs.target_ip || secrets.ORACLE_HOST }}
+          ORACLE_HOST: ${{ inputs.target_ip || '141.144.234.121' }}
           ORACLE_USER: ${{ secrets.ORACLE_USER }}
         run: |
           set -euo pipefail
@@ -396,7 +396,7 @@ jobs:
       - name: Restore previous production release
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.restore_release == true }}
         env:
-          ORACLE_HOST: ${{ inputs.target_ip || secrets.ORACLE_HOST }}
+          ORACLE_HOST: ${{ inputs.target_ip || '141.144.234.121' }}
           ORACLE_USER: ${{ secrets.ORACLE_USER }}
           RESTORE_REVISION: ${{ inputs.restore_revision }}
           RESTORE_NEXT_TARGET: ${{ inputs.restore_next_target }}
@@ -476,7 +476,7 @@ jobs:
       - name: Roll back if public verification failed
         if: ${{ failure() && steps.deploy.outcome == 'success' && steps.verify.outcome == 'failure' }}
         env:
-          ORACLE_HOST: ${{ inputs.target_ip || secrets.ORACLE_HOST }}
+          ORACLE_HOST: ${{ inputs.target_ip || '141.144.234.121' }}
           ORACLE_USER: ${{ secrets.ORACLE_USER }}
           PREVIOUS_REVISION: ${{ steps.deploy.outputs.previous_revision }}
           PREVIOUS_NEXT_TARGET: ${{ steps.deploy.outputs.previous_next_target }}

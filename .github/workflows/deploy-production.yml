@@ -23,6 +23,11 @@ on:
         description: Optional exact approved Oracle IPv4 address for a manual deploy
         type: string
         required: false
+      preflight_only:
+        description: Run read-only host and service checks without deploying
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -51,7 +56,7 @@ jobs:
               echo "ERROR: rollback-only mode must use the existing recovery host, not a target override."
               exit 1
             fi
-            echo "Rollback-only mode: using the existing recovery host to undo the prior incomplete activation."
+            echo "Rollback-only mode: using the approved Oracle host to restore the previous release."
           else
             resolved_oracle_ips="$(getent ahostsv4 "$ORACLE_HOST" | awk '{print $1}' | sort -u || true)"
             if ! printf '%s\n' "$resolved_oracle_ips" | grep -Fxq '141.144.234.121'; then
@@ -90,12 +95,43 @@ jobs:
             exit 1
           fi
           echo "Verified target is a running Oracle Cloud instance."
+          REPO="/opt/mexo/repo"
           APP="/opt/mexo/repo/portfel-inwestora"
+          EXPECTED_BRANCH="najlepsza-wersja"
+          CURRENT_BRANCH="$(git -C "$REPO" branch --show-current)"
+          if [ "$CURRENT_BRANCH" != "$EXPECTED_BRANCH" ]; then
+            echo "ERROR: target repository is on ${CURRENT_BRANCH:-detached HEAD}, expected $EXPECTED_BRANCH; no production files were changed."
+            exit 1
+          fi
+          if [ -n "$(git -C "$REPO" status --porcelain --untracked-files=no)" ]; then
+            echo "ERROR: target repository contains tracked local changes; no production files were changed."
+            exit 1
+          fi
           SERVICE_WORKDIR="$(systemctl show -p WorkingDirectory --value mexo.service)"
           if [ "$SERVICE_WORKDIR" != "$APP" ]; then
             echo "ERROR: mexo.service WorkingDirectory does not match the approved application directory; deployment stopped before changing files."
             exit 1
           fi
+
+          NODE_VERSION="$(node --version)"
+          case "$NODE_VERSION" in
+            v24.*) ;;
+            *) echo "ERROR: target Node.js version $NODE_VERSION does not satisfy the repository's Node 24.x requirement; no production files were changed."; exit 1 ;;
+          esac
+          npm --version >/dev/null
+          if [ -L "$APP/.next" ]; then
+            CURRENT_NEXT_TARGET="$(readlink "$APP/.next")"
+            case "$CURRENT_NEXT_TARGET" in
+              .mexo-releases/*) test -f "$APP/$CURRENT_NEXT_TARGET/BUILD_ID" ;;
+              *) echo "ERROR: current Next.js build points outside managed releases; no production files were changed."; exit 1 ;;
+            esac
+          elif [ -d "$APP/.next" ]; then
+            test -f "$APP/.next/BUILD_ID"
+          else
+            echo "ERROR: no current Next.js build is available for rollback; no production files were changed."
+            exit 1
+          fi
+          echo "Verified branch, Node $NODE_VERSION, application directory, and an existing Next.js build for rollback."
 
           python3 - <<'PY'
           import pathlib
@@ -198,9 +234,13 @@ jobs:
           fi
           echo "Public pre-deploy routes are healthy."
 
+      - name: Complete read-only preflight
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.restore_release != true && inputs.preflight_only == true }}
+        run: echo "Read-only Oracle preflight passed. No production files were changed."
+
       - name: Stage and activate Mexo
         id: deploy
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.restore_release != true }}
+        if: ${{ github.event_name != 'workflow_dispatch' || (inputs.restore_release != true && inputs.preflight_only != true) }}
         env:
           ORACLE_HOST: ${{ inputs.target_ip || '141.144.234.121' }}
           ORACLE_USER: ${{ secrets.ORACLE_USER }}
@@ -447,7 +487,7 @@ jobs:
           echo "Restored release is serving healthy public dashboard and login routes."
 
       - name: Verify public revision and routes
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.restore_release != true }}
+        if: ${{ github.event_name != 'workflow_dispatch' || (inputs.restore_release != true && inputs.preflight_only != true) }}
         id: verify
         env:
           EXPECTED_REVISION: ${{ github.sha }}

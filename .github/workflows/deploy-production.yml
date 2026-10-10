@@ -411,7 +411,9 @@ jobs:
           sudo -n systemctl restart mexo
           sudo -n systemctl is-active --quiet mexo
 
-          LOCAL_SERVICE_PORTS="$(python3 - <<'PY'
+          LOCAL_REVISION_VERIFIED=0
+          for ((attempt = 1; attempt <= 30; attempt += 1)); do
+            LOCAL_SERVICE_PORTS="$(python3 - <<'PY'
           import pathlib
           import re
           import subprocess
@@ -431,8 +433,8 @@ jobs:
               if main_pid > 0:
                   service_pids.add(main_pid)
               ss = subprocess.run(["sudo", "-n", "ss", "-ltnp"], check=True, capture_output=True, text=True).stdout
-          except Exception:
-              print("ERROR: unable to identify the active mexo.service listener for local revision verification.")
+          except Exception as error:
+              print(f"Temporary listener inspection failed ({type(error).__name__}); retrying.", file=sys.stderr)
               sys.exit(1)
 
           ports = set()
@@ -444,20 +446,23 @@ jobs:
                   if match:
                       ports.add(int(match.group(1)))
           if not ports:
-              print("ERROR: mexo.service has no identifiable active TCP listener.")
-              sys.exit(1)
+              sys.exit(0)
           print(" ".join(str(port) for port in sorted(ports)))
           PY
-          )"
-          LOCAL_REVISION_VERIFIED=0
-          for port in $LOCAL_SERVICE_PORTS; do
-            response="$(curl -fsS --max-time 8 -H 'Host: mexo.com.pl' \
-              "http://127.0.0.1:$port/api/system/revision?nonce=$BUILD_SUFFIX" 2>/dev/null || true)"
-            local_revision="$(printf '%s' "$response" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("revision", ""))' 2>/dev/null || true)"
-            if [ "$local_revision" = "$BUILD_REVISION" ]; then
-              LOCAL_REVISION_VERIFIED=1
+            )" || LOCAL_SERVICE_PORTS=""
+            for port in $LOCAL_SERVICE_PORTS; do
+              response="$(curl -fsS --max-time 8 -H 'Host: mexo.com.pl' \
+                "http://127.0.0.1:$port/api/system/revision?nonce=$BUILD_SUFFIX-$attempt" 2>/dev/null || true)"
+              local_revision="$(printf '%s' "$response" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("revision", ""))' 2>/dev/null || true)"
+              if [ "$local_revision" = "$BUILD_REVISION" ]; then
+                LOCAL_REVISION_VERIFIED=1
+                break
+              fi
+            done
+            if [ "$LOCAL_REVISION_VERIFIED" = "1" ]; then
               break
             fi
+            sleep 1
           done
           if [ "$LOCAL_REVISION_VERIFIED" != "1" ]; then
             echo "ERROR: the active local mexo.service does not serve the staged revision; restoring the previous release before any public verification."

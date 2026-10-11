@@ -10,6 +10,7 @@ type Props = {
   portfolios?: InvestmentPortfolio[];
   activePortfolioId?: string;
   isAllPortfoliosSelected?: boolean;
+  isPortfolioMutationPending?: boolean;
   fxRates: FxRates;
   baseCurrency: CurrencyCode;
   totalPortfolioValue?: number;
@@ -24,7 +25,7 @@ export default function PortfolioIncomeWorkspace(props: Props) {
   if (props.isAllPortfoliosSelected) {
     return (
       <section className="workspace-income">
-        <CashWorkspace portfolio={props.portfolio} portfolios={props.portfolios} activePortfolioId={props.activePortfolioId ?? props.portfolio.id} isAllPortfoliosSelected fxRates={props.fxRates} baseCurrency={props.baseCurrency} totalPortfolioValue={props.totalPortfolioValue} onPortfolioChange={props.onPortfolioChange} />
+        <CashWorkspace portfolio={props.portfolio} portfolios={props.portfolios} activePortfolioId={props.activePortfolioId ?? props.portfolio.id} isAllPortfoliosSelected isPortfolioMutationPending={props.isPortfolioMutationPending} fxRates={props.fxRates} baseCurrency={props.baseCurrency} totalPortfolioValue={props.totalPortfolioValue} onPortfolioChange={props.onPortfolioChange} />
       </section>
     );
   }
@@ -35,7 +36,7 @@ export default function PortfolioIncomeWorkspace(props: Props) {
         <button type="button" className={activeView === "dividends" ? "is-active" : ""} onClick={() => setView("dividends")}>Dywidendy</button>
         <button type="button" className={activeView === "cash" ? "is-active" : ""} onClick={() => setView("cash")}>Gotowka</button>
       </nav>
-      {activeView === "dividends" ? <DividendCashWorkspace {...props} activeView="dividends" /> : <CashWorkspace portfolio={props.portfolio} portfolios={props.portfolios} activePortfolioId={props.activePortfolioId ?? props.portfolio.id} fxRates={props.fxRates} baseCurrency={props.baseCurrency} totalPortfolioValue={props.totalPortfolioValue} onPortfolioChange={props.onPortfolioChange} />}
+      {activeView === "dividends" ? <DividendCashWorkspace {...props} activeView="dividends" /> : <CashWorkspace portfolio={props.portfolio} portfolios={props.portfolios} activePortfolioId={props.activePortfolioId ?? props.portfolio.id} isPortfolioMutationPending={props.isPortfolioMutationPending} fxRates={props.fxRates} baseCurrency={props.baseCurrency} totalPortfolioValue={props.totalPortfolioValue} onPortfolioChange={props.onPortfolioChange} />}
     </section>
   );
 }

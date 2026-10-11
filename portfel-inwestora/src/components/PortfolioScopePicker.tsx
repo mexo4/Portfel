@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { acquireBodyScrollLock } from "@/lib/client/body-scroll-lock";
 import { getPortfolioScopeLabel, normalizePortfolioScope, type PortfolioScopeSelection } from "@/lib/portfolio-selection";
 import { PORTFOLIO_ACCOUNT_TYPE_LABELS, normalizePortfolioAccountType } from "@/lib/portfolio-account-rules";
 import type { InvestmentPortfolio } from "@/types/portfolio";
@@ -41,8 +42,7 @@ export default function PortfolioScopePicker({ portfolios, selection, disabled =
   useEffect(() => {
     if (!isOpen) return;
     const trigger = triggerRef.current;
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
+    const releaseBodyScrollLock = acquireBodyScrollLock(document);
     const frame = window.requestAnimationFrame(() => {
       const first = dialogRef.current?.querySelector<HTMLElement>(focusableSelector);
       (first ?? dialogRef.current)?.focus();
@@ -68,7 +68,7 @@ export default function PortfolioScopePicker({ portfolios, selection, disabled =
     };
     window.addEventListener("keydown", onKeyDown);
     return () => {
-      document.body.style.overflow = previousOverflow;
+      releaseBodyScrollLock();
       window.cancelAnimationFrame(frame);
       window.removeEventListener("keydown", onKeyDown);
       window.requestAnimationFrame(() => trigger?.focus());

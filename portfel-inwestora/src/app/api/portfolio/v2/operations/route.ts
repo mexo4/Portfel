@@ -7,21 +7,13 @@ import {
   updateCurrentUserPortfolio,
 } from "@/lib/server/auth";
 import { normalizePortfolioBook } from "@/lib/portfolio-state";
+import { isAccountOwnedByPortfolio, resolveRequestedPortfolio } from "@/lib/server/portfolio-request-scope";
 import type { PortfolioOperation } from "@/types/portfolio";
 
 export const runtime = "nodejs";
 
 const createOperationId = () =>
   `op-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-
-const getPortfolioByRequest = (
-  portfolioId: string | null,
-  portfolios: ReturnType<typeof normalizePortfolioBook>["portfolios"],
-  activePortfolioId: string
-) =>
-  portfolios.find((portfolio) => portfolio.id === portfolioId) ??
-  portfolios.find((portfolio) => portfolio.id === activePortfolioId) ??
-  portfolios[0];
 
 export async function GET(request: Request) {
   const accountData = await getCurrentAccountData();
@@ -35,11 +27,12 @@ export async function GET(request: Request) {
     portfolios: accountData.portfolios,
     activePortfolioId: accountData.activePortfolioId,
   });
-  const portfolio = getPortfolioByRequest(
-    searchParams.get("portfolioId"),
+  const portfolio = resolveRequestedPortfolio(
     portfolioBook.portfolios,
+    searchParams.get("portfolioId"),
     portfolioBook.activePortfolioId
   );
+  if (!portfolio) return NextResponse.json({ error: "Nie znaleziono wybranego portfela." }, { status: 404 });
 
   return NextResponse.json({
     portfolioId: portfolio.id,
@@ -63,11 +56,29 @@ export async function POST(request: Request) {
       portfolios: accountData.portfolios,
       activePortfolioId: accountData.activePortfolioId,
     });
-    const targetPortfolio = getPortfolioByRequest(
-      payload.portfolioId ?? null,
+    const targetPortfolio = resolveRequestedPortfolio(
       portfolioBook.portfolios,
+      payload.portfolioId ?? null,
       portfolioBook.activePortfolioId
     );
+    if (!targetPortfolio) throw new Error("Nie znaleziono wybranego portfela.");
+    const requestedAccountId = payload.operation?.accountId;
+    if (typeof requestedAccountId === "string" && !requestedAccountId.trim()) {
+      throw new Error("Wybierz konto należące do wskazanego portfela.");
+    }
+    if (typeof requestedAccountId === "string" && requestedAccountId.trim()) {
+      const account = targetPortfolio.accounts?.find((item) => item.id === requestedAccountId);
+      if (!isAccountOwnedByPortfolio(account, targetPortfolio.id)) {
+        throw new Error("Wybrane konto nie należy do wskazanego portfela.");
+      }
+    }
+    const targetAccountId = payload.operation?.metadata?.targetAccountId;
+    if (typeof targetAccountId === "string" && targetAccountId.trim()) {
+      const account = targetPortfolio.accounts?.find((item) => item.id === targetAccountId);
+      if (!isAccountOwnedByPortfolio(account, targetPortfolio.id)) {
+        throw new Error("Konto docelowe nie należy do wskazanego portfela.");
+      }
+    }
     const now = new Date().toISOString();
     const operation = normalizePortfolioOperation(
       targetPortfolio.id,

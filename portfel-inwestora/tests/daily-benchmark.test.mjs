@@ -8,7 +8,7 @@ import {
   rankBenchmarkSearchResults,
 } from "../src/lib/benchmark-search.ts";
 import { buildPortfolioDailyMetricPoints } from "../src/lib/portfolio-daily-metrics.ts";
-import { aggregatePortfolioHistoryPoints } from "../src/lib/server/portfolio-history.ts";
+import { aggregatePortfolioHistoryPoints, buildBuyCashflowEvents, getAggregateTwrStatus, hasUnreliableHistoryGap } from "../src/lib/server/portfolio-history.ts";
 
 const readSource = (relativePath) =>
   readFile(new URL(`../${relativePath}`, import.meta.url), "utf8");
@@ -180,6 +180,52 @@ test("custom aggregate weights returns by capital rather than averaging portfoli
 
   assert.equal(points.at(-1)?.timeWeightedReturnPercent, 13.33);
   assert.notEqual(points.at(-1)?.timeWeightedReturnPercent, 20);
+});
+
+test("custom aggregate correctly nets portfolios with positive and negative daily performance", () => {
+  const points = aggregatePortfolioHistoryPoints([
+    { points: [
+      { date: "2026-08-10", portfolioValuePln: 1_000, netInvestedPln: 1_000, profitLossPln: 0, timeWeightedReturnPercent: 0 },
+      { date: "2026-08-11", portfolioValuePln: 1_100, netInvestedPln: 1_000, profitLossPln: 100, timeWeightedReturnPercent: 10 },
+    ] },
+    { points: [
+      { date: "2026-08-10", portfolioValuePln: 2_000, netInvestedPln: 2_000, profitLossPln: 0, timeWeightedReturnPercent: 0 },
+      { date: "2026-08-11", portfolioValuePln: 1_800, netInvestedPln: 2_000, profitLossPln: -200, timeWeightedReturnPercent: -10 },
+    ] },
+  ]);
+
+  // Combined return is (-100 P/L) / 3,000 starting value, not an average of +10% and -10%.
+  assert.equal(points.at(-1)?.profitLossPln, -100);
+  assert.equal(points.at(-1)?.timeWeightedReturnPercent, -3.33);
+});
+
+test("legacy sales without a cash-impact operation are explicitly identified as incomplete TWR input", () => {
+  const sale = { id: "sale-1", saleDate: "2026-08-11", realizedInvestedPln: 900, allocations: [] };
+  const legacy = buildBuyCashflowEvents([], [sale], new Map(), []);
+  const mirrored = buildBuyCashflowEvents([], [sale], new Map(), [
+    { id: "op-sale-1", operationType: "SELL", metadata: { cashImpact: true, saleId: "sale-1" } },
+  ]);
+
+  assert.equal(legacy.hasUnmirroredSale, true);
+  assert.equal(mirrored.hasUnmirroredSale, false);
+});
+
+test("TWR completeness rejects long price-history gaps but tolerates normal weekends", () => {
+  assert.equal(hasUnreliableHistoryGap([
+    { date: "2026-08-10", close: 100 },
+    { date: "2026-08-13", close: 101 },
+  ], "2026-08-10", "2026-08-13"), false);
+  assert.equal(hasUnreliableHistoryGap([
+    { date: "2026-08-10", close: 100 },
+    { date: "2026-08-21", close: 103 },
+  ], "2026-08-10", "2026-08-21"), true);
+});
+
+test("aggregate TWR is unavailable or incomplete if any non-empty component history is unreliable", () => {
+  assert.equal(getAggregateTwrStatus([]), "unavailable");
+  assert.equal(getAggregateTwrStatus([{ twrStatus: "complete" }, { twrStatus: "complete" }]), "complete");
+  assert.equal(getAggregateTwrStatus([{ twrStatus: "complete" }, { twrStatus: "incomplete" }]), "incomplete");
+  assert.equal(getAggregateTwrStatus([{ twrStatus: "unavailable" }]), "unavailable");
 });
 
 test("a selected portfolio-to-portfolio transfer does not create aggregate profit", () => {

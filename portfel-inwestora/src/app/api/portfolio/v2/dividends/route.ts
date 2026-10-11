@@ -12,18 +12,9 @@ import {
   updateCurrentUserPortfolio,
 } from "@/lib/server/auth";
 import { normalizePortfolioBook } from "@/lib/portfolio-state";
-import type { InvestmentPortfolio } from "@/types/portfolio";
+import { isAccountOwnedByPortfolio, resolveRequestedPortfolio } from "@/lib/server/portfolio-request-scope";
 
 export const runtime = "nodejs";
-
-const getPortfolioById = (
-  portfolios: InvestmentPortfolio[],
-  portfolioId: string | undefined,
-  activePortfolioId: string
-) =>
-  portfolios.find((portfolio) => portfolio.id === portfolioId) ??
-  portfolios.find((portfolio) => portfolio.id === activePortfolioId) ??
-  portfolios[0];
 
 const toNumber = (value: unknown, fallback = 0) => {
   const parsed = typeof value === "number" ? value : Number(String(value ?? "").replace(",", "."));
@@ -45,11 +36,12 @@ export async function GET(request: Request) {
     portfolios: accountData.portfolios,
     activePortfolioId: accountData.activePortfolioId,
   });
-  const portfolio = getPortfolioById(
+  const portfolio = resolveRequestedPortfolio(
     portfolioBook.portfolios,
     searchParams.get("portfolioId") ?? undefined,
     portfolioBook.activePortfolioId
   );
+  if (!portfolio) return NextResponse.json({ error: "Nie znaleziono wybranego portfela." }, { status: 404 });
 
   return NextResponse.json({
     portfolioId: portfolio.id,
@@ -70,18 +62,38 @@ export async function POST(request: Request) {
       portfolios: accountData.portfolios,
       activePortfolioId: accountData.activePortfolioId,
     });
-    const portfolio = getPortfolioById(
+    const requestedPortfolioId = typeof payload.portfolioId === "string"
+      ? payload.portfolioId
+      : undefined;
+    const portfolio = resolveRequestedPortfolio(
       portfolioBook.portfolios,
-      toStringValue(payload.portfolioId) || undefined,
+      requestedPortfolioId,
       portfolioBook.activePortfolioId
     );
+    if (!portfolio) throw new Error("Nie znaleziono wybranego portfela.");
+    const requestedAccountId = typeof payload.accountId === "string"
+      ? toStringValue(payload.accountId)
+      : "";
+    if (typeof payload.accountId === "string" && !requestedAccountId) {
+      throw new Error("Wybierz konto wpływu z bieżącego portfela.");
+    }
+    const requestedInstrumentId = toStringValue(payload.instrumentId);
+    if (typeof payload.instrumentId === "string" && !requestedInstrumentId) {
+      throw new Error("Wybierz instrument z bieżącego portfela.");
+    }
+    const account = requestedAccountId
+      ? portfolio.accounts?.find((item) => item.id === requestedAccountId)
+      : getDefaultDividendAccount(portfolio.accounts);
+    if (requestedAccountId && !isAccountOwnedByPortfolio(account, portfolio.id)) {
+      throw new Error("Konto wpływu nie należy do wskazanego portfela.");
+    }
     const instrument =
-      portfolio.instruments?.find(
-        (item) => item.id === toStringValue(payload.instrumentId)
-      ) ?? getDefaultDividendInstrument(portfolio);
-    const account =
-      portfolio.accounts?.find((item) => item.id === toStringValue(payload.accountId)) ??
-      getDefaultDividendAccount(portfolio.accounts);
+      (requestedInstrumentId
+        ? portfolio.instruments?.find((item) => item.id === requestedInstrumentId)
+        : getDefaultDividendInstrument(portfolio)) ?? null;
+    if (requestedInstrumentId && !instrument) {
+      throw new Error("Instrument nie należy do wskazanego portfela.");
+    }
 
     if (!instrument || !account) {
       throw new Error("Brakuje instrumentu albo konta inwestycyjnego dla dywidendy.");
@@ -130,12 +142,13 @@ export async function POST(request: Request) {
       accountData.portfolioRevision
     );
     const updatedBook = updatedPortfolioResult.portfolioBook;
-    const updatedPortfolio = getPortfolioById(
+    const updatedPortfolio = resolveRequestedPortfolio(
       updatedBook.portfolios,
       portfolio.id,
       updatedBook.activePortfolioId
     );
 
+    if (!updatedPortfolio) throw new Error("Nie znaleziono zapisanego portfela.");
     return NextResponse.json({
       dividend: getPortfolioDividends(updatedPortfolio, FALLBACK_FX_RATES).find(
         (dividend) => dividend.operationId === operation.id

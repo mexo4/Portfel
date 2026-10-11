@@ -3,6 +3,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { CurrencyCode } from "@/types/portfolio";
+import { acquireBodyScrollLock } from "@/lib/client/body-scroll-lock";
 
 type CurrencyPickerProps = {
   label: string;
@@ -45,7 +46,7 @@ export default function CurrencyPicker({
       return;
     }
 
-    const previousOverflow = document.body.style.overflow;
+    const releaseBodyScrollLock = acquireBodyScrollLock(document);
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         setIsOpen(false);
@@ -53,11 +54,10 @@ export default function CurrencyPicker({
     };
     const timeoutId = window.setTimeout(() => searchInputRef.current?.focus(), 0);
 
-    document.body.style.overflow = "hidden";
     window.addEventListener("keydown", handleKeyDown);
 
     return () => {
-      document.body.style.overflow = previousOverflow;
+      releaseBodyScrollLock();
       window.clearTimeout(timeoutId);
       window.removeEventListener("keydown", handleKeyDown);
     };

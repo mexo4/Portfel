@@ -25,6 +25,7 @@ import {
   type TooltipPayloadEntry,
 } from "recharts";
 import { createPortal } from "react-dom";
+import { acquireBodyScrollLock } from "@/lib/client/body-scroll-lock";
 import TruncatedText from "@/components/TruncatedText";
 import { getUserFacingHistoryWarnings } from "@/lib/history-warning-visibility";
 import {
@@ -884,6 +885,7 @@ export default function PortfolioLineCharts({
   const [isSearchingBenchmarks, setIsSearchingBenchmarks] = useState(false);
   const [benchmarkSearchError, setBenchmarkSearchError] = useState<string | null>(null);
   const [serverHistory, setServerHistory] = useState<PortfolioHistoryResponse>(EMPTY_HISTORY);
+  const [serverHistorySignature, setServerHistorySignature] = useState("");
   const [warnings, setWarnings] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -1051,7 +1053,7 @@ export default function PortfolioLineCharts({
       return;
     }
 
-    const previousOverflow = document.body.style.overflow;
+    const releaseBodyScrollLock = acquireBodyScrollLock(document);
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         if (isRangePickerOpen) {
@@ -1063,11 +1065,10 @@ export default function PortfolioLineCharts({
       }
     };
 
-    document.body.style.overflow = "hidden";
     window.addEventListener("keydown", handleKeyDown);
 
     return () => {
-      document.body.style.overflow = previousOverflow;
+      releaseBodyScrollLock();
       window.removeEventListener("keydown", handleKeyDown);
     };
   }, [closeChartModal, isChartModalOpen, isRangePickerOpen]);
@@ -1191,6 +1192,7 @@ export default function PortfolioLineCharts({
       ))
     ) {
       setServerHistory(EMPTY_HISTORY);
+      setServerHistorySignature(historyRequestSignature);
       setWarnings([]);
       setError(null);
       setIsLoading(false);
@@ -1200,6 +1202,7 @@ export default function PortfolioLineCharts({
 
     setIsLoading(true);
     setError(null);
+    setWarnings([]);
 
     void (async () => {
       try {
@@ -1218,6 +1221,7 @@ export default function PortfolioLineCharts({
         }
 
         setServerHistory(response);
+        setServerHistorySignature(historyRequestSignature);
         setWarnings(response.warnings);
       } catch (fetchError) {
         if (isCancelled) {
@@ -1230,6 +1234,7 @@ export default function PortfolioLineCharts({
             : "Nie udalo sie pobrac historii portfela."
         );
         setServerHistory(EMPTY_HISTORY);
+        setServerHistorySignature(historyRequestSignature);
         setWarnings([]);
       } finally {
         if (!isCancelled) {
@@ -1243,17 +1248,30 @@ export default function PortfolioLineCharts({
     };
   }, [historyRequestSignature]);
 
-  const historyPoints =
-    serverHistory.points.length > 0 ? serverHistory.points : fallbackHistory.points;
+  const isHistoryPending =
+    isLoading || serverHistorySignature !== historyRequestSignature;
+  const effectiveServerHistory =
+    serverHistorySignature === historyRequestSignature ? serverHistory : EMPTY_HISTORY;
+  const historyPoints = useMemo(
+    () => isHistoryPending
+      ? []
+      : effectiveServerHistory.points.length > 0
+        ? effectiveServerHistory.points
+        : fallbackHistory.points,
+    [effectiveServerHistory.points, fallbackHistory.points, isHistoryPending]
+  );
   const displayPoints = useMemo(
     () => convertHistoryPointsToBase(historyPoints, baseCurrency, fxRates),
     [baseCurrency, fxRates, historyPoints]
   );
   const displayBenchmarkSeries = useMemo(
-    () => convertBenchmarkSeriesToBase(serverHistory.benchmarkSeries, baseCurrency, fxRates),
-    [baseCurrency, fxRates, serverHistory.benchmarkSeries]
+    () => convertBenchmarkSeriesToBase(effectiveServerHistory.benchmarkSeries, baseCurrency, fxRates),
+    [baseCurrency, effectiveServerHistory.benchmarkSeries, fxRates]
   );
-  const displayWarnings = useMemo(() => getUserFacingHistoryWarnings(warnings), [warnings]);
+  const displayWarnings = useMemo(
+    () => isHistoryPending ? [] : getUserFacingHistoryWarnings(warnings),
+    [isHistoryPending, warnings]
+  );
   const benchmarkSearchKind = VISIBLE_SEARCH_MODE_OPTIONS.find(
     (option) => option.value === benchmarkSearchMode
   )?.kind;
@@ -2308,7 +2326,7 @@ export default function PortfolioLineCharts({
   };
 
   if (
-    !isLoading &&
+    !isHistoryPending &&
     !error &&
     assets.length === 0 &&
     sales.length === 0 &&
@@ -2326,11 +2344,12 @@ export default function PortfolioLineCharts({
     );
   }
 
-  const hasRenderableData = chartModel.data.length > 0 && visibleChartLines.length > 0;
+  const hasRenderableData =
+    !isHistoryPending && chartModel.data.length > 0 && visibleChartLines.length > 0;
   const hasSelectedChartData =
-    mode === "daily-investment-result"
+    !isHistoryPending && (mode === "daily-investment-result"
       ? hasDailyInvestmentResultData
-      : hasRenderableData;
+      : hasRenderableData);
   const hasManualViewport = manualViewport !== null;
 
   const handleOpenChartModal = () => {
@@ -3050,6 +3069,14 @@ export default function PortfolioLineCharts({
     </div>
   );
 
+  const renderHistorySkeleton = () => (
+    <div className="line-chart-shell line-visual-chart-shell line-visual-history-skeleton mt-6" role="status" aria-label="Wczytywanie historii portfela">
+      <span className="line-visual-history-skeleton-title" />
+      <span className="line-visual-history-skeleton-chart" />
+      <span className="line-visual-history-skeleton-note">Pobieram historię wybranego zakresu…</span>
+    </div>
+  );
+
   return (
     <>
       <section className="panel chart-card chart-card-wide line-visual-panel">
@@ -3227,12 +3254,12 @@ export default function PortfolioLineCharts({
         </section>
       ) : null}
 
-      {mode === "daily-investment-result" ? null : renderSummary()}
+      {mode === "daily-investment-result" || isHistoryPending ? null : renderSummary()}
 
-      {isLoading || error || displayWarnings.length > 0 ? (
+      {isHistoryPending || error || displayWarnings.length > 0 ? (
         <div className="line-visual-status mt-6">
-          {isLoading ? (
-            <p className="field-note">Dociagam dokladniejsza historie portfela...</p>
+          {isHistoryPending ? (
+            <p className="field-note">Wczytuję historię wybranego zakresu…</p>
           ) : null}
           {error ? <p className="field-note field-note-error">{error}</p> : null}
           {displayWarnings.length > 0 ? (
@@ -3247,7 +3274,9 @@ export default function PortfolioLineCharts({
         </div>
       ) : null}
 
-      {mode === "daily-investment-result" ? (
+      {isHistoryPending ? (
+        renderHistorySkeleton()
+      ) : mode === "daily-investment-result" ? (
         renderDailyInvestmentResultChartFrame()
       ) : (
         <div className="line-chart-shell line-visual-chart-shell mt-6">

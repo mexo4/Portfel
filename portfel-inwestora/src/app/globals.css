@@ -879,6 +879,53 @@ textarea {
     0 24px 48px rgba(20, 35, 48, 0.08);
 }
 
+.line-visual-history-skeleton {
+  display: grid;
+  grid-template-rows: 18px minmax(180px, 1fr) 14px;
+  gap: 18px;
+  min-height: 340px;
+}
+
+.line-visual-history-skeleton-title,
+.line-visual-history-skeleton-chart,
+.line-visual-history-skeleton-note {
+  display: block;
+  border-radius: 12px;
+  background: linear-gradient(100deg, rgba(20, 35, 48, 0.045) 25%, rgba(20, 35, 48, 0.095) 45%, rgba(20, 35, 48, 0.045) 65%);
+  background-size: 240% 100%;
+  animation: line-history-shimmer 1.35s ease-in-out infinite;
+}
+
+.line-visual-history-skeleton-title {
+  width: min(34%, 280px);
+}
+
+.line-visual-history-skeleton-chart {
+  border-radius: 18px;
+  background-image:
+    linear-gradient(100deg, rgba(20, 35, 48, 0.035) 25%, rgba(20, 35, 48, 0.08) 45%, rgba(20, 35, 48, 0.035) 65%),
+    repeating-linear-gradient(to bottom, transparent 0 48px, rgba(20, 35, 48, 0.055) 49px 50px);
+}
+
+.line-visual-history-skeleton-note {
+  width: min(46%, 360px);
+  height: 14px;
+  color: transparent;
+  font-size: 0;
+}
+
+@keyframes line-history-shimmer {
+  to { background-position: -240% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .line-visual-history-skeleton-title,
+  .line-visual-history-skeleton-chart,
+  .line-visual-history-skeleton-note {
+    animation: none;
+  }
+}
+
 .line-chart-svg {
   display: block;
   width: 100%;
@@ -8931,7 +8978,15 @@ textarea {
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: 2px 2px 14px;
-  scrollbar-width: thin;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+.workspace-sidebar-nav::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
 }
 
 .workspace-nav-group {

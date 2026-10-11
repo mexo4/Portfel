@@ -97,6 +97,15 @@ const setCachedPayload = setMarketCachePayload;
 const EODHD_API_KEY = process.env.EODHD_API_KEY ?? "";
 const HISTORY_CACHE_TTL_MS = 6 * 60 * 60 * 1_000;
 const FX_HISTORY_CACHE_TTL_MS = 24 * 60 * 60 * 1_000;
+const historyCacheRequestsInFlight = new Map<string, Promise<unknown>>();
+
+const isHistoryDiagnosticsEnabled = () =>
+  process.env.PORTFOLIO_HISTORY_DIAGNOSTICS === "true";
+
+const logHistoryDiagnostic = (event: string, fields: Record<string, number | string>) => {
+  if (!isHistoryDiagnosticsEnabled()) return;
+  console.info(`[portfolio-history] ${event}`, fields);
+};
 const NBP_CHUNK_MAX_DAYS = 360;
 
 const fetchTextWithNodeHttps = (
@@ -333,17 +342,42 @@ const getCachedOrFetch = async <T,>(
   ttlMs: number,
   fetcher: () => Promise<T>
 ) => {
-  const cachedPayload = await getCachedPayload<T>(key, ttlMs, {
-    ignoreEmptyArray: true,
-  });
+  const inFlight = historyCacheRequestsInFlight.get(key);
+  if (inFlight) return inFlight as Promise<T>;
 
-  if (cachedPayload !== null) {
-    return cachedPayload;
+  const request = (async () => {
+    const startedAt = performance.now();
+    const cachedPayload = await getCachedPayload<T>(key, ttlMs, {
+      ignoreEmptyArray: true,
+    });
+
+    if (cachedPayload !== null) {
+      logHistoryDiagnostic("cache-hit", {
+        key: createHash("sha256").update(key).digest("hex").slice(0, 10),
+        durationMs: Math.round(performance.now() - startedAt),
+      });
+      return cachedPayload;
+    }
+
+    const fetchStartedAt = performance.now();
+    const payload = await fetcher();
+    await setCachedPayload(key, payload);
+    logHistoryDiagnostic("cache-miss", {
+      key: createHash("sha256").update(key).digest("hex").slice(0, 10),
+      fetchAndStoreMs: Math.round(performance.now() - fetchStartedAt),
+      totalMs: Math.round(performance.now() - startedAt),
+    });
+    return payload;
+  })();
+
+  historyCacheRequestsInFlight.set(key, request);
+  try {
+    return await request;
+  } finally {
+    if (historyCacheRequestsInFlight.get(key) === request) {
+      historyCacheRequestsInFlight.delete(key);
+    }
   }
-
-  const payload = await fetcher();
-  await setCachedPayload(key, payload);
-  return payload;
 };
 
 const dedupeAndSortPricePoints = (points: PricePoint[]) => {
@@ -360,6 +394,22 @@ const dedupeAndSortPricePoints = (points: PricePoint[]) => {
   return Array.from(byDate.entries())
     .map(([date, close]) => ({ date, close }))
     .sort((left, right) => left.date.localeCompare(right.date));
+};
+
+const MAX_RELIABLE_PRICE_GAP_DAYS = 5;
+
+export const hasUnreliableHistoryGap = (
+  points: readonly PricePoint[],
+  startDate: string,
+  endDate: string
+) => {
+  let cursor = startDate;
+  for (const point of points) {
+    if (point.date < startDate || point.date > endDate) continue;
+    if (getDaysBetween(cursor, point.date) > MAX_RELIABLE_PRICE_GAP_DAYS) return true;
+    cursor = point.date;
+  }
+  return getDaysBetween(cursor, endDate) > MAX_RELIABLE_PRICE_GAP_DAYS;
 };
 
 const dedupeAndSortFxPoints = (points: FxPoint[]) => {
@@ -1233,7 +1283,7 @@ const convertPurchaseValueToPlnOnDate = (
   );
 };
 
-const buildBuyCashflowEvents = (
+export const buildBuyCashflowEvents = (
   assets: PortfolioAsset[],
   sales: PortfolioSale[],
   fxSeriesByCode: Map<CurrencyCode, Map<string, number>>,
@@ -1298,7 +1348,10 @@ const buildBuyCashflowEvents = (
     addAmountToDateMap(events, sale.saleDate, -round(sale.realizedInvestedPln));
   }
 
-  return events;
+  return {
+    events,
+    hasUnmirroredSale: sales.some((sale) => !cashImpactSaleIds.has(sale.id)),
+  };
 };
 
 const buildCashLedgerEvents = (
@@ -1587,6 +1640,7 @@ export const buildPortfolioHistory = async ({
   accounts?: PortfolioAccount[];
   benchmarks?: PortfolioBenchmarkDefinition[];
 }): Promise<PortfolioHistoryResponse> => {
+  const buildStartedAt = performance.now();
   const today = toDateInputValue(new Date().toISOString());
   const startDate = getPortfolioHistoryStartDate({
     assets,
@@ -1599,6 +1653,8 @@ export const buildPortfolioHistory = async ({
     return {
       points: [],
       warnings: [],
+      twrStatus: "unavailable",
+      twrStatusReason: "Brak danych historycznych do wyliczenia TWR.",
       assetSeries: [],
       benchmarkSeries: [],
     };
@@ -1611,7 +1667,9 @@ export const buildPortfolioHistory = async ({
     .filter((segment): segment is PortfolioHistorySegment => Boolean(segment));
   const segments = [...openSegments, ...soldSegments];
   const warnings = new Set<string>();
+  const twrIssues = new Set<string>();
 
+  const fxStartedAt = performance.now();
   const { fxSeriesByCode, warnings: fxWarnings } = await buildFxSeries(
     getNeededFxCodes(assets, sales, benchmarks, operations),
     startDate,
@@ -1621,13 +1679,28 @@ export const buildPortfolioHistory = async ({
   for (const warning of fxWarnings) {
     warnings.add(warning);
   }
+  if (fxWarnings.length > 0) {
+    twrIssues.add("Brak pełnej historii kursów walut dla części okresu.");
+  }
+  logHistoryDiagnostic("fx-ready", {
+    currencies: getNeededFxCodes(assets, sales, benchmarks, operations).length,
+    durationMs: Math.round(performance.now() - fxStartedAt),
+  });
 
-  const netInvestedEvents = buildBuyCashflowEvents(
+  const legacyCashflows = buildBuyCashflowEvents(
     assets,
     sales,
     fxSeriesByCode,
     operations
   );
+  const netInvestedEvents = legacyCashflows.events;
+  if (legacyCashflows.hasUnmirroredSale) {
+    // Legacy asset/sale state does not contain the sale proceeds as a historic
+    // cash balance. Treating the missing proceeds as zero can manufacture a
+    // large daily loss and a false aggregate TWR. Keep the historical value/P&L
+    // unchanged, but withhold TWR until the cash side of every sale is known.
+    twrIssues.add("Starsza sprzedaż nie ma kompletnego lustrzanego rejestru gotówki.");
+  }
   const cashLedgerEvents = buildCashLedgerEvents(
     operations,
     accounts,
@@ -1655,6 +1728,7 @@ export const buildPortfolioHistory = async ({
       new Map<string, number>(dates.map((date) => [date, 0] as [string, number])),
     ] as const)
   );
+  const quotesStartedAt = performance.now();
   const instrumentHistoryEntries = await Promise.all(
     instrumentDefinitions.map(async (definition) => {
       const history = await fetchInstrumentHistory(definition, startDate, today);
@@ -1670,6 +1744,10 @@ export const buildPortfolioHistory = async ({
       warnings.add(history.warning);
     }
   }
+  logHistoryDiagnostic("quotes-ready", {
+    instruments: instrumentDefinitions.length,
+    durationMs: Math.round(performance.now() - quotesStartedAt),
+  });
 
   const benchmarkSeries = buildBenchmarkReturnSeries({
     benchmarks,
@@ -1689,9 +1767,13 @@ export const buildPortfolioHistory = async ({
       firstHistoryDate && firstHistoryDate > segment.startDate
         ? getDaysBetween(segment.startDate, firstHistoryDate)
         : 0;
+    if (history?.warning || hasUnreliableHistoryGap(historyPoints, segment.startDate, segment.endDate)) {
+      twrIssues.add("Brak pełnej historii notowań dla co najmniej jednej pozycji.");
+    }
     let pointIndex = 0;
     let lastKnownClose: number | undefined;
     let usedFallback = false;
+    let usedFallbackAfterEntry = false;
 
     for (const date of dates) {
       if (date < segment.startDate || date > segment.endDate) {
@@ -1726,7 +1808,14 @@ export const buildPortfolioHistory = async ({
 
       if (!hasProviderPrice) {
         usedFallback = true;
+        if (date > segment.startDate) {
+          usedFallbackAfterEntry = true;
+        }
       }
+    }
+
+    if (usedFallbackAfterEntry) {
+      twrIssues.add("Niektóre dni historii pozycji nie mają wiarygodnego kursu rynkowego.");
     }
 
     if (usedFallback && historyPoints.length > 0 && initialGapDays > 5) {
@@ -1809,6 +1898,18 @@ export const buildPortfolioHistory = async ({
     previousPortfolioValuePln = portfolioValuePln;
   }
 
+  const hasValuableHistory = points.some((point) => point.portfolioValuePln > 0);
+  const twrStatus: PortfolioHistoryResponse["twrStatus"] = !hasValuableHistory
+    ? "unavailable"
+    : twrIssues.size > 0
+      ? "incomplete"
+      : "complete";
+  if (twrStatus !== "complete") {
+    for (const point of points) {
+      point.timeWeightedReturnPercent = null;
+    }
+  }
+
   const assetSeries: PortfolioAssetHistorySeries[] = assetSeriesDefinitions
     .map((definition) => ({
       groupKey: definition.groupKey,
@@ -1822,11 +1923,25 @@ export const buildPortfolioHistory = async ({
     }))
     .filter((series) => series.points.some((point) => point.valuePln !== 0));
 
+  logHistoryDiagnostic("portfolio-ready", {
+    days: points.length,
+    instruments: instrumentDefinitions.length,
+    warnings: warnings.size,
+    durationMs: Math.round(performance.now() - buildStartedAt),
+    twrStatus: twrStatus ?? "unavailable",
+  });
+
   return {
     points,
     assetSeries,
     benchmarkSeries,
     warnings: Array.from(warnings).sort((left, right) => left.localeCompare(right, "pl")),
+    twrStatus,
+    ...(twrStatus === "incomplete"
+      ? { twrStatusReason: Array.from(twrIssues).join(" ") }
+      : twrStatus === "unavailable"
+        ? { twrStatusReason: "Brak wystarczających danych historycznych do wyliczenia TWR." }
+        : {}),
   };
 };
 
@@ -1892,6 +2007,16 @@ export const aggregatePortfolioHistoryPoints = (
   });
 };
 
+export const getAggregateTwrStatus = (
+  histories: ReadonlyArray<Pick<PortfolioHistoryResponse, "twrStatus">>
+): NonNullable<PortfolioHistoryResponse["twrStatus"]> => {
+  if (histories.length === 0) return "unavailable";
+  if (histories.every((history) => history.twrStatus === "complete")) return "complete";
+  return histories.some((history) => history.twrStatus === "incomplete")
+    ? "incomplete"
+    : "unavailable";
+};
+
 export const buildAggregatePortfolioHistory = async ({
   portfolioScopes,
   benchmarks = [],
@@ -1899,6 +2024,7 @@ export const buildAggregatePortfolioHistory = async ({
   portfolioScopes: PortfolioHistoryScope[];
   benchmarks?: PortfolioBenchmarkDefinition[];
 }): Promise<PortfolioHistoryResponse> => {
+  const aggregateStartedAt = performance.now();
   const uniqueScopes = Array.from(
     new Map(
       portfolioScopes
@@ -1915,7 +2041,14 @@ export const buildAggregatePortfolioHistory = async ({
   );
 
   if (uniqueScopes.length === 0) {
-    return { points: [], warnings: [], assetSeries: [], benchmarkSeries: [] };
+    return {
+      points: [],
+      warnings: [],
+      twrStatus: "unavailable",
+      twrStatusReason: "Brak danych historycznych do wyliczenia TWR.",
+      assetSeries: [],
+      benchmarkSeries: [],
+    };
   }
 
   const histories = await Promise.all(
@@ -1934,7 +2067,22 @@ export const buildAggregatePortfolioHistory = async ({
     )
   );
   const warnings = new Set(histories.flatMap((history) => history.warnings));
-  const points = aggregatePortfolioHistoryPoints(histories);
+  const twrStatus = getAggregateTwrStatus(histories);
+  const points = aggregatePortfolioHistoryPoints(histories).map((point) => ({
+    ...point,
+    timeWeightedReturnPercent:
+      twrStatus === "complete" ? point.timeWeightedReturnPercent : null,
+  }));
+  const twrStatusReason = Array.from(
+    new Set(histories.flatMap((history) => history.twrStatusReason ? [history.twrStatusReason] : []))
+  ).join(" ");
+
+  logHistoryDiagnostic("aggregate-ready", {
+    portfolios: uniqueScopes.length,
+    days: points.length,
+    durationMs: Math.round(performance.now() - aggregateStartedAt),
+    twrStatus: twrStatus ?? "unavailable",
+  });
 
   if (benchmarks.length > 0) {
     warnings.add("Benchmarki są dostępne po wyborze konkretnego portfela; widok łączny nie tworzy syntetycznej serii.");
@@ -1943,6 +2091,8 @@ export const buildAggregatePortfolioHistory = async ({
   return {
     points,
     warnings: Array.from(warnings).sort((left, right) => left.localeCompare(right, "pl")),
+    twrStatus,
+    ...(twrStatusReason ? { twrStatusReason } : {}),
     assetSeries: [],
     benchmarkSeries: [],
   };

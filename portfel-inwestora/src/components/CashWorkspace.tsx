@@ -24,6 +24,7 @@ type Props = {
   portfolios?: InvestmentPortfolio[];
   activePortfolioId?: string;
   isAllPortfoliosSelected?: boolean;
+  isPortfolioMutationPending?: boolean;
   fxRates: FxRates;
   baseCurrency: CurrencyCode;
   totalPortfolioValue?: number;
@@ -216,6 +217,7 @@ export default function CashWorkspace({
   portfolios = portfolio ? [portfolio] : [],
   activePortfolioId = portfolio?.id ?? "",
   isAllPortfoliosSelected = false,
+  isPortfolioMutationPending = false,
   fxRates,
   baseCurrency,
   totalPortfolioValue = 0,
@@ -229,7 +231,7 @@ export default function CashWorkspace({
 
   const aggregate = isAllPortfoliosSelected;
   const selectedPortfolio = aggregate
-    ? portfolios.find((item) => item.id === targetPortfolioId) ?? portfolios[0] ?? null
+    ? portfolios.find((item) => item.id === targetPortfolioId) ?? null
     : portfolio ?? portfolios.find((item) => item.id === activePortfolioId) ?? null;
   const selectedAccountType = normalizePortfolioAccountType(selectedPortfolio?.accountType);
   useEffect(() => {
@@ -296,6 +298,21 @@ export default function CashWorkspace({
   const accountForCurrency = accountCandidates(selectedPortfolio?.accounts, draft.currency);
   const targetAccounts = accountCandidates(selectedPortfolio?.accounts, draft.targetCurrency);
 
+  useEffect(() => {
+    if (!aggregate) {
+      if (targetPortfolioId !== activePortfolioId) setTargetPortfolioId(activePortfolioId);
+      return;
+    }
+    if (targetPortfolioId && portfolios.some((item) => item.id === targetPortfolioId)) return;
+    const nextId = activePortfolioId && portfolios.some((item) => item.id === activePortfolioId)
+      ? activePortfolioId
+      : portfolios[0]?.id ?? "";
+    setTargetPortfolioId(nextId);
+    setDraft(createDraft(normalizePortfolioAccountType(portfolios.find((item) => item.id === nextId)?.accountType)));
+    setEditingId(null);
+    setMessage(null);
+  }, [activePortfolioId, aggregate, portfolios, targetPortfolioId]);
+
   const updateDraft = (patch: Partial<Draft>) => setDraft((current) => ({ ...current, ...patch }));
   const changeOperationType = (operationType: CashOperationKind) => setDraft((current) => ({
     ...current,
@@ -306,7 +323,7 @@ export default function CashWorkspace({
   const changeEntryKind = (entryKind: CashEntryKind) => setDraft((current) => ({ ...current, entryKind, operationType: entryKind === "INITIAL_BALANCE" ? "DEPOSIT" : entryKind === "BALANCE_ADJUSTMENT" ? "CUSTOM" : current.operationType }));
 
   const submit = async () => {
-    if (pending) return;
+    if (pending || isPortfolioMutationPending) return;
     const amount = numberValue(draft.amount);
     if (!selectedPortfolio || !Number.isFinite(amount) || amount === 0 || !draft.date) {
       setMessage({ type: "error", text: "Wybierz portfel, podaj kwotę i datę operacji." });
@@ -323,6 +340,7 @@ export default function CashWorkspace({
     if (
       draft.accountId &&
       (!selectedSourceAccount ||
+        selectedSourceAccount.portfolioId !== selectedPortfolio.id ||
         isPortfolioAccountArchived(selectedSourceAccount) ||
         selectedSourceAccount.currency !== currency)
     ) {
@@ -334,7 +352,7 @@ export default function CashWorkspace({
       : undefined;
     if (
       draft.operationType === "TRANSFER" &&
-      (!selectedTargetAccount || isPortfolioAccountArchived(selectedTargetAccount))
+      (!selectedTargetAccount || selectedTargetAccount.portfolioId !== selectedPortfolio.id || isPortfolioAccountArchived(selectedTargetAccount))
     ) {
       setMessage({ type: "error", text: "Wybierz konto docelowe dla przelewu." });
       return;
@@ -412,7 +430,7 @@ export default function CashWorkspace({
   };
 
   const edit = (operation: PortfolioOperation) => {
-    if (aggregate || !isEditableCashOperation(operation)) return;
+    if (aggregate || isPortfolioMutationPending || !isEditableCashOperation(operation)) return;
     updateDraft({ operationType: operation.operationType as CashOperationKind, entryKind: (operation.metadata.cashEntryKind as CashEntryKind) ?? "STANDARD", accountId: operation.accountId, targetAccountId: typeof operation.metadata.targetAccountId === "string" ? operation.metadata.targetAccountId : "", amount: String(operation.amount), currency: operation.currency, targetCurrency: typeof operation.metadata.targetCurrency === "string" ? operation.metadata.targetCurrency : operation.currency, targetAmount: typeof operation.metadata.targetAmount === "number" ? String(operation.metadata.targetAmount) : String(operation.amount), date: operation.date, notes: operation.notes, accountFlowKind: normalizeAccountFlowKind(operation.metadata.accountFlowKind, operation.operationType) ?? defaultAccountFlowKind(operation.operationType as CashOperationKind, selectedAccountType) });
     setEditingId(operation.id); setMessage(null);
   };
@@ -433,7 +451,7 @@ export default function CashWorkspace({
       : null;
 
   const remove = async (operation: PortfolioOperation) => {
-    if (aggregate || pending || !isEditableCashOperation(operation) || !selectedPortfolio) return;
+    if (aggregate || pending || isPortfolioMutationPending || !isEditableCashOperation(operation) || !selectedPortfolio) return;
     if (typeof window !== "undefined" && !window.confirm("Usunąć tę operację gotówkową?")) return;
     setPending(true); setMessage(null);
     try {
@@ -443,7 +461,7 @@ export default function CashWorkspace({
   };
 
   const updateAccountArchiveState = async (account: PortfolioAccount, archived: boolean) => {
-    if (aggregate || pending || !selectedPortfolio) return;
+    if (aggregate || pending || isPortfolioMutationPending || !selectedPortfolio) return;
     if (
       archived &&
       typeof window !== "undefined" &&
@@ -483,7 +501,7 @@ export default function CashWorkspace({
     <section className="cash-workspace">
       <div className="panel cash-summary-panel">
         <div className="sprint-panel-head"><div><p className="eyebrow">Gotówka</p><h2 className="section-title">Saldo gotówkowe</h2><p className="section-copy">Środki są liczone z tego samego dziennika operacji co portfel.</p></div>{aggregate ? <span className="tag">Wszystkie portfele</span> : <span className="account-type-badge account-type-badge-strong">{PORTFOLIO_ACCOUNT_TYPE_LABELS[selectedAccountType]}</span>}</div>
-        {aggregate ? <label className="field cash-target-portfolio"><span>Portfel docelowy dla nowych operacji</span><select value={targetPortfolioId} onChange={(event) => setTargetPortfolioId(event.target.value)}>{portfolios.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label> : null}
+        {aggregate ? <label className="field cash-target-portfolio"><span>Portfel docelowy dla nowych operacji</span><select value={targetPortfolioId} disabled={isPortfolioMutationPending} onChange={(event) => { const nextId = event.target.value; setTargetPortfolioId(nextId); setDraft(createDraft(normalizePortfolioAccountType(portfolios.find((item) => item.id === nextId)?.accountType))); setEditingId(null); setMessage(null); }}>{portfolios.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label> : null}
         <div className="workspace-performance-metric-grid cash-summary-grid mt-6"><article><span>Łączna gotówka</span><strong>{formatCurrency(cashValue, baseCurrency)}</strong></article><article><span>Udział w portfelu</span><strong>{cashShare.toFixed(1)}%</strong></article><article><span>Aktywne konta</span><strong>{activeAccountCount}</strong></article></div>
         {balances.some((item) => item.amount < 0) ? <p className="field-note field-note-error mt-4">Saldo ujemne jest dozwolone, ale wymaga weryfikacji.</p> : null}
         <div className="cash-balance-list mt-6">{balances.map((balance) => <article key={`${balance.accountId}:${balance.currency}`}><span>{balance.accountName}</span><strong className={balance.amount < 0 ? "tone-negative" : ""}>{formatCurrency(balance.amount, balance.currency)}</strong><small>{balance.currency} · {formatCurrency(convertCurrency(balance.amount, balance.currency, baseCurrency, fxRates), baseCurrency)}</small>{!aggregate ? <button type="button" className="ghost-button" onClick={() => { const account = displayActiveCashAccounts.find((candidate) => candidate.id === balance.accountId); if (account) void updateAccountArchiveState(account, true); }} disabled={pending}>Archiwizuj</button> : null}</article>)}{balances.length === 0 ? <p className="field-note">Brak aktywnych rachunków gotówkowych.</p> : null}</div>
@@ -504,7 +522,7 @@ export default function CashWorkspace({
         </div>
         {withdrawalTaxNote && selectedAccountType !== "STANDARD" ? <div className="account-tax-note mt-4"><strong>{withdrawalTaxNote.status === "EXACT_RULE" ? "Reguła podatkowa" : "Informacja podatkowa"}</strong><span>{withdrawalTaxNote.note}</span>{withdrawalTaxNote.estimatedTaxPln !== null && withdrawalTaxNote.estimatedTaxPln > 0 ? <span>Szacowana kwota podatku: {formatCurrency(withdrawalTaxNote.estimatedTaxPln, "PLN")}. Nie jest automatycznie potrącana.</span> : null}</div> : null}
         {message ? <p className={`field-note mt-4 ${message.type === "error" ? "field-note-error" : "tone-positive"}`} role={message.type === "error" ? "alert" : "status"}>{message.text}</p> : null}
-        <div className="sprint-action-row mt-5"><button type="button" className="primary-button" onClick={submit} disabled={pending}>{pending ? "Zapisywanie…" : editingId ? "Zapisz zmiany" : "Dodaj operację"}</button></div>
+        <div className="sprint-action-row mt-5"><button type="button" className="primary-button" onClick={submit} disabled={pending || isPortfolioMutationPending || !selectedPortfolio}>{pending ? "Zapisywanie…" : isPortfolioMutationPending ? "Zmiana portfela…" : editingId ? "Zapisz zmiany" : "Dodaj operację"}</button></div>
       </article>
 
       <article className="panel sprint-wide-panel mt-6"><div className="sprint-panel-head"><div><p className="eyebrow">Historia gotówki</p><h2 className="section-title">Operacje i saldo po operacji</h2></div><span className="tag">{history.length} wpisów</span></div><div className="sprint-table-wrap mt-5"><table className="portfolio-table sprint-table"><thead><tr><th>Data</th><th>Typ</th><th>Konto</th><th>Kwota</th><th>Saldo</th><th>Opis</th><th>Akcje</th></tr></thead><tbody>{history.map((entry) => { const op = selectedPortfolio?.operations?.find((item) => item.id === entry.operationId); return <tr key={entry.id}><td>{formatDate(entry.date)}</td><td>{op ? operationLabel(op) : entry.operationType}</td><td>{entry.accountName}</td><td className={entry.amount < 0 ? "tone-negative" : "tone-positive"}>{formatCurrency(entry.amount, entry.currency)}</td><td>{formatCurrency(entry.balanceAfter, entry.currency)}</td><td><span className="table-note">{entry.notes || "—"}</span></td><td>{op && !aggregate && isEditableCashOperation(op) ? <span className="inline-actions"><button type="button" className="ghost-button" onClick={() => edit(op)}>Edytuj</button><button type="button" className="ghost-button" onClick={() => void remove(op)} disabled={pending}>Usuń</button></span> : <span className="table-note">—</span>}</td></tr>; })}{history.length === 0 ? <tr><td colSpan={7}><p className="empty-row">Brak historii gotówki.</p></td></tr> : null}</tbody></table></div><div className="cash-mobile-history">{history.map((entry) => { const op = selectedPortfolio?.operations?.find((item) => item.id === entry.operationId); return <article key={`mobile-${entry.id}`} className="cash-mobile-row"><div><strong>{op ? operationLabel(op) : entry.operationType}</strong><span>{formatDate(entry.date)} · {entry.accountName}</span></div><strong className={entry.amount < 0 ? "tone-negative" : "tone-positive"}>{formatCurrency(entry.amount, entry.currency)}</strong>{op && !aggregate && isEditableCashOperation(op) ? <div className="inline-actions"><button type="button" className="ghost-button" onClick={() => edit(op)}>Edytuj</button><button type="button" className="ghost-button" onClick={() => void remove(op)} disabled={pending}>Usuń</button></div> : null}</article>; })}</div></article>

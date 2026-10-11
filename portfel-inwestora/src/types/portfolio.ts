@@ -853,6 +853,9 @@ export type PortfolioEngineSnapshot = {
 export type PortfolioHistoryResponse = {
   points: PortfolioHistoryPoint[];
   warnings: string[];
+  /** Whether the historic inputs are complete enough to present a TWR value. */
+  twrStatus?: "complete" | "incomplete" | "unavailable";
+  twrStatusReason?: string;
   assetSeries: PortfolioAssetHistorySeries[];
   benchmarkSeries: PortfolioBenchmarkHistorySeries[];
 };

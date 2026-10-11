@@ -44,9 +44,10 @@ import type {
 type DividendCashWorkspaceProps = {
   activeView: "dividends" | "cash";
   portfolio: InvestmentPortfolio;
+  isPortfolioMutationPending?: boolean;
   fxRates: FxRates;
   baseCurrency: CurrencyCode;
-  onPortfolioChange: (portfolio: InvestmentPortfolio) => void;
+  onPortfolioChange: (portfolio: InvestmentPortfolio) => void | Promise<void>;
 };
 
 type DividendDraft = {
@@ -234,6 +235,7 @@ const getReportLabel = (label: string, portfolio: InvestmentPortfolio) =>
 export default function DividendCashWorkspace({
   activeView,
   portfolio,
+  isPortfolioMutationPending = false,
   fxRates,
   baseCurrency,
   onPortfolioChange,
@@ -244,6 +246,8 @@ export default function DividendCashWorkspace({
     useState<DividendReportBucket>("monthly");
   const [dividendError, setDividendError] = useState<string | null>(null);
   const [cashError, setCashError] = useState<string | null>(null);
+  const [isSavingDividend, setIsSavingDividend] = useState(false);
+  const [isSavingCash, setIsSavingCash] = useState(false);
   const dividendInstrumentRef = useRef<HTMLInputElement | null>(null);
   const dividendCustomNameRef = useRef<HTMLInputElement | null>(null);
   const dividendAccountRef = useRef<HTMLSelectElement | null>(null);
@@ -319,7 +323,7 @@ export default function DividendCashWorkspace({
   );
 
   const replaceOperations = (operations: PortfolioOperation[]) => {
-    onPortfolioChange({
+    return onPortfolioChange({
       ...portfolio,
       operations,
       updatedAt: new Date().toISOString(),
@@ -335,7 +339,7 @@ export default function DividendCashWorkspace({
     instruments?: PortfolioInstrument[];
     operations: PortfolioOperation[];
   }) => {
-    onPortfolioChange({
+    return onPortfolioChange({
       ...portfolio,
       accounts: nextAccounts,
       instruments: nextInstruments,
@@ -396,6 +400,7 @@ export default function DividendCashWorkspace({
   };
 
   const editDividend = (dividend: PortfolioDividend) => {
+    if (isPortfolioMutationPending || isSavingDividend || isSavingCash) return;
     setDividendDraft({
       editingId: dividend.operationId,
       instrumentId: dividend.instrumentId,
@@ -423,6 +428,7 @@ export default function DividendCashWorkspace({
   };
 
   const deleteDividend = (dividend: PortfolioDividend) => {
+    if (isPortfolioMutationPending || isSavingDividend || isSavingCash) return;
     replaceOperations(
       (portfolio.operations ?? []).filter(
         (operation) => operation.id !== dividend.operationId
@@ -535,7 +541,8 @@ export default function DividendCashWorkspace({
     };
   };
 
-  const saveDividend = () => {
+  const saveDividend = async () => {
+    if (isSavingDividend || isPortfolioMutationPending) return;
     const resolvedInstrument = getResolvedDividendInstrument();
     const instrument = resolvedInstrument.instrument;
     const resolvedAccount = getResolvedDividendAccount();
@@ -557,6 +564,11 @@ export default function DividendCashWorkspace({
     if (!account) {
       setDividendError("Wybierz konto wplywu albo utworz nowe konto walutowe.");
       dividendAccountRef.current?.focus();
+      return;
+    }
+
+    if (account.portfolioId !== portfolio.id || instrument.portfolioId !== portfolio.id) {
+      setDividendError("Instrument i konto muszą należeć do aktualnie wybranego portfela.");
       return;
     }
 
@@ -631,15 +643,24 @@ export default function DividendCashWorkspace({
         )
       : [...currentOperations, nextOperation];
 
-    replacePortfolioCore({
-      accounts: resolvedAccount.accounts,
-      instruments: resolvedInstrument.instruments,
-      operations: nextOperations,
-    });
-    resetDividendDraft();
+    setIsSavingDividend(true);
+    setDividendError(null);
+    try {
+      await replacePortfolioCore({
+        accounts: resolvedAccount.accounts,
+        instruments: resolvedInstrument.instruments,
+        operations: nextOperations,
+      });
+      resetDividendDraft();
+    } catch {
+      setDividendError("Nie udało się zapisać dywidendy. Dane formularza pozostały zachowane.");
+    } finally {
+      setIsSavingDividend(false);
+    }
   };
 
-  const saveCashOperation = () => {
+  const saveCashOperation = async () => {
+    if (isSavingCash || isPortfolioMutationPending) return;
     const account = cashAccounts.find((item) => item.id === cashDraft.accountId);
     const targetAccount = cashAccounts.find(
       (item) => item.id === cashDraft.targetAccountId
@@ -651,9 +672,19 @@ export default function DividendCashWorkspace({
       return;
     }
 
+    if (account.portfolioId !== portfolio.id) {
+      setCashError("Konto źródłowe nie należy do aktualnie wybranego portfela.");
+      return;
+    }
+
     if (cashDraft.operationType === "TRANSFER" && !targetAccount) {
       setCashError("Wybierz konto docelowe przelewu.");
       cashAccountRef.current?.focus();
+      return;
+    }
+
+    if (targetAccount && targetAccount.portfolioId !== portfolio.id) {
+      setCashError("Konto docelowe nie należy do aktualnie wybranego portfela.");
       return;
     }
 
@@ -682,9 +713,16 @@ export default function DividendCashWorkspace({
       notes: cashDraft.notes,
     });
 
-    replaceOperations([...(portfolio.operations ?? []), operation]);
-    setCashDraft(getDefaultCashDraft(portfolio));
+    setIsSavingCash(true);
     setCashError(null);
+    try {
+      await replaceOperations([...(portfolio.operations ?? []), operation]);
+      setCashDraft(getDefaultCashDraft(portfolio));
+    } catch {
+      setCashError("Nie udało się zapisać operacji gotówkowej. Dane formularza pozostały zachowane.");
+    } finally {
+      setIsSavingCash(false);
+    }
   };
 
   return (
@@ -1064,8 +1102,8 @@ export default function DividendCashWorkspace({
             ) : null}
 
             <div className="sprint-action-row mt-5">
-              <button className="primary-button" type="button" onClick={saveDividend}>
-                {dividendDraft.editingId ? "Zapisz dywidende" : "Dodaj dywidende"}
+              <button className="primary-button" type="button" onClick={() => void saveDividend()} disabled={isSavingDividend || isPortfolioMutationPending}>
+                {isSavingDividend ? "Zapisywanie…" : isPortfolioMutationPending ? "Zmiana portfela…" : dividendDraft.editingId ? "Zapisz dywidende" : "Dodaj dywidende"}
               </button>
               {dividendDraft.editingId ? (
                 <button className="ghost-button" type="button" onClick={resetDividendDraft}>
@@ -1480,8 +1518,8 @@ export default function DividendCashWorkspace({
             ) : null}
 
             <div className="sprint-action-row mt-5">
-              <button className="primary-button" type="button" onClick={saveCashOperation}>
-                Dodaj operacje gotowkowa
+              <button className="primary-button" type="button" onClick={() => void saveCashOperation()} disabled={isSavingCash || isPortfolioMutationPending}>
+                {isSavingCash ? "Zapisywanie…" : isPortfolioMutationPending ? "Zmiana portfela…" : "Dodaj operacje gotowkowa"}
               </button>
             </div>
           </article>

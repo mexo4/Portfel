@@ -16,6 +16,7 @@ import {
   createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode,
 } from "react";
 import { usePortfolioWorkspace } from "@/components/PortfolioWorkspaceContext";
+import { acquireBodyScrollLock } from "@/lib/client/body-scroll-lock";
 import {
   DASHBOARD_WIDGET_DEFINITIONS, DEFAULT_DASHBOARD_LAYOUT, DEFAULT_MOBILE_DASHBOARD_LAYOUT,
   dashboardScopeLayoutsEqual, getDashboardPresetLayouts,
@@ -359,10 +360,9 @@ function DashboardChart({ mode }: { mode: DashboardChartMode }) {
   useEffect(() => {
     if (!isFullscreen) return;
     const onKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape") setIsFullscreen(false); };
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
+    const releaseBodyScrollLock = acquireBodyScrollLock(document);
     window.addEventListener("keydown", onKeyDown);
-    return () => { document.body.style.overflow = previousOverflow; window.removeEventListener("keydown", onKeyDown); };
+    return () => { releaseBodyScrollLock(); window.removeEventListener("keydown", onKeyDown); };
   }, [isFullscreen]);
 
   const renderChart = (fullscreen = false) => <ResponsiveContainer width="100%" height="100%">

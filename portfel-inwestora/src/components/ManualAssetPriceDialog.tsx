@@ -4,6 +4,7 @@ import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import type { PortfolioAssetGroup } from "@/lib/pricing";
 import { formatDateTime } from "@/lib/utils";
 import type { CurrencyCode } from "@/types/portfolio";
+import { acquireBodyScrollLock } from "@/lib/client/body-scroll-lock";
 
 const SUPPORTED_CURRENCIES = ["PLN", "USD", "EUR", "GBP", "DKK"] as const;
 
@@ -64,8 +65,7 @@ export default function ManualAssetPriceDialog({
     previousFocusRef.current = document.activeElement instanceof HTMLElement
       ? document.activeElement
       : null;
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
+    const releaseBodyScrollLock = acquireBodyScrollLock(document);
     window.requestAnimationFrame(() => priceInputRef.current?.focus());
 
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -95,7 +95,7 @@ export default function ManualAssetPriceDialog({
 
     window.addEventListener("keydown", handleKeyDown);
     return () => {
-      document.body.style.overflow = previousOverflow;
+      releaseBodyScrollLock();
       window.removeEventListener("keydown", handleKeyDown);
       previousFocusRef.current?.focus();
     };

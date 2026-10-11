@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { CRYPTO_UI_ENABLED } from "@/lib/constants";
+import { acquireBodyScrollLock } from "@/lib/client/body-scroll-lock";
 import type { BrokerImportPreset } from "@/lib/import-operations";
 
 export type ImportPlatformStatus = "full" | "partial" | "planned";
@@ -786,19 +787,18 @@ export default function ImportPlatformPicker({
       return;
     }
 
-    const previousOverflow = document.body.style.overflow;
+    const releaseBodyScrollLock = acquireBodyScrollLock(document);
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         setIsOpen(false);
       }
     };
 
-    document.body.style.overflow = "hidden";
     window.addEventListener("keydown", handleKeyDown);
     window.setTimeout(() => searchInputRef.current?.focus(), 0);
 
     return () => {
-      document.body.style.overflow = previousOverflow;
+      releaseBodyScrollLock();
       window.removeEventListener("keydown", handleKeyDown);
     };
   }, [isOpen]);

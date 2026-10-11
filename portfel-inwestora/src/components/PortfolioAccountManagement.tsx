@@ -14,6 +14,7 @@ import {
   normalizePortfolioAccountType,
 } from "@/lib/portfolio-account-rules";
 import { formatCurrency } from "@/lib/utils";
+import { acquireBodyScrollLock } from "@/lib/client/body-scroll-lock";
 import type {
   IkzeLimitVariant,
   IkzeTaxEstimateRate,
@@ -315,12 +316,11 @@ export default function PortfolioAccountManagement({
   useEffect(() => {
     if (!isCreating) return;
 
-    const previousBodyOverflow = document.body.style.overflow;
+    const releaseBodyScrollLock = acquireBodyScrollLock(document);
     const focusTimeout = window.setTimeout(() => createNameInputRef.current?.focus(), 0);
-    document.body.style.overflow = "hidden";
 
     return () => {
-      document.body.style.overflow = previousBodyOverflow;
+      releaseBodyScrollLock();
       window.clearTimeout(focusTimeout);
       const returnTarget = returnFocusRef.current;
       returnFocusRef.current = null;

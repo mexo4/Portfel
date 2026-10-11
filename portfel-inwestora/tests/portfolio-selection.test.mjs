@@ -33,7 +33,7 @@ test("scope normalization removes deleted IDs and never permits an empty committ
 test("portfolio scope URLs preserve all/custom context and display currency across routes", () => {
   assert.equal(getWorkspaceReadHref("/analytics/charts", ALL_PORTFOLIOS_ID, "USD", { mode: "ALL" }), "/analytics/charts?portfolio=all&currency=USD");
   assert.equal(getWorkspaceReadHref("/analytics/charts", CUSTOM_PORTFOLIOS_ID, "EUR", { mode: "CUSTOM", portfolioIds: ["xtb", "ike"] }), "/analytics/charts?portfolio=custom&portfolios=xtb%2Cike&currency=EUR");
-  assert.equal(getWorkspaceReadHref("/analytics/charts", "ike", "PLN", { mode: "SINGLE", portfolioId: "ike" }), "/analytics/charts?portfolio=ike");
+  assert.equal(getWorkspaceReadHref("/analytics/charts", "ike", "USD", { mode: "SINGLE", portfolioId: "ike" }), "/analytics/charts?portfolio=ike&currency=USD");
 });
 
 test("aggregate history and API scope authorization reject foreign and oversized IDs", () => {

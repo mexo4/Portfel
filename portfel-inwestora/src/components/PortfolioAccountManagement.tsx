@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent, KeyboardEvent } from "react";
+import { createPortal } from "react-dom";
 import {
   OKI_EFFECTIVE_DATE,
   OKI_ANNUAL_RULES,
@@ -431,11 +432,12 @@ export default function PortfolioAccountManagement({
           <div className="portfolio-hub-actions">
             <button className="ghost-button" type="button" onClick={onRename} disabled={isPending || isAllPortfoliosSelected}>Zmień nazwę</button>
             <button className="ghost-button admin-danger-button" type="button" onClick={onDelete} disabled={portfolios.length <= 1 || isPending || isAllPortfoliosSelected}>{isPending ? "Zapisywanie…" : "Usuń portfel"}</button>
-            <button ref={createTriggerRef} className="primary-button" type="button" onClick={openCreateModal} disabled={isPending}>Dodaj portfel</button>
+            <button ref={createTriggerRef} className="primary-button" type="button" onClick={openCreateModal} disabled={isPending} aria-haspopup="dialog" aria-expanded={isCreating}>Dodaj portfel</button>
           </div>
         </div>
 
-        {isCreating ? (
+        {isCreating && typeof document !== "undefined"
+          ? createPortal(
           <div
             className="portfolio-create-backdrop"
             role="presentation"
@@ -518,8 +520,10 @@ export default function PortfolioAccountManagement({
                 </footer>
               </form>
             </section>
-          </div>
-        ) : null}
+          </div>,
+          document.body
+        )
+          : null}
 
         <div className="portfolio-card-grid mt-5">
           {summaries.map(({ portfolio, summary }) => {

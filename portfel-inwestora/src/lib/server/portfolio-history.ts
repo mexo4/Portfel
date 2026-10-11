@@ -996,6 +996,7 @@ const buildFxSeries = async (
         return {
           code,
           dailyRates: new Map(dates.map((date) => [date, 1] as const)),
+          historicalDailyRates: new Map(dates.map((date) => [date, 1] as const)),
           warnings: [] as string[],
         };
       }
@@ -1007,10 +1008,13 @@ const buildFxSeries = async (
       const fallbackFxRates: Record<CurrencyCode, number> = FALLBACK_FX_RATES;
       const fallbackRate = fallbackRates[code] ?? fallbackFxRates[code];
       const dailyRates = new Map<string, number>();
+      const historicalDailyRates = new Map<string, number | null>();
       let pointIndex = 0;
       let lastKnownRate: number | undefined;
       let usedFallback = false;
       let missingRate = false;
+      let firstUnavailableDate: string | null = null;
+      let lastUnavailableDate: string | null = null;
 
       for (const date of dates) {
         while (pointIndex < points.length && points[pointIndex]!.date <= date) {
@@ -1020,8 +1024,16 @@ const buildFxSeries = async (
 
         if (typeof lastKnownRate === "number" && lastKnownRate > 0) {
           dailyRates.set(date, lastKnownRate);
+          historicalDailyRates.set(date, lastKnownRate);
           continue;
         }
+
+        // Keep historical conversion separate from the valuation fallback.
+        // The latter is useful for a provisional PLN history, but must never
+        // be presented as an actual historic exchange rate.
+        historicalDailyRates.set(date, null);
+        firstUnavailableDate ??= date;
+        lastUnavailableDate = date;
 
         if (typeof fallbackRate === "number" && Number.isFinite(fallbackRate) && fallbackRate > 0) {
           dailyRates.set(date, fallbackRate);
@@ -1035,12 +1047,13 @@ const buildFxSeries = async (
       return {
         code,
         dailyRates,
+        historicalDailyRates,
         warnings:
           missingRate
-            ? [`Brakuje kursu FX dla ${code}; nie wyceniono czesci historii.`]
+            ? [`Brakuje historycznego kursu FX ${code} dla zakresu ${firstUnavailableDate}–${lastUnavailableDate}; części historii nie można wiarygodnie przeliczyć.`]
             : usedFallback || points.length === 0
               ? [
-                  `Brak pelnej historii FX dla ${code}; brakujace dni uzupelniono biezacym kursem.`,
+                  `Brak wcześniejszej historii FX ${code} przed ${firstUnavailableDate}; wstępna wycena PLN użyła kursu bieżącego, dlatego TWR w tym okresie jest niepełny.`,
                 ]
               : [],
       };
@@ -1050,11 +1063,19 @@ const buildFxSeries = async (
   const fxSeriesByCode = new Map(
     fxEntries.map((entry) => [entry.code, entry.dailyRates] as const)
   );
+  const historicalFxSeriesByCode = new Map(
+    fxEntries.map((entry) => [entry.code, entry.historicalDailyRates] as const)
+  );
   const warnings = fxEntries.flatMap((entry) => entry.warnings);
+  const warningsByCode = new Map(
+    fxEntries.map((entry) => [entry.code, entry.warnings] as const)
+  );
 
   return {
     fxSeriesByCode,
+    historicalFxSeriesByCode,
     warnings,
+    warningsByCode,
   };
 };
 
@@ -1244,6 +1265,17 @@ const getFxRateForDate = (
   const fallbackFxRates: Record<CurrencyCode, number> = FALLBACK_FX_RATES;
   return fxSeriesByCode.get(normalizedCode)?.get(date) ?? fallbackFxRates[normalizedCode] ?? 0;
 };
+
+const getHistoricalFxRateForDate = (
+  fxSeriesByCode: Map<CurrencyCode, Map<string, number | null>>,
+  code: CurrencyCode,
+  date: string
+) => fxSeriesByCode.get(toCurrencyCode(code, "PLN"))?.get(date) ?? null;
+
+export const getPortfolioTwrFxWarnings = (
+  requiredFxCodes: readonly CurrencyCode[],
+  warningsByCode: ReadonlyMap<CurrencyCode, readonly string[]>
+) => requiredFxCodes.flatMap((code) => warningsByCode.get(code) ?? []);
 
 const convertToPlnOnDate = (
   amount: number,
@@ -1632,6 +1664,7 @@ export const buildPortfolioHistory = async ({
   operations = [],
   accounts = [],
   benchmarks = [],
+  presentationCurrency = "PLN",
 }: {
   assets: PortfolioAsset[];
   sales: PortfolioSale[];
@@ -1639,7 +1672,9 @@ export const buildPortfolioHistory = async ({
   operations?: PortfolioOperation[];
   accounts?: PortfolioAccount[];
   benchmarks?: PortfolioBenchmarkDefinition[];
+  presentationCurrency?: CurrencyCode;
 }): Promise<PortfolioHistoryResponse> => {
+  const normalizedPresentationCurrency = toCurrencyCode(presentationCurrency, "PLN");
   const buildStartedAt = performance.now();
   const today = toDateInputValue(new Date().toISOString());
   const startDate = getPortfolioHistoryStartDate({
@@ -1655,6 +1690,9 @@ export const buildPortfolioHistory = async ({
       warnings: [],
       twrStatus: "unavailable",
       twrStatusReason: "Brak danych historycznych do wyliczenia TWR.",
+      presentationCurrency: normalizedPresentationCurrency,
+      presentationTwrStatus: "unavailable",
+      presentationTwrStatusReason: "Brak danych historycznych do wyliczenia TWR.",
       assetSeries: [],
       benchmarkSeries: [],
     };
@@ -1670,8 +1708,9 @@ export const buildPortfolioHistory = async ({
   const twrIssues = new Set<string>();
 
   const fxStartedAt = performance.now();
-  const { fxSeriesByCode, warnings: fxWarnings } = await buildFxSeries(
-    getNeededFxCodes(assets, sales, benchmarks, operations),
+  const requiredFxCodes = getNeededFxCodes(assets, sales, benchmarks, operations);
+  const { fxSeriesByCode, historicalFxSeriesByCode, warnings: fxWarnings, warningsByCode } = await buildFxSeries(
+    [...new Set([...requiredFxCodes, normalizedPresentationCurrency])],
     startDate,
     today
   );
@@ -1679,11 +1718,12 @@ export const buildPortfolioHistory = async ({
   for (const warning of fxWarnings) {
     warnings.add(warning);
   }
-  if (fxWarnings.length > 0) {
-    twrIssues.add("Brak pełnej historii kursów walut dla części okresu.");
-  }
+  // A missing rate for a source-currency cash flow/asset makes the PLN history
+  // unreliable. A missing rate only for the selected display currency must
+  // not invalidate the independently calculated PLN TWR.
+  getPortfolioTwrFxWarnings(requiredFxCodes, warningsByCode).forEach((warning) => twrIssues.add(warning));
   logHistoryDiagnostic("fx-ready", {
-    currencies: getNeededFxCodes(assets, sales, benchmarks, operations).length,
+    currencies: requiredFxCodes.length,
     durationMs: Math.round(performance.now() - fxStartedAt),
   });
 
@@ -1767,8 +1807,11 @@ export const buildPortfolioHistory = async ({
       firstHistoryDate && firstHistoryDate > segment.startDate
         ? getDaysBetween(segment.startDate, firstHistoryDate)
         : 0;
-    if (history?.warning || hasUnreliableHistoryGap(historyPoints, segment.startDate, segment.endDate)) {
-      twrIssues.add("Brak pełnej historii notowań dla co najmniej jednej pozycji.");
+    if (history?.warning) {
+      twrIssues.add(`Brak pełnej historii notowań ${segment.symbol} (${segment.startDate}–${segment.endDate}).`);
+    }
+    if (hasUnreliableHistoryGap(historyPoints, segment.startDate, segment.endDate)) {
+      twrIssues.add(`Historia notowań ${segment.symbol} ma luki przekraczające 5 dni (${segment.startDate}–${segment.endDate}).`);
     }
     let pointIndex = 0;
     let lastKnownClose: number | undefined;
@@ -1815,7 +1858,7 @@ export const buildPortfolioHistory = async ({
     }
 
     if (usedFallbackAfterEntry) {
-      twrIssues.add("Niektóre dni historii pozycji nie mają wiarygodnego kursu rynkowego.");
+      twrIssues.add(`Pozycja ${segment.symbol} używa ceny zakupu zamiast kursu rynkowego po ${segment.startDate}.`);
     }
 
     if (usedFallback && historyPoints.length > 0 && initialGapDays > 5) {
@@ -1830,6 +1873,13 @@ export const buildPortfolioHistory = async ({
   let cumulativeAdjustmentsPln = 0;
   let cumulativeTimeWeightedReturnFactor = 1;
   let previousPortfolioValuePln: number | null = null;
+  let cumulativeNetInvestedPresentation = 0;
+  let cumulativeAdjustmentsPresentation = 0;
+  let cumulativePresentationReturnFactor = 1;
+  let previousPortfolioValuePresentation: number | null = null;
+  let presentationFlowsComplete = true;
+  let presentationAdjustmentsComplete = true;
+  let hasMissingPresentationFx = false;
   const cashBalancesByKey = new Map<string, { accountId: string; currency: CurrencyCode; amount: number }>();
   const accountArchivedDates = new Map(
     accounts.map((account) => [account.id, getPortfolioAccountArchivedDate(account)] as const)
@@ -1871,6 +1921,52 @@ export const buildPortfolioHistory = async ({
       portfolioValuePln - netInvestedPln + cumulativeAdjustmentsPln
     );
 
+    const presentationRateToPln = getHistoricalFxRateForDate(
+      historicalFxSeriesByCode,
+      normalizedPresentationCurrency,
+      date
+    );
+    const canPresentValue = typeof presentationRateToPln === "number" && presentationRateToPln > 0;
+    const portfolioValuePresentation = canPresentValue
+      ? round(portfolioValuePln / presentationRateToPln)
+      : null;
+    const externalFlowPresentation = externalFlowPln === 0
+      ? 0
+      : canPresentValue ? externalFlowPln / presentationRateToPln : null;
+    const realizedAdjustmentPresentation = realizedAdjustmentPln === 0
+      ? 0
+      : canPresentValue ? realizedAdjustmentPln / presentationRateToPln : null;
+
+    if (!canPresentValue && (portfolioValuePln !== 0 || externalFlowPln !== 0 || realizedAdjustmentPln !== 0)) {
+      hasMissingPresentationFx = true;
+    }
+    if (externalFlowPresentation === null) presentationFlowsComplete = false;
+    else cumulativeNetInvestedPresentation = round(cumulativeNetInvestedPresentation + externalFlowPresentation);
+    if (realizedAdjustmentPresentation === null) presentationAdjustmentsComplete = false;
+    else cumulativeAdjustmentsPresentation = round(cumulativeAdjustmentsPresentation + realizedAdjustmentPresentation);
+
+    const presentationNetInvested = presentationFlowsComplete ? cumulativeNetInvestedPresentation : null;
+    const presentationProfitLoss =
+      portfolioValuePresentation !== null && presentationNetInvested !== null && presentationAdjustmentsComplete
+        ? round(portfolioValuePresentation - presentationNetInvested + cumulativeAdjustmentsPresentation)
+        : null;
+
+    if (
+      previousPortfolioValuePresentation !== null &&
+      previousPortfolioValuePresentation > 0 &&
+      portfolioValuePresentation !== null &&
+      externalFlowPresentation !== null &&
+      realizedAdjustmentPresentation !== null
+    ) {
+      const dailyPresentationReturn = (
+        portfolioValuePresentation + realizedAdjustmentPresentation -
+        previousPortfolioValuePresentation - externalFlowPresentation
+      ) / previousPortfolioValuePresentation;
+      if (Number.isFinite(dailyPresentationReturn)) {
+        cumulativePresentationReturnFactor *= 1 + dailyPresentationReturn;
+      }
+    }
+
     if (previousPortfolioValuePln !== null && previousPortfolioValuePln > 0) {
       const dailyReturn =
         (portfolioValuePln +
@@ -1893,9 +1989,17 @@ export const buildPortfolioHistory = async ({
         (cumulativeTimeWeightedReturnFactor - 1) * 100,
         2
       ),
+      presentationPortfolioValue: portfolioValuePresentation,
+      presentationNetInvested,
+      presentationProfitLoss,
+      presentationTimeWeightedReturnPercent: round(
+        (cumulativePresentationReturnFactor - 1) * 100,
+        2
+      ),
     });
 
     previousPortfolioValuePln = portfolioValuePln;
+    previousPortfolioValuePresentation = portfolioValuePresentation;
   }
 
   const hasValuableHistory = points.some((point) => point.portfolioValuePln > 0);
@@ -1910,6 +2014,16 @@ export const buildPortfolioHistory = async ({
     }
   }
 
+  const presentationTwrStatus: NonNullable<PortfolioHistoryResponse["presentationTwrStatus"]> =
+    !hasValuableHistory
+      ? "unavailable"
+      : twrStatus !== "complete" || hasMissingPresentationFx
+        ? "incomplete"
+        : "complete";
+  if (presentationTwrStatus !== "complete") {
+    for (const point of points) point.presentationTimeWeightedReturnPercent = null;
+  }
+
   const assetSeries: PortfolioAssetHistorySeries[] = assetSeriesDefinitions
     .map((definition) => ({
       groupKey: definition.groupKey,
@@ -1919,6 +2033,12 @@ export const buildPortfolioHistory = async ({
       points: dates.map((date) => ({
         date,
         valuePln: round(assetValueByGroupKey.get(definition.groupKey)?.get(date) ?? 0),
+        valuePresentation: (() => {
+          const rate = getHistoricalFxRateForDate(historicalFxSeriesByCode, normalizedPresentationCurrency, date);
+          return typeof rate === "number" && rate > 0
+            ? round((assetValueByGroupKey.get(definition.groupKey)?.get(date) ?? 0) / rate)
+            : null;
+        })(),
       })),
     }))
     .filter((series) => series.points.some((point) => point.valuePln !== 0));
@@ -1934,13 +2054,39 @@ export const buildPortfolioHistory = async ({
   return {
     points,
     assetSeries,
-    benchmarkSeries,
+    benchmarkSeries: benchmarkSeries.map((series) => {
+      let presentationStartPrice: number | null = null;
+      return {
+        ...series,
+        points: series.points.map((point) => {
+          const rate = getHistoricalFxRateForDate(historicalFxSeriesByCode, normalizedPresentationCurrency, point.date);
+          const pricePresentation = typeof rate === "number" && rate > 0 ? round(point.pricePln / rate) : null;
+          if (presentationStartPrice === null && pricePresentation !== null) presentationStartPrice = pricePresentation;
+          return {
+            ...point,
+            pricePresentation,
+            presentationReturnPercent: pricePresentation !== null && presentationStartPrice
+              ? round(((pricePresentation / presentationStartPrice) - 1) * 100, 2)
+              : null,
+          };
+        }),
+      };
+    }),
     warnings: Array.from(warnings).sort((left, right) => left.localeCompare(right, "pl")),
     twrStatus,
+    presentationCurrency: normalizedPresentationCurrency,
+    presentationTwrStatus,
     ...(twrStatus === "incomplete"
-      ? { twrStatusReason: Array.from(twrIssues).join(" ") }
+      ? { twrStatusReason: Array.from(twrIssues).slice(0, 5).join(" ") }
       : twrStatus === "unavailable"
         ? { twrStatusReason: "Brak wystarczających danych historycznych do wyliczenia TWR." }
+        : {}),
+    ...(presentationTwrStatus === "incomplete"
+      ? { presentationTwrStatusReason: hasMissingPresentationFx
+          ? `Brakuje historycznego kursu ${normalizedPresentationCurrency} w części zakresu; TWR w tej walucie nie jest dostępny. ${Array.from(twrIssues).slice(0, 5).join(" ")}`
+          : Array.from(twrIssues).slice(0, 5).join(" ") }
+      : presentationTwrStatus === "unavailable"
+        ? { presentationTwrStatusReason: "Brak wystarczających danych historycznych do wyliczenia TWR." }
         : {}),
   };
 };
@@ -1961,11 +2107,17 @@ export const aggregatePortfolioHistoryPoints = (
     .sort((left, right) => left.localeCompare(right));
   const pointIndices = scopedPoints.map(() => -1);
   let cumulativeTimeWeightedReturnFactor = 1;
+  let cumulativePresentationReturnFactor = 1;
 
   return dates.map((date) => {
     let previousAggregateValuePln = 0;
     let aggregateProfitLossDeltaPln = 0;
-    const currentPoints = scopedPoints.flatMap((points, scopeIndex) => {
+    let previousAggregatePresentationValue = 0;
+    let aggregatePresentationProfitLossDelta = 0;
+    let presentationValuesComplete = true;
+    let presentationHistoryCount = 0;
+    const currentPoints: PortfolioHistoryPoint[] = [];
+    scopedPoints.forEach((points, scopeIndex) => {
       const previousPointIndex = pointIndices[scopeIndex] ?? -1;
       let pointIndex = pointIndices[scopeIndex] ?? -1;
       while (pointIndex + 1 < points.length && points[pointIndex + 1]!.date <= date) {
@@ -1974,6 +2126,7 @@ export const aggregatePortfolioHistoryPoints = (
       pointIndices[scopeIndex] = pointIndex;
       const currentPoint = pointIndex >= 0 ? points[pointIndex] : undefined;
       const previousPoint = previousPointIndex >= 0 ? points[previousPointIndex] : undefined;
+      if (currentPoint) currentPoints.push(currentPoint);
       if (currentPoint && previousPoint && previousPoint.portfolioValuePln > 0) {
         // Combine constituent daily TWR numerators over the value that was
         // actually invested at the start of this interval. A portfolio whose
@@ -1982,7 +2135,24 @@ export const aggregatePortfolioHistoryPoints = (
         previousAggregateValuePln += previousPoint.portfolioValuePln;
         aggregateProfitLossDeltaPln += currentPoint.profitLossPln - previousPoint.profitLossPln;
       }
-      return pointIndex >= 0 ? [points[pointIndex]!] : [];
+      if (currentPoint) {
+        if (typeof currentPoint.presentationPortfolioValue === "number") {
+          presentationHistoryCount += 1;
+        } else {
+          presentationValuesComplete = false;
+        }
+      }
+      if (
+        currentPoint && previousPoint &&
+        typeof previousPoint.presentationPortfolioValue === "number" &&
+        typeof previousPoint.presentationProfitLoss === "number" &&
+        typeof currentPoint.presentationProfitLoss === "number" &&
+        previousPoint.presentationPortfolioValue > 0
+      ) {
+        previousAggregatePresentationValue += previousPoint.presentationPortfolioValue;
+        aggregatePresentationProfitLossDelta +=
+          currentPoint.presentationProfitLoss - previousPoint.presentationProfitLoss;
+      }
     });
     const portfolioValuePln = round(currentPoints.reduce((total, point) => total + point.portfolioValuePln, 0));
     const netInvestedPln = round(currentPoints.reduce((total, point) => total + point.netInvestedPln, 0));
@@ -1997,12 +2167,39 @@ export const aggregatePortfolioHistoryPoints = (
       }
     }
 
+    if (previousAggregatePresentationValue > 0) {
+      const dailyPresentationReturn = aggregatePresentationProfitLossDelta / previousAggregatePresentationValue;
+      if (Number.isFinite(dailyPresentationReturn)) {
+        cumulativePresentationReturnFactor *= 1 + dailyPresentationReturn;
+      }
+    }
+
+    const canPresentAggregate = currentPoints.length > 0 && presentationValuesComplete &&
+      currentPoints.every((point) => typeof point.presentationPortfolioValue === "number");
+    const presentationPortfolioValue = canPresentAggregate
+      ? round(currentPoints.reduce((total, point) => total + point.presentationPortfolioValue!, 0))
+      : null;
+    const presentationNetInvested = canPresentAggregate && currentPoints.every((point) => typeof point.presentationNetInvested === "number")
+      ? round(currentPoints.reduce((total, point) => total + point.presentationNetInvested!, 0))
+      : null;
+    const presentationProfitLoss = canPresentAggregate && currentPoints.every((point) => typeof point.presentationProfitLoss === "number")
+      ? round(currentPoints.reduce((total, point) => total + point.presentationProfitLoss!, 0))
+      : null;
+
     return {
       date,
       portfolioValuePln,
       netInvestedPln,
       profitLossPln,
       timeWeightedReturnPercent: round((cumulativeTimeWeightedReturnFactor - 1) * 100, 2),
+      ...(presentationHistoryCount > 0
+        ? {
+            presentationPortfolioValue,
+            presentationNetInvested,
+            presentationProfitLoss,
+            presentationTimeWeightedReturnPercent: round((cumulativePresentationReturnFactor - 1) * 100, 2),
+          }
+        : {}),
     };
   });
 };
@@ -2020,11 +2217,14 @@ export const getAggregateTwrStatus = (
 export const buildAggregatePortfolioHistory = async ({
   portfolioScopes,
   benchmarks = [],
+  presentationCurrency = "PLN",
 }: {
   portfolioScopes: PortfolioHistoryScope[];
   benchmarks?: PortfolioBenchmarkDefinition[];
+  presentationCurrency?: CurrencyCode;
 }): Promise<PortfolioHistoryResponse> => {
   const aggregateStartedAt = performance.now();
+  const normalizedPresentationCurrency = toCurrencyCode(presentationCurrency, "PLN");
   const uniqueScopes = Array.from(
     new Map(
       portfolioScopes
@@ -2046,6 +2246,9 @@ export const buildAggregatePortfolioHistory = async ({
       warnings: [],
       twrStatus: "unavailable",
       twrStatusReason: "Brak danych historycznych do wyliczenia TWR.",
+      presentationCurrency: normalizedPresentationCurrency,
+      presentationTwrStatus: "unavailable",
+      presentationTwrStatusReason: "Brak danych historycznych do wyliczenia TWR.",
       assetSeries: [],
       benchmarkSeries: [],
     };
@@ -2059,6 +2262,7 @@ export const buildAggregatePortfolioHistory = async ({
         realizedAdjustments: scope.realizedAdjustments,
         operations: scope.operations ?? [],
         accounts: scope.accounts ?? [],
+        presentationCurrency: normalizedPresentationCurrency,
         // A user-selected benchmark has no single economically correct
         // aggregate start/cash-flow basis. Keep the existing per-portfolio
         // calculation honest rather than producing a synthetic comparison.
@@ -2068,13 +2272,25 @@ export const buildAggregatePortfolioHistory = async ({
   );
   const warnings = new Set(histories.flatMap((history) => history.warnings));
   const twrStatus = getAggregateTwrStatus(histories);
+  const presentationTwrStatus = getAggregateTwrStatus(histories.map((history) => ({
+    twrStatus: history.presentationTwrStatus ?? history.twrStatus,
+  })));
   const points = aggregatePortfolioHistoryPoints(histories).map((point) => ({
     ...point,
     timeWeightedReturnPercent:
       twrStatus === "complete" ? point.timeWeightedReturnPercent : null,
+    presentationTimeWeightedReturnPercent:
+      presentationTwrStatus === "complete" ? point.presentationTimeWeightedReturnPercent ?? null : null,
   }));
   const twrStatusReason = Array.from(
-    new Set(histories.flatMap((history) => history.twrStatusReason ? [history.twrStatusReason] : []))
+    new Set(histories.flatMap((history, index) => history.twrStatusReason
+      ? [`${uniqueScopes[index]?.portfolioName ?? "Portfel"} (${uniqueScopes[index]?.portfolioId ?? "?"}): ${history.twrStatusReason}`]
+      : []))
+  ).join(" ");
+  const presentationTwrStatusReason = Array.from(
+    new Set(histories.flatMap((history, index) => history.presentationTwrStatusReason
+      ? [`${uniqueScopes[index]?.portfolioName ?? "Portfel"} (${uniqueScopes[index]?.portfolioId ?? "?"}): ${history.presentationTwrStatusReason}`]
+      : []))
   ).join(" ");
 
   logHistoryDiagnostic("aggregate-ready", {
@@ -2092,7 +2308,10 @@ export const buildAggregatePortfolioHistory = async ({
     points,
     warnings: Array.from(warnings).sort((left, right) => left.localeCompare(right, "pl")),
     twrStatus,
+    presentationCurrency: normalizedPresentationCurrency,
+    presentationTwrStatus,
     ...(twrStatusReason ? { twrStatusReason } : {}),
+    ...(presentationTwrStatusReason ? { presentationTwrStatusReason } : {}),
     assetSeries: [],
     benchmarkSeries: [],
   };

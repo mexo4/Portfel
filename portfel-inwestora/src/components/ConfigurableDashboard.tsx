@@ -30,7 +30,6 @@ import {
   buildDashboardReadModel, type DashboardOperationRow, type DashboardReadModel,
 } from "@/lib/dashboard-read-model";
 import { filterChartPointsByRange, type ChartRangePreset } from "@/lib/chart-viewport";
-import { convertFromPln } from "@/lib/pricing";
 import { fetchCorporateEvents, fetchDashboardLayout, fetchEspiFeed, fetchPortfolioHistory, saveDashboardLayout } from "@/lib/api";
 import {
   getCorporateEventLabel, getUpcomingDividendRelevantDate, type CorporateEvent,
@@ -98,6 +97,7 @@ const getHistorySignature = (workspace: ReturnType<typeof usePortfolioWorkspace>
     assets: scope.assets.map(getHistoryAssetSignature),
   })),
   benchmarks: workspace.isAllPortfoliosSelected ? [] : (workspace.activePortfolio?.benchmarks ?? []),
+  presentationCurrency: workspace.presentationCurrency,
 });
 
 type DashboardData = {
@@ -120,7 +120,11 @@ const useDashboardData = () => {
 
 function DashboardDataProvider({ children, scopeKey }: { children: ReactNode; scopeKey: string }) {
   const workspace = usePortfolioWorkspace();
-  const [history, setHistory] = useState<PortfolioHistoryResponse | null>(null);
+  const [historyState, setHistoryState] = useState<{
+    signature: string;
+    history: PortfolioHistoryResponse | null;
+    error: boolean;
+  } | null>(null);
   const [events, setEvents] = useState<CorporateEventsResponse | null>(null);
   const [status, setStatus] = useState({ history: true, events: true });
   const [errors, setErrors] = useState({ history: false, events: false });
@@ -132,7 +136,6 @@ function DashboardDataProvider({ children, scopeKey }: { children: ReactNode; sc
     const generation = ++requestGenerationRef.current;
     const parsed = JSON.parse(historySignature) as ReturnType<typeof JSON.parse>;
     const isCurrent = () => !controller.signal.aborted && generation === requestGenerationRef.current;
-    setHistory(null);
     setEvents(null);
     setStatus({ history: true, events: true });
     setErrors({ history: false, events: false });
@@ -156,12 +159,20 @@ function DashboardDataProvider({ children, scopeKey }: { children: ReactNode; sc
             : workspace.activePortfolio?.accountType,
           benchmarks: workspace.isAllPortfoliosSelected ? [] : (workspace.activePortfolio?.benchmarks ?? []),
           portfolioScopes: getHistoryScopes(workspace),
+          presentationCurrency: workspace.presentationCurrency,
           signal: controller.signal,
         })
       : Promise.resolve(EMPTY_HISTORY);
 
-    void historyRequest.then((value) => { if (isCurrent()) setHistory(value); })
-      .catch(() => { if (isCurrent()) setErrors((current) => ({ ...current, history: true })); })
+    void historyRequest.then((value) => {
+      if (isCurrent()) setHistoryState({ signature: historySignature, history: value, error: false });
+    })
+      .catch(() => {
+        if (isCurrent()) {
+          setHistoryState({ signature: historySignature, history: null, error: true });
+          setErrors((current) => ({ ...current, history: true }));
+        }
+      })
       .finally(() => { if (isCurrent()) setStatus((current) => ({ ...current, history: false })); });
 
     const portfolioId = workspace.portfolioScope.mode === "CUSTOM" ? "custom" : workspace.isAllRealPortfoliosSelected ? "all" : workspace.activePortfolioId;
@@ -175,6 +186,11 @@ function DashboardDataProvider({ children, scopeKey }: { children: ReactNode; sc
   // itself intentionally is not a dependency, avoiding duplicate requests.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [historySignature, scopeKey]);
+
+  const historyMatchesScope = historyState?.signature === historySignature;
+  const history = historyMatchesScope ? historyState?.history ?? null : null;
+  const isHistoryLoading = !historyMatchesScope || status.history;
+  const historyError = historyMatchesScope && historyState?.error === true;
 
   const model = useMemo(() => buildDashboardReadModel({
     history,
@@ -202,13 +218,13 @@ function DashboardDataProvider({ children, scopeKey }: { children: ReactNode; sc
   const value = useMemo<DashboardData>(() => ({
     history,
     model,
-    isHistoryLoading: status.history,
+    isHistoryLoading,
     isEventsLoading: status.events,
     isWatchlistLoading: workspace.isWatchlistLoading,
-    historyError: errors.history,
+    historyError,
     eventsError: errors.events,
     watchlistError: workspace.watchlistReadError,
-  }), [errors, history, model, status, workspace.isWatchlistLoading, workspace.watchlistReadError]);
+  }), [errors.events, history, historyError, isHistoryLoading, model, status.events, workspace.isWatchlistLoading, workspace.watchlistReadError]);
   return <DashboardDataContext.Provider value={value}>{children}</DashboardDataContext.Provider>;
 }
 
@@ -251,14 +267,14 @@ function PortfolioStateWidget() {
   const data = useDashboardData();
   const metrics = data.model.history;
   const daily = metrics.latest?.cashFlowNeutralResultPln;
-  const dailyInBase = daily === undefined ? null : convertFromPln(daily, workspace.activeBaseCurrency, workspace.fxRates);
+  const dailyInBase = daily === undefined ? null : daily;
   const dailyPercent = metrics.latest?.cashFlowNeutralResultPercent ?? null;
   const returnPercent = metrics.returnPercent;
   const snapshotValue = metrics.latestPoint
-    ? convertFromPln(metrics.latestPoint.portfolioValuePln, workspace.activeBaseCurrency, workspace.fxRates)
+    ? metrics.latestPoint.portfolioValuePln
     : workspace.summaryTotalValue;
   const snapshotProfitLoss = metrics.latestPoint
-    ? convertFromPln(metrics.latestPoint.profitLossPln, workspace.activeBaseCurrency, workspace.fxRates)
+    ? metrics.latestPoint.profitLossPln
     : workspace.summaryCombinedProfitLoss;
   return <WidgetShell eyebrow="Szybki odczyt" title="Stan portfela">
     <div className="dashboard-state-grid">
@@ -275,15 +291,15 @@ function DashboardMetricWidget({ id }: { id: DashboardWidgetId }) {
   const data = useDashboardData();
   const history = data.model.history;
   const latestDaily = history.latest?.cashFlowNeutralResultPln;
-  const dailyBase = latestDaily === undefined ? null : convertFromPln(latestDaily, workspace.activeBaseCurrency, workspace.fxRates);
+  const dailyBase = latestDaily === undefined ? null : latestDaily;
   const snapshotValue = history.latestPoint
-    ? convertFromPln(history.latestPoint.portfolioValuePln, workspace.activeBaseCurrency, workspace.fxRates)
+    ? history.latestPoint.portfolioValuePln
     : workspace.summaryTotalValue;
   const snapshotProfitLoss = history.latestPoint
-    ? convertFromPln(history.latestPoint.profitLossPln, workspace.activeBaseCurrency, workspace.fxRates)
+    ? history.latestPoint.profitLossPln
     : workspace.summaryCombinedProfitLoss;
   const snapshotInvested = history.latestPoint
-    ? convertFromPln(history.latestPoint.netInvestedPln, workspace.activeBaseCurrency, workspace.fxRates)
+    ? history.latestPoint.netInvestedPln
     : workspace.summaryTotalInvested;
   const values: Partial<Record<DashboardWidgetId, { label: string; value: string; detail: string; tone?: "positive" | "negative" }>> = {
     "portfolio-value": { label: "Wartość", value: formatCurrency(snapshotValue, workspace.activeBaseCurrency), detail: workspace.isAllPortfoliosSelected ? "Wszystkie portfele" : workspace.activePortfolio?.name ?? "Portfel" },
@@ -344,13 +360,13 @@ function DashboardChart({ mode }: { mode: DashboardChartMode }) {
   const benchmarkByDate = new Map(benchmark?.points.map((point) => [point.date, point.returnPercent]) ?? []);
   const chartData: DashboardChartRow[] = mode === "daily" ? dailyPoints.map((point) => ({
     date: point.date,
-    value: convertFromPln(point.cashFlowNeutralResultPln, workspace.activeBaseCurrency, workspace.fxRates),
+    value: point.cashFlowNeutralResultPln,
   })) : points.filter((point) => mode !== "benchmark" || point.timeWeightedReturnPercent !== null).map((point) => ({
     date: point.date,
     value: mode === "value"
-      ? convertFromPln(point.portfolioValuePln, workspace.activeBaseCurrency, workspace.fxRates)
+      ? point.portfolioValuePln
       : mode === "result"
-        ? convertFromPln(point.profitLossPln, workspace.activeBaseCurrency, workspace.fxRates)
+        ? point.profitLossPln
         : point.timeWeightedReturnPercent ?? 0,
     benchmark: mode === "benchmark" ? benchmarkByDate.get(point.date) ?? null : null,
   }));
@@ -548,8 +564,8 @@ function DailySnapshotWidget() {
   const data = useDashboardData();
   const snapshot = data.model.dailySnapshot;
   const latest = snapshot.latest;
-  const dailyResult = latest ? convertFromPln(latest.cashFlowNeutralResultPln, workspace.activeBaseCurrency, workspace.fxRates) : null;
-  const raw = latest ? convertFromPln(latest.rawValueChangePln, workspace.activeBaseCurrency, workspace.fxRates) : null;
+  const dailyResult = latest?.cashFlowNeutralResultPln ?? null;
+  const raw = latest?.rawValueChangePln ?? null;
   const { best, worst, benchmarkPercent: benchmark } = snapshot;
   const isSessionDay = isCurrentWarsawDayGpwSession();
   return <WidgetShell eyebrow={isSessionDay ? "Dzisiaj" : "Dzień wolny od sesji"} title="Co się zmieniło?" href={workspace.getReadHref("/analytics/performance")}>

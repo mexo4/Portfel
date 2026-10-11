@@ -6,6 +6,7 @@ import { buildAggregatePortfolioHistory, buildPortfolioHistory } from "@/lib/ser
 import { getSortedPortfolioRealizedAdjustments } from "@/lib/portfolio-state";
 import { ensurePortfolioCoreModel } from "@/lib/operation-engine";
 import { getAuthorizedPortfolioScopeIds } from "@/lib/portfolio-selection";
+import { toCurrencyCode } from "@/lib/utils";
 import type {
   PortfolioAccount,
   PortfolioAccountType,
@@ -95,7 +96,9 @@ export async function POST(request: Request) {
       benchmarks?: PortfolioBenchmarkDefinition[];
       portfolioScopes?: PortfolioHistoryScope[];
       portfolioScopeIds?: string[];
+      presentationCurrency?: string;
     };
+    const presentationCurrency = toCurrencyCode(payload.presentationCurrency, "PLN");
     const benchmarks = Array.isArray(payload.benchmarks) ? payload.benchmarks : [];
     const rawScopes = Array.isArray(payload.portfolioScopes) ? payload.portfolioScopes : [];
 
@@ -123,6 +126,7 @@ export async function POST(request: Request) {
         });
         return [{
           portfolioId: corePortfolio.id,
+          portfolioName: corePortfolio.name,
           accountType: corePortfolio.accountType,
           assets: state.assets,
           sales: state.sales,
@@ -140,8 +144,8 @@ export async function POST(request: Request) {
       });
       const historyStartedAt = performance.now();
       const history = await buildHistoryOnce(
-        historyBuildKey(accountData.user.id, accountData.portfolioRevision, { ids: authorizedIds, benchmarks }),
-        () => buildAggregatePortfolioHistory({ portfolioScopes, benchmarks })
+        historyBuildKey(accountData.user.id, accountData.portfolioRevision, { ids: authorizedIds, benchmarks, presentationCurrency }),
+        () => buildAggregatePortfolioHistory({ portfolioScopes, benchmarks, presentationCurrency })
       );
       return respondWithTiming(history, 200, requestStartedAt, authMs, performance.now() - historyStartedAt, portfolioScopes.length);
     }
@@ -171,6 +175,7 @@ export async function POST(request: Request) {
         operations,
         accounts,
         benchmarks,
+        presentationCurrency,
       }),
       () => buildPortfolioHistory({
         assets: portfolioState.assets,
@@ -179,6 +184,7 @@ export async function POST(request: Request) {
         operations,
         accounts,
         benchmarks,
+        presentationCurrency,
       })
     );
 

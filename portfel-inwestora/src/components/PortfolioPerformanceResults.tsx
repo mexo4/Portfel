@@ -5,7 +5,6 @@ import { fetchPerformancePreferences, fetchPoloniaRates, fetchPortfolioHistory, 
 import { getBestPortfolioDailyMetrics } from "@/lib/portfolio-daily-metrics";
 import { calculatePortfolioRiskAnalytics, getAvailableRiskPeriods, type CalendarReturn, type RiskAnalyticsPeriod, type RiskFreeRatePoint, type RiskMetric, type RiskMetricUnavailableCode } from "@/lib/portfolio-risk-analytics";
 import { DEFAULT_PERFORMANCE_METRICS, PERFORMANCE_METRIC_IDS, PERFORMANCE_METRIC_LABELS, type PerformanceMetricId } from "@/lib/performance-preferences";
-import { convertFromPln } from "@/lib/pricing";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import type { CurrencyCode, FxRates, PortfolioAccount, PortfolioAccountType, PortfolioAsset, PortfolioBenchmarkDefinition, PortfolioHistoryResponse, PortfolioHistoryScope, PortfolioOperation, PortfolioRealizedAdjustment, PortfolioSale } from "@/types/portfolio";
 
@@ -37,7 +36,7 @@ function MetricCard({ title, metric, value, detail, tone }: { title: string; met
 
 const getCalendarLabel = (item: CalendarReturn | null) => item ? item.month ? `${MONTH_LABELS[item.month - 1]} ${item.year}` : String(item.year) : "—";
 
-export default function PortfolioPerformanceResults({ assets, sales, realizedAdjustments, fxRates, baseCurrency, combinedProfitLoss, refreshRevision, operations = [], accounts = [], accountType, benchmarks = [], portfolioScopes, isAggregate = false }: Props) {
+export default function PortfolioPerformanceResults({ assets, sales, realizedAdjustments, baseCurrency, combinedProfitLoss, refreshRevision, operations = [], accounts = [], accountType, benchmarks = [], portfolioScopes, isAggregate = false }: Props) {
   const [historyState, setHistoryState] = useState<{ signature: string; history: PortfolioHistoryResponse; error: string | null }>({ signature: "", history: EMPTY_HISTORY, error: null });
   const [riskFreeState, setRiskFreeState] = useState<{ rates: RiskFreeRatePoint[] | null; sourceUrl: string | null; fetchedAt: string | null; stale: boolean }>({ rates: null, sourceUrl: null, fetchedAt: null, stale: false });
   const [period, setPeriod] = useState<RiskAnalyticsPeriod>("MAX");
@@ -46,13 +45,13 @@ export default function PortfolioPerformanceResults({ assets, sales, realizedAdj
   const [isEditing, setIsEditing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [preferencesNotice, setPreferencesNotice] = useState<{ message: string; isError: boolean } | null>(null);
-  const signature = useMemo(() => JSON.stringify({ assets, sales, realizedAdjustments, operations, accounts, accountType, benchmarks, portfolioScopes, refreshRevision }), [accountType, accounts, assets, benchmarks, operations, portfolioScopes, realizedAdjustments, refreshRevision, sales]);
+  const signature = useMemo(() => JSON.stringify({ assets, sales, realizedAdjustments, operations, accounts, accountType, benchmarks, portfolioScopes, refreshRevision, presentationCurrency: baseCurrency }), [accountType, accounts, assets, baseCurrency, benchmarks, operations, portfolioScopes, realizedAdjustments, refreshRevision, sales]);
 
   useEffect(() => { const controller = new AbortController(); void fetchPerformancePreferences(controller.signal).then((response) => { if (controller.signal.aborted) return; setVisibleMetrics(response.visibleMetrics); setDraftMetrics(response.visibleMetrics); setPreferencesNotice(null); }).catch(() => { if (controller.signal.aborted) return; setVisibleMetrics([...DEFAULT_PERFORMANCE_METRICS]); setDraftMetrics([...DEFAULT_PERFORMANCE_METRICS]); setPreferencesNotice({ message: "Używamy domyślnego układu wyników. Dane finansowe pozostają dostępne.", isError: false }); }); return () => controller.abort(); }, []);
   useEffect(() => { const controller = new AbortController(); void fetchPoloniaRates(controller.signal).then((response) => { if (controller.signal.aborted) return; setRiskFreeState({ rates: response.rates, sourceUrl: response.descriptionUrl, fetchedAt: response.fetchedAt, stale: response.stale }); }).catch(() => { if (controller.signal.aborted) return; setRiskFreeState({ rates: null, sourceUrl: null, fetchedAt: null, stale: false }); }); return () => controller.abort(); }, []);
   useEffect(() => {
     const controller = new AbortController();
-    const payload = JSON.parse(signature) as { assets: PortfolioAsset[]; sales: PortfolioSale[]; realizedAdjustments: PortfolioRealizedAdjustment[]; operations: PortfolioOperation[]; accounts: PortfolioAccount[]; accountType?: PortfolioAccountType; benchmarks: PortfolioBenchmarkDefinition[]; portfolioScopes?: PortfolioHistoryScope[] };
+    const payload = JSON.parse(signature) as { assets: PortfolioAsset[]; sales: PortfolioSale[]; realizedAdjustments: PortfolioRealizedAdjustment[]; operations: PortfolioOperation[]; accounts: PortfolioAccount[]; accountType?: PortfolioAccountType; benchmarks: PortfolioBenchmarkDefinition[]; portfolioScopes?: PortfolioHistoryScope[]; presentationCurrency: CurrencyCode };
     void fetchPortfolioHistory({ ...payload, signal: controller.signal }).then((history) => { if (!controller.signal.aborted) setHistoryState({ signature, history, error: null }); }).catch(() => { if (!controller.signal.aborted) setHistoryState({ signature, history: EMPTY_HISTORY, error: "Nie udało się pobrać historii potrzebnej do analizy. Wynik łączny nadal jest dostępny." }); });
     return () => controller.abort();
   }, [signature]);
@@ -60,16 +59,38 @@ export default function PortfolioPerformanceResults({ assets, sales, realizedAdj
   const isHistoryLoading = historyState.signature !== signature;
   const history = isHistoryLoading ? EMPTY_HISTORY : historyState.history;
   const historyError = isHistoryLoading ? null : historyState.error;
-  const availablePeriods = useMemo(() => getAvailableRiskPeriods(history.points), [history.points]);
+  const analysisPoints = useMemo(() => {
+    if (history.presentationCurrency !== baseCurrency) return baseCurrency === "PLN" ? history.points : [];
+    return history.points.flatMap((point) =>
+      typeof point.presentationPortfolioValue === "number" &&
+      typeof point.presentationNetInvested === "number" &&
+      typeof point.presentationProfitLoss === "number"
+        ? [{
+            ...point,
+            portfolioValuePln: point.presentationPortfolioValue,
+            netInvestedPln: point.presentationNetInvested,
+            profitLossPln: point.presentationProfitLoss,
+            timeWeightedReturnPercent: point.presentationTimeWeightedReturnPercent ?? null,
+          }]
+        : []
+    );
+  }, [baseCurrency, history.points, history.presentationCurrency]);
+  const availablePeriods = useMemo(() => getAvailableRiskPeriods(analysisPoints), [analysisPoints]);
   useEffect(() => { if (availablePeriods.length && !availablePeriods.includes(period)) setPeriod(availablePeriods.includes("MAX") ? "MAX" : availablePeriods[0]!); }, [availablePeriods, period]);
   const configuredBenchmark = benchmarks[0];
   const benchmarkSeries = useMemo(
-    () => history.benchmarkSeries[0] ?? (configuredBenchmark ? { id: configuredBenchmark.id, label: configuredBenchmark.name, points: [] } : undefined),
-    [configuredBenchmark, history.benchmarkSeries]
+    () => {
+      const series = history.benchmarkSeries[0];
+      if (series && history.presentationCurrency === baseCurrency) {
+        return { ...series, points: series.points.map((point) => ({ ...point, returnPercent: point.presentationReturnPercent ?? null })) };
+      }
+      return configuredBenchmark ? { id: configuredBenchmark.id, label: configuredBenchmark.name, points: [] } : undefined;
+    },
+    [baseCurrency, configuredBenchmark, history.benchmarkSeries, history.presentationCurrency]
   );
-  const analytics = useMemo(() => calculatePortfolioRiskAnalytics({ points: history.points, period, benchmark: benchmarkSeries, riskFreeRates: riskFreeState.rates, isAggregate }), [benchmarkSeries, history.points, isAggregate, period, riskFreeState.rates]);
-  const metrics = useMemo(() => getBestPortfolioDailyMetrics(history.points), [history.points]);
-  const formatPln = (value: number) => formatCurrency(convertFromPln(value, baseCurrency, fxRates), baseCurrency);
+  const analytics = useMemo(() => calculatePortfolioRiskAnalytics({ points: analysisPoints, period, benchmark: benchmarkSeries, riskFreeRates: baseCurrency === "PLN" ? riskFreeState.rates : null, isAggregate }), [analysisPoints, baseCurrency, benchmarkSeries, isAggregate, period, riskFreeState.rates]);
+  const metrics = useMemo(() => getBestPortfolioDailyMetrics(analysisPoints), [analysisPoints]);
+  const formatPln = (value: number) => formatCurrency(value, baseCurrency);
   const formatSignedPln = (value: number) => `${value > 0 ? "+" : ""}${formatPln(value)}`;
   const isVisible = (...ids: PerformanceMetricId[]) => ids.some((id) => visibleMetrics.includes(id));
   const benchmarkYearByKey = new Map(analytics.benchmark.yearlyReturns.map((item) => [item.key, item]));
@@ -103,11 +124,11 @@ export default function PortfolioPerformanceResults({ assets, sales, realizedAdj
         {visibleMetrics.includes("max-drawdown") ? <MetricCard title="Max Drawdown" metric={analytics.drawdown} value={analytics.drawdown.value ? formatPercent(analytics.drawdown.value.maxDrawdown, false) : undefined} tone="tone-negative" detail={analytics.drawdown.value ? <>{formatDate(analytics.drawdown.value.peakDate)} → {formatDate(analytics.drawdown.value.troughDate)}<br />Odzyskanie: {analytics.drawdown.value.recoveryDate ? formatDate(analytics.drawdown.value.recoveryDate) : "nadal trwa"} · obecnie {formatPercent(analytics.drawdown.value.currentDrawdown, false)}</> : undefined} /> : null}
         {visibleMetrics.includes("time-under-water") ? <MetricCard title="Time Under Water" metric={analytics.timeUnderWater} value={analytics.timeUnderWater.value?.current ? `${analytics.timeUnderWater.value.current.days} dni obecnie` : "Brak bieżącego obsunięcia"} detail={analytics.timeUnderWater.value?.longestCompleted ? `Najdłuższy zakończony: ${analytics.timeUnderWater.value.longestCompleted.days} dni` : "Brak zakończonego okresu pod wodą"} /> : null}
       </div></section> : null}
-      {isVisible("sharpe", "sortino", "calmar") ? <section className="risk-section" aria-labelledby="risk-adjusted-title"><div className="risk-section-heading"><div><p className="eyebrow">Risk-adjusted</p><h3 id="risk-adjusted-title">Wynik względem podjętego ryzyka</h3></div><span>{riskFreeState.sourceUrl ? <a href={riskFreeState.sourceUrl} target="_blank" rel="noreferrer">POLONIA NBP ↗</a> : "POLONIA niedostępna"}{riskFreeState.stale ? " · ostatnia poprawna kopia" : ""}</span></div><div className="risk-metric-grid">
+      {isVisible("sharpe", "sortino", "calmar") ? <section className="risk-section" aria-labelledby="risk-adjusted-title"><div className="risk-section-heading"><div><p className="eyebrow">Risk-adjusted</p><h3 id="risk-adjusted-title">Wynik względem podjętego ryzyka</h3></div><span>{baseCurrency !== "PLN" ? `Brak stopy wolnej od ryzyka dla ${baseCurrency}` : riskFreeState.sourceUrl ? <a href={riskFreeState.sourceUrl} target="_blank" rel="noreferrer">POLONIA NBP ↗</a> : "POLONIA niedostępna"}{baseCurrency === "PLN" && riskFreeState.stale ? " · ostatnia poprawna kopia" : ""}</span></div><div className="risk-metric-grid">
         {visibleMetrics.includes("sharpe") ? <MetricCard title="Sharpe" metric={analytics.sharpe} value={analytics.sharpe.value !== null ? ratioFormatter.format(analytics.sharpe.value) : undefined} /> : null}
         {visibleMetrics.includes("sortino") ? <MetricCard title="Sortino" metric={analytics.sortino} value={analytics.sortino.value !== null ? ratioFormatter.format(analytics.sortino.value) : undefined} /> : null}
         {visibleMetrics.includes("calmar") ? <MetricCard title="Calmar" metric={analytics.calmar} value={analytics.calmar.value !== null ? ratioFormatter.format(analytics.calmar.value) : undefined} detail="Wymaga co najmniej 365 dni historii" /> : null}
-      </div><p className="risk-source-note">Stopa wolna od ryzyka: oficjalna dzienna stawka O/N POLONIA, forward-fill między publikacjami, przeliczona na stawkę dzienną. {riskFreeState.fetchedAt ? `Aktualizacja źródła: ${formatDate(riskFreeState.fetchedAt)}.` : "Brak źródła nie jest zastępowany stałą."}</p></section> : null}
+      </div><p className="risk-source-note">{baseCurrency === "PLN" ? `Stopa wolna od ryzyka: oficjalna dzienna stawka O/N POLONIA, forward-fill między publikacjami, przeliczona na stawkę dzienną. ${riskFreeState.fetchedAt ? `Aktualizacja źródła: ${formatDate(riskFreeState.fetchedAt)}.` : "Brak źródła nie jest zastępowany stałą."}` : `Metryki wymagające stopy wolnej od ryzyka są ukryte, ponieważ dostępna stawka POLONIA jest denominowana w PLN, a prezentacja jest w ${baseCurrency}.`}</p></section> : null}
       {isVisible("beta", "alpha", "information-ratio", "tracking-error") ? <section className="risk-section" aria-labelledby="risk-benchmark-title"><div className="risk-section-heading"><div><p className="eyebrow">Benchmark</p><h3 id="risk-benchmark-title">Relacja do rynku</h3></div><span>{analytics.benchmark.benchmarkLabel ?? (isAggregate ? "Wszystkie portfele" : "Nie wybrano")}</span></div>{!configuredBenchmark && !isAggregate ? <p className="risk-inline-notice">Wymagany benchmark. Dodaj go w „Wykresy → Portfel vs benchmark”; Wyniki użyją tej samej zapisanej konfiguracji.</p> : null}{isAggregate ? <p className="risk-inline-notice">Widok „Wszystkie portfele” nie ma syntetycznego wspólnego benchmarku. Metryki porównawcze pozostają jawnie niedostępne.</p> : null}<div className="risk-metric-grid">
         {visibleMetrics.includes("beta") ? <MetricCard title="Beta" metric={analytics.benchmark.beta} value={analytics.benchmark.beta.value !== null ? ratioFormatter.format(analytics.benchmark.beta.value) : undefined} /> : null}
         {visibleMetrics.includes("alpha") ? <MetricCard title="Alpha Jensena" metric={analytics.benchmark.alpha} value={analytics.benchmark.alpha.value !== null ? formatPercent(analytics.benchmark.alpha.value) : undefined} /> : null}

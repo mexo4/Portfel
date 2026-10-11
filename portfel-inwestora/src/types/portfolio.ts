@@ -586,6 +586,11 @@ export type PortfolioHistoryPoint = {
   netInvestedPln: number;
   profitLossPln: number;
   timeWeightedReturnPercent: number | null;
+  /** Values converted with the historical FX rate for the request's presentation currency. */
+  presentationPortfolioValue?: number | null;
+  presentationNetInvested?: number | null;
+  presentationProfitLoss?: number | null;
+  presentationTimeWeightedReturnPercent?: number | null;
 };
 
 /**
@@ -595,6 +600,7 @@ export type PortfolioHistoryPoint = {
  */
 export type PortfolioHistoryScope = {
   portfolioId: string;
+  portfolioName?: string;
   accountType?: PortfolioAccountType;
   assets: PortfolioAsset[];
   sales: PortfolioSale[];
@@ -606,6 +612,7 @@ export type PortfolioHistoryScope = {
 export type PortfolioAssetHistorySeriesPoint = {
   date: string;
   valuePln: number;
+  valuePresentation?: number | null;
 };
 
 export type PortfolioAssetHistorySeries = {
@@ -620,6 +627,8 @@ export type PortfolioBenchmarkHistoryPoint = {
   date: string;
   price: number;
   pricePln: number;
+  pricePresentation?: number | null;
+  presentationReturnPercent?: number | null;
   returnPercent: number | null;
 };
 
@@ -853,9 +862,12 @@ export type PortfolioEngineSnapshot = {
 export type PortfolioHistoryResponse = {
   points: PortfolioHistoryPoint[];
   warnings: string[];
+  presentationCurrency?: CurrencyCode;
   /** Whether the historic inputs are complete enough to present a TWR value. */
   twrStatus?: "complete" | "incomplete" | "unavailable";
   twrStatusReason?: string;
+  presentationTwrStatus?: "complete" | "incomplete" | "unavailable";
+  presentationTwrStatusReason?: string;
   assetSeries: PortfolioAssetHistorySeries[];
   benchmarkSeries: PortfolioBenchmarkHistorySeries[];
 };

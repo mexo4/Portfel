@@ -153,6 +153,7 @@ type HistoryRequestPayload = {
   accountType?: PortfolioAccountType;
   benchmarks: PortfolioBenchmarkDefinition[];
   portfolioScopes?: PortfolioHistoryScope[];
+  presentationCurrency: CurrencyCode;
 };
 
 // React Strict Mode intentionally re-runs effects in development. A history
@@ -347,25 +348,46 @@ const formatCompactCurrency = (value: number, currency: CurrencyCode) => {
 const convertHistoryPointsToBase = (
   points: PortfolioHistoryPoint[],
   baseCurrency: CurrencyCode,
-  fxRates: FxRates
-) =>
-  points.map((point) => ({
-    ...point,
+  fxRates: FxRates,
+  historyCurrency?: CurrencyCode
+) => points.flatMap((point) => {
+  if (historyCurrency === baseCurrency && typeof point.presentationPortfolioValue === "number") {
+    return [{
+      ...point,
+      portfolioValuePln: point.presentationPortfolioValue,
+      netInvestedPln: point.presentationNetInvested ?? Number.NaN,
+      profitLossPln: point.presentationProfitLoss ?? Number.NaN,
+      timeWeightedReturnPercent: point.presentationTimeWeightedReturnPercent ?? null,
+    }];
+  }
+  // Current spot FX is not a valid substitute for historical FX. A legacy or
+  // incomplete non-PLN response therefore yields no converted point.
+  if (baseCurrency !== "PLN") return [];
+  return [{ ...point,
     portfolioValuePln: convertFromPln(point.portfolioValuePln, baseCurrency, fxRates),
     netInvestedPln: convertFromPln(point.netInvestedPln, baseCurrency, fxRates),
     profitLossPln: convertFromPln(point.profitLossPln, baseCurrency, fxRates),
-  }));
+  }];
+});
 
 const convertBenchmarkSeriesToBase = (
   series: PortfolioBenchmarkHistorySeries[],
   baseCurrency: CurrencyCode,
-  fxRates: FxRates
+  fxRates: FxRates,
+  historyCurrency?: CurrencyCode
 ) =>
   series.map((entry) => ({
     ...entry,
     points: entry.points.map((point) => ({
       ...point,
-      pricePln: convertFromPln(point.pricePln, baseCurrency, fxRates),
+      pricePln: historyCurrency === baseCurrency && typeof point.pricePresentation === "number"
+        ? point.pricePresentation
+        : baseCurrency === "PLN"
+          ? point.pricePln
+          : Number.NaN,
+      returnPercent: historyCurrency === baseCurrency
+        ? point.presentationReturnPercent ?? null
+        : point.returnPercent,
     })),
   }));
 
@@ -1146,6 +1168,7 @@ export default function PortfolioLineCharts({
         accounts: portfolioScopes?.length ? [] : accounts,
         accountType: portfolioScopes?.length ? undefined : accountType,
         benchmarks: selectedBenchmarks,
+        presentationCurrency: baseCurrency,
         portfolioScopes: portfolioScopes?.map((scope) => ({
           portfolioId: scope.portfolioId,
           accountType: scope.accountType,
@@ -1166,7 +1189,7 @@ export default function PortfolioLineCharts({
         })),
         refreshRevision,
       }),
-    [accountType, accounts, assets, operations, portfolioScopes, realizedAdjustments, refreshRevision, sales, selectedBenchmarks]
+    [accountType, accounts, assets, baseCurrency, operations, portfolioScopes, realizedAdjustments, refreshRevision, sales, selectedBenchmarks]
   );
 
   useEffect(() => {
@@ -1180,6 +1203,7 @@ export default function PortfolioLineCharts({
       accountType?: PortfolioAccountType;
       benchmarks: PortfolioBenchmarkDefinition[];
       portfolioScopes?: PortfolioHistoryScope[];
+      presentationCurrency?: CurrencyCode;
     };
 
     if (
@@ -1214,6 +1238,7 @@ export default function PortfolioLineCharts({
           accounts: historyRequest.accounts,
           benchmarks: historyRequest.benchmarks,
           portfolioScopes: historyRequest.portfolioScopes,
+          presentationCurrency: historyRequest.presentationCurrency ?? baseCurrency,
         });
 
         if (isCancelled) {
@@ -1246,7 +1271,7 @@ export default function PortfolioLineCharts({
     return () => {
       isCancelled = true;
     };
-  }, [historyRequestSignature]);
+  }, [baseCurrency, historyRequestSignature]);
 
   const isHistoryPending =
     isLoading || serverHistorySignature !== historyRequestSignature;
@@ -1257,16 +1282,16 @@ export default function PortfolioLineCharts({
       ? []
       : effectiveServerHistory.points.length > 0
         ? effectiveServerHistory.points
-        : fallbackHistory.points,
-    [effectiveServerHistory.points, fallbackHistory.points, isHistoryPending]
+        : baseCurrency === "PLN" ? fallbackHistory.points : [],
+    [baseCurrency, effectiveServerHistory.points, fallbackHistory.points, isHistoryPending]
   );
   const displayPoints = useMemo(
-    () => convertHistoryPointsToBase(historyPoints, baseCurrency, fxRates),
-    [baseCurrency, fxRates, historyPoints]
+    () => convertHistoryPointsToBase(historyPoints, baseCurrency, fxRates, effectiveServerHistory.presentationCurrency),
+    [baseCurrency, effectiveServerHistory.presentationCurrency, fxRates, historyPoints]
   );
   const displayBenchmarkSeries = useMemo(
-    () => convertBenchmarkSeriesToBase(effectiveServerHistory.benchmarkSeries, baseCurrency, fxRates),
-    [baseCurrency, effectiveServerHistory.benchmarkSeries, fxRates]
+    () => convertBenchmarkSeriesToBase(effectiveServerHistory.benchmarkSeries, baseCurrency, fxRates, effectiveServerHistory.presentationCurrency),
+    [baseCurrency, effectiveServerHistory.benchmarkSeries, effectiveServerHistory.presentationCurrency, fxRates]
   );
   const displayWarnings = useMemo(
     () => isHistoryPending ? [] : getUserFacingHistoryWarnings(warnings),

@@ -94,7 +94,22 @@ export const getDashboardHistoryMetrics = (
   fallbackProfitLoss = 0,
   fallbackInvested = 0
 ) => {
-  const points = history?.points ?? [];
+  const sourcePoints = history?.points ?? [];
+  const points = history?.presentationCurrency && history.presentationCurrency !== "PLN"
+    ? sourcePoints.flatMap((point) =>
+        typeof point.presentationPortfolioValue === "number" &&
+        typeof point.presentationNetInvested === "number" &&
+        typeof point.presentationProfitLoss === "number"
+          ? [{
+              ...point,
+              portfolioValuePln: point.presentationPortfolioValue,
+              netInvestedPln: point.presentationNetInvested,
+              profitLossPln: point.presentationProfitLoss,
+              timeWeightedReturnPercent: point.presentationTimeWeightedReturnPercent ?? null,
+            }]
+          : []
+      )
+    : sourcePoints;
   const dailyPoints = buildPortfolioDailyMetricPoints(points);
   const latest = dailyPoints.at(-1) ?? null;
   const latestPoint = points.at(-1) ?? null;
@@ -110,7 +125,17 @@ export const getDashboardHistoryMetrics = (
     dailyPoints,
     latest,
     latestPoint,
-    benchmark: history?.benchmarkSeries[0] ?? null,
+    benchmark: history?.benchmarkSeries[0]
+      ? {
+          ...history.benchmarkSeries[0],
+          points: history.benchmarkSeries[0].points.map((point) => ({
+            ...point,
+            returnPercent: history.presentationCurrency && history.presentationCurrency !== "PLN"
+              ? point.presentationReturnPercent ?? null
+              : point.returnPercent,
+          })),
+        }
+      : null,
     returnPercent: currentCapitalReturn,
   };
 };

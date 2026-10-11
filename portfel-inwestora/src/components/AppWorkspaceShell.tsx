@@ -298,6 +298,7 @@ export default function AppWorkspaceShell({ account, portfolios, selectedPortfol
     <header className="workspace-mobile-header">
       <Link href={getWorkspaceHref("/dashboard")} className="workspace-mobile-brand" aria-label="Mexo — pulpit"><Image src="/mexo-mark-transparent.png" alt="" width={34} height={34} priority /></Link>
       <PortfolioScopePicker portfolios={portfolios} selection={portfolioScope} disabled={isPortfolioMutationPending} mobile onApply={onPortfolioScopeChange} />
+      <label className="workspace-mobile-header-currency"><span className="sr-only">Waluta prezentacji</span><select aria-label="Waluta prezentacji" value={activeBaseCurrency} onChange={(event) => onBaseCurrencyChange(event.target.value)} disabled={isPortfolioMutationPending}><option value="PLN">PLN</option><option value="USD">USD</option><option value="EUR">EUR</option><option value="GBP">GBP</option></select></label>
       <button ref={quickAddTriggerRef} type="button" className="workspace-mobile-quick-action" onClick={() => openQuickActions(true)} aria-label="Otwórz szybkie działania" aria-haspopup="dialog" aria-expanded={isQuickAddOpen}><WorkspaceIcon name="plus" /></button>
     </header>
 
@@ -306,7 +307,7 @@ export default function AppWorkspaceShell({ account, portfolios, selectedPortfol
         <button ref={commandTriggerRef} type="button" className="workspace-global-search-trigger" onClick={openCommand} aria-haspopup="dialog" aria-expanded={isCommandOpen}><WorkspaceIcon name="search" /><span>Przejdź do…</span><kbd>Ctrl K</kbd></button>
         <div className="workspace-topbar-actions">
           <PortfolioScopePicker portfolios={portfolios} selection={portfolioScope} disabled={isPortfolioMutationPending} onApply={onPortfolioScopeChange} />
-          <label className="workspace-currency-select"><span>Waluta</span><select value={activeBaseCurrency} onChange={(event) => onBaseCurrencyChange(event.target.value)} disabled={isPortfolioMutationPending}><option value="PLN">PLN</option><option value="USD">USD</option><option value="EUR">EUR</option><option value="GBP">GBP</option></select></label>
+          <label className="workspace-currency-select"><span>Waluta prezentacji</span><select aria-label="Waluta prezentacji" value={activeBaseCurrency} onChange={(event) => onBaseCurrencyChange(event.target.value)} disabled={isPortfolioMutationPending}><option value="PLN">PLN</option><option value="USD">USD</option><option value="EUR">EUR</option><option value="GBP">GBP</option></select></label>
           <button ref={quickActionsTriggerRef} type="button" className="workspace-topbar-add" onClick={() => openQuickActions(false)} aria-label="Otwórz szybkie działania" aria-haspopup="dialog" aria-expanded={isQuickActionsOpen}><WorkspaceIcon name="plus" /><span>Szybkie działania</span></button>
           <Link href={getWorkspaceHref("/settings")} className="workspace-profile-link" aria-label="Ustawienia konta">{(account.email[0] ?? "M").toUpperCase()}</Link>
         </div>

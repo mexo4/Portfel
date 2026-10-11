@@ -8214,12 +8214,13 @@ textarea {
   .workspace-shell { display: block; min-height: 100dvh; }
   .workspace-sidebar,
   .workspace-topbar { display: none; }
-  .workspace-mobile-header { position: sticky; top: 0; z-index: 35; display: grid; min-height: 59px; grid-template-columns: 34px minmax(0, 1fr) minmax(78px, auto); align-items: center; gap: 9px; padding: max(8px, env(safe-area-inset-top)) 13px 8px; border-bottom: 1px solid var(--line); background: rgba(248,244,237,.9); backdrop-filter: blur(16px); }
+  .workspace-mobile-header { position: sticky; top: 0; z-index: 35; display: grid; min-height: 59px; grid-template-columns: 34px minmax(0, 1fr) auto 40px; align-items: center; gap: 7px; padding: max(8px, env(safe-area-inset-top)) 13px 8px; border-bottom: 1px solid var(--line); background: rgba(248,244,237,.9); backdrop-filter: blur(16px); }
   .workspace-mobile-brand { width: 31px; height: 31px; border-radius: 9px; font-size: .82rem; text-decoration: none; }
   .workspace-mobile-header div { display: grid; min-width: 0; gap: 1px; }
   .workspace-mobile-header small { overflow: hidden; color: var(--muted); font-size: .59rem; font-weight: 800; letter-spacing: .08em; text-overflow: ellipsis; text-transform: uppercase; white-space: nowrap; }
   .workspace-mobile-header strong { overflow: hidden; font-size: .91rem; letter-spacing: -.02em; text-overflow: ellipsis; white-space: nowrap; }
   .workspace-mobile-header select { width: 82px; min-height: 32px; padding-left: 7px; font-size: .7rem; }
+  .workspace-mobile-header-currency select { width: 68px; max-width: 68px; min-height: 32px; padding: 0 19px 0 6px; border-radius: 8px; font-size: .68rem; font-weight: 760; }
   .workspace-content { padding: 16px 12px calc(88px + env(safe-area-inset-bottom)); }
   .workspace-bottom-nav { position: fixed; z-index: 50; right: 0; bottom: 0; left: 0; display: grid; min-height: calc(60px + env(safe-area-inset-bottom)); grid-template-columns: repeat(5, minmax(0, 1fr)); align-items: start; padding: 6px 9px max(7px, env(safe-area-inset-bottom)); border-top: 1px solid var(--line); background: rgba(255,253,248,.94); box-shadow: 0 -8px 24px rgba(31,41,55,.07); backdrop-filter: blur(16px); }
   .workspace-bottom-nav .workspace-nav-link,

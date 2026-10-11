@@ -79,3 +79,18 @@ test("all modal scroll-lock call sites use the shared reference-counted lock", a
     assert.doesNotMatch(source, /document\.body\.style\.overflow\s*=\s*["']hidden/);
   }
 });
+
+test("new portfolio dialog is rendered in the body portal, outside workspace stacking contexts", async () => {
+  const source = await readSource("src/components/PortfolioAccountManagement.tsx");
+
+  assert.match(source, /import \{ createPortal \} from "react-dom"/);
+  assert.match(source, /createPortal\([\s\S]*?className="portfolio-create-backdrop"[\s\S]*?document\.body/);
+  assert.match(source, /role="dialog"[\s\S]*?aria-modal="true"/);
+});
+
+test("purchase/account currency in asset entry reuses the shared currency picker", async () => {
+  const source = await readSource("src/components/AddAssetForm.tsx");
+
+  assert.match(source, /import CurrencyPicker from "@\/components\/CurrencyPicker"/);
+  assert.match(source, /<CurrencyPicker[\s\S]*?label="Waluta zakupu \/ konta"[\s\S]*?value=\{draft\.purchaseCurrency\}/);
+});

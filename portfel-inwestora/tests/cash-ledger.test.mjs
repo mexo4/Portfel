@@ -11,7 +11,7 @@ import {
 } from "../src/lib/operation-engine.ts";
 import { buildCashOperation, buildCashHistory } from "../src/lib/cash-engine.ts";
 import { getPortfolioSummary } from "../src/lib/portfolio-engine.ts";
-import { buildPortfolioHistory } from "../src/lib/server/portfolio-history.ts";
+import { aggregatePortfolioHistoryPoints, buildPortfolioHistory } from "../src/lib/server/portfolio-history.ts";
 
 const NOW = "2026-08-23T12:00:00.000Z";
 const account = (id, currency) => ({
@@ -376,6 +376,42 @@ test("deposits and withdrawals change history value without creating investment 
         portfolioValuePln === 600 && netInvestedPln === 600 && profitLossPln === 0
     )
   );
+});
+
+test("a transfer out of one selected portfolio and into another is neutral in combined TWR", async () => {
+  const sourceAccount = plnAccount;
+  const targetAccount = {
+    ...account("portfolio-2:account:cash:PLN", "PLN"),
+    portfolioId: "portfolio-2",
+  };
+  const sourceOperations = [
+    cashOperation({ id: "scope-source-seed", operationType: "DEPOSIT", amount: 1_000, date: "2026-08-20" }),
+    cashOperation({ id: "scope-source-transfer", operationType: "WITHDRAW", amount: 300, date: "2026-08-21", accountFlowKind: "TRANSFER_OUT" }),
+  ];
+  const targetOperations = [
+    buildCashOperation({
+      id: "scope-target-transfer",
+      portfolioId: "portfolio-2",
+      accountId: targetAccount.id,
+      operationType: "DEPOSIT",
+      amount: 300,
+      currency: "PLN",
+      date: "2026-08-21",
+      notes: "Transfer in",
+      accountFlowKind: "TRANSFER_IN",
+    }),
+  ];
+  const [sourceHistory, targetHistory] = await Promise.all([
+    buildPortfolioHistory({ assets: [], sales: [], realizedAdjustments: [], operations: sourceOperations, accounts: [sourceAccount] }),
+    buildPortfolioHistory({ assets: [], sales: [], realizedAdjustments: [], operations: targetOperations, accounts: [targetAccount] }),
+  ]);
+  const aggregate = aggregatePortfolioHistoryPoints([sourceHistory, targetHistory]);
+  const transferDay = aggregate.find((point) => point.date === "2026-08-21");
+
+  assert.equal(transferDay?.portfolioValuePln, 1_000);
+  assert.equal(transferDay?.netInvestedPln, 1_000);
+  assert.equal(transferDay?.profitLossPln, 0);
+  assert.equal(transferDay?.timeWeightedReturnPercent, 0);
 });
 
 test("interest is cash income and therefore appears as investment profit", async () => {

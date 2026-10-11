@@ -126,7 +126,7 @@ export const getWorkspaceReadHref = (
     params.set("currency", presentationCurrency);
   } else if (normalized.mode === "SINGLE") {
     params.set("portfolio", normalized.portfolioId);
-    params.delete("currency");
+    params.set("currency", presentationCurrency);
   } else {
     params.set("portfolio", "custom");
     params.set("portfolios", normalized.portfolioIds.join(","));

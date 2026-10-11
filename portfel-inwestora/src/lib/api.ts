@@ -12,6 +12,7 @@ import type {
   BondSwapQuote,
   FxRates,
   CashHistoryEntry,
+  CurrencyCode,
   PortfolioAccount,
   PortfolioAsset,
   PortfolioBook,
@@ -1025,6 +1026,7 @@ export const fetchPortfolioHistory = async ({
   accountType,
   benchmarks,
   portfolioScopes,
+  presentationCurrency,
   signal,
 }: {
   assets: PortfolioAsset[];
@@ -1035,11 +1037,12 @@ export const fetchPortfolioHistory = async ({
   accountType?: PortfolioAccountType;
   benchmarks?: PortfolioBenchmarkDefinition[];
   portfolioScopes?: PortfolioHistoryScope[];
+  presentationCurrency?: CurrencyCode;
   signal?: AbortSignal;
 }) => {
   const body = portfolioScopes !== undefined
-    ? { portfolioScopeIds: portfolioScopes.map(({ portfolioId }) => portfolioId), benchmarks }
-    : { assets, sales, realizedAdjustments, operations, accounts, accountType, benchmarks };
+    ? { portfolioScopeIds: portfolioScopes.map(({ portfolioId }) => portfolioId), benchmarks, presentationCurrency }
+    : { assets, sales, realizedAdjustments, operations, accounts, accountType, benchmarks, presentationCurrency };
   return requestJson<PortfolioHistoryResponse>("/api/portfolio-history", {
     method: "POST",
     signal,

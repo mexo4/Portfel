@@ -36,6 +36,11 @@ export type PortfolioWorkspaceValue = {
   isAllRealPortfoliosSelected: boolean;
   onPortfolioScopeChange: (selection: PortfolioScopeSelection) => void;
   isAllPortfoliosSelected: boolean;
+  /** Global read-only currency used to present analytics; never persisted on a portfolio. */
+  presentationCurrency: CurrencyCode;
+  /** Persisted currency of the selected real portfolio, used for transaction defaults. */
+  portfolioBaseCurrency: CurrencyCode;
+  /** @deprecated use presentationCurrency for display and portfolioBaseCurrency for writes. */
   activeBaseCurrency: CurrencyCode;
   isPortfolioMutationPending: boolean;
   isLoggingOut: boolean;

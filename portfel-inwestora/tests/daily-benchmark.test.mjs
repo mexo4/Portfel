@@ -8,7 +8,8 @@ import {
   rankBenchmarkSearchResults,
 } from "../src/lib/benchmark-search.ts";
 import { buildPortfolioDailyMetricPoints } from "../src/lib/portfolio-daily-metrics.ts";
-import { aggregatePortfolioHistoryPoints, buildBuyCashflowEvents, getAggregateTwrStatus, hasUnreliableHistoryGap } from "../src/lib/server/portfolio-history.ts";
+import { aggregatePortfolioHistoryPoints, buildBuyCashflowEvents, getAggregateTwrStatus, getPortfolioTwrFxWarnings, hasUnreliableHistoryGap } from "../src/lib/server/portfolio-history.ts";
+import { getDashboardHistoryMetrics } from "../src/lib/dashboard-read-model.ts";
 
 const readSource = (relativePath) =>
   readFile(new URL(`../${relativePath}`, import.meta.url), "utf8");
@@ -180,6 +181,76 @@ test("custom aggregate weights returns by capital rather than averaging portfoli
 
   assert.equal(points.at(-1)?.timeWeightedReturnPercent, 13.33);
   assert.notEqual(points.at(-1)?.timeWeightedReturnPercent, 20);
+});
+
+test("presentation-currency TWR follows daily values after historical FX conversion", () => {
+  // A constant USD holding is worth 1,000 PLN at inception (2 PLN/USD) and
+  // still 500 USD the next day (2.2 PLN/USD). PLN appreciates by 10%, but the
+  // USD-denominated portfolio had no investment return.
+  const points = aggregatePortfolioHistoryPoints([{
+    points: [
+      {
+        date: "2026-08-10",
+        portfolioValuePln: 1_000,
+        netInvestedPln: 1_000,
+        profitLossPln: 0,
+        timeWeightedReturnPercent: 0,
+        presentationPortfolioValue: 500,
+        presentationNetInvested: 500,
+        presentationProfitLoss: 0,
+        presentationTimeWeightedReturnPercent: 0,
+      },
+      {
+        date: "2026-08-11",
+        portfolioValuePln: 1_100,
+        netInvestedPln: 1_000,
+        profitLossPln: 100,
+        timeWeightedReturnPercent: 10,
+        presentationPortfolioValue: 500,
+        presentationNetInvested: 500,
+        presentationProfitLoss: 0,
+        presentationTimeWeightedReturnPercent: 0,
+      },
+    ],
+  }]);
+
+  assert.equal(points.at(-1)?.timeWeightedReturnPercent, 10);
+  assert.equal(points.at(-1)?.presentationTimeWeightedReturnPercent, 0);
+});
+
+test("presentation-only FX gaps do not invalidate the independently computed PLN TWR", () => {
+  const warningsByCode = new Map([
+    ["PLN", []],
+    ["USD", ["Brakuje historycznego kursu FX USD dla zakresu 2020-01-01–2020-02-01."]],
+  ]);
+
+  assert.deepEqual(getPortfolioTwrFxWarnings(["PLN"], warningsByCode), []);
+  assert.deepEqual(getPortfolioTwrFxWarnings(["PLN", "USD"], warningsByCode), [
+    "Brakuje historycznego kursu FX USD dla zakresu 2020-01-01–2020-02-01.",
+  ]);
+});
+
+test("dashboard latest value and capital return use normalized presentation-currency points", () => {
+  const metrics = getDashboardHistoryMetrics({
+    presentationCurrency: "USD",
+    points: [{
+      date: "2026-08-11",
+      portfolioValuePln: 4_400,
+      netInvestedPln: 4_400,
+      profitLossPln: 0,
+      timeWeightedReturnPercent: 10,
+      presentationPortfolioValue: 2_000,
+      presentationNetInvested: 2_000,
+      presentationProfitLoss: 0,
+      presentationTimeWeightedReturnPercent: 0,
+    }],
+    warnings: [],
+    assetSeries: [],
+    benchmarkSeries: [],
+  });
+
+  assert.equal(metrics.latestPoint?.portfolioValuePln, 2_000);
+  assert.equal(metrics.returnPercent, 0);
 });
 
 test("custom aggregate correctly nets portfolios with positive and negative daily performance", () => {

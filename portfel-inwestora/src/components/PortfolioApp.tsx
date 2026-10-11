@@ -1132,9 +1132,13 @@ export default function PortfolioApp({
   const isAllPortfoliosSelected = portfolioScope.mode !== "SINGLE";
   const isAllRealPortfoliosSelected = portfolioScope.mode === "ALL";
   const activePortfolioBaseCurrency = toCurrencyCode(activePortfolio?.baseCurrency, "PLN");
-  const activeBaseCurrency = isAllPortfoliosSelected
-    ? toCurrencyCode(searchParams.get("currency") ?? undefined, activePortfolioBaseCurrency)
-    : activePortfolioBaseCurrency;
+  const presentationCurrency = toCurrencyCode(
+    searchParams.get("currency") ?? undefined,
+    activePortfolioBaseCurrency
+  );
+  // Backward-compatible alias: consumers use this for display only. Writes
+  // and transaction defaults use activePortfolioBaseCurrency instead.
+  const activeBaseCurrency = presentationCurrency;
   const selectedPortfolioId = portfolioScope.mode === "ALL"
     ? ALL_PORTFOLIOS_ID
     : portfolioScope.mode === "CUSTOM"
@@ -1154,7 +1158,7 @@ export default function PortfolioApp({
         nextParams.set("currency", toCurrencyCode(nextCurrency, activePortfolioBaseCurrency));
       } else if (nextSelection.mode === "SINGLE") {
         nextParams.set("portfolio", nextSelection.portfolioId);
-        nextParams.delete("currency");
+        nextParams.set("currency", toCurrencyCode(nextCurrency, activePortfolioBaseCurrency));
       } else {
         nextParams.set("portfolio", "custom");
         nextParams.set("portfolios", nextSelection.portfolioIds.join(","));
@@ -1814,51 +1818,9 @@ export default function PortfolioApp({
       return;
     }
 
-    // Aggregate currency is a temporary display preference in the URL. It
-    // must not rewrite any concrete portfolio's persisted base currency.
-    if (isAllPortfoliosSelected) {
-      replacePortfolioContextQuery(portfolioScope, nextBaseCurrency);
-      return;
-    }
-
-    if (!requireConcretePortfolioSelection() || !activePortfolio) {
-      return;
-    }
-
-    const now = new Date().toISOString();
-    const workspace = workspaceRef.current;
-    const nextPortfolios = portfoliosRef.current.map((portfolio) =>
-      portfolio.id === activePortfolioIdRef.current
-        ? {
-            ...portfolio,
-            baseCurrency: nextBaseCurrency,
-            assets: normalizeStoredPortfolioAssets(workspace.assets),
-            sales: getSortedPortfolioSales(workspace.sales),
-            realizedAdjustments: getSortedPortfolioRealizedAdjustments(
-              workspace.realizedAdjustments
-            ),
-            updatedAt: now,
-          }
-        : portfolio
-    );
-
-    setIsPortfolioMutationPending(true);
-    applyPortfolioBook(nextPortfolios, activePortfolioIdRef.current);
-
-    try {
-      await queuePortfolioSave(
-        {
-          schemaVersion: 2,
-          portfolios: nextPortfolios,
-          activePortfolioId: activePortfolioIdRef.current,
-        },
-        true
-      );
-    } catch {
-      restoreLastPersistedPortfolioBook();
-    } finally {
-      setIsPortfolioMutationPending(false);
-    }
+    // Presentation currency is URL-only in every scope. It must never mutate
+    // the persisted portfolio base currency or transaction data.
+    replacePortfolioContextQuery(portfolioScope, nextBaseCurrency);
   };
 
   useEffect(() => {
@@ -4753,7 +4715,7 @@ export default function PortfolioApp({
       const currentPortfolios = commitActivePortfolioSnapshot(portfoliosRef.current);
       portfoliosRef.current = currentPortfolios;
       setPortfolios(currentPortfolios);
-      replacePortfolioContextQuery({ mode: "ALL" }, activePortfolioBaseCurrency, navigation);
+      replacePortfolioContextQuery({ mode: "ALL" }, activeBaseCurrency, navigation);
       setFilter("");
       setSyncError(null);
       return;
@@ -5131,7 +5093,8 @@ export default function PortfolioApp({
     account, isAdmin, portfolios, selectedPortfolios, portfolioSummaries, selectedPortfolioSummaries,
     activePortfolio, activePortfolioId, selectedPortfolioId, portfolioScope, portfolioScopeLabel,
     selectedPortfolioIds, isPortfolioScopeAggregate: isAllPortfoliosSelected,
-    isAllRealPortfoliosSelected, isAllPortfoliosSelected, activeBaseCurrency, isPortfolioMutationPending, isLoggingOut,
+    isAllRealPortfoliosSelected, isAllPortfoliosSelected, activeBaseCurrency, presentationCurrency,
+    portfolioBaseCurrency: activePortfolioBaseCurrency, isPortfolioMutationPending, isLoggingOut,
     onPortfolioChange: (portfolioId) => { void handleSelectPortfolio(portfolioId); },
     onPortfolioScopeChange: handlePortfolioScopeChange,
     onBenchmarksChange: async (benchmarks) => {

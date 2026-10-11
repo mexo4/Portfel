@@ -228,3 +228,71 @@ test("asset-class allocation orders actual value and classifies stocks by their 
     { id: "stock:international", label: "Akcje mi\u0119dzynarodowe", totalValue: 50 },
   ]);
 });
+
+test("verified ETF metadata corrects stale stock classification in the structure read model", () => {
+  const allocation = getAssetClassAllocation([
+    {
+      key: "legacy-vwrd",
+      kind: "stock",
+      instrumentType: "ETF",
+      symbol: "VWRD.UK",
+      totalValue: 1_200,
+      lots: [{ kind: "stock", instrumentType: "ETF", name: "Vanguard FTSE All-World UCITS ETF" }],
+    },
+    {
+      key: "legacy-vhyd",
+      kind: "stock",
+      instrumentType: "ETF",
+      symbol: "VHYD.UK",
+      totalValue: 800,
+      lots: [{ kind: "stock", instrumentType: "ETF", name: "Vanguard FTSE All-World High Dividend Yield" }],
+    },
+    {
+      key: "dnp",
+      kind: "stock",
+      instrumentType: "STOCK",
+      symbol: "DNP.PL",
+      totalValue: 3_000,
+      lots: [{ kind: "stock", instrumentType: "STOCK", symbol: "DNP.PL", provider: "stooq", marketCurrency: "PLN" }],
+    },
+  ]);
+
+  assert.deepEqual(allocation, [
+    { id: "stock:gpw", label: "Akcje GPW", totalValue: 3_000 },
+    { id: "etf", label: "ETF", totalValue: 2_000 },
+  ]);
+  assert.equal(allocation.reduce((sum, item) => sum + item.totalValue, 0), 5_000);
+});
+
+test("name-only ETF clues remain unverified rather than being promoted to ETF or stock", () => {
+  const group = {
+    key: "unverified",
+    kind: "stock",
+    instrumentType: "STOCK",
+    name: "Vanguard FTSE All-World UCITS ETF",
+    symbol: "UNKN.UK",
+    totalValue: 25,
+    lots: [{ kind: "stock", instrumentType: "STOCK", name: "Vanguard FTSE All-World UCITS ETF" }],
+  };
+
+  assert.deepEqual(getAssetClassAllocation([group]), [
+    { id: "unverified", label: "Niezweryfikowany typ", totalValue: 25 },
+  ]);
+  assert.deepEqual(getGeographicAllocation([group]), []);
+});
+
+test("ETC, ETN, mutual funds and CFDs on ETFs remain separate instrument classes", () => {
+  const allocation = getAssetClassAllocation([
+    { key: "etc", kind: "stock", instrumentType: "ETC", symbol: "GOLD", totalValue: 100, lots: [{ kind: "stock", instrumentType: "ETC" }] },
+    { key: "etn", kind: "stock", instrumentType: "ETN", symbol: "NOTE", totalValue: 90, lots: [{ kind: "stock", instrumentType: "ETN" }] },
+    { key: "fund", kind: "stock", instrumentType: "FUND", symbol: "FUND", totalValue: 80, lots: [{ kind: "stock", instrumentType: "FUND" }] },
+    { key: "cfd", kind: "etf", instrumentType: "CFD", symbol: "ETF.CFD", totalValue: 70, lots: [{ kind: "etf", instrumentType: "CFD" }] },
+  ]);
+
+  assert.deepEqual(allocation.map(({ id, label }) => [id, label]), [
+    ["etc", "ETC"],
+    ["etn", "ETN"],
+    ["fund", "Fundusze"],
+    ["cfd", "CFD"],
+  ]);
+});

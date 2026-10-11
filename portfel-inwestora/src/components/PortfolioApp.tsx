@@ -236,6 +236,7 @@ const getQuoteSnapshotPayload = (
         provider: asset.provider,
         providerId: asset.providerId,
         priceScale: asset.priceScale,
+        instrumentType: asset.instrumentType,
       }))
   );
 
@@ -1499,6 +1500,7 @@ export default function PortfolioApp({
             provider: fallback?.provider ?? asset.provider,
             providerId: fallback?.providerId ?? asset.providerId,
             priceScale: fallback?.priceScale ?? asset.priceScale,
+            instrumentType: fallback?.instrumentType ?? asset.instrumentType,
             priceSource: "AUTOMATIC",
           };
         });
@@ -2983,6 +2985,7 @@ export default function PortfolioApp({
       providerId: result.providerId,
       priceScale: result.priceScale,
       issuerCountry: result.issuerCountry,
+      isin: result.isin,
       instrumentIdentity: selectedEtf?.instrumentIdentity,
       marketCurrencyConfirmed: Boolean(selectedEtf?.instrumentIdentity.currency),
       latestPrice: undefined,
@@ -3014,6 +3017,7 @@ export default function PortfolioApp({
           providerId: resolvedListing.providerId,
           priceScale: resolvedListing.priceScale,
           instrumentIdentity: resolvedListing.instrumentIdentity,
+          isin: resolvedListing.isin ?? currentDraft.isin,
           marketCurrencyConfirmed: Boolean(resolvedListing.instrumentIdentity.currency),
         };
       });
@@ -3608,6 +3612,11 @@ export default function PortfolioApp({
         name: storedName,
         symbol: storedSymbol,
         kind: draft.kind,
+        instrumentType:
+          quote?.instrumentType ??
+          (draft.kind === "etf" && draft.instrumentIdentity?.instrumentType === "ETF"
+            ? "ETF"
+            : undefined),
         purchaseDate,
         quantity: draft.quantity,
         purchasePrice: draft.purchasePrice,
@@ -3621,6 +3630,7 @@ export default function PortfolioApp({
         providerId: quote?.providerId ?? draft.providerId,
         priceScale: quote?.priceScale ?? draft.priceScale,
         issuerCountry: draft.issuerCountry,
+        isin: draft.isin,
         instrumentIdentity: draft.instrumentIdentity,
         latestPrice: quote?.price,
         latestPriceDate: quote?.priceDate,
@@ -4294,6 +4304,7 @@ export default function PortfolioApp({
           marketCurrency: importedMarketCurrency,
           provider: operation.provider,
           providerId: operation.providerId,
+          isin: operation.isin,
           priceScale: operation.priceScale,
           groupOrder: existingGroupOrder ?? getNextGroupOrder(nextAssets),
           createdAt: new Date(`${operation.date}T00:00:00.000Z`).toISOString(),

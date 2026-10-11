@@ -377,6 +377,8 @@ const normalizeInstrumentType = (value: unknown, fallback: InstrumentType): Inst
     value === "BOND" ||
     value === "CRYPTO" ||
     value === "CFD" ||
+    value === "ETC" ||
+    value === "ETN" ||
     value === "FUND" ||
     value === "TERM_DEPOSIT" ||
     value === "CASH" ||
@@ -419,7 +421,11 @@ const buildLegacyInstruments = (
     instrumentsById.set(id, {
       id,
       portfolioId,
-      type: source.instrumentType ?? getInstrumentTypeForAssetKind(source.kind),
+      type:
+        source.instrumentType ??
+        (source.instrumentIdentity?.instrumentType === "ETF"
+          ? "ETF"
+          : getInstrumentTypeForAssetKind(source.kind)),
       assetKind: source.kind,
       symbol: resolveTickerIdentity({
         symbol: source.symbol,
@@ -503,10 +509,20 @@ export const normalizePortfolioInstruments = (
         rawInstrument.assetKind === "bond"
           ? rawInstrument.assetKind
           : undefined;
-      const type = normalizeInstrumentType(
+      const declaredType = normalizeInstrumentType(
         rawInstrument.type,
         assetKind ? getInstrumentTypeForAssetKind(assetKind) : "OTHER"
       );
+      const rawIdentity = asRecord(rawInstrument.instrumentIdentity);
+      const hasVerifiedEtfIdentity =
+        rawIdentity?.instrumentType === "ETF" &&
+        Boolean(
+          getString(rawIdentity.figi) ||
+            getString(rawIdentity.shareClassFigi) ||
+            (getString(rawIdentity.ticker) &&
+              (getString(rawIdentity.exchangeCode) || getString(rawIdentity.exchange) || getString(rawIdentity.mic)))
+        );
+      const type = hasVerifiedEtfIdentity && declaredType !== "CFD" ? "ETF" : declaredType;
 
       return {
         id,
@@ -527,8 +543,8 @@ export const normalizePortfolioInstruments = (
             ? rawInstrument.priceScale
             : undefined,
         instrumentIdentity:
-          assetKind === "etf" && asRecord(rawInstrument.instrumentIdentity).ticker
-            ? (asRecord(rawInstrument.instrumentIdentity) as InstrumentIdentity)
+          rawIdentity?.instrumentType === "ETF" && rawIdentity.ticker
+            ? (rawIdentity as InstrumentIdentity)
             : undefined,
         metadata: asRecord(rawInstrument.metadata),
         createdAt: normalizeIsoDateTime(rawInstrument.createdAt, now),

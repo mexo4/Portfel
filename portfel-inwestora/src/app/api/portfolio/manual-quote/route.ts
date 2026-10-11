@@ -78,6 +78,7 @@ const automaticFallbackFromAsset = (asset: PortfolioAsset): AutomaticQuoteFallba
     provider: asset.provider,
     providerId: asset.providerId,
     priceScale: asset.priceScale,
+    instrumentType: asset.instrumentType,
   };
 };
 

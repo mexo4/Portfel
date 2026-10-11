@@ -8,6 +8,8 @@ import ManualAssetPriceDialog, {
 } from "@/components/ManualAssetPriceDialog";
 import { usePortfolioWorkspace } from "@/components/PortfolioWorkspaceContext";
 import { getGroupedPortfolioAssets, type PortfolioAssetGroup } from "@/lib/pricing";
+import { getPortfolioInstrumentClass } from "@/lib/geographic-allocation";
+import { getInstrumentClassLabel } from "@/lib/instrument-classification";
 import { sortPortfolioAssetGroups } from "@/lib/portfolio-position-sort";
 import { formatCurrency, formatDate, formatDateTime, formatNumber } from "@/lib/utils";
 import type {
@@ -61,12 +63,11 @@ const formatSignedCurrency = (value: number, currency: CurrencyCode) =>
 const formatSignedPercent = (value: number) =>
   `${value > 0 ? "+" : ""}${value.toFixed(2)}%`;
 
-const getPositionTypeLabel = (group: PortfolioAssetGroup) =>
-  group.instrumentType === "CFD"
-    ? `CFD ${group.positionDirection}`
-    : group.instrumentType === "OTHER"
-      ? "IMPORTOWANY"
-      : group.kind.toUpperCase();
+const getPositionTypeLabel = (group: PortfolioAssetGroup) => {
+  const instrumentClass = getPortfolioInstrumentClass(group);
+  const label = instrumentClass === "stock" ? "Akcje" : getInstrumentClassLabel(instrumentClass);
+  return instrumentClass === "cfd" ? `${label} ${group.positionDirection}` : label;
+};
 
 export default function PortfolioPositionCards({
   assets,

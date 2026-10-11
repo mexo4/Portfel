@@ -27,6 +27,8 @@ import ManualAssetPriceDialog, {
   isManualAssetPriceGroup,
 } from "@/components/ManualAssetPriceDialog";
 import { KIND_LABELS } from "@/lib/constants";
+import { getPortfolioInstrumentClass } from "@/lib/geographic-allocation";
+import { getInstrumentClassLabel } from "@/lib/instrument-classification";
 import { sortPortfolioAssetGroups } from "@/lib/portfolio-position-sort";
 import {
   getAssetLatestUnitPrice,
@@ -110,12 +112,10 @@ const formatSignedCurrency = (value: number, currency: CurrencyCode) =>
 const formatSignedPercent = (value: number) =>
   `${value > 0 ? "+" : ""}${value.toFixed(2)}%`;
 
-const getGroupTypeLabel = (group: PortfolioAssetGroup) =>
-  group.instrumentType === "CFD"
-    ? "CFD"
-    : group.instrumentType === "OTHER"
-      ? "Instrument importowany"
-      : KIND_LABELS[group.kind];
+const getGroupTypeLabel = (group: PortfolioAssetGroup) => {
+  const instrumentClass = getPortfolioInstrumentClass(group);
+  return instrumentClass === "stock" ? KIND_LABELS.stock : getInstrumentClassLabel(instrumentClass);
+};
 
 const GroupDragOverlayCard = ({ group }: { group: PortfolioAssetGroup }) => {
   return (

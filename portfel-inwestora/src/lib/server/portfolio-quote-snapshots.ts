@@ -1,4 +1,5 @@
 import { execute, query, withTransaction } from "@/lib/server/db";
+import { normalizeProviderInstrumentType } from "@/lib/instrument-classification";
 import type { PortfolioAsset, PortfolioBook } from "@/types/portfolio";
 
 export type AutomaticQuoteFallback = {
@@ -12,6 +13,7 @@ export type AutomaticQuoteFallback = {
   provider?: PortfolioAsset["provider"];
   providerId?: string;
   priceScale?: number;
+  instrumentType?: PortfolioAsset["instrumentType"];
 };
 
 export type PortfolioQuoteSnapshotInput = {
@@ -27,6 +29,7 @@ export type PortfolioQuoteSnapshotInput = {
   provider?: PortfolioAsset["provider"];
   providerId?: string;
   priceScale?: number;
+  instrumentType?: PortfolioAsset["instrumentType"];
   priceSource?: PortfolioAsset["priceSource"];
   /** Kept only while a per-portfolio manual quote is active, so removal can
    * resume the exact prior automatic quote (or return to no quote). */
@@ -86,6 +89,7 @@ const sanitiseAutomaticFallback = (
     provider: typeof fallback.provider === "string" ? fallback.provider as PortfolioAsset["provider"] : undefined,
     providerId: typeof fallback.providerId === "string" ? fallback.providerId : undefined,
     priceScale: typeof fallback.priceScale === "number" && Number.isFinite(fallback.priceScale) ? fallback.priceScale : undefined,
+    instrumentType: normalizeProviderInstrumentType(fallback.instrumentType),
   };
 };
 
@@ -120,6 +124,7 @@ const sanitiseSnapshot = (
       typeof snapshot.priceScale === "number" && Number.isFinite(snapshot.priceScale)
         ? snapshot.priceScale
         : undefined,
+    instrumentType: normalizeProviderInstrumentType(snapshot.instrumentType),
     priceSource: snapshot.priceSource === "MANUAL" ? "MANUAL" : "AUTOMATIC",
     automaticFallback:
       snapshot.priceSource === "MANUAL"
@@ -191,6 +196,7 @@ const applySnapshot = (
     provider: snapshot.provider ?? asset.provider,
     providerId: snapshot.providerId ?? asset.providerId,
     priceScale: snapshot.priceScale ?? asset.priceScale,
+    instrumentType: snapshot.instrumentType ?? asset.instrumentType,
   };
 };
 

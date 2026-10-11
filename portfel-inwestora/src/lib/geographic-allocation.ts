@@ -1,6 +1,7 @@
 import type { PortfolioAssetGroup } from "@/lib/pricing";
 import { LOCAL_STOCK_CATALOG } from "@/lib/constants";
 import { getGpwTickerCore, isGpwSymbol, normalizeSymbol } from "@/lib/ticker";
+import { classifyInstrument, type InstrumentClass } from "@/lib/instrument-classification";
 
 export const UNKNOWN_COUNTRY_LABEL = "Inne / Brak danych";
 
@@ -13,6 +14,35 @@ export type AssetClassAllocationItem = {
   id: string;
   label: string;
   totalValue: number;
+};
+
+export const getPortfolioInstrumentClass = (
+  group: Pick<PortfolioAssetGroup, "kind" | "instrumentType" | "lots" | "name">
+): InstrumentClass => {
+  const groupClassification = classifyInstrument({
+    kind: group.kind,
+    instrumentType: group.instrumentType,
+    name: group.name,
+  });
+  const classifications = group.lots.map((lot) => {
+    const lotHasClassificationMetadata = Boolean(
+      lot.kind || lot.instrumentType || lot.instrumentIdentity || lot.name
+    );
+    return lotHasClassificationMetadata ? classifyInstrument({
+      kind: lot.kind,
+      instrumentType: lot.instrumentType,
+      instrumentIdentity: lot.instrumentIdentity,
+      isin: lot.isin,
+      name: lot.name,
+    }) : groupClassification;
+  });
+  const verifiedClasses = new Set(classifications.filter((value) => value !== "unverified"));
+
+  // A trusted provider/catalog type can repair older lots in the same legacy
+  // symbol group. Conflicting verified types remain explicitly unresolved.
+  if (verifiedClasses.size > 1) return "unverified";
+  if (verifiedClasses.size === 1) return Array.from(verifiedClasses)[0]!;
+  return classifications[0] ?? groupClassification;
 };
 
 const COUNTRY_ALIASES: Record<string, string> = {
@@ -115,17 +145,26 @@ export const getAssetClassAllocation = (groups: PortfolioAssetGroup[]) => {
   const allocation = new Map<string, AssetClassAllocationItem>();
 
   for (const group of groups) {
-    const stockClass = group.kind === "stock" ? getStockMarketClass(group) : null;
-    const id = stockClass?.id ?? group.kind;
+    const instrumentClass = getPortfolioInstrumentClass(group);
+    const stockClass = instrumentClass === "stock" ? getStockMarketClass(group) : null;
+    const id = stockClass?.id ?? instrumentClass;
     const label = stockClass
       ? stockClass.label
-      : group.kind === "etf"
+      : instrumentClass === "etf"
         ? "ETF"
-        : group.kind === "crypto"
+        : instrumentClass === "crypto"
           ? "Krypto"
-          : group.kind === "bond"
+          : instrumentClass === "bond"
             ? "Obligacje"
-            : "Inne";
+            : instrumentClass === "cfd"
+              ? "CFD"
+              : instrumentClass === "etc"
+                ? "ETC"
+                : instrumentClass === "etn"
+                  ? "ETN"
+                  : instrumentClass === "fund"
+                    ? "Fundusze"
+                    : "Niezweryfikowany typ";
     const current = allocation.get(id);
 
     allocation.set(id, {
@@ -136,7 +175,7 @@ export const getAssetClassAllocation = (groups: PortfolioAssetGroup[]) => {
   }
 
   return Array.from(allocation.values())
-    .filter((item) => item.totalValue > 0)
+    .filter((item) => item.totalValue !== 0)
     .sort(
       (left, right) =>
         right.totalValue - left.totalValue || left.label.localeCompare(right.label, "pl")
@@ -151,7 +190,7 @@ export const getGeographicAllocation = (groups: PortfolioAssetGroup[]) => {
   const allocation = new Map<string, number>();
 
   for (const group of groups) {
-    if (group.kind !== "stock") continue;
+    if (getPortfolioInstrumentClass(group) !== "stock") continue;
 
     const country = getConfirmedIssuerCountry(group);
     allocation.set(country, (allocation.get(country) ?? 0) + group.totalValue);

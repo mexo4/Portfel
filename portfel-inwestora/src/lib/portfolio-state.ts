@@ -21,6 +21,7 @@ import {
   getPortfolioAssetGroupKey,
 } from "@/lib/ticker";
 import { getTodayDateInputValue, round, toCurrencyCode, toDateInputValue } from "@/lib/utils";
+import { normalizeProviderInstrumentType } from "@/lib/instrument-classification";
 import type {
   AssetKind,
   BenchmarkInvestment,
@@ -72,6 +73,11 @@ const asRecord = (value: unknown): Record<string, unknown> | null =>
 
 const cleanIdentityText = (value: unknown, maxLength = 160) =>
   typeof value === "string" ? value.trim().slice(0, maxLength) : "";
+
+const normalizeIsin = (value: unknown) => {
+  const normalized = typeof value === "string" ? value.trim().toUpperCase() : "";
+  return /^[A-Z]{2}[A-Z0-9]{9}[0-9]$/.test(normalized) ? normalized : undefined;
+};
 
 const normalizeEtfInstrumentIdentity = (
   value: unknown,
@@ -144,11 +150,7 @@ const isSupportedAssetKind = (value: unknown): value is AssetKind =>
   typeof value === "string" && SUPPORTED_ASSET_KINDS.has(value as AssetKind);
 
 const normalizeImportedInstrumentType = (value: unknown): InstrumentType | undefined => {
-  if (value === "CFD" || value === "OTHER") return value;
-  if (value === "STOCK" || value === "ETF" || value === "BOND" || value === "CRYPTO") {
-    return value;
-  }
-  return undefined;
+  return normalizeProviderInstrumentType(value);
 };
 
 const normalizePositionDirection = (value: unknown): PositionDirection =>
@@ -375,7 +377,7 @@ export const normalizeStoredPortfolioAssets = (assets: PortfolioAsset[]) => {
           ? asset.issuerCountry.trim().slice(0, 80)
           : undefined;
       const instrumentIdentity =
-        asset.kind === "etf"
+        asset.instrumentIdentity?.instrumentType === "ETF"
           ? normalizeEtfInstrumentIdentity(asset.instrumentIdentity, {
               symbol,
               name: asset.name || symbol,
@@ -394,6 +396,7 @@ export const normalizeStoredPortfolioAssets = (assets: PortfolioAsset[]) => {
         providerId:
           normalizePortfolioProviderId(asset.providerId, asset.kind) ??
           (instrumentIdentity ? undefined : getFallbackProviderId(asset.kind, provider, symbol)),
+        isin: normalizeIsin(asset.isin),
         instrumentIdentity,
         issuerCountry,
         quantity: round(asset.quantity, 6),
@@ -478,12 +481,13 @@ const normalizePortfolioSaleAllocation = (
       typeof allocation.providerId === "string" && allocation.providerId
         ? normalizePortfolioProviderId(allocation.providerId, kind)
         : undefined,
+    isin: normalizeIsin(allocation.isin),
     priceScale:
       hasFiniteNumber(allocation.priceScale) && allocation.priceScale > 0
         ? allocation.priceScale
         : undefined,
     instrumentIdentity:
-      kind === "etf"
+      allocation.instrumentIdentity?.instrumentType === "ETF"
         ? normalizeEtfInstrumentIdentity(allocation.instrumentIdentity, {
             symbol: typeof allocation.symbol === "string" ? allocation.symbol : "",
             name: typeof allocation.name === "string" ? allocation.name : "",
@@ -550,7 +554,7 @@ const normalizePortfolioSale = (
   );
   const name = typeof sale.name === "string" && sale.name ? sale.name : symbol;
   const instrumentIdentity =
-    kind === "etf"
+    sale.instrumentIdentity?.instrumentType === "ETF"
       ? normalizeEtfInstrumentIdentity(sale.instrumentIdentity, {
           symbol,
           name,
@@ -593,6 +597,7 @@ const normalizePortfolioSale = (
     providerId:
       normalizePortfolioProviderId(sale.providerId, kind) ??
       getFallbackProviderId(kind, provider, symbol),
+    isin: normalizeIsin(sale.isin),
     priceScale:
       hasFiniteNumber(sale.priceScale) && sale.priceScale > 0
         ? sale.priceScale
@@ -696,7 +701,7 @@ const normalizePortfolioAsset = (
       ? asset.issuerCountry.trim().slice(0, 80)
       : undefined;
   const instrumentIdentity =
-    kind === "etf"
+    asset.instrumentIdentity?.instrumentType === "ETF"
       ? normalizeEtfInstrumentIdentity(asset.instrumentIdentity, {
           symbol,
           name,
@@ -738,6 +743,7 @@ const normalizePortfolioAsset = (
     providerId:
       normalizePortfolioProviderId(asset.providerId, kind) ??
       (instrumentIdentity ? undefined : getFallbackProviderId(kind, provider, symbol)),
+    isin: normalizeIsin(asset.isin),
     priceScale:
       hasFiniteNumber(asset.priceScale) && asset.priceScale > 0
         ? asset.priceScale
@@ -1345,6 +1351,7 @@ export const applySaleToPortfolio = ({
       marketCurrency: lot.marketCurrency,
       provider: lot.provider,
       providerId: lot.providerId,
+      isin: lot.isin,
       priceScale: lot.priceScale,
       instrumentIdentity: lot.instrumentIdentity,
       latestPrice: lot.latestPrice,
@@ -1468,6 +1475,7 @@ export const applySaleToPortfolio = ({
     marketCurrency: saleCurrency,
     provider: draft.provider,
     providerId: draft.providerId,
+    isin: group.lots[0]?.isin,
     priceScale: draft.priceScale,
     instrumentIdentity: group.lots[0]?.instrumentIdentity,
     bondMeta: group.lots[0]?.bondMeta,
@@ -1560,6 +1568,7 @@ const createRestoredAssetFromAllocation = ({
       ? getSafeQuoteProvider(allocation.provider, allocation.kind)
       : sale.provider,
   providerId: allocation.providerId ?? sale.providerId,
+  isin: allocation.isin ?? sale.isin,
   priceScale: allocation.priceScale ?? sale.priceScale,
   instrumentIdentity: allocation.instrumentIdentity ?? sale.instrumentIdentity,
   latestPrice: allocation.latestPrice,

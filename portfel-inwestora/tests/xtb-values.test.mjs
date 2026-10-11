@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { strToU8, zipSync } from "fflate";
 import { parseBrokerOperationsXlsx } from "../src/lib/import-operations.ts";
+import { classifyInstrument } from "../src/lib/instrument-classification.ts";
 import { calculateCashBalances } from "../src/lib/operation-engine.ts";
 import { applySaleToPortfolio, normalizePortfolioBook } from "../src/lib/portfolio-state.ts";
 import { getAssetProfitLossPln, getGroupedPortfolioAssets } from "../src/lib/portfolio-engine.ts";
@@ -468,6 +469,35 @@ test("XTB XLSX newest-first same-day history imports buys before partial sales a
   assert.equal(assets.reduce((sum, lot) => sum + lot.quantity * lot.purchasePrice, 0), 510);
   assert.equal(realized, 110);
   assert.equal(balance(ordered, "PLN"), 1600);
+});
+
+test("XTB name-only ETF hint is not persisted as verified ETF before provider confirmation", async () => {
+  const result = await parse("USD", [
+    row(
+      "vanguard-import",
+      "Stock purchase",
+      "OPEN BUY 2 @ 100",
+      "VWRD.UK",
+      -200,
+      "01.09.2026 10:00:00",
+      "Vanguard FTSE All-World UCITS ETF"
+    ),
+  ]);
+
+  assert.equal(result.skippedRows.length, 0);
+  assert.equal(result.operations.length, 1);
+  const [operation] = result.operations;
+  assert.equal(operation.kind, "etf");
+  assert.equal(operation.instrumentType, "OTHER");
+  assert.equal(classifyInstrument({
+    kind: operation.kind,
+    instrumentType: operation.instrumentType,
+    name: operation.name,
+  }), "unverified");
+  assert.equal(operation.symbol, "VWRD.UK");
+  assert.equal(operation.currency, "USD");
+  assert.equal(operation.quantity, 2);
+  assert.equal(operation.price, 100);
 });
 
 test("XTB XLSX refunded commission and positive swap retain credit signs instead of becoming expenses", async () => {

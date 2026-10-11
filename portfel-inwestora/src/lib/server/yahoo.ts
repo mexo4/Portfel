@@ -1,4 +1,5 @@
 import { inferCurrencyFromSymbol, normalizeSymbol } from "@/lib/ticker";
+import { normalizeProviderInstrumentType } from "@/lib/instrument-classification";
 import { normalizeText, round, toCurrencyCode, uniqueBy } from "@/lib/utils";
 import type { AssetQuote, AssetSearchResult, CurrencyCode } from "@/types/portfolio";
 
@@ -25,11 +26,11 @@ type YahooChartResponse = {
         chartPreviousClose?: number;
         previousClose?: number;
         regularMarketTime?: number;
+        instrumentType?: string;
         shortName?: string;
         longName?: string;
         exchangeName?: string;
         fullExchangeName?: string;
-        instrumentType?: string;
       };
       timestamp?: number[];
       indicators?: {
@@ -57,6 +58,7 @@ type YahooQuoteSummaryResponse = {
       regularMarketTime?: number;
       shortName?: string;
       longName?: string;
+      quoteType?: string;
     }>;
     error?: {
       description?: string;
@@ -216,6 +218,7 @@ const buildYahooQuote = ({
   fallbackCurrency,
   marketTimestamp,
   name,
+  rawInstrumentType,
 }: {
   requestedSymbol: string;
   providerId: string;
@@ -225,6 +228,7 @@ const buildYahooQuote = ({
   fallbackCurrency: CurrencyCode;
   marketTimestamp?: string;
   name?: string;
+  rawInstrumentType?: string;
 }): AssetQuote => {
   const moneyUnit = normalizeYahooMoneyUnit(rawCurrency, fallbackCurrency);
 
@@ -233,6 +237,7 @@ const buildYahooQuote = ({
     price: round(rawPrice * moneyUnit.priceScale, 4),
     marketCurrency: moneyUnit.currency,
     provider: "yahoo",
+    instrumentType: normalizeProviderInstrumentType(rawInstrumentType),
     providerId: normalizeSymbol(providerId),
     // Provider time and local fetch time are deliberately distinct: a market
     // may be closed while the response is fetched moments ago.
@@ -275,6 +280,7 @@ const toYahooSummaryQuote = (
         ? new Date(item.regularMarketTime * 1_000).toISOString()
         : undefined,
     name: item.longName?.trim() || item.shortName?.trim(),
+    rawInstrumentType: item.quoteType,
   });
 };
 
@@ -311,6 +317,7 @@ const toYahooChartQuote = (
         ? new Date(meta.regularMarketTime * 1_000).toISOString()
         : undefined,
     name: meta.longName?.trim() || meta.shortName?.trim(),
+    rawInstrumentType: meta.instrumentType,
   });
 };
 

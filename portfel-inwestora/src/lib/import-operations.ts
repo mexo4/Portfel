@@ -7,6 +7,7 @@ import {
   resolveTickerIdentity,
 } from "@/lib/ticker-aliases";
 import { normalizeText, round, toCurrencyCode, toDateInputValue, uniqueBy } from "@/lib/utils";
+import { normalizeProviderInstrumentType } from "@/lib/instrument-classification";
 import type {
   AssetKind,
   CurrencyCode,
@@ -436,9 +437,18 @@ const inferImportedInstrumentType = (
   if (/\b(cfd|forex|fx|contract for difference|kontrakt roznic)\b/.test(normalized)) {
     return "CFD";
   }
+  const declaredType = normalizeProviderInstrumentType(value);
+  if (declaredType && declaredType !== "OTHER") return declaredType;
+  if (/\b(exchange traded commodity|etc)\b/.test(normalized)) return "ETC";
+  if (/\b(exchange traded note|etn)\b/.test(normalized)) return "ETN";
+  if (/\b(exchange traded fund|etf)\b/.test(normalized)) return "ETF";
+  if (/\b(mutual fund|open end fund)\b/.test(normalized)) return "FUND";
   if (kind === "crypto") return "CRYPTO";
-  if (kind === "etf") return "ETF";
   if (kind === "bond") return "BOND";
+  // `kind` can be inferred from a display name. Do not turn that inference
+  // into trusted ETF metadata; quote refresh remains available while the
+  // classifier marks it unresolved until a catalog/provider confirms it.
+  if (kind === "etf") return "OTHER";
   if (
     normalized &&
     !/\b(stock|share|equity|akcj|papier wartosciowy|security|rynek|market)\w*\b/.test(normalized)
@@ -2450,6 +2460,7 @@ const buildBaseXtbOperation = ({
   symbol = "",
   name = "",
   kind = "stock",
+  instrumentType,
   quantity = 0,
   price = 0,
   currency = accountCurrency,
@@ -2472,6 +2483,7 @@ const buildBaseXtbOperation = ({
   symbol?: string;
   name?: string;
   kind?: AssetKind;
+  instrumentType?: InstrumentType;
   quantity?: number;
   price?: number;
   currency?: CurrencyCode;
@@ -2509,6 +2521,7 @@ const buildBaseXtbOperation = ({
     symbol: resolvedSymbol,
     name: cryptoIdentity?.name ?? alias?.name ?? (name.trim() || resolvedSymbol || row.rawType),
     kind: resolvedKind,
+    instrumentType,
     quantity: roundImportedQuantity(quantity, resolvedKind),
     price: round(Math.abs(price), 6),
     currency: operationType === "BUY" || operationType === "SELL" ? resolvedCurrency : currency,
@@ -3147,6 +3160,7 @@ export const parseXtbCashOperationRows = (
           symbol: tradeRow.rawSymbol,
           name: tradeRow.instrumentName || tradeRow.rawSymbol,
           kind,
+          instrumentType: inferImportedInstrumentType(tradeRow.rawType, kind),
           quantity: trade.quantity,
           price: trade.price,
           currency: marketCurrency,

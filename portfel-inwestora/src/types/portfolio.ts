@@ -6,6 +6,8 @@ export type InstrumentType =
   | "BOND"
   | "CRYPTO"
   | "CFD"
+  | "ETC"
+  | "ETN"
   | "FUND"
   | "TERM_DEPOSIT"
   | "CASH"
@@ -242,6 +244,8 @@ export type AssetQuote = {
   price: number;
   marketCurrency: CurrencyCode;
   provider: QuoteProvider;
+  /** Normalized security type supplied by a quote/catalog provider, when available. */
+  instrumentType?: InstrumentType;
   /** When Mexo received the provider response. */
   fetchedAt: string;
   /** Date of the market session that produced this price (YYYY-MM-DD). */
@@ -291,6 +295,8 @@ export type PortfolioAsset = {
   marketCurrency: CurrencyCode;
   provider: QuoteProvider;
   providerId?: string;
+  /** Stable instrument identifier supplied by a broker/catalog, if available. */
+  isin?: string;
   priceScale?: number;
   /** Persisted only when a trusted discovery source supplied the issuer country. */
   issuerCountry?: string;
@@ -324,6 +330,7 @@ export type AssetDraft = {
   marketCurrency: CurrencyCode;
   provider: QuoteProvider;
   providerId?: string;
+  isin?: string;
   priceScale?: number;
   issuerCountry?: string;
   instrumentIdentity?: InstrumentIdentity;
@@ -367,6 +374,7 @@ export type PortfolioSaleAllocation = {
   marketCurrency?: CurrencyCode;
   provider?: QuoteProvider;
   providerId?: string;
+  isin?: string;
   priceScale?: number;
   instrumentIdentity?: InstrumentIdentity;
   latestPrice?: number;
@@ -398,6 +406,7 @@ export type PortfolioSale = {
   marketCurrency: CurrencyCode;
   provider: QuoteProvider;
   providerId?: string;
+  isin?: string;
   priceScale?: number;
   instrumentIdentity?: InstrumentIdentity;
   bondMeta?: TreasuryBondSeries;

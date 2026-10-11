@@ -475,6 +475,7 @@ export const hasSameStoredQuoteSnapshot = (
   current.provider === next.provider &&
   current.providerId === next.providerId &&
   current.priceScale === next.priceScale &&
+  current.instrumentType === next.instrumentType &&
   JSON.stringify(current.bondMeta ?? null) === JSON.stringify(next.bondMeta ?? null);
 
 const keepExistingAssetForUnchangedQuote = (
@@ -522,6 +523,7 @@ export const mergeQuoteIntoPortfolioAsset = (
       latestPriceFetchedAt: quote.fetchedAt,
       previousClose: quote.previousClose ?? asset.previousClose,
       lastUpdatedAt: quote.fetchedAt,
+      instrumentType: quote.instrumentType ?? asset.instrumentType,
     });
   }
 
@@ -542,6 +544,7 @@ export const mergeQuoteIntoPortfolioAsset = (
     bondMeta: quote.bondMeta ?? asset.bondMeta,
     lastUpdatedAt: quote.fetchedAt,
     name: quote.name ?? asset.name,
+    instrumentType: quote.instrumentType ?? asset.instrumentType,
   });
 };
 
@@ -594,6 +597,7 @@ export const applyRefreshedPortfolioAssetSnapshot = (
     marketTimestamp: refreshed.latestPriceMarketTimestamp,
     previousClose: refreshed.previousClose,
     bondMeta: refreshed.bondMeta,
+    instrumentType: refreshed.instrumentType,
   });
 
   return hasSameStoredQuoteSnapshot(current, merged) ? current : merged;
@@ -759,6 +763,7 @@ export const savePortfolioQuoteSnapshots = async (
     provider?: PortfolioAsset["provider"];
     providerId?: string;
     priceScale?: number;
+    instrumentType?: PortfolioAsset["instrumentType"];
   }>
 ) =>
   requestJson<{ saved: number }>("/api/portfolio/quotes", {
@@ -795,6 +800,7 @@ export const clearManualPortfolioQuote = async (input: {
       provider?: PortfolioAsset["provider"];
       providerId?: string;
       priceScale?: number;
+      instrumentType?: PortfolioAsset["instrumentType"];
     };
   }>;
 }>("/api/portfolio/manual-quote", {

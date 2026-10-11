@@ -215,8 +215,8 @@ test("asset-class allocation orders actual value and classifies stocks by their 
     { kind: "stock", symbol: "DNP.PL", totalValue: 5_138.26, lots: [{ symbol: "DNP.PL", provider: "stooq", marketCurrency: "PLN", issuerCountry: "USA" }] },
     { kind: "etf", symbol: "ETFBDIVPL", totalValue: 300.95, lots: [{}] },
     { kind: "crypto", symbol: "BTC", totalValue: 470.82, lots: [{}] },
-    { kind: "stock", symbol: "AAPL", totalValue: 200, lots: [{ issuerCountry: "USA" }] },
-    // Any non-US, non-GPW stock, including incomplete legacy metadata, is international.
+    { kind: "stock", symbol: "AAPL", totalValue: 200, lots: [{ issuerCountry: "USA", issuerCountrySource: "issuer-profile" }] },
+    // Unverified country metadata is shown separately, not forced into international.
     { kind: "stock", symbol: "UNKNOWN.DE", totalValue: 50, lots: [{}] },
   ]);
 
@@ -225,7 +225,7 @@ test("asset-class allocation orders actual value and classifies stocks by their 
     { id: "crypto", label: "Krypto", totalValue: 470.82 },
     { id: "etf", label: "ETF", totalValue: 300.95 },
     { id: "stock:usa", label: "Akcje ameryka\u0144skie", totalValue: 200 },
-    { id: "stock:international", label: "Akcje mi\u0119dzynarodowe", totalValue: 50 },
+    { id: "stock:issuer-country-unknown", label: "Akcje \u2014 nieustalony kraj", totalValue: 50 },
   ]);
 });
 

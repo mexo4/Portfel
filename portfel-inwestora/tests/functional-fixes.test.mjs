@@ -4,7 +4,7 @@ import test from "node:test";
 import { getGeographicAllocation } from "../src/lib/geographic-allocation.ts";
 import { DEFAULT_PERFORMANCE_METRICS, normalizePerformanceMetricIds } from "../src/lib/performance-preferences.ts";
 
-const group = ({ key, symbol, provider = "stooq", currency = "PLN", country, kind = "stock", value = 100 }) => ({ key, kind, totalValue: value, lots: [{ symbol, provider, providerId: symbol, marketCurrency: currency, issuerCountry: country }] });
+const group = ({ key, symbol, provider = "stooq", currency = "PLN", country, countrySource, kind = "stock", value = 100 }) => ({ key, kind, totalValue: value, lots: [{ symbol, provider, providerId: symbol, marketCurrency: currency, issuerCountry: country, issuerCountrySource: countrySource ?? (country ? "issuer-profile" : undefined) }] });
 
 test("geographic exposure recognizes legacy GPW broadly but explicit issuer metadata wins", () => {
   const result = getGeographicAllocation([

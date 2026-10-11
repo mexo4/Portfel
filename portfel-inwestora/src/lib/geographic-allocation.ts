@@ -4,6 +4,7 @@ import { getGpwTickerCore, isGpwSymbol, normalizeSymbol } from "@/lib/ticker";
 import { classifyInstrument, type InstrumentClass } from "@/lib/instrument-classification";
 
 export const UNKNOWN_COUNTRY_LABEL = "Inne / Brak danych";
+export const UNKNOWN_STOCK_COUNTRY_LABEL = "Akcje — nieustalony kraj";
 
 export type GeographicAllocationItem = {
   country: string;
@@ -47,16 +48,29 @@ export const getPortfolioInstrumentClass = (
 
 const COUNTRY_ALIASES: Record<string, string> = {
   pl: "Polska",
+  pol: "Polska",
   poland: "Polska",
   polska: "Polska",
   us: "USA",
   usa: "USA",
+  "u.s.": "USA",
+  "u.s.a.": "USA",
+  "united states (us)": "USA",
+  "stany zjednoczone": "USA",
   "united states": "USA",
   "united states of america": "USA",
 };
 
-const normalizeIssuerCountry = (value: string) =>
-  COUNTRY_ALIASES[value.trim().toLocaleLowerCase("en-US")] ?? value.trim();
+const normalizeIssuerCountry = (value: string) => {
+  const trimmed = value.trim();
+  const normalized = trimmed.toLocaleLowerCase("en-US");
+
+  if (["unknown", "n/a", "na", "none", "-", "brak danych"].includes(normalized)) {
+    return UNKNOWN_COUNTRY_LABEL;
+  }
+
+  return COUNTRY_ALIASES[normalized] ?? trimmed;
+};
 
 const getCanonicalCatalogSymbol = (symbol: string) =>
   isGpwSymbol(symbol) ? getGpwTickerCore(symbol) : normalizeSymbol(symbol);
@@ -84,11 +98,18 @@ const getCatalogIssuerCountry = (group: PortfolioAssetGroup) => {
 };
 
 export const getConfirmedIssuerCountry = (group: PortfolioAssetGroup) => {
-  // Country exposure is intentionally issuer metadata, not exchange metadata.
-  // A listing suffix or quote currency is not sufficient evidence of a country.
+  // Only values with provenance are trusted. Legacy records did not preserve
+  // provenance, and EODHD Search's Country field was incorrectly persisted as
+  // issuer country. Do not mistake an exchange-country for a cross-listed
+  // company's issuer country.
   const countries = Array.from(
     new Set(
       group.lots
+        .filter((asset) =>
+          asset.issuerCountrySource === "catalog" ||
+          asset.issuerCountrySource === "issuer-profile" ||
+          asset.issuerCountrySource === "broker-confirmed"
+        )
         .map((asset) => asset.issuerCountry?.trim())
         .filter((country): country is string => Boolean(country))
         .map(normalizeIssuerCountry)
@@ -130,9 +151,17 @@ export const getStockMarketClass = (group: PortfolioAssetGroup) => {
     return { id: "stock:gpw", label: "Akcje GPW" };
   }
 
-  return getConfirmedIssuerCountry(group) === "USA"
-    ? { id: "stock:usa", label: "Akcje ameryka\u0144skie" }
-    : { id: "stock:international", label: "Akcje mi\u0119dzynarodowe" };
+  const issuerCountry = getConfirmedIssuerCountry(group);
+
+  if (issuerCountry === "USA") {
+    return { id: "stock:usa", label: "Akcje amerykańskie" };
+  }
+
+  if (issuerCountry === UNKNOWN_COUNTRY_LABEL) {
+    return { id: "stock:issuer-country-unknown", label: UNKNOWN_STOCK_COUNTRY_LABEL };
+  }
+
+  return { id: "stock:international", label: "Akcje międzynarodowe" };
 };
 
 /**

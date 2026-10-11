@@ -29,6 +29,7 @@ import type {
   FxRates,
   InstrumentType,
   InstrumentIdentity,
+  IssuerCountrySource,
   InvestmentPortfolio,
   PortfolioBook,
   PortfolioAccountType,
@@ -78,6 +79,11 @@ const normalizeIsin = (value: unknown) => {
   const normalized = typeof value === "string" ? value.trim().toUpperCase() : "";
   return /^[A-Z]{2}[A-Z0-9]{9}[0-9]$/.test(normalized) ? normalized : undefined;
 };
+
+const normalizeIssuerCountrySource = (value: unknown): IssuerCountrySource | undefined =>
+  value === "catalog" || value === "issuer-profile" || value === "broker-confirmed"
+    ? value
+    : undefined;
 
 const normalizeEtfInstrumentIdentity = (
   value: unknown,
@@ -399,6 +405,7 @@ export const normalizeStoredPortfolioAssets = (assets: PortfolioAsset[]) => {
         isin: normalizeIsin(asset.isin),
         instrumentIdentity,
         issuerCountry,
+        issuerCountrySource: normalizeIssuerCountrySource(asset.issuerCountrySource),
         quantity: round(asset.quantity, 6),
         feePln: hasFiniteNumber(asset.feePln) ? round(asset.feePln, 6) : 0,
         purchaseDate: toDateInputValue(asset.purchaseDate, getTodayDateInputValue()),
@@ -749,6 +756,7 @@ const normalizePortfolioAsset = (
         ? asset.priceScale
         : undefined,
     issuerCountry,
+    issuerCountrySource: normalizeIssuerCountrySource(asset.issuerCountrySource),
     instrumentIdentity,
     latestPrice:
       hasFiniteNumber(asset.latestPrice) && asset.latestPrice > 0

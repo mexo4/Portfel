@@ -311,7 +311,11 @@ const toSearchResult = (item: EodhdListing): AssetSearchResult => ({
   source: "api",
   isin: item.isin,
   priceScale: item.priceScale,
-  issuerCountry: item.country,
+  // EODHD Search's Country field describes the listing venue, not the
+  // issuer's country of registration. For ordinary stocks keep it in subtitle
+  // only. Preserve the pre-existing ETF search payload contract; ETFs are not
+  // classified by issuer country in the asset-class allocation.
+  issuerCountry: item.kind === "stock" ? undefined : item.country,
 });
 
 const fetchSearchListings = async (query: string, kind: EodhdSearchKind) => {

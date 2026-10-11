@@ -32,6 +32,9 @@ export type OperationType =
 
 export type AccountKind = "investment" | "cash" | "currency";
 
+/** Provenance for issuer-country metadata. Exchange-country fields must never be marked as issuer data. */
+export type IssuerCountrySource = "catalog" | "issuer-profile" | "broker-confirmed";
+
 export type BrokerCode =
   | "XTB"
   | "IBKR"
@@ -172,6 +175,7 @@ export type AssetCatalogItem = {
   priceScale?: number;
   /** Provider/catalog-confirmed issuer country; never inferred from a suffix. */
   issuerCountry?: string;
+  issuerCountrySource?: IssuerCountrySource;
 };
 
 export type AssetSearchResult = {
@@ -186,6 +190,7 @@ export type AssetSearchResult = {
   isin?: string;
   priceScale?: number;
   issuerCountry?: string;
+  issuerCountrySource?: IssuerCountrySource;
   instrumentIdentity?: InstrumentIdentity;
 };
 
@@ -300,6 +305,7 @@ export type PortfolioAsset = {
   priceScale?: number;
   /** Persisted only when a trusted discovery source supplied the issuer country. */
   issuerCountry?: string;
+  issuerCountrySource?: IssuerCountrySource;
   instrumentIdentity?: InstrumentIdentity;
   latestPrice?: number;
   priceSource?: PortfolioPriceSource;
@@ -333,6 +339,7 @@ export type AssetDraft = {
   isin?: string;
   priceScale?: number;
   issuerCountry?: string;
+  issuerCountrySource?: IssuerCountrySource;
   instrumentIdentity?: InstrumentIdentity;
   marketCurrencyConfirmed?: boolean;
   latestPrice?: number;

@@ -155,6 +155,7 @@ export const searchCatalogAssets = (
       providerId: item.providerId,
       subtitle: item.subtitle,
       issuerCountry: item.issuerCountry,
+      issuerCountrySource: item.issuerCountry ? "catalog" : undefined,
       source: "catalog" as const,
     }));
 };

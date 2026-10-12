@@ -69,7 +69,17 @@ const normalizeIssuerCountry = (value: string) => {
     return UNKNOWN_COUNTRY_LABEL;
   }
 
-  return COUNTRY_ALIASES[normalized] ?? trimmed;
+  const alias = COUNTRY_ALIASES[normalized];
+  if (alias) return alias;
+
+  // GLEIF returns ISO 3166-1 alpha-2 codes for the registered legal entity.
+  // Render those as localized issuer countries instead of exposing raw codes.
+  if (/^[A-Z]{2}$/i.test(trimmed) && typeof Intl.DisplayNames === "function") {
+    const localized = new Intl.DisplayNames(["pl"], { type: "region" }).of(trimmed.toUpperCase());
+    if (localized && localized.toUpperCase() !== trimmed.toUpperCase()) return localized;
+  }
+
+  return trimmed;
 };
 
 const getCanonicalCatalogSymbol = (symbol: string) =>
@@ -108,7 +118,8 @@ export const getConfirmedIssuerCountry = (group: PortfolioAssetGroup) => {
         .filter((asset) =>
           asset.issuerCountrySource === "catalog" ||
           asset.issuerCountrySource === "issuer-profile" ||
-          asset.issuerCountrySource === "broker-confirmed"
+          asset.issuerCountrySource === "broker-confirmed" ||
+          asset.issuerCountrySource === "gleif-isin"
         )
         .map((asset) => asset.issuerCountry?.trim())
         .filter((country): country is string => Boolean(country))

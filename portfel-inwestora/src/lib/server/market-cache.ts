@@ -26,6 +26,7 @@ export const purgeExpiredMarketCacheEntries = async () => {
         OR ("key" LIKE 'gpw-catalog%' AND updated_at < $4)
         OR ("key" LIKE 'treasury-bond-series%' AND updated_at < $4)
         OR ("key" LIKE 'treasury-bond-cpi%' AND updated_at < $5)
+        OR ("key" LIKE 'issuer-country:gleif:isin:%' AND updated_at < $6)
     `,
     [
       isoBefore(1000 * 60 * 60 * 24 * 14),
@@ -33,6 +34,7 @@ export const purgeExpiredMarketCacheEntries = async () => {
       isoBefore(1000 * 60 * 60 * 24),
       isoBefore(1000 * 60 * 60 * 24 * 7),
       isoBefore(1000 * 60 * 60 * 24 * 90),
+      isoBefore(1000 * 60 * 60 * 24 * 365),
     ]
   );
 };
@@ -55,6 +57,23 @@ export const getMarketCachePayload = async <T,>(
   ttlMs: number,
   options: { ignoreEmptyArray?: boolean } = {}
 ) => {
+  const entry = await getMarketCacheEntry(key, ttlMs);
+
+  if (!entry) return null;
+
+  const payload = entry.payload as T;
+
+  if (options.ignoreEmptyArray && Array.isArray(payload) && payload.length === 0) {
+    return null;
+  }
+
+  return payload;
+};
+
+export const getMarketCacheEntry = async (
+  key: string,
+  ttlMs = Number.POSITIVE_INFINITY
+): Promise<{ payload: unknown; updatedAt: string } | null> => {
   const row = await queryOne<MarketCacheRow>(
     'SELECT payload_json, updated_at FROM market_cache WHERE "key" = $1',
     [key]
@@ -71,13 +90,8 @@ export const getMarketCachePayload = async <T,>(
   }
 
   try {
-    const payload = JSON.parse(row.payload_json) as T;
-
-    if (options.ignoreEmptyArray && Array.isArray(payload) && payload.length === 0) {
-      return null;
-    }
-
-    return payload;
+    const payload = JSON.parse(row.payload_json) as unknown;
+    return { payload, updatedAt: row.updated_at };
   } catch {
     return null;
   }
@@ -104,4 +118,29 @@ export const setMarketCachePayload = async (
   );
 
   scheduleMarketCacheMaintenance();
+};
+
+/** Store only if this request started no earlier than the currently cached one. */
+export const setMarketCachePayloadIfNewer = async (
+  key: string,
+  payload: unknown,
+  requestStartedAt: string
+) => {
+  await execute(
+    `
+      INSERT INTO market_cache ("key", payload_json, updated_at)
+      VALUES ($1, $2, $3)
+      ON CONFLICT ("key") DO UPDATE SET
+        payload_json = EXCLUDED.payload_json,
+        updated_at = EXCLUDED.updated_at
+      WHERE market_cache.updated_at <= EXCLUDED.updated_at
+    `,
+    [key, JSON.stringify(payload), requestStartedAt]
+  );
+
+  scheduleMarketCacheMaintenance();
+};
+
+export const deleteMarketCachePayload = async (key: string) => {
+  await execute('DELETE FROM market_cache WHERE "key" = $1', [key]);
 };

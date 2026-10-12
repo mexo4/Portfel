@@ -4,13 +4,19 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { FREE_PLAN_ASSET_LIMIT, MEXO_TESTER_MODE } from "@/lib/constants";
 import { assertUniquePortfolioNames, normalizePortfolioBook, normalizePortfolioState } from "@/lib/portfolio-state";
-import { repairMisclassifiedXtbListingCurrencies } from "@/lib/operation-engine";
+import { getPortfolioInstrumentId, repairMisclassifiedXtbListingCurrencies } from "@/lib/operation-engine";
 import type { NextResponse } from "next/server";
 import { createFreshUserProfile, normalizeUserProfile } from "@/lib/profile";
 import { isForcedProEmail } from "@/lib/server/access";
 import { execute, queryOne, withTransaction } from "@/lib/server/db";
 import { sendPasswordResetEmail, sendVerificationEmail } from "@/lib/server/email";
 import { syncPortfolioCoreTablesInTransaction } from "@/lib/server/portfolio-core-sync";
+import { enrichPortfolioBookIssuerCountries } from "@/lib/issuer-country";
+import {
+  invalidateIssuerCountryCacheForIsin,
+  resolveIssuerCountryByIsin,
+} from "@/lib/server/issuer-country";
+import { normalizeIssuerIsin } from "@/lib/issuer-country";
 import {
   getPortfolioQuoteSnapshots,
   mergePortfolioBookQuoteSnapshots,
@@ -20,6 +26,7 @@ import type {
   InvestmentPortfolio,
   PortfolioBook,
   PortfolioState,
+  IssuerCountrySource,
   SubscriptionPlan,
   SubscriptionStatus,
   UserProfile,
@@ -190,6 +197,41 @@ const parsePortfolioBook = (portfolioJson: string): {
       needsMigration: true,
     };
   }
+};
+
+const issuerMetadataSources = new Set<IssuerCountrySource>([
+  "catalog",
+  "issuer-profile",
+  "broker-confirmed",
+  "gleif-isin",
+]);
+
+const getConfirmedIssuerMetadataByIsin = (book: PortfolioBook) => {
+  const metadata = new Map<string, string>();
+  for (const portfolio of book.portfolios) {
+    const instrumentsById = new Map((portfolio.instruments ?? []).map((instrument) => [instrument.id, instrument]));
+    for (const asset of portfolio.assets) {
+      const instrumentId = getPortfolioInstrumentId(portfolio.id, asset);
+      const instrument = instrumentsById.get(instrumentId);
+      const source = asset.issuerCountrySource ?? instrument?.metadata?.issuerCountrySource;
+      const country = asset.issuerCountry ?? instrument?.metadata?.issuerCountry;
+      const isin = normalizeIssuerIsin(asset.isin) ?? normalizeIssuerIsin(instrument?.isin);
+      if (isin && typeof country === "string" && country.trim() &&
+        typeof source === "string" && issuerMetadataSources.has(source as IssuerCountrySource)) {
+        metadata.set(isin, `${source}:${country.trim().toUpperCase()}`);
+      }
+    }
+    for (const instrument of portfolio.instruments ?? []) {
+      const source = instrument.metadata?.issuerCountrySource;
+      const country = instrument.metadata?.issuerCountry;
+      const isin = normalizeIssuerIsin(instrument.isin);
+      if (isin && typeof country === "string" && country.trim() &&
+        typeof source === "string" && issuerMetadataSources.has(source as IssuerCountrySource)) {
+        metadata.set(isin, `${source}:${country.trim().toUpperCase()}`);
+      }
+    }
+  }
+  return metadata;
 };
 
 const parseUserProfile = (
@@ -772,6 +814,10 @@ export const getCurrentAccountData = async () => {
     portfolioBook,
     await getPortfolioQuoteSnapshots(portfolioBook.portfolios.map((portfolio) => portfolio.id))
   );
+  portfolioBook = await enrichPortfolioBookIssuerCountries(
+    portfolioBook,
+    resolveIssuerCountryByIsin
+  );
 
   const activePortfolio =
     portfolioBook.portfolios.find(
@@ -897,8 +943,14 @@ export const updateCurrentUserPortfolio = async (
   const requestedRevision = Number.isInteger(expectedPortfolioRevision)
     ? expectedPortfolioRevision
     : existingUser.portfolio_revision;
+  const previousPortfolioBook = parsePortfolioBook(existingUser.portfolio_json).portfolioBook;
+  const previousIssuerMetadata = getConfirmedIssuerMetadataByIsin(previousPortfolioBook);
+  const nextIssuerMetadata = getConfirmedIssuerMetadataByIsin(normalizedPortfolio);
+  const issuerIsinsToInvalidate = Array.from(
+    new Set([...previousIssuerMetadata.keys(), ...nextIssuerMetadata.keys()])
+  ).filter((isin) => previousIssuerMetadata.get(isin) !== nextIssuerMetadata.get(isin));
 
-  return withTransaction(async (transaction) => {
+  const result = await withTransaction(async (transaction) => {
     const currentRows = await transaction.query<{
       portfolio_revision: number;
       portfolio_core_revision: number;
@@ -944,6 +996,16 @@ export const updateCurrentUserPortfolio = async (
       portfolioRevision: updatedUser.portfolio_revision,
     };
   });
+
+  await Promise.all(issuerIsinsToInvalidate.map(async (isin) => {
+    try {
+      await invalidateIssuerCountryCacheForIsin(isin);
+    } catch {
+      // Issuer metadata cache invalidation is best-effort and cannot undo a saved portfolio.
+    }
+  }));
+
+  return result;
 };
 
 export const updateCurrentUserSubscription = async (

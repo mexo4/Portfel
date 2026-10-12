@@ -33,7 +33,11 @@ export type OperationType =
 export type AccountKind = "investment" | "cash" | "currency";
 
 /** Provenance for issuer-country metadata. Exchange-country fields must never be marked as issuer data. */
-export type IssuerCountrySource = "catalog" | "issuer-profile" | "broker-confirmed";
+export type IssuerCountrySource =
+  | "catalog"
+  | "issuer-profile"
+  | "broker-confirmed"
+  | "gleif-isin";
 
 export type BrokerCode =
   | "XTB"

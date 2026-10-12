@@ -81,7 +81,10 @@ const normalizeIsin = (value: unknown) => {
 };
 
 const normalizeIssuerCountrySource = (value: unknown): IssuerCountrySource | undefined =>
-  value === "catalog" || value === "issuer-profile" || value === "broker-confirmed"
+  value === "catalog" ||
+  value === "issuer-profile" ||
+  value === "broker-confirmed" ||
+  value === "gleif-isin"
     ? value
     : undefined;
 

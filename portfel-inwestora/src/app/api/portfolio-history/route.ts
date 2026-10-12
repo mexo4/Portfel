@@ -78,7 +78,13 @@ const mergeRealizedAdjustments = (
 export async function POST(request: Request) {
   const requestStartedAt = performance.now();
   const authStartedAt = requestStartedAt;
-  const accountData = await getCurrentAccountData();
+  // Historical series still need quote snapshots because they carry verified
+  // listing metadata (provider, venue and quote currency). Issuer-country
+  // enrichment is unrelated to history and can trigger public GLEIF lookups,
+  // so keep that work out of this latency-critical request.
+  const accountData = await getCurrentAccountData({
+    enrichIssuerCountries: false,
+  });
   const authMs = performance.now() - authStartedAt;
 
   if (!accountData) {

@@ -7,6 +7,8 @@ export type PortfolioScopeSelection =
   | { mode: "SINGLE"; portfolioId: string }
   | { mode: "CUSTOM"; portfolioIds: string[] };
 
+export type PortfolioScopeSyncAction = "WAIT" | "ACKNOWLEDGE" | "APPLY_URL_SCOPE" | "NOOP";
+
 export const isAllPortfoliosSelection = (portfolioId: string | undefined) =>
   portfolioId === ALL_PORTFOLIOS_ID;
 
@@ -34,6 +36,75 @@ export const normalizePortfolioScope = (
   }
   if (selectedIds.length === 1) return { mode: "SINGLE", portfolioId: selectedIds[0]! };
   return { mode: "CUSTOM", portfolioIds: selectedIds };
+};
+
+/** Scope equality is semantic: CUSTOM selections compare by IDs, not checkbox order. */
+export const arePortfolioScopesEqual = (
+  left: PortfolioScopeSelection,
+  right: PortfolioScopeSelection,
+  portfolioIds: ReadonlyArray<string>
+) => {
+  const normalizedLeft = normalizePortfolioScope(left, portfolioIds);
+  const normalizedRight = normalizePortfolioScope(right, portfolioIds);
+  if (normalizedLeft.mode !== normalizedRight.mode) return false;
+  if (normalizedLeft.mode === "ALL" && normalizedRight.mode === "ALL") return true;
+  if (normalizedLeft.mode === "SINGLE" && normalizedRight.mode === "SINGLE") {
+    return normalizedLeft.portfolioId === normalizedRight.portfolioId;
+  }
+  if (normalizedLeft.mode !== "CUSTOM" || normalizedRight.mode !== "CUSTOM") return false;
+  const leftIds = [...normalizedLeft.portfolioIds].sort();
+  const rightIds = [...normalizedRight.portfolioIds].sort();
+  return leftIds.length === rightIds.length && leftIds.every((id, index) => id === rightIds[index]);
+};
+
+/**
+ * Resolves the active real portfolio after a stale-write conflict without
+ * allowing the server's older activePortfolioId to override the route the
+ * user is currently viewing. The saved server book itself remains authoritative.
+ */
+export const getPreferredActivePortfolioId = (
+  scope: PortfolioScopeSelection,
+  currentActivePortfolioId: string,
+  portfolioIds: ReadonlyArray<string>
+) => {
+  if (scope.mode === "SINGLE" && portfolioIds.includes(scope.portfolioId)) {
+    return scope.portfolioId;
+  }
+  if (portfolioIds.includes(currentActivePortfolioId)) return currentActivePortfolioId;
+  return portfolioIds[0] ?? "";
+};
+
+/**
+ * Prevents the URL -> active-book sync effect from interpreting an in-flight
+ * app-initiated navigation's old URL as a new user selection. A URL change to
+ * somewhere other than the pending target is treated as external navigation.
+ */
+export const getPortfolioScopeSyncAction = ({
+  urlScope,
+  lastObservedUrlScope,
+  pendingScope,
+  activePortfolioId,
+  isMutationPending,
+  portfolioIds,
+}: {
+  urlScope: PortfolioScopeSelection;
+  lastObservedUrlScope: PortfolioScopeSelection;
+  pendingScope: PortfolioScopeSelection | null;
+  activePortfolioId: string;
+  isMutationPending: boolean;
+  portfolioIds: ReadonlyArray<string>;
+}): PortfolioScopeSyncAction => {
+  if (isMutationPending) return "WAIT";
+
+  if (pendingScope) {
+    if (arePortfolioScopesEqual(urlScope, pendingScope, portfolioIds)) return "ACKNOWLEDGE";
+    if (arePortfolioScopesEqual(urlScope, lastObservedUrlScope, portfolioIds)) return "WAIT";
+    return "APPLY_URL_SCOPE";
+  }
+
+  return urlScope.mode === "SINGLE" && urlScope.portfolioId !== activePortfolioId
+    ? "APPLY_URL_SCOPE"
+    : "NOOP";
 };
 
 /** URL state is user-scoped by authorization: IDs are always intersected with the caller's own portfolio list. */

@@ -2,7 +2,7 @@
 
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import dynamic from "next/dynamic";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type ComponentProps } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type ComponentProps } from "react";
 import AppWorkspaceShell from "@/components/AppWorkspaceShell";
 import AssetModeSelector from "@/components/AssetModeSelector";
 import { PortfolioWorkspaceProvider, type PortfolioWorkspaceValue } from "@/components/PortfolioWorkspaceContext";
@@ -94,6 +94,9 @@ import { getGpwWatchlistCanonicalKey, type WatchlistItem } from "@/lib/watchlist
 import {
   ALL_PORTFOLIOS_ID,
   CUSTOM_PORTFOLIOS_ID,
+  arePortfolioScopesEqual,
+  getPortfolioScopeSyncAction,
+  getPreferredActivePortfolioId,
   getPortfolioScopeIds,
   getPortfolioScopeLabel,
   getWorkspaceReadHref,
@@ -1117,6 +1120,25 @@ export default function PortfolioApp({
     () => parsePortfolioScope(searchParams, portfolioIds),
     [portfolioIds, searchParams]
   );
+  const pendingPortfolioScopeRef = useRef<PortfolioScopeSelection | null>(null);
+  const lastObservedPortfolioScopeRef = useRef(portfolioScope);
+  const currentPortfolioScopeRef = useRef(portfolioScope);
+  const currentPathnameRef = useRef(pathname);
+  const currentSearchParamsRef = useRef(searchParams);
+  const currentRouteKey = `${pathname}?${searchParams.toString()}`;
+  const currentRouteKeyRef = useRef(currentRouteKey);
+  const lastObservedRouteKeyRef = useRef(currentRouteKey);
+  const expectedRouteKeyRef = useRef<string | null>(null);
+  const portfolioNavigationGenerationRef = useRef(0);
+  // Update these before browser events or async callbacks can observe a newly
+  // committed route, so a delayed portfolio save never navigates from a stale
+  // render closure.
+  useLayoutEffect(() => {
+    currentPathnameRef.current = pathname;
+    currentSearchParamsRef.current = searchParams;
+    currentRouteKeyRef.current = currentRouteKey;
+    currentPortfolioScopeRef.current = portfolioScope;
+  }, [currentRouteKey, pathname, portfolioScope, searchParams]);
   const selectedPortfolioIds = useMemo(
     () => getPortfolioScopeIds(portfolioScope, portfolioIds),
     [portfolioIds, portfolioScope]
@@ -1151,27 +1173,104 @@ export default function PortfolioApp({
       nextCurrency = activeBaseCurrency,
       navigation: "push" | "replace" = "replace"
     ) => {
-      const nextParams = new URLSearchParams(searchParams.toString());
+      const nextParams = new URLSearchParams(currentSearchParamsRef.current.toString());
       nextParams.delete("portfolios");
 
-      if (nextSelection.mode === "ALL") {
+      const normalizedSelection = normalizePortfolioScope(nextSelection, portfolioIds);
+
+      if (normalizedSelection.mode === "ALL") {
         nextParams.set("portfolio", "all");
         nextParams.set("currency", toCurrencyCode(nextCurrency, activePortfolioBaseCurrency));
-      } else if (nextSelection.mode === "SINGLE") {
-        nextParams.set("portfolio", nextSelection.portfolioId);
+      } else if (normalizedSelection.mode === "SINGLE") {
+        nextParams.set("portfolio", normalizedSelection.portfolioId);
         nextParams.set("currency", toCurrencyCode(nextCurrency, activePortfolioBaseCurrency));
       } else {
         nextParams.set("portfolio", "custom");
-        nextParams.set("portfolios", nextSelection.portfolioIds.join(","));
+        nextParams.set("portfolios", normalizedSelection.portfolioIds.join(","));
         nextParams.set("currency", toCurrencyCode(nextCurrency, activePortfolioBaseCurrency));
       }
 
       const query = nextParams.toString();
-      const href = query ? `${pathname}?${query}` : pathname;
+      const nextPathname = currentPathnameRef.current;
+      const href = query ? `${nextPathname}?${query}` : nextPathname;
+      const currentHref = currentRouteKeyRef.current;
+
+      pendingPortfolioScopeRef.current = arePortfolioScopesEqual(
+        normalizedSelection,
+        currentPortfolioScopeRef.current,
+        portfolioIds
+      ) ? null : normalizedSelection;
+
+      if (href === currentHref) {
+        if (expectedRouteKeyRef.current) {
+          expectedRouteKeyRef.current = null;
+          portfolioNavigationGenerationRef.current += 1;
+        }
+        return;
+      }
+
+      // A later explicit route update supersedes any async selection intent
+      // that has not yet completed. The expected URL distinguishes this
+      // navigation from browser back/forward or a link the user clicked.
+      portfolioNavigationGenerationRef.current += 1;
+      expectedRouteKeyRef.current = href;
       router[navigation](href, { scroll: false });
     },
-    [activeBaseCurrency, activePortfolioBaseCurrency, pathname, router, searchParams]
+    [activeBaseCurrency, activePortfolioBaseCurrency, portfolioIds, router]
   );
+
+  useEffect(() => {
+    const handlePopState = () => {
+      portfolioNavigationGenerationRef.current += 1;
+      pendingPortfolioScopeRef.current = null;
+      expectedRouteKeyRef.current = null;
+    };
+
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, []);
+
+  useEffect(() => {
+    if (lastObservedRouteKeyRef.current === currentRouteKey) return;
+
+    lastObservedRouteKeyRef.current = currentRouteKey;
+    if (expectedRouteKeyRef.current === currentRouteKey) {
+      expectedRouteKeyRef.current = null;
+      return;
+    }
+
+    const pendingScope = pendingPortfolioScopeRef.current;
+    const currentScope = currentPortfolioScopeRef.current;
+    if (
+      pendingScope &&
+      arePortfolioScopesEqual(currentScope, pendingScope, portfolioIds)
+    ) {
+      // The scope has landed; a concurrent tab/path transition should not
+      // invalidate a selection that is already reflected in the URL.
+      pendingPortfolioScopeRef.current = null;
+      expectedRouteKeyRef.current = null;
+      return;
+    }
+    if (
+      pendingScope &&
+      arePortfolioScopesEqual(
+        currentScope,
+        lastObservedPortfolioScopeRef.current,
+        portfolioIds
+      )
+    ) {
+      // Workspace-tab navigation preserves the current URL scope. Keep a
+      // pending portfolio selection alive so it can complete on the new path.
+      return;
+    }
+
+    // A different route than the one we initiated is a real navigation (link,
+    // back/forward, or another app action), so older async selection work must
+    // not later replace it.
+    expectedRouteKeyRef.current = null;
+    pendingPortfolioScopeRef.current = null;
+    portfolioNavigationGenerationRef.current += 1;
+  }, [currentRouteKey, portfolioIds]);
   const allPortfolioAssets = useMemo(
     () => selectedPortfolios.flatMap((portfolio) => portfolio.assets),
     [selectedPortfolios]
@@ -1537,12 +1636,20 @@ export default function PortfolioApp({
   );
 
   const applyPersistedPortfolioBook = useCallback(
-    (portfolioBook: PortfolioBook, portfolioRevision: number) => {
+    (
+      portfolioBook: PortfolioBook,
+      portfolioRevision: number,
+      preferredActivePortfolioId?: string
+    ) => {
       const normalizedBook = normalizePortfolioBook(portfolioBook);
-      const nextActivePortfolio =
-        normalizedBook.portfolios.find(
-          (portfolio) => portfolio.id === normalizedBook.activePortfolioId
-        ) ?? normalizedBook.portfolios[0];
+      const nextActivePortfolioId = getPreferredActivePortfolioId(
+        portfolioScope,
+        preferredActivePortfolioId ?? normalizedBook.activePortfolioId,
+        normalizedBook.portfolios.map(({ id }) => id)
+      );
+      const nextActivePortfolio = normalizedBook.portfolios.find(
+        (portfolio) => portfolio.id === nextActivePortfolioId
+      ) ?? normalizedBook.portfolios[0];
       const nextWorkspace = {
         assets: normalizeStoredPortfolioAssets(nextActivePortfolio.assets),
         sales: getSortedPortfolioSales(nextActivePortfolio.sales),
@@ -1554,10 +1661,10 @@ export default function PortfolioApp({
       portfolioRevisionRef.current = portfolioRevision;
       lastPersistedPortfolioBookRef.current = normalizedBook;
       lastPersistedPortfolioRevisionRef.current = portfolioRevision;
-      applyPortfolioBook(normalizedBook.portfolios, normalizedBook.activePortfolioId);
+      applyPortfolioBook(normalizedBook.portfolios, nextActivePortfolio.id);
       replaceWorkspace(nextWorkspace);
     },
-    [applyPortfolioBook, replaceWorkspace]
+    [applyPortfolioBook, portfolioScope, replaceWorkspace]
   );
 
   const commitActivePortfolioSnapshot = useCallback(
@@ -1667,12 +1774,28 @@ export default function PortfolioApp({
                   portfolios: conflictPayload.portfolios,
                   activePortfolioId: conflictPayload.activePortfolioId,
                 };
+                const preferredActivePortfolioId = getPreferredActivePortfolioId(
+                  portfolioScope,
+                  activePortfolioIdRef.current,
+                  serverBook.portfolios.map(({ id }) => id)
+                );
+                const reconciledUiBook: PortfolioBook = {
+                  ...serverBook,
+                  activePortfolioId: preferredActivePortfolioId,
+                };
 
                 pendingPortfolioSaveRef.current = null;
-                ignoredPortfolioSaveFingerprintRef.current = getPortfolioSaveFingerprint(serverBook);
-                lastSavedPortfolioFingerprintRef.current =
-                  ignoredPortfolioSaveFingerprintRef.current;
-                applyPersistedPortfolioBook(serverBook, conflictPayload.portfolioRevision);
+                // The server book is the conflict baseline. Ignore the
+                // route-preserving local selection fingerprint once so the
+                // persistence effect does not immediately retry the same
+                // conflicting full-book write in a loop.
+                ignoredPortfolioSaveFingerprintRef.current = getPortfolioSaveFingerprint(reconciledUiBook);
+                lastSavedPortfolioFingerprintRef.current = getPortfolioSaveFingerprint(serverBook);
+                applyPersistedPortfolioBook(
+                  serverBook,
+                  conflictPayload.portfolioRevision,
+                  preferredActivePortfolioId
+                );
                 restoredFromConflict = true;
               }
             }
@@ -1698,7 +1821,7 @@ export default function PortfolioApp({
 
     portfolioSavePromiseRef.current = savePromise;
     return savePromise;
-  }, [applyPersistedPortfolioBook]);
+  }, [applyPersistedPortfolioBook, portfolioScope]);
 
   const queuePortfolioSave = useCallback(
     (nextBook: PortfolioBook, immediate = false) => {
@@ -1803,11 +1926,18 @@ export default function PortfolioApp({
   );
 
   const restoreLastPersistedPortfolioBook = useCallback(() => {
-    applyPersistedPortfolioBook(
-      lastPersistedPortfolioBookRef.current,
-      lastPersistedPortfolioRevisionRef.current
+    const persistedBook = lastPersistedPortfolioBookRef.current;
+    const preferredActivePortfolioId = getPreferredActivePortfolioId(
+      portfolioScope,
+      activePortfolioIdRef.current,
+      persistedBook.portfolios.map(({ id }) => id)
     );
-  }, [applyPersistedPortfolioBook]);
+    applyPersistedPortfolioBook(
+      persistedBook,
+      lastPersistedPortfolioRevisionRef.current,
+      preferredActivePortfolioId
+    );
+  }, [applyPersistedPortfolioBook, portfolioScope]);
 
   const handleBaseCurrencyChange = async (value: string) => {
     if (isPortfolioMutationPending) {
@@ -4720,6 +4850,7 @@ export default function PortfolioApp({
     if (isPortfolioMutationPending) {
       return;
     }
+    const navigationGeneration = portfolioNavigationGenerationRef.current;
 
     if (portfolioId === ALL_PORTFOLIOS_ID) {
       // Commit the currently visible real portfolio into local memory before
@@ -4746,6 +4877,11 @@ export default function PortfolioApp({
       return;
     }
 
+    const requestedScope: PortfolioScopeSelection = {
+      mode: "SINGLE",
+      portfolioId: nextPortfolio.id,
+    };
+    pendingPortfolioScopeRef.current = requestedScope;
     setIsPortfolioMutationPending(true);
     applyPortfolioBook(currentPortfolios, nextPortfolio.id);
     loadPortfolioIntoWorkspace(nextPortfolio);
@@ -4759,8 +4895,21 @@ export default function PortfolioApp({
         },
         true
       );
-      replacePortfolioContextQuery({ mode: "SINGLE", portfolioId: nextPortfolio.id }, activeBaseCurrency, navigation);
+      if (navigationGeneration === portfolioNavigationGenerationRef.current) {
+        replacePortfolioContextQuery({ mode: "SINGLE", portfolioId: nextPortfolio.id }, activeBaseCurrency, navigation);
+      } else if (
+        pendingPortfolioScopeRef.current?.mode === "SINGLE" &&
+        pendingPortfolioScopeRef.current.portfolioId === nextPortfolio.id
+      ) {
+        pendingPortfolioScopeRef.current = null;
+      }
     } catch {
+      if (
+        pendingPortfolioScopeRef.current?.mode === "SINGLE" &&
+        pendingPortfolioScopeRef.current.portfolioId === nextPortfolio.id
+      ) {
+        pendingPortfolioScopeRef.current = null;
+      }
       restoreLastPersistedPortfolioBook();
     } finally {
       setIsPortfolioMutationPending(false);
@@ -4783,17 +4932,29 @@ export default function PortfolioApp({
   };
 
   useEffect(() => {
-    if (
-      portfolioScope.mode === "SINGLE" &&
-      portfolioScope.portfolioId !== activePortfolioId &&
-      !isPortfolioMutationPending
-    ) {
+    const syncAction = getPortfolioScopeSyncAction({
+      urlScope: portfolioScope,
+      lastObservedUrlScope: lastObservedPortfolioScopeRef.current,
+      pendingScope: pendingPortfolioScopeRef.current,
+      activePortfolioId,
+      isMutationPending: isPortfolioMutationPending,
+      portfolioIds,
+    });
+    lastObservedPortfolioScopeRef.current = portfolioScope;
+
+    if (syncAction === "ACKNOWLEDGE") {
+      pendingPortfolioScopeRef.current = null;
+      return;
+    }
+
+    if (syncAction === "APPLY_URL_SCOPE" && portfolioScope.mode === "SINGLE") {
+      pendingPortfolioScopeRef.current = null;
       void handleSelectPortfolio(portfolioScope.portfolioId);
     }
     // The handler intentionally snapshots the currently visible real book;
     // URL changes are the source of truth only for SINGLE read scopes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activePortfolioId, isPortfolioMutationPending, portfolioScope]);
+  }, [activePortfolioId, isPortfolioMutationPending, portfolioIds, portfolioScope]);
 
   const handleCreatePortfolio = async ({
     name,

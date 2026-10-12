@@ -62,3 +62,15 @@ test("portfolio history keeps account rules per real portfolio and deduplicates 
   assert.match(route, /buildAutomaticBondCouponAdjustments\([\s\S]*corePortfolio\.accountType/);
   assert.match(workspace, /accountType: portfolio\.accountType/);
 });
+
+test("history requests keep verified listing snapshots but skip unrelated GLEIF issuer lookups", async () => {
+  const [route, auth] = await Promise.all([
+    readSource("src/app/api/portfolio-history/route.ts"),
+    readSource("src/lib/server/auth.ts"),
+  ]);
+
+  assert.match(route, /getCurrentAccountData\(\{\s*enrichIssuerCountries:\s*false,\s*\}\)/);
+  assert.match(auth, /mergePortfolioBookQuoteSnapshots\([\s\S]*?getPortfolioQuoteSnapshots\(/);
+  assert.match(auth, /if \(enrichIssuerCountries\)\s*\{[\s\S]*?enrichPortfolioBookIssuerCountries\(/);
+  assert.match(route, /Server-Timing/);
+});

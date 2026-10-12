@@ -784,7 +784,14 @@ export const loginAccount = async ({
   return toAuthenticatedUser(await withForcedProSubscription(user));
 };
 
-export const getCurrentAccountData = async () => {
+export type CurrentAccountDataOptions = {
+  /** Issuer enrichment is needed by portfolio structure, not chart history. */
+  enrichIssuerCountries?: boolean;
+};
+
+export const getCurrentAccountData = async ({
+  enrichIssuerCountries = true,
+}: CurrentAccountDataOptions = {}) => {
   // Load the portfolio read model in the indexed session lookup instead of
   // paying for a second users query on every workspace page and API call.
   const sessionUser = await getCurrentSessionUser(true);
@@ -810,14 +817,18 @@ export const getCurrentAccountData = async () => {
     portfolioRevision = persistedPortfolio.portfolioRevision;
   }
 
+  // Quote snapshots carry verified listing metadata (including quote
+  // currency/provider), which is also required by historical price lookup.
   portfolioBook = mergePortfolioBookQuoteSnapshots(
     portfolioBook,
     await getPortfolioQuoteSnapshots(portfolioBook.portfolios.map((portfolio) => portfolio.id))
   );
-  portfolioBook = await enrichPortfolioBookIssuerCountries(
-    portfolioBook,
-    resolveIssuerCountryByIsin
-  );
+  if (enrichIssuerCountries) {
+    portfolioBook = await enrichPortfolioBookIssuerCountries(
+      portfolioBook,
+      resolveIssuerCountryByIsin
+    );
+  }
 
   const activePortfolio =
     portfolioBook.portfolios.find(

@@ -48,12 +48,12 @@ test("ordinary shares are split by GPW listing and confirmed issuer country", ()
 }
 );
 
-test("unproven legacy exchange-country metadata is not classified as issuer country", () => {
+test("legacy stocks without confirmed issuer metadata remain visible as international, never unknown", () => {
   const legacy = stock({ symbol: "TM.US", country: "USA" });
   assert.equal(getConfirmedIssuerCountry(legacy), UNKNOWN_COUNTRY_LABEL);
   assert.deepEqual(getStockMarketClass(legacy), {
-    id: "stock:issuer-country-unknown",
-    label: "Akcje — nieustalony kraj",
+    id: "stock:international",
+    label: "Akcje międzynarodowe",
   });
 });
 
@@ -73,7 +73,7 @@ test("allocation remains additive for SINGLE, ALL and CUSTOM portfolio scopes", 
   assert.equal(getTotal(["p2", "p3"]), 280); // CUSTOM
 });
 
-test("US aliases normalize, and conflicting issuer metadata remains unknown", () => {
+test("US aliases normalize, and conflicting issuer metadata falls back to international", () => {
   assert.equal(getStockMarketClass(stock({ symbol: "AAPL", country: "United States of America", source: "issuer-profile" })).id, "stock:usa");
   const conflicting = {
     ...stock({ symbol: "DUAL", country: "USA", source: "issuer-profile" }),
@@ -83,10 +83,10 @@ test("US aliases normalize, and conflicting issuer metadata remains unknown", ()
     ],
   };
   assert.equal(getConfirmedIssuerCountry(conflicting), UNKNOWN_COUNTRY_LABEL);
-  assert.equal(getStockMarketClass(conflicting).id, "stock:issuer-country-unknown");
+  assert.equal(getStockMarketClass(conflicting).id, "stock:international");
 });
 
-test("ETF and non-stock asset classes are untouched by ordinary-stock country allocation", () => {
+test("ETF and non-stock asset classes stay untouched and no fourth stock country bucket is emitted", () => {
   const result = getAssetClassAllocation([
     { kind: "etf", totalValue: 40, lots: [{ issuerCountry: "USA", issuerCountrySource: "issuer-profile" }] },
     { kind: "crypto", totalValue: 30, lots: [] },
@@ -95,9 +95,10 @@ test("ETF and non-stock asset classes are untouched by ordinary-stock country al
   assert.deepEqual(result, [
     { id: "etf", label: "ETF", totalValue: 40 },
     { id: "crypto", label: "Krypto", totalValue: 30 },
-    { id: "stock:issuer-country-unknown", label: "Akcje — nieustalony kraj", totalValue: 20 },
+    { id: "stock:international", label: "Akcje międzynarodowe", totalValue: 20 },
   ]);
   assert.equal(result.reduce((sum, item) => sum + item.totalValue, 0), 90);
+  assert.equal(result.some((item) => item.id === "stock:issuer-country-unknown"), false);
 });
 
 test("legacy country strings remain stored but are not promoted without trusted provenance", () => {
@@ -137,7 +138,7 @@ test("legacy country strings remain stored but are not promoted without trusted 
   assert.equal(legacy?.issuerCountry, "USA");
   assert.equal(legacy?.issuerCountrySource, undefined);
   assert.equal(verified?.issuerCountrySource, "issuer-profile");
-  assert.equal(getStockMarketClass({ kind: "stock", totalValue: 10, lots: [legacy] }).id, "stock:issuer-country-unknown");
+  assert.equal(getStockMarketClass({ kind: "stock", totalValue: 10, lots: [legacy] }).id, "stock:international");
   assert.equal(getStockMarketClass({ kind: "stock", totalValue: 10, lots: [verified] }).id, "stock:usa");
 });
 

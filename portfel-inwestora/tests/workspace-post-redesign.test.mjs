@@ -216,7 +216,7 @@ test("asset-class allocation orders actual value and classifies stocks by their 
     { kind: "etf", symbol: "ETFBDIVPL", totalValue: 300.95, lots: [{}] },
     { kind: "crypto", symbol: "BTC", totalValue: 470.82, lots: [{}] },
     { kind: "stock", symbol: "AAPL", totalValue: 200, lots: [{ issuerCountry: "USA", issuerCountrySource: "issuer-profile" }] },
-    // Unverified country metadata is shown separately, not forced into international.
+    // Unknown country is retained in the international bucket unless the issuer is verified as U.S.
     { kind: "stock", symbol: "UNKNOWN.DE", totalValue: 50, lots: [{}] },
   ]);
 
@@ -225,7 +225,7 @@ test("asset-class allocation orders actual value and classifies stocks by their 
     { id: "crypto", label: "Krypto", totalValue: 470.82 },
     { id: "etf", label: "ETF", totalValue: 300.95 },
     { id: "stock:usa", label: "Akcje ameryka\u0144skie", totalValue: 200 },
-    { id: "stock:issuer-country-unknown", label: "Akcje \u2014 nieustalony kraj", totalValue: 50 },
+    { id: "stock:international", label: "Akcje międzynarodowe", totalValue: 50 },
   ]);
 });
 

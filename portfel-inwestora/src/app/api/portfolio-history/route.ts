@@ -3,6 +3,10 @@ import { NextResponse } from "next/server";
 import { buildAutomaticBondCouponAdjustments, normalizePortfolioState } from "@/lib/portfolio-state";
 import { getCurrentAccountData } from "@/lib/server/auth";
 import { buildAggregatePortfolioHistory, buildPortfolioHistory } from "@/lib/server/portfolio-history";
+import {
+  getCachedPortfolioHistoryResponse,
+  setCachedPortfolioHistoryResponse,
+} from "@/lib/server/portfolio-history-response-cache";
 import { getSortedPortfolioRealizedAdjustments } from "@/lib/portfolio-state";
 import { ensurePortfolioCoreModel } from "@/lib/operation-engine";
 import { getAuthorizedPortfolioScopeIds } from "@/lib/portfolio-selection";
@@ -38,19 +42,40 @@ const buildHistoryOnce = (
 const historyBuildKey = (userId: string, revision: number, input: unknown) =>
   `${userId}:${revision}:${createHash("sha256").update(JSON.stringify(input)).digest("hex")}`;
 
+const getOrBuildHistoryResponse = async (
+  key: string,
+  build: () => Promise<PortfolioHistoryResponse>
+) => {
+  const cached = getCachedPortfolioHistoryResponse(key);
+  if (cached) return { response: cached, cacheStatus: "hit" as const };
+
+  const alreadyBuilding = historyBuildsInFlight.has(key);
+  const response = await buildHistoryOnce(key, async () => {
+    const cachedAfterRace = getCachedPortfolioHistoryResponse(key);
+    if (cachedAfterRace) return cachedAfterRace;
+    const built = await build();
+    setCachedPortfolioHistoryResponse(key, built);
+    return built;
+  });
+  return { response, cacheStatus: alreadyBuilding ? "shared" as const : "miss" as const };
+};
+
+const currentHistoryDate = () => new Date().toISOString().slice(0, 10);
+
 const respondWithTiming = (
   body: unknown,
   status: number,
   startedAt: number,
   authMs: number,
   buildMs: number,
-  scopeCount: number
+  scopeCount: number,
+  cacheStatus: "hit" | "miss" | "shared" = "miss"
 ) => {
   const response = NextResponse.json(body, { status });
   response.headers.set("Cache-Control", "private, no-store");
   response.headers.set(
     "Server-Timing",
-    `auth;dur=${authMs.toFixed(1)}, history;dur=${buildMs.toFixed(1)}, total;dur=${(performance.now() - startedAt).toFixed(1)}`
+    `auth;dur=${authMs.toFixed(1)}, history;dur=${buildMs.toFixed(1)}, historycache;desc="${cacheStatus}", total;dur=${(performance.now() - startedAt).toFixed(1)}`
   );
   if (process.env.PORTFOLIO_HISTORY_DIAGNOSTICS === "true") {
     console.info("[portfolio-history] request", {
@@ -58,6 +83,7 @@ const respondWithTiming = (
       scopeCount,
       authMs: Number(authMs.toFixed(1)),
       historyMs: Number(buildMs.toFixed(1)),
+      historyCache: cacheStatus,
       totalMs: Number((performance.now() - startedAt).toFixed(1)),
     });
   }
@@ -149,11 +175,25 @@ export async function POST(request: Request) {
         }];
       });
       const historyStartedAt = performance.now();
-      const history = await buildHistoryOnce(
-        historyBuildKey(accountData.user.id, accountData.portfolioRevision, { ids: authorizedIds, benchmarks, presentationCurrency }),
+      const historyKey = historyBuildKey(accountData.user.id, accountData.portfolioRevision, {
+        ids: [...authorizedIds].sort(),
+        benchmarks,
+        presentationCurrency,
+        historyDate: currentHistoryDate(),
+      });
+      const { response: history, cacheStatus } = await getOrBuildHistoryResponse(
+        historyKey,
         () => buildAggregatePortfolioHistory({ portfolioScopes, benchmarks, presentationCurrency })
       );
-      return respondWithTiming(history, 200, requestStartedAt, authMs, performance.now() - historyStartedAt, portfolioScopes.length);
+      return respondWithTiming(
+        history,
+        200,
+        requestStartedAt,
+        authMs,
+        performance.now() - historyStartedAt,
+        portfolioScopes.length,
+        cacheStatus
+      );
     }
     const portfolioState = normalizePortfolioState({
       assets: Array.isArray(payload.assets) ? payload.assets : [],
@@ -173,16 +213,18 @@ export async function POST(request: Request) {
     const operations = Array.isArray(payload.operations) ? payload.operations : [];
     const accounts = Array.isArray(payload.accounts) ? payload.accounts : [];
     const historyStartedAt = performance.now();
-    const history = await buildHistoryOnce(
-      historyBuildKey(accountData.user.id, accountData.portfolioRevision, {
-        assets: portfolioState.assets,
-        sales: portfolioState.sales,
-        realizedAdjustments: effectiveRealizedAdjustments,
-        operations,
-        accounts,
-        benchmarks,
-        presentationCurrency,
-      }),
+    const historyKey = historyBuildKey(accountData.user.id, accountData.portfolioRevision, {
+      assets: portfolioState.assets,
+      sales: portfolioState.sales,
+      realizedAdjustments: effectiveRealizedAdjustments,
+      operations,
+      accounts,
+      benchmarks,
+      presentationCurrency,
+      historyDate: currentHistoryDate(),
+    });
+    const { response: history, cacheStatus } = await getOrBuildHistoryResponse(
+      historyKey,
       () => buildPortfolioHistory({
         assets: portfolioState.assets,
         sales: portfolioState.sales,
@@ -194,7 +236,15 @@ export async function POST(request: Request) {
       })
     );
 
-    return respondWithTiming(history, 200, requestStartedAt, authMs, performance.now() - historyStartedAt, 1);
+    return respondWithTiming(
+      history,
+      200,
+      requestStartedAt,
+      authMs,
+      performance.now() - historyStartedAt,
+      1,
+      cacheStatus
+    );
   } catch (error) {
     const message =
       error instanceof Error

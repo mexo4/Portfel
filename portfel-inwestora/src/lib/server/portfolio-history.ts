@@ -1,4 +1,5 @@
-import { getMarketCachePayload, setMarketCachePayload } from "@/lib/server/market-cache";
+import { getMarketCacheEntry, setMarketCachePayload } from "@/lib/server/market-cache";
+import { isReusableHistoryCacheEntry } from "@/lib/server/portfolio-history-cache-policy";
 import { fetchFxRatesServer } from "@/lib/server/market-data";
 import { fetchTreasuryBondQuoteSeriesServer } from "@/lib/server/treasury-bonds";
 import { normalizeYahooMoneyUnit } from "@/lib/server/yahoo";
@@ -91,7 +92,6 @@ type AssetSeriesDefinition = {
   kind: AssetKind;
 };
 
-const getCachedPayload = getMarketCachePayload;
 const setCachedPayload = setMarketCachePayload;
 
 const EODHD_API_KEY = process.env.EODHD_API_KEY ?? "";
@@ -347,13 +347,16 @@ const getCachedOrFetch = async <T,>(
 
   const request = (async () => {
     const startedAt = performance.now();
-    const cachedPayload = await getCachedPayload<T>(key, ttlMs, {
-      ignoreEmptyArray: true,
-    });
+    const cachedEntry = await getMarketCacheEntry(key, ttlMs);
 
-    if (cachedPayload !== null) {
+    if (cachedEntry !== null && isReusableHistoryCacheEntry(cachedEntry.payload, cachedEntry.updatedAt)) {
+      const cachedPayload = cachedEntry.payload as T;
+      const isNegativeArrayCache = Array.isArray(cachedPayload) && cachedPayload.length === 0;
       logHistoryDiagnostic("cache-hit", {
         key: createHash("sha256").update(key).digest("hex").slice(0, 10),
+        source: key.startsWith("portfolio-history:") ? key.split(":")[1] ?? "history" : "history",
+        empty: isNegativeArrayCache ? 1 : 0,
+        points: Array.isArray(cachedPayload) ? cachedPayload.length : 0,
         durationMs: Math.round(performance.now() - startedAt),
       });
       return cachedPayload;
@@ -361,10 +364,17 @@ const getCachedOrFetch = async <T,>(
 
     const fetchStartedAt = performance.now();
     const payload = await fetcher();
+    const fetchMs = performance.now() - fetchStartedAt;
+    const storeStartedAt = performance.now();
     await setCachedPayload(key, payload);
+    const storeMs = performance.now() - storeStartedAt;
     logHistoryDiagnostic("cache-miss", {
       key: createHash("sha256").update(key).digest("hex").slice(0, 10),
-      fetchAndStoreMs: Math.round(performance.now() - fetchStartedAt),
+      source: key.startsWith("portfolio-history:") ? key.split(":")[1] ?? "history" : "history",
+      empty: Array.isArray(payload) && payload.length === 0 ? 1 : 0,
+      points: Array.isArray(payload) ? payload.length : 0,
+      fetchMs: Math.round(fetchMs),
+      cacheWriteMs: Math.round(storeMs),
       totalMs: Math.round(performance.now() - startedAt),
     });
     return payload;
@@ -2046,6 +2056,9 @@ export const buildPortfolioHistory = async ({
   logHistoryDiagnostic("portfolio-ready", {
     days: points.length,
     instruments: instrumentDefinitions.length,
+    segments: segments.length,
+    operations: operations.length,
+    accounts: accounts.length,
     warnings: warnings.size,
     durationMs: Math.round(performance.now() - buildStartedAt),
     twrStatus: twrStatus ?? "unavailable",

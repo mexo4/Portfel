@@ -4,7 +4,6 @@ import { getGpwTickerCore, isGpwSymbol, normalizeSymbol } from "@/lib/ticker";
 import { classifyInstrument, type InstrumentClass } from "@/lib/instrument-classification";
 
 export const UNKNOWN_COUNTRY_LABEL = "Inne / Brak danych";
-export const UNKNOWN_STOCK_COUNTRY_LABEL = "Akcje — nieustalony kraj";
 
 export type GeographicAllocationItem = {
   country: string;
@@ -168,16 +167,18 @@ export const getStockMarketClass = (group: PortfolioAssetGroup) => {
     return { id: "stock:usa", label: "Akcje amerykańskie" };
   }
 
-  if (issuerCountry === UNKNOWN_COUNTRY_LABEL) {
-    return { id: "stock:issuer-country-unknown", label: UNKNOWN_STOCK_COUNTRY_LABEL };
-  }
-
+  // For the three-way stock allocation, the user wants only verified U.S.
+  // issuers separated from GPW listings. Old records often have no reliable
+  // issuer-country provenance, so keep those visible in International rather
+  // than creating a fourth "unknown country" bucket. This does not alter the
+  // stored country metadata or financial values.
   return { id: "stock:international", label: "Akcje międzynarodowe" };
 };
 
 /**
- * The asset-class card can split stocks only when issuer-country metadata is
- * confirmed. It never derives a country from a ticker suffix or an exchange.
+ * GPW and confirmed U.S. issuer metadata are explicit buckets. Other ordinary
+ * stocks remain visible under International; we do not infer USA from a
+ * listing venue or ticker suffix.
  * ETFs intentionally remain a separate class because no look-through
  * allocation exists yet.
  */

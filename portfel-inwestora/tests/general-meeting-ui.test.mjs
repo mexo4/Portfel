@@ -28,7 +28,7 @@ test("Wydarzenia GPW show meeting time, registration date and investor guidance"
 
   assert.match(panel, /event\.eventType === "GENERAL_MEETING"/);
   assert.match(panel, /Dzień rejestracji:/);
-  assert.match(panel, /16 dni przed WZA · szczegóły uczestnictwa sprawdź u brokera/);
+  assert.match(panel, /Data wskazana w ogłoszeniu emitenta · szczegóły uczestnictwa sprawdź u brokera/);
   assert.match(panel, /godz\. \{formatEventTime\(event\.eventTime\)\}/);
   assert.match(panel, /Termin zmieniony/);
   assert.doesNotMatch(panel, /Brak potwierdzonych przyszłych terminów raportów/);

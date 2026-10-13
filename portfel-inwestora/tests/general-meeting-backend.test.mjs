@@ -62,9 +62,13 @@ test("a stale convening cannot resurrect a cancelled meeting, but a later formal
   );
 });
 
-test("WZA reuses central ESPI synchronization and preserves each report source", async () => {
+test("WZA uses a focused shared GPW synchronization lane and preserves each report source", async () => {
   const provider = await readFile(
     new URL("../src/lib/server/corporate-events.ts", import.meta.url),
+    "utf8"
+  );
+  const espi = await readFile(
+    new URL("../src/lib/server/espi.ts", import.meta.url),
     "utf8"
   );
   const start = provider.indexOf("export class StoredPapEspiGeneralMeetingProvider");
@@ -72,11 +76,17 @@ test("WZA reuses central ESPI synchronization and preserves each report source",
   const implementation = provider.slice(start, end);
 
   assert.ok(start >= 0);
-  assert.match(provider, /synchronizePapEspi\(\)/);
+  assert.match(implementation, /synchronizeGpwGeneralMeetingReports\(\)/);
+  assert.match(espi, /const GPW_WZA_SOURCE = "GPW_WZA"/);
+  assert.match(espi, /getEspiSyncState\(GPW_WZA_SOURCE, GPW_WZA_REFRESH_TTL_MS\)/);
+  assert.match(espi, /isPotentialGpwGeneralMeetingCandidate\(candidate\)/);
+  assert.match(espi, /\.filter\(\(event\) => event\.eventType === "GENERAL_MEETING"\)/);
+  assert.match(espi, /upsertEspiReport\(item\.report\)/);
+  assert.match(espi, /releaseSyncLock\([\s\S]*source: GPW_WZA_SOURCE/);
   assert.match(implementation, /getStoredEspiReportsForCorporateEvents/);
   assert.match(implementation, /sourceUrl: report\.sourceUrl/);
   assert.match(implementation, /batches/);
-  assert.doesNotMatch(implementation, /fetchWithSystemTrust|fetchPapDocument/);
+  assert.doesNotMatch(implementation, /synchronizePapEspi\(\)|fetchWithSystemTrust|fetchPapDocument/);
 });
 
 test("a newly added WZA provider bootstraps even when the aggregate instrument check is fresh", async () => {
@@ -103,7 +113,8 @@ test("WZA persistence keeps identity/history, meeting fields and cancelled inact
   assert.match(provider, /\[parsed\.previousEventDate, parsed\.eventDate\]/);
   assert.match(provider, /existing\.event_identity \|\| eventIdentity/);
   assert.match(provider, /general_meeting_type = COALESCE/);
-  assert.match(provider, /registration_date = COALESCE/);
+  assert.match(provider, /registration_date_source = CASE/);
+  assert.match(provider, /registration_date_source = 'OFFICIAL'/);
   assert.match(provider, /active = \$17/);
   assert.match(provider, /INSERT INTO corporate_event_history/);
   assert.match(provider, /if \(isCancellation\) return 500/);
@@ -111,6 +122,7 @@ test("WZA persistence keeps identity/history, meeting fields and cancelled inact
   assert.match(provider, /isParsedEventActive\(parsed\)/);
   assert.match(db, /general_meeting_type TEXT/);
   assert.match(db, /registration_date TEXT/);
+  assert.match(db, /registration_date_source TEXT/);
 });
 
 test("source failures update checks without deleting last valid corporate events", async () => {
@@ -138,12 +150,15 @@ test("global WZA projection is independent from portfolio membership and logs sy
   assert.match(provider, /synchronizeGlobalGeneralMeetings/);
   assert.match(provider, /corporate_events_projection_status/);
   assert.match(provider, /GENERAL_MEETING_PROJECTION_BATCH_SIZE = 100/);
+  assert.match(provider, /GENERAL_MEETING_PROJECTION_VERSION = 3/);
   assert.match(provider, /report\.source_id NOT LIKE 'newconnect:%'/);
   assert.match(provider, /report\.published_at >= \$1/);
-  assert.doesNotMatch(provider, /report\.category\s*=\s*'GENERAL_MEETING'/);
+  assert.match(provider, /report\.category = 'GENERAL_MEETING'/);
+  assert.match(provider, /report\.source_title ILIKE '%waln%zgromadz%'/);
   assert.match(provider, /\[WZA SYNC\] fetched=/);
   assert.match(provider, /for \(const report of reports\)/);
-  assert.doesNotMatch(provider, /ORDER BY report\.published_at ASC, report\.source_id ASC\s+LIMIT 1000/);
+  assert.match(provider, /ORDER BY report\.published_at DESC, report\.source_id DESC/);
+  assert.doesNotMatch(provider, /ORDER BY report\.published_at ASC, report\.source_id ASC/);
   assert.match(provider, /SELECT id FROM corporate_event_instruments WHERE market = 'GPW'/);
   assert.match(api, /scope === "all"\s*\? \[\]/);
   assert.match(api, /addCalendarMonths\(today, 12\)/);
@@ -151,8 +166,24 @@ test("global WZA projection is independent from portfolio membership and logs sy
   assert.match(api, /instrument\.held/);
   assert.match(api, /projection\.pending > 0/);
   assert.match(api, /Cache-Control.*private, no-store/);
+  assert.match(provider, /getGlobalGeneralMeetingSourceState = getGpwGeneralMeetingSyncState/);
+  assert.match(provider, /if \(refreshSource\) await synchronizeGpwGeneralMeetingReports\(\)/);
   assert.match(espi, /eligibleRows < 50/);
   assert.match(espi, /createHash\("sha256"\)/);
   assert.match(espi, /body_text IS DISTINCT FROM \$12/);
   assert.match(espi, /corporate_events_projection_version = CASE/);
+});
+
+test("the calendar ignores VIGO opinion links as the source of its meeting date", async () => {
+  const provider = await readFile(
+    new URL("../src/lib/server/corporate-events.ts", import.meta.url),
+    "utf8"
+  );
+  const parser = await readFile(
+    new URL("../src/lib/corporate-events.ts", import.meta.url),
+    "utf8"
+  );
+
+  assert.match(provider, /source_url ~\* '\[\?&\]title=\(opinia\|stanowisko\)'/);
+  assert.ok(parser.includes("opinia\\s+(?:rady\\s+nadzorczej"));
 });

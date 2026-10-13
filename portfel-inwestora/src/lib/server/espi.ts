@@ -23,6 +23,7 @@ import {
   type PapEspiListCandidate,
   type ParsedPapEspiReport,
 } from "@/lib/espi";
+import { parseCorporateEventDocument } from "@/lib/corporate-events";
 import { ensurePortfolioCoreModel, getPortfolioInstrumentId } from "@/lib/operation-engine";
 import { normalizePortfolioBook } from "@/lib/portfolio-state";
 import {
@@ -38,6 +39,7 @@ import type { WatchlistItem } from "@/lib/watchlist";
 import type { InvestmentPortfolio, PortfolioInstrument } from "@/types/portfolio";
 
 const PAP_SOURCE = "PAP_ESPI" as const;
+const GPW_WZA_SOURCE = "GPW_WZA" as const;
 export const getEspiSourcePriority = (sourceId: string) => {
   if (sourceId.startsWith("gpw:")) return 0;
   if (sourceId.startsWith("newconnect:")) return 1;
@@ -49,6 +51,7 @@ const GPW_ESPI_SEARCH_URL = "https://www.gpw.pl/ajaxindex.php";
 const NEWCONNECT_ESPI_BASE_URL = "https://newconnect.pl";
 const NEWCONNECT_ESPI_SEARCH_URL = `${NEWCONNECT_ESPI_BASE_URL}/ajaxindex.php`;
 const ESPI_REFRESH_TTL_MS = 10 * 60 * 1_000;
+const GPW_WZA_REFRESH_TTL_MS = 60 * 60 * 1_000;
 const ESPI_OVERLAP_TTL_MS = 24 * 60 * 60 * 1_000;
 const ESPI_SOURCE_TIMEOUT_MS = 15_000;
 const ESPI_LOCK_TTL_MS = 3 * 60 * 1_000;
@@ -285,7 +288,10 @@ const addDays = (isoDate: string, days: number) => {
 const getFeedPageUrl = (page: number) =>
   page > 0 ? `${PAP_ESPI_FEED_URL}?page=${page}` : PAP_ESPI_FEED_URL;
 
-export const getEspiSyncState = async (): Promise<EspiSyncMeta & { nextBackfillPage: number; backfillComplete: boolean; lastOverlapAt?: string }> => {
+export const getEspiSyncState = async (
+  source: string = PAP_SOURCE,
+  refreshTtlMs = ESPI_REFRESH_TTL_MS
+): Promise<EspiSyncMeta & { nextBackfillPage: number; backfillComplete: boolean; lastOverlapAt?: string }> => {
   const row = await queryOne<EspiSyncStateRow>(
     `
       SELECT status, last_checked_at, last_success_at, last_overlap_at, next_backfill_page,
@@ -293,14 +299,14 @@ export const getEspiSyncState = async (): Promise<EspiSyncMeta & { nextBackfillP
       FROM espi_sync_state
       WHERE source = $1
     `,
-    [PAP_SOURCE]
+    [source]
   );
   const isRefreshing = Boolean(row?.lock_token && row.lock_expires_at && Date.parse(row.lock_expires_at) > Date.now());
   return {
     status: row?.status ?? "NOT_SYNCED",
     lastCheckedAt: row?.last_checked_at ? normalizeIso(row.last_checked_at) : undefined,
     lastSuccessAt: row?.last_success_at ? normalizeIso(row.last_success_at) : undefined,
-    isStale: !isFresh(row?.last_checked_at ?? null),
+    isStale: !isFresh(row?.last_checked_at ?? null, refreshTtlMs),
     isRefreshing,
     nextBackfillPage: row?.next_backfill_page ?? 1,
     backfillComplete: row?.backfill_complete ?? false,
@@ -308,7 +314,7 @@ export const getEspiSyncState = async (): Promise<EspiSyncMeta & { nextBackfillP
   };
 };
 
-const acquireSyncLock = async () => {
+const acquireSyncLock = async (source: string = PAP_SOURCE) => {
   const token = randomUUID();
   const now = new Date().toISOString();
   const expiresAt = new Date(Date.now() + ESPI_LOCK_TTL_MS).toISOString();
@@ -327,13 +333,14 @@ const acquireSyncLock = async () => {
          OR espi_sync_state.lock_expires_at < $4
       RETURNING lock_token
     `,
-    [PAP_SOURCE, token, expiresAt, now]
+    [source, token, expiresAt, now]
   );
   return row?.lock_token === token ? token : null;
 };
 
 const releaseSyncLock = async ({
   token,
+  source = PAP_SOURCE,
   status,
   errorCode,
   nextBackfillPage,
@@ -341,6 +348,7 @@ const releaseSyncLock = async ({
   lastOverlapAt,
 }: {
   token: string;
+  source?: string;
   status: EspiSourceStatus;
   errorCode?: string;
   nextBackfillPage?: number;
@@ -363,7 +371,7 @@ const releaseSyncLock = async ({
           updated_at = $2
       WHERE source = $7 AND lock_token = $8
     `,
-    [status, now, errorCode ?? null, nextBackfillPage ?? null, backfillComplete ?? null, lastOverlapAt ?? null, PAP_SOURCE, token]
+    [status, now, errorCode ?? null, nextBackfillPage ?? null, backfillComplete ?? null, lastOverlapAt ?? null, source, token]
   );
 };
 
@@ -1320,6 +1328,229 @@ export const synchronizePapEspi = async ({
     console.info(`[ESPI SYNC] fetched=0 new=0 duplicates=${skippedExisting} saved=0 errors=${Math.max(errors, 1)}`);
     return { status, insertedOrUpdated: 0, skippedExisting, parsed: 0, pagesRead, locked: false, errors: Math.max(errors, 1) };
   }
+};
+
+const isPotentialGpwGeneralMeetingCandidate = (candidate: PapEspiListCandidate) => {
+  const text = `${candidate.sourceTitle} ${candidate.title ?? ""}`
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .replace(/[łŁ]/g, (character) => character === "Ł" ? "L" : "l")
+    .toLocaleLowerCase("pl-PL");
+  return /waln\w*\s+zgromadzen|\b(?:wza|zwz|nwz|agm|egm)\b|zwo(?:l|l)an\w*\s+(?:nadzwyczajn\w*\s+)?waln/iu.test(text);
+};
+
+export type GpwGeneralMeetingSourceSyncResult = {
+  status: EspiSourceStatus;
+  pagesRead: number;
+  candidates: number;
+  fetched: number;
+  parsed: number;
+  saved: number;
+  duplicates: number;
+  errors: number;
+  locked: boolean;
+};
+
+let gpwGeneralMeetingSyncInFlight: Promise<GpwGeneralMeetingSourceSyncResult> | null = null;
+
+export const getGpwGeneralMeetingSyncState = () =>
+  getEspiSyncState(GPW_WZA_SOURCE, GPW_WZA_REFRESH_TTL_MS);
+
+/**
+ * Fast, shared WZA lane: page the official GPW union only over the 12-month
+ * publication horizon and fetch details only for plausible meeting notices.
+ * Full ESPI history synchronization remains independent and continues to fill
+ * the ESPI feed without blocking the global meeting calendar.
+ */
+export const synchronizeGpwGeneralMeetingReports = ({ force = false }: { force?: boolean } = {}): Promise<GpwGeneralMeetingSourceSyncResult> => {
+  if (gpwGeneralMeetingSyncInFlight) return gpwGeneralMeetingSyncInFlight;
+
+  gpwGeneralMeetingSyncInFlight = (async (): Promise<GpwGeneralMeetingSourceSyncResult> => {
+    const state = await getGpwGeneralMeetingSyncState();
+    if (!force && !state.isStale) {
+      return {
+        status: state.status === "NOT_SYNCED" ? "NOT_FOUND" : state.status,
+        pagesRead: 0,
+        candidates: 0,
+        fetched: 0,
+        parsed: 0,
+        saved: 0,
+        duplicates: 0,
+        errors: 0,
+        locked: false,
+      };
+    }
+
+    const token = await acquireSyncLock(GPW_WZA_SOURCE);
+    if (!token) {
+      return {
+        status: state.status === "NOT_SYNCED" ? "NOT_FOUND" : state.status,
+        pagesRead: 0,
+        candidates: 0,
+        fetched: 0,
+        parsed: 0,
+        saved: 0,
+        duplicates: 0,
+        errors: 0,
+        locked: true,
+      };
+    }
+
+    let status: EspiSourceStatus = "SUCCESS";
+    let pagesRead = 0;
+    let errors = 0;
+    let overlapComplete = false;
+    let lastOverlapAt: string | undefined;
+    const startedAt = Date.now();
+
+    try {
+      const today = getWarsawDate();
+      const repairBoundary = addDays(today, -ESPI_OFFICIAL_REPAIR_DAYS);
+      const priorOverlapDate = state.lastOverlapAt?.slice(0, 10);
+      const rollingBoundary = priorOverlapDate ? addDays(priorOverlapDate, -ESPI_OVERLAP_DAYS) : repairBoundary;
+      const stopBeforeDate = rollingBoundary < repairBoundary ? repairBoundary : rollingBoundary;
+      const candidates: PapEspiListCandidate[] = [];
+      const pageSignatures = new Set<string>();
+      const seenIds = new Set<string>();
+
+      for (let offset = 0; offset < 4_000; offset += 50) {
+        const response = await fetchGpwList({ offset });
+        if (response.status !== "SUCCESS") {
+          errors += 1;
+          status = response.status;
+          break;
+        }
+        pagesRead += 1;
+        const signature = createHash("sha256").update(response.document).digest("hex");
+        if (pageSignatures.has(signature)) {
+          errors += 1;
+          status = "TEMPORARILY_UNAVAILABLE";
+          diagnose({ provider: GPW_WZA_SOURCE, phase: "pagination", status: "REPEATED_PAGE", offset });
+          break;
+        }
+        pageSignatures.add(signature);
+
+        const parsedPage = parseGpwEspiList(response.document);
+        if (parsedPage.malformedRows > 0) errors += parsedPage.malformedRows;
+        const pageCandidates = parsedPage.candidates;
+        for (const candidate of pageCandidates) {
+          if (!seenIds.has(candidate.sourceId)) {
+            seenIds.add(candidate.sourceId);
+            if (isPotentialGpwGeneralMeetingCandidate(candidate)) candidates.push(candidate);
+          }
+        }
+
+        if (parsedPage.eligibleRows === 0) {
+          overlapComplete = true;
+          break;
+        }
+        const oldest = pageCandidates
+          .map((candidate) => candidate.sourcePublishedAt?.slice(0, 10))
+          .filter((value): value is string => Boolean(value))
+          .sort()[0];
+        if (parsedPage.eligibleRows < 50 || (oldest && oldest < stopBeforeDate)) {
+          overlapComplete = true;
+          break;
+        }
+      }
+
+      const uniqueCandidates = Array.from(new Map(candidates.map((candidate) => [candidate.sourceId, candidate])).values());
+      const storedState = await getStoredSourceState(uniqueCandidates);
+      const detailRefreshBoundary = addDays(today, -90);
+      const pending = uniqueCandidates.filter((candidate) => {
+        if (!storedState.storedIds.has(candidate.sourceId)) return true;
+        if (!storedState.sourceCheckedAt.has(candidate.sourceId)) return false;
+        const publishedDay = candidate.sourcePublishedAt?.slice(0, 10);
+        return Boolean(publishedDay && publishedDay >= detailRefreshBoundary &&
+          !isFresh(storedState.sourceCheckedAt.get(candidate.sourceId) ?? null, 24 * 60 * 60 * 1_000));
+      });
+
+      const fetched = await mapWithConcurrency(pending, ARTICLE_CONCURRENCY, async (candidate) => {
+        const response = await fetchOfficialHtml(candidate.sourceUrl);
+        if (response.status !== "SUCCESS") return { candidate, status: response.status, report: null };
+        const report = parseGpwEspiReport(response.document, candidate);
+        if (!report) return { candidate, status: "PARSE_ERROR" as const, report: null };
+        const events = parseCorporateEventDocument(`${report.sourceTitle}\n${report.title}\n${report.body}`)
+          .filter((event) => event.eventType === "GENERAL_MEETING");
+        return { candidate, status: "SUCCESS" as const, report: events.length ? report : null };
+      });
+
+      let parsed = 0;
+      let saved = 0;
+      let duplicates = 0;
+      for (const item of fetched) {
+        if (item.status !== "SUCCESS") {
+          errors += 1;
+          if (item.status !== "PARSE_ERROR") status = item.status;
+          else if (status === "SUCCESS") status = "PARSE_ERROR";
+          diagnose({ provider: GPW_WZA_SOURCE, sourceId: item.candidate.sourceId, status: item.status });
+          continue;
+        }
+        if (!item.report) continue;
+        parsed += 1;
+        try {
+          const stored = await upsertEspiReport(item.report);
+          await linkCorrection(stored.id, item.report, stored.issuerId);
+          saved += 1;
+          if (!stored.created) duplicates += 1;
+        } catch (error) {
+          errors += 1;
+          status = "TEMPORARILY_UNAVAILABLE";
+          diagnose({
+            provider: GPW_WZA_SOURCE,
+            phase: "store",
+            sourceId: item.candidate.sourceId,
+            error: error instanceof Error ? error.name : "unknown",
+          });
+        }
+      }
+
+      if (errors > 0 && status === "SUCCESS") status = "PARSE_ERROR";
+      if (overlapComplete && errors === 0) lastOverlapAt = new Date().toISOString();
+      await releaseSyncLock({
+        token,
+        source: GPW_WZA_SOURCE,
+        status,
+        errorCode: errors ? `WZA_SYNC_ERRORS_${errors}` : undefined,
+        lastOverlapAt,
+      });
+      console.info(`[WZA SOURCE SYNC] pages=${pagesRead} candidates=${uniqueCandidates.length} fetched=${pending.length} parsed=${parsed} saved=${saved} duplicates=${duplicates} errors=${errors} durationMs=${Date.now() - startedAt}`);
+      return {
+        status,
+        pagesRead,
+        candidates: uniqueCandidates.length,
+        fetched: pending.length,
+        parsed,
+        saved,
+        duplicates,
+        errors,
+        locked: false,
+      };
+    } catch (error) {
+      await releaseSyncLock({
+        token,
+        source: GPW_WZA_SOURCE,
+        status: "TEMPORARILY_UNAVAILABLE",
+        errorCode: error instanceof Error ? error.message.slice(0, 80) : "UNKNOWN",
+      });
+      diagnose({ provider: GPW_WZA_SOURCE, error: error instanceof Error ? error.name : "unknown" });
+      return {
+        status: "TEMPORARILY_UNAVAILABLE",
+        pagesRead,
+        candidates: 0,
+        fetched: 0,
+        parsed: 0,
+        saved: 0,
+        duplicates: 0,
+        errors: Math.max(errors, 1),
+        locked: false,
+      };
+    }
+  })().finally(() => {
+    gpwGeneralMeetingSyncInFlight = null;
+  });
+
+  return gpwGeneralMeetingSyncInFlight;
 };
 
 export const getPortfolioTrackedInputs = (portfolios: InvestmentPortfolio[]) =>

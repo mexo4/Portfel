@@ -16,9 +16,10 @@ import { getGpwTickerCore, isGpwSymbol, normalizeGpwSymbol } from "@/lib/ticker"
 import { execute, query, queryOne, withTransaction, type DatabaseTransaction } from "@/lib/server/db";
 import {
   getStoredEspiReportsForCorporateEvents,
-  getEspiSyncState,
+  getGpwGeneralMeetingSyncState,
   PAP_ESPI_FEED_URL,
-  synchronizePapEspi,
+  synchronizeGpwGeneralMeetingReports,
+  type GpwGeneralMeetingSourceSyncResult,
   type StoredEspiCorporateEventReport,
 } from "@/lib/server/espi";
 import { findGpwCatalogEntry } from "@/lib/server/gpw-catalog";
@@ -62,6 +63,7 @@ type EventRow = {
   fiscal_year: number | null;
   general_meeting_type: "ZWZ" | "NWZ" | null;
   registration_date: string | null;
+  registration_date_source: "OFFICIAL" | null;
   dividend_per_share: number | null;
   dividend_total_per_share: number | null;
   dividend_advance_per_share: number | null;
@@ -645,31 +647,21 @@ export class PapEspiCorporateEventProvider implements CorporateEventProvider {
   }
 }
 
-let corporateEventsEspiSyncInFlight: Promise<Awaited<ReturnType<typeof synchronizePapEspi>>> | null = null;
-
-const synchronizeCorporateEventsEspi = () => {
-  if (corporateEventsEspiSyncInFlight) return corporateEventsEspiSyncInFlight;
-  corporateEventsEspiSyncInFlight = synchronizePapEspi().finally(() => {
-    corporateEventsEspiSyncInFlight = null;
-  });
-  return corporateEventsEspiSyncInFlight;
-};
-
 /**
- * WZA uses the same central PAP/ESPI ingestion, TTL and lock as the ESPI feed.
- * It only parses normalized reports already stored in `espi_reports`; it never
- * starts a second issuer crawler or fetches individual PAP pages itself.
+ * WZA uses a dedicated, shared GPW list lane. It persists only official report
+ * details whose parsed content is a general-meeting notice, so the calendar
+ * doesn't wait for the full ESPI archive to fetch unrelated report bodies.
  */
 export class StoredPapEspiGeneralMeetingProvider implements CorporateEventProvider {
   id = "stored-pap-espi-general-meeting";
 
   async fetchEvents(instrument: CanonicalInstrument): Promise<ProviderResult> {
     const startedAt = Date.now();
-    let synchronization: Awaited<ReturnType<typeof synchronizePapEspi>>;
+    let synchronization: GpwGeneralMeetingSourceSyncResult;
     let reports: StoredEspiCorporateEventReport[];
 
     try {
-      synchronization = await synchronizeCorporateEventsEspi();
+      synchronization = await synchronizeGpwGeneralMeetingReports();
       reports = await getStoredEspiReportsForCorporateEvents({ instrumentId: instrument.id });
     } catch {
       return {
@@ -1012,9 +1004,9 @@ const upsertParsedEvents = async (
             event_identity, general_meeting_type, registration_date,
             dividend_per_share, dividend_total_per_share, dividend_advance_per_share,
             dividend_currency, ex_dividend_date, record_date, payment_date, dividend_installment, status, active, source_published_at, source_type,
-            source_priority, discovered_at, updated_at
+            source_priority, discovered_at, updated_at, registration_date_source
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $24)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $24, $25)
         `,
         [
           eventId,
@@ -1041,6 +1033,7 @@ const upsertParsedEvents = async (
           batch.source.sourceType,
           toSourcePriority(batch.source, parsed),
           now,
+          parsed.registrationDate ? "OFFICIAL" : null,
         ]
       );
     } else if (apply) {
@@ -1054,7 +1047,16 @@ const upsertParsedEvents = async (
               fiscal_year = COALESCE($4, fiscal_year),
               event_identity = $5,
               general_meeting_type = COALESCE($6, general_meeting_type),
-              registration_date = COALESCE($7, registration_date),
+              registration_date = CASE
+                WHEN $7::text IS NOT NULL THEN $7
+                WHEN registration_date_source = 'OFFICIAL' THEN registration_date
+                ELSE NULL
+              END,
+              registration_date_source = CASE
+                WHEN $7::text IS NOT NULL THEN 'OFFICIAL'
+                WHEN registration_date_source = 'OFFICIAL' THEN 'OFFICIAL'
+                ELSE NULL
+              END,
               dividend_per_share = $8,
               dividend_total_per_share = COALESCE($9, dividend_total_per_share),
               dividend_advance_per_share = COALESCE($10, dividend_advance_per_share),
@@ -1276,7 +1278,9 @@ const toCorporateEvent = (row: EventRow): CorporateEvent => ({
   fiscalPeriod: row.fiscal_period ?? undefined,
   fiscalYear: row.fiscal_year ?? undefined,
   generalMeetingType: row.general_meeting_type ?? undefined,
-  registrationDate: row.registration_date ?? undefined,
+  registrationDate: row.registration_date_source === "OFFICIAL"
+    ? row.registration_date ?? undefined
+    : undefined,
   dividendPerShare: row.dividend_per_share ?? undefined,
   dividendTotalPerShare: row.dividend_total_per_share ?? undefined,
   dividendAdvancePerShare: row.dividend_advance_per_share ?? undefined,
@@ -1312,6 +1316,7 @@ const getStoredEvents = async (
       SELECT event.id, event.instrument_id, instrument.ticker, instrument.company_name,
              event.event_type, event.event_date, event.event_time, event.fiscal_period,
              event.fiscal_year, event.general_meeting_type, event.registration_date,
+             event.registration_date_source,
              event.dividend_per_share, event.dividend_total_per_share,
              event.dividend_advance_per_share, event.dividend_currency,
              event.ex_dividend_date, event.record_date, event.payment_date,
@@ -1325,6 +1330,10 @@ const getStoredEvents = async (
         SELECT source_type, source_url, source_published_at
         FROM corporate_event_sources
         WHERE corporate_event_id = event.id
+          AND NOT (
+            event.event_type = 'GENERAL_MEETING'
+            AND source_url ~* '[?&]title=(opinia|stanowisko)'
+          )
         ORDER BY source_priority DESC, source_published_at DESC NULLS LAST, discovered_at DESC
         LIMIT 1
       ) AS source ON TRUE
@@ -1374,7 +1383,7 @@ export type GlobalGeneralMeetingSyncResult = {
   pending: number;
 };
 
-const GENERAL_MEETING_PROJECTION_VERSION = 2;
+const GENERAL_MEETING_PROJECTION_VERSION = 3;
 // A batch is deliberately small enough to keep the authenticated calendar API
 // responsive; the versioned queue continues on the next poll until empty.
 const GENERAL_MEETING_PROJECTION_BATCH_SIZE = 100;
@@ -1411,7 +1420,7 @@ export const synchronizeGlobalGeneralMeetings = ({
   if (globalGeneralMeetingSyncInFlight) return globalGeneralMeetingSyncInFlight;
 
   globalGeneralMeetingSyncInFlight = (async () => {
-    if (refreshSource) await synchronizeCorporateEventsEspi();
+    if (refreshSource) await synchronizeGpwGeneralMeetingReports();
     const publishedAfter = new Date(Date.now() - 730 * 24 * 60 * 60 * 1_000).toISOString();
     const unmatchedRetryBefore = new Date(Date.now() - GENERAL_MEETING_UNMATCHED_RETRY_MS).toISOString();
     const reports = await query<GlobalGeneralMeetingReportRow>(
@@ -1429,6 +1438,13 @@ export const synchronizeGlobalGeneralMeetings = ({
           AND report.market <> 'NEWCONNECT'
           AND (instrument.market = 'GPW' OR (instrument.id IS NULL AND report.market IN ('GPW', 'UNKNOWN')))
           AND (
+            report.category = 'GENERAL_MEETING'
+            OR report.source_title ILIKE '%waln%zgromadz%'
+            OR report.title ILIKE '%waln%zgromadz%'
+            OR report.source_title ~* '(^|[^[:alnum:]])(WZA|ZWZ|NWZ|AGM|EGM)([^[:alnum:]]|$)'
+            OR report.title ~* '(^|[^[:alnum:]])(WZA|ZWZ|NWZ|AGM|EGM)([^[:alnum:]]|$)'
+          )
+          AND (
             report.corporate_events_projection_version IS DISTINCT FROM $2
             OR report.corporate_events_projection_status = 'PARSE_ERROR'
             OR (
@@ -1437,7 +1453,7 @@ export const synchronizeGlobalGeneralMeetings = ({
             )
             OR $5::boolean
           )
-        ORDER BY report.published_at ASC, report.source_id ASC
+        ORDER BY report.published_at DESC, report.source_id DESC
         LIMIT $4
       `,
       [publishedAfter, GENERAL_MEETING_PROJECTION_VERSION, unmatchedRetryBefore, GENERAL_MEETING_PROJECTION_BATCH_SIZE, force]
@@ -1536,6 +1552,13 @@ export const synchronizeGlobalGeneralMeetings = ({
           AND report.market <> 'NEWCONNECT'
           AND (instrument.market = 'GPW' OR (instrument.id IS NULL AND report.market IN ('GPW', 'UNKNOWN')))
           AND (
+            report.category = 'GENERAL_MEETING'
+            OR report.source_title ILIKE '%waln%zgromadz%'
+            OR report.title ILIKE '%waln%zgromadz%'
+            OR report.source_title ~* '(^|[^[:alnum:]])(WZA|ZWZ|NWZ|AGM|EGM)([^[:alnum:]]|$)'
+            OR report.title ~* '(^|[^[:alnum:]])(WZA|ZWZ|NWZ|AGM|EGM)([^[:alnum:]]|$)'
+          )
+          AND (
             report.corporate_events_projection_version IS DISTINCT FROM $2
             OR report.corporate_events_projection_status = 'PARSE_ERROR'
             OR (
@@ -1582,7 +1605,7 @@ export const getGlobalGeneralMeetings = async ({
   return getStoredEvents(instrumentIds, fromDate, toDate, ["GENERAL_MEETING"]);
 };
 
-export const getGlobalGeneralMeetingSourceState = getEspiSyncState;
+export const getGlobalGeneralMeetingSourceState = getGpwGeneralMeetingSyncState;
 
 export const getCorporateEventsForGpwPortfolio = async ({
   instruments,

@@ -3,14 +3,13 @@ import test from "node:test";
 import {
   getCorporateEventIdentityKey,
   getCorporateEventLabel,
-  getGeneralMeetingRegistrationDate,
   parseCorporateEventDocument,
 } from "../src/lib/corporate-events.ts";
 
 const meetings = (document) =>
   parseCorporateEventDocument(document).filter((event) => event.eventType === "GENERAL_MEETING");
 
-test("parses the formal LSI ZWZ date and time instead of the PAP publication date", () => {
+test("parses the formal LSI ZWZ date and time without inventing a record date", () => {
   const [event] = meetings(`
     LSI SOFTWARE SA (19/2026) Zwyczajne Walne Zgromadzenie
     Data publikacji: 02.06.2026, 17:57
@@ -33,7 +32,7 @@ test("parses the formal LSI ZWZ date and time instead of the PAP publication dat
       eventTime: "10:00",
       meetingType: "ZWZ",
       action: "CONVENING",
-      registrationDate: "2026-06-13",
+      registrationDate: undefined,
       label: "Zwyczajne Walne Zgromadzenie",
     }
   );
@@ -171,9 +170,11 @@ test("keeps ZWZ and NWZ independent even when they occur in the same year", () =
   assert.notEqual(getCorporateEventIdentityKey(zwz), getCorporateEventIdentityKey(nwz));
 });
 
-test("registration fallback is exactly 16 calendar days, including month boundaries", () => {
-  assert.equal(getGeneralMeetingRegistrationDate("2026-06-03"), "2026-05-18");
-  assert.equal(getGeneralMeetingRegistrationDate("2026-09-24"), "2026-09-08");
+test("does not create an extra meeting from the VIGO supervisory board opinion", () => {
+  const text = `OPINIA RADY NADZORCZEJ W SPRAWIE PORZĄDKU OBRAD ORAZ PROJEKTÓW UCHWAŁ
+    NADZWYCZAJNEGO WALNEGO ZGROMADZENIA VIGO PHOTONICS S.A. ZWOŁANEGO NA DZIEŃ
+    29 PAŹDZIERNIKA 2026 ROKU.`;
+  assert.deepEqual(meetings(text), []);
 });
 
 test("financial-report schedules remain intact and do not create a meeting", () => {
@@ -276,7 +277,7 @@ test("an official XTPL-style new meeting keeps its announced date ahead of the c
     {
       eventDate: "2026-10-19",
       eventTime: "12:00",
-      registrationDate: "2026-10-03",
+      registrationDate: undefined,
       action: "CONVENING",
       cancelled: false,
     }

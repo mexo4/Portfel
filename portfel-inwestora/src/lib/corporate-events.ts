@@ -251,18 +251,6 @@ const getIsoDateFromMatch = (match: RegExpExecArray) => {
   return namedDate ?? numericDate ?? englishMonthFirstDate;
 };
 
-const subtractCalendarDays = (isoDate: string, days: number) => {
-  const [year, month, day] = isoDate.split("-").map(Number);
-  if (![year, month, day].every(Number.isInteger)) return undefined;
-
-  const date = new Date(Date.UTC(year, month - 1, day));
-  date.setUTCDate(date.getUTCDate() - days);
-  return date.toISOString().slice(0, 10);
-};
-
-export const getGeneralMeetingRegistrationDate = (meetingDate: string) =>
-  subtractCalendarDays(meetingDate, 16);
-
 export const extractPolishDates = (value: string) => {
   const dates: string[] = [];
 
@@ -386,7 +374,7 @@ const GENERAL_MEETING_REFERENCE =
   /waln(?:e|ego|emu|ym|ych)?\s+zgromadzeni(?:e|a|u|em)?(?:\s+akcjonariuszy)?|\b(?:wza|zwz|nwz|agm|egm)\b|\b(?:annual|extraordinary|ordinary)\s+general\s+meeting\b|\bgeneral\s+meeting\b/iu;
 
 const GENERAL_MEETING_FALSE_NOTICE =
-  /projekt(?:y|u|em)?\s+uchwal|zgloszeni(?:e|a)\s+projektu\s+uchwal|(?:uzupelnieni|zmian)[eaęy]?\s+porzadku\s+obrad|zadani(?:e|a)\s+akcjonariusz|zgloszeni(?:e|a)\s+kandydat|wykaz\s+akcjonariusz|lista\s+akcjonariusz[^\n.]{0,100}(?:glos|procent|%)|tresc\s+uchwal\s+podjetych|uchwal(?:y|a)\s+podjet|wynik(?:i|ow)?\s+glosowa|po\s+(?:odbyciu|zakonczeniu)\s+(?:walnego|wza|zwz|nwz)|informacj[ae]\s+po\s+(?:walnym|wza|zwz|nwz)|(?:minutes|results?\s+of\s+voting|resolutions?\s+adopted|draft\s+resolutions?|candidates?\s+for\s+the\s+board|agenda\s+amendment)[^\n.]{0,100}(?:general\s+meeting|\b(?:agm|egm)\b)/iu;
+  /opinia\s+(?:rady\s+nadzorczej|zarzadu)[\s\S]{0,240}?(?:waln\w*\s+zgromadzeni\w*|\b(?:wza|zwz|nwz)\b)|stanowisko\s+rady\s+nadzorczej[\s\S]{0,240}?(?:waln\w*\s+zgromadzeni\w*|\b(?:wza|zwz|nwz)\b)|projekt(?:y|u|em)?\s+uchwal|zgloszeni(?:e|a)\s+projektu\s+uchwal|(?:uzupelnieni|zmian)[eaęy]?\s+porzadku\s+obrad|zadani(?:e|a)\s+akcjonariusz|zgloszeni(?:e|a)\s+kandydat|wykaz\s+akcjonariusz|lista\s+akcjonariusz[^\n.]{0,100}(?:glos|procent|%)|tresc\s+uchwal\s+podjetych|uchwal(?:y|a)\s+podjet|wynik(?:i|ow)?\s+glosowa|po\s+(?:odbyciu|zakonczeniu)\s+(?:walnego|wza|zwz|nwz)|informacj[ae]\s+po\s+(?:walnym|wza|zwz|nwz)|(?:minutes|results?\s+of\s+voting|resolutions?\s+adopted|draft\s+resolutions?|candidates?\s+for\s+the\s+board|agenda\s+amendment)[^\n.]{0,100}(?:general\s+meeting|\b(?:agm|egm)\b)/iu;
 
 const GENERAL_MEETING_FORMAL_NOTICE =
   /(?:ogloszeni[ae]\s+o\s+)?zwolani[eu]\s+(?:(?:zwyczajnego|nadzwyczajnego)\s+)?walnego\s+zgromadzenia|\bzwol(?:uje|a|al|ano|anie|aniu|ane|anego|anym)(?![\p{L}\p{N}_])[\s\S]{0,260}?(?:waln\w*\s+zgromadzeni\w*|\b(?:zwz|nwz|wza)\b)|(?:waln\w*\s+zgromadzeni\w*|\b(?:zwz|nwz)\b)[\s\S]{0,180}?(?:zostanie\s+zwolan\w*|zwolan\w*\s+na)|(?:zarzad|spolka|emitent)[\s\S]{0,160}?informuje[\s\S]{0,220}?(?:waln\w*\s+zgromadzeni\w*|\b(?:zwz|nwz)\b)[\s\S]{0,100}?odbedzie\s+sie|(?:informacj\w*\s+o\s+terminie|notice\s+(?:of|on)\s+(?:the\s+)?date)[\s\S]{0,180}?(?:waln\w*\s+zgromadzeni\w*|\b(?:zwz|nwz|wza|agm|egm)\b)|(?:notice\s+(?:of|convening)\s+(?:the\s+)?(?:annual|extraordinary|ordinary\s+)?general\s+meeting|(?:annual|extraordinary|ordinary)\s+general\s+meeting[\s\S]{0,180}?(?:will\s+be\s+held|is\s+convened|shall\s+be\s+held)|(?:board|company|issuer)[\s\S]{0,120}?(?:convenes|hereby\s+convenes)[\s\S]{0,150}?general\s+meeting)/iu;
@@ -434,6 +422,14 @@ const getSemanticMeetingDate = (text: string) => {
 };
 
 const getOfficialGeneralMeetingRegistrationDate = (text: string) => {
+  // English-language issuer notices often use an explicit label-first form
+  // such as "Record date: September 15, 2026".
+  for (const reference of text.matchAll(/(?:record|registration)\s+date\s*:?\s*/giu)) {
+    const start = (reference.index ?? 0) + reference[0].length;
+    const date = extractPolishDates(text.slice(start, start + 120))[0];
+    if (date) return date;
+  }
+
   // PAP/ESPI notices also use the inverse wording: "Dzień 8 września ...
   // jest dniem rejestracji uczestnictwa". Resolve that explicit issuer date
   // before looking for the more common label-first form.
@@ -585,9 +581,7 @@ const getGeneralMeetingEvents = (text: string): ParsedCorporateEvent[] => {
       isScheduleChange: true,
       generalMeetingType: meetingType,
       generalMeetingAction: "RESCHEDULE",
-      registrationDate:
-        getOfficialGeneralMeetingRegistrationDate(meetingText) ??
-        getGeneralMeetingRegistrationDate(eventDate),
+      registrationDate: getOfficialGeneralMeetingRegistrationDate(meetingText),
       isCancellation: false,
       eventIdentity: getGeneralMeetingIdentity(meetingType, previousEventDate),
     }];
@@ -613,9 +607,7 @@ const getGeneralMeetingEvents = (text: string): ParsedCorporateEvent[] => {
     isScheduleChange: false,
     generalMeetingType: meetingType,
     generalMeetingAction: cancellation ? "CANCELLATION" : "CONVENING",
-    registrationDate:
-      getOfficialGeneralMeetingRegistrationDate(meetingText) ??
-      getGeneralMeetingRegistrationDate(eventDate),
+    registrationDate: getOfficialGeneralMeetingRegistrationDate(meetingText),
     isCancellation: cancellation,
     eventIdentity: getGeneralMeetingIdentity(meetingType, eventDate),
   }];

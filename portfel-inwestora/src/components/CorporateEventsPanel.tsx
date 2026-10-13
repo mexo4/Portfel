@@ -198,11 +198,11 @@ export default function CorporateEventsPanel({ portfolioId, portfolioIds, varian
       {isMeetingView && meetingSyncState ? (
         <p className="corporate-events-state" aria-live="polite">
           {meetingSyncState.isRefreshing
-            ? "Odświeżanie i uzupełnianie kalendarza GPW…"
+            ? "Odświeżanie i uzupełnianie kalendarza GPW; nowe terminy będą pojawiać się na bieżąco…"
             : meetingSyncState.status === "SUCCESS" && !meetingSyncState.isStale
-              ? `Ostatnia udana synchronizacja: ${formatSyncTime(meetingSyncState.lastSuccessfulSyncAt) ?? "niedawno"}.`
-              : `Dane mogą być częściowe. Ostatnia udana synchronizacja: ${formatSyncTime(meetingSyncState.lastSuccessfulSyncAt) ?? "brak"}.`}
-          {meetingSyncState.projectionPending ? ` Pozostało raportów do sprawdzenia: ${meetingSyncState.projectionPending}.` : ""}
+              ? `Ostatnie sprawdzenie oficjalnego źródła: ${formatSyncTime(meetingSyncState.lastSuccessfulSyncAt) ?? "niedawno"}.`
+              : `Dane mogą być częściowe. Ostatnie sprawdzenie źródła: ${formatSyncTime(meetingSyncState.lastSuccessfulSyncAt) ?? "brak"}.`}
+          {meetingSyncState.projectionPending ? ` Pozostałe oficjalne raporty do weryfikacji: ${meetingSyncState.projectionPending}.` : ""}
         </p>
       ) : null}
 
@@ -278,7 +278,7 @@ export default function CorporateEventsPanel({ portfolioId, portfolioIds, varian
                       <span>
                         Dzień rejestracji: <time dateTime={event.registrationDate}>{registrationDate.long}</time>
                       </span>
-                      <small>16 dni przed WZA · szczegóły uczestnictwa sprawdź u brokera</small>
+                      <small>Data wskazana w ogłoszeniu emitenta · szczegóły uczestnictwa sprawdź u brokera</small>
                     </div>
                   ) : null}
                 </div>

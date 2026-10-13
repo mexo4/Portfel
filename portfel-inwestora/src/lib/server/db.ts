@@ -412,6 +412,7 @@ const schemaStatements = [
       dividend_installment INTEGER,
       general_meeting_type TEXT,
       registration_date TEXT,
+      registration_date_source TEXT,
       status TEXT NOT NULL,
       active BOOLEAN NOT NULL DEFAULT TRUE,
       source_published_at TEXT,
@@ -433,6 +434,7 @@ const schemaStatements = [
   "ALTER TABLE corporate_events ADD COLUMN IF NOT EXISTS dividend_installment INTEGER",
   "ALTER TABLE corporate_events ADD COLUMN IF NOT EXISTS general_meeting_type TEXT",
   "ALTER TABLE corporate_events ADD COLUMN IF NOT EXISTS registration_date TEXT",
+  "ALTER TABLE corporate_events ADD COLUMN IF NOT EXISTS registration_date_source TEXT",
   `
     UPDATE corporate_events
     SET event_identity = event_type || ':' || COALESCE(fiscal_period, '') || ':' || COALESCE(fiscal_year::TEXT, '')

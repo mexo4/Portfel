@@ -1371,7 +1371,14 @@ export type GlobalGeneralMeetingSyncResult = {
   saved: number;
   unmatched: number;
   errors: number;
+  pending: number;
 };
+
+const GENERAL_MEETING_PROJECTION_VERSION = 2;
+// A batch is deliberately small enough to keep the authenticated calendar API
+// responsive; the versioned queue continues on the next poll until empty.
+const GENERAL_MEETING_PROJECTION_BATCH_SIZE = 100;
+const GENERAL_MEETING_UNMATCHED_RETRY_MS = 7 * 24 * 60 * 60 * 1_000;
 
 let globalGeneralMeetingSyncInFlight: Promise<GlobalGeneralMeetingSyncResult> | null = null;
 
@@ -1382,10 +1389,11 @@ const updateGeneralMeetingProjectionStatus = (
   `
     UPDATE espi_reports
     SET corporate_events_projection_status = $1,
-        corporate_events_projected_at = $2
-    WHERE id = $3
+        corporate_events_projected_at = $2,
+        corporate_events_projection_version = $3
+    WHERE id = $4
   `,
-  [status, new Date().toISOString(), reportId]
+  [status, new Date().toISOString(), GENERAL_MEETING_PROJECTION_VERSION, reportId]
 );
 
 /**
@@ -1405,6 +1413,7 @@ export const synchronizeGlobalGeneralMeetings = ({
   globalGeneralMeetingSyncInFlight = (async () => {
     if (refreshSource) await synchronizeCorporateEventsEspi();
     const publishedAfter = new Date(Date.now() - 730 * 24 * 60 * 60 * 1_000).toISOString();
+    const unmatchedRetryBefore = new Date(Date.now() - GENERAL_MEETING_UNMATCHED_RETRY_MS).toISOString();
     const reports = await query<GlobalGeneralMeetingReportRow>(
       `
         SELECT report.id, report.source_id, report.issuer_id, report.source_title,
@@ -1416,16 +1425,22 @@ export const synchronizeGlobalGeneralMeetings = ({
         LEFT JOIN corporate_event_instruments AS instrument ON instrument.id = report.issuer_id
         WHERE report.source = 'PAP_ESPI'
           AND report.published_at >= $1
+          AND report.source_id NOT LIKE 'newconnect:%'
+          AND report.market <> 'NEWCONNECT'
+          AND (instrument.market = 'GPW' OR (instrument.id IS NULL AND report.market IN ('GPW', 'UNKNOWN')))
           AND (
-            report.category = 'GENERAL_MEETING'
-            OR report.source_title ILIKE '%waln%zgromadz%'
-            OR report.title ILIKE '%waln%zgromadz%'
-            OR report.source_title ~* '(^|[^[:alnum:]])(ZWZ|NWZ)([^[:alnum:]]|$)'
-            OR report.title ~* '(^|[^[:alnum:]])(ZWZ|NWZ)([^[:alnum:]]|$)'
-        )
+            report.corporate_events_projection_version IS DISTINCT FROM $2
+            OR report.corporate_events_projection_status = 'PARSE_ERROR'
+            OR (
+              report.corporate_events_projection_status = 'UNMATCHED'
+              AND report.corporate_events_projected_at < $3
+            )
+            OR $5::boolean
+          )
         ORDER BY report.published_at ASC, report.source_id ASC
+        LIMIT $4
       `,
-      [publishedAfter]
+      [publishedAfter, GENERAL_MEETING_PROJECTION_VERSION, unmatchedRetryBefore, GENERAL_MEETING_PROJECTION_BATCH_SIZE, force]
     );
 
     let created = 0;
@@ -1435,18 +1450,14 @@ export const synchronizeGlobalGeneralMeetings = ({
     let errors = 0;
 
     for (const report of reports) {
-      if (!force && (report.projection_status === "SUCCESS" || report.projection_status === "NO_EVENT")) {
-        duplicates += 1;
-        continue;
-      }
-      if (!report.issuer_id || !report.canonical_key || !report.ticker || !report.company_name) {
-        unmatched += 1;
-        await updateGeneralMeetingProjectionStatus(report.id, "UNMATCHED");
-        diagnose({ provider: "global-espi-wza", sourceId: report.source_id, status: "UNMATCHED" });
-        continue;
-      }
-
       try {
+        if (!report.issuer_id || !report.canonical_key || !report.ticker || !report.company_name) {
+          unmatched += 1;
+          await updateGeneralMeetingProjectionStatus(report.id, "UNMATCHED");
+          diagnose({ provider: "global-espi-wza", sourceId: report.source_id, status: "UNMATCHED" });
+          continue;
+        }
+
         const events = parseCorporateEventDocument(`${report.source_title}\n${report.title}\n${report.body_text}`)
           .filter((event) => event.eventType === "GENERAL_MEETING");
         if (events.length === 0) {
@@ -1480,10 +1491,11 @@ export const synchronizeGlobalGeneralMeetings = ({
             `
               UPDATE espi_reports
               SET corporate_events_projection_status = 'SUCCESS',
-                  corporate_events_projected_at = $1
-              WHERE id = $2
+                  corporate_events_projected_at = $1,
+                  corporate_events_projection_version = $2
+              WHERE id = $3
             `,
-            [new Date().toISOString(), report.id]
+            [new Date().toISOString(), GENERAL_MEETING_PROJECTION_VERSION, report.id]
           );
           return upsert;
         });
@@ -1492,7 +1504,17 @@ export const synchronizeGlobalGeneralMeetings = ({
         saved += result.saved;
       } catch (error) {
         errors += 1;
-        await updateGeneralMeetingProjectionStatus(report.id, "PARSE_ERROR");
+        try {
+          await updateGeneralMeetingProjectionStatus(report.id, "PARSE_ERROR");
+        } catch (statusError) {
+          errors += 1;
+          diagnose({
+            provider: "global-espi-wza",
+            sourceId: report.source_id,
+            phase: "status-update",
+            error: statusError instanceof Error ? statusError.name : "unknown",
+          });
+        }
         diagnose({
           provider: "global-espi-wza",
           sourceId: report.source_id,
@@ -1503,8 +1525,30 @@ export const synchronizeGlobalGeneralMeetings = ({
       }
     }
 
-    console.info(`[WZA SYNC] fetched=${reports.length} new=${created} duplicates=${duplicates} saved=${saved} unmatched=${unmatched} errors=${errors}`);
-    return { fetched: reports.length, created, duplicates, saved, unmatched, errors };
+    const pendingResult = await queryOne<{ count: number | string }>(
+      `
+        SELECT COUNT(*) AS count
+        FROM espi_reports AS report
+        LEFT JOIN corporate_event_instruments AS instrument ON instrument.id = report.issuer_id
+        WHERE report.source = 'PAP_ESPI'
+          AND report.published_at >= $1
+          AND report.source_id NOT LIKE 'newconnect:%'
+          AND report.market <> 'NEWCONNECT'
+          AND (instrument.market = 'GPW' OR (instrument.id IS NULL AND report.market IN ('GPW', 'UNKNOWN')))
+          AND (
+            report.corporate_events_projection_version IS DISTINCT FROM $2
+            OR report.corporate_events_projection_status = 'PARSE_ERROR'
+            OR (
+              report.corporate_events_projection_status = 'UNMATCHED'
+              AND report.corporate_events_projected_at < $3
+            )
+          )
+      `,
+      [publishedAfter, GENERAL_MEETING_PROJECTION_VERSION, unmatchedRetryBefore]
+    );
+    const pending = Number(pendingResult?.count ?? 0);
+    console.info(`[WZA SYNC] fetched=${reports.length} new=${created} duplicates=${duplicates} saved=${saved} unmatched=${unmatched} pending=${pending} errors=${errors}`);
+    return { fetched: reports.length, created, duplicates, saved, unmatched, errors, pending };
   })().finally(() => {
     globalGeneralMeetingSyncInFlight = null;
   });

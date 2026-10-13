@@ -193,6 +193,96 @@ test("financial-report schedules remain intact and do not create a meeting", () 
   );
 });
 
+test("parses no-diacritic official notice forms and keeps meeting date separate from registration date", () => {
+  const [event] = meetings(`
+    Informacja o terminie NWZ spółki Example S.A.
+    Zarzad zwoluje Nadzwyczajne Walne Zgromadzenie, ktore odbedzie sie w dniu
+    01 pazdziernika 2026 roku o godzinie 09:00.
+    Dzien 17 wrzesnia 2026 roku jest dniem rejestracji uczestnictwa.
+  `);
+
+  assert.deepEqual(
+    {
+      eventDate: event?.eventDate,
+      eventTime: event?.eventTime,
+      meetingType: event?.generalMeetingType,
+      registrationDate: event?.registrationDate,
+    },
+    {
+      eventDate: "2026-10-01",
+      eventTime: "09:00",
+      meetingType: "NWZ",
+      registrationDate: "2026-09-17",
+    }
+  );
+});
+
+test("parses an English bilingual notice with month-first date and AM/PM time", () => {
+  const [event] = meetings(`
+    Notice of an Extraordinary General Meeting (EGM)
+    The meeting will be held on October 1, 2026 at 10:30 a.m. in Warsaw.
+    Record date: September 15, 2026.
+  `);
+
+  assert.deepEqual(
+    {
+      eventDate: event?.eventDate,
+      eventTime: event?.eventTime,
+      meetingType: event?.generalMeetingType,
+      registrationDate: event?.registrationDate,
+    },
+    {
+      eventDate: "2026-10-01",
+      eventTime: "10:30",
+      meetingType: "NWZ",
+      registrationDate: "2026-09-15",
+    }
+  );
+});
+
+test("does not project English AGM follow-up reports as new meetings", () => {
+  assert.deepEqual(
+    meetings("Results of voting at the Annual General Meeting held on June 25, 2026."),
+    []
+  );
+});
+
+test("a current convening notice is not cancelled by a later reference to an older cancelled meeting", () => {
+  const [event] = meetings(`
+    Zarząd zwołuje Nadzwyczajne Walne Zgromadzenie, które odbędzie się w dniu 21 października 2026 roku o godzinie 11:00.
+    Poprzednie NWZ zwołane na 8 października zostało odwołane.
+  `);
+
+  assert.equal(event?.eventDate, "2026-10-21");
+  assert.equal(event?.generalMeetingAction, "CONVENING");
+  assert.equal(event?.isCancellation, false);
+});
+
+test("an official XTPL-style new meeting keeps its announced date ahead of the cancelled prior date", () => {
+  const [event] = meetings(`
+    XTPL SPÓŁKA AKCYJNA (38/2026) Zwołanie Nadzwyczajnego Walnego Zgromadzenia na dzień 19 października 2026 roku
+    Zarząd XTPL S.A. informuje o zwołaniu na dzień 19 października 2026 roku Nadzwyczajnego Walnego Zgromadzenia, które rozpocznie się o godzinie 12:00.
+    Zwołanie Walnego Zgromadzenia następuje w związku z odwołaniem NWZ Spółki zwołanego na dzień 29 września 2026 roku.
+  `);
+
+  assert.deepEqual(
+    {
+      eventDate: event?.eventDate,
+      eventTime: event?.eventTime,
+      registrationDate: event?.registrationDate,
+      action: event?.generalMeetingAction,
+      cancelled: event?.isCancellation,
+    },
+    {
+      eventDate: "2026-10-19",
+      eventTime: "12:00",
+      registrationDate: "2026-10-03",
+      action: "CONVENING",
+      cancelled: false,
+    }
+  );
+});
+
 test("a dividend approved by a general meeting stays a dividend, not a new WZA", () => {
   const events = parseCorporateEventDocument(`
     Dywidenda za rok 2025: Zwyczajne Walne Zgromadzenie uchwaliło 1,18 zł na akcję.

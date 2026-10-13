@@ -118,6 +118,51 @@ test("official GPW list/detail parsing preserves geru id, ISIN, seconds and norm
   assert.doesNotMatch(report.body, /<p>/);
 });
 
+test("official GPW pagination counts eligible malformed rows instead of shortening a full page", () => {
+  const parsed = parseGpwEspiList(`
+    <li><span class="date">05-09-2026 13:32:03 | Current | ESPI | 25/2026</span>
+      <strong class="name"><a href="/espi-ebi-report?geru_id=496523">TOWER INVESTMENTS S.A. (PLTWRNV00013)</a></strong>
+      <p>Zawarcie aneksu</p></li>
+    <li><span class="date">05-09-2026 13:33:03 | Current | ESPI | 26/2026</span>
+      <strong class="name"><a href="/espi-ebi-report?id=496524">BROKEN S.A.</a></strong>
+      <p>Raport bez stabilnego identyfikatora URL</p></li>
+  `);
+
+  assert.equal(parsed.eligibleRows, 2);
+  assert.equal(parsed.candidates.length, 1);
+  assert.equal(parsed.malformedRows, 1);
+  assert.equal(parsed.malformedByReason.missing_source_id, 1);
+});
+
+test("GPW ESPI rows without a paragraph title retain the stable report ID and use the linked title", () => {
+  const parsed = parseGpwEspiList(`
+    <li><span class="date">05-09-2026 13:32:03 | Current | ESPI | 25/2026</span>
+      <strong class="name"><a href="/komunikat?geru_id=496523&amp;title=Zwo%C5%82anie+NWZ">TOWER INVESTMENTS S.A. (PLTWRNV00013)</a></strong>
+    </li>
+  `);
+
+  assert.equal(parsed.candidates.length, 1);
+  assert.equal(parsed.candidates[0].sourceId, "gpw:496523");
+  assert.equal(parsed.candidates[0].title, "Zwołanie NWZ");
+  assert.match(parsed.candidates[0].sourceTitle, /Zwołanie NWZ/);
+  assert.equal(parsed.titleFallbacks, 1);
+  assert.equal(parsed.malformedRows, 0);
+});
+
+test("GPW ESPI rows without a list or linked title still fetch their detail instead of being discarded", () => {
+  const parsed = parseGpwEspiList(`
+    <li><span class="date">05-09-2026 13:32:03 | Current | ESPI | 25/2026</span>
+      <strong class="name"><a href="/komunikat?geru_id=496524">TOWER INVESTMENTS S.A. (PLTWRNV00013)</a></strong>
+    </li>
+  `);
+
+  assert.equal(parsed.candidates.length, 1);
+  assert.equal(parsed.candidates[0].sourceId, "gpw:496524");
+  assert.match(parsed.candidates[0].sourceTitle, /Raport ESPI/);
+  assert.equal(parsed.titleFallbacks, 1);
+  assert.equal(parsed.malformedRows, 0);
+});
+
 test("NewConnect uses a separate stable source namespace while retaining ESPI-only rows", () => {
   const parsed = parseGpwEspiList(`
     <li><span class="date">06-09-2026 11:26:16 | Bieżący | ESPI | 10/2026</span>

@@ -45,10 +45,18 @@ export async function GET(request: Request) {
 
   try {
     const initialState = await getGlobalGeneralMeetingSourceState();
-    await synchronizeGlobalGeneralMeetings({ refreshSource: false });
-    if (initialState.isStale && !initialState.isRefreshing) {
+    const projection = await synchronizeGlobalGeneralMeetings({ refreshSource: false });
+    const shouldRefreshSource = initialState.isStale && !initialState.isRefreshing;
+    if (shouldRefreshSource) {
       after(async () => {
         await synchronizeGlobalGeneralMeetings();
+      });
+    } else if (projection.pending > 0) {
+      // Keep projection backfills moving in bounded batches after responding.
+      // The client polls while this state is true, so there is no unbounded
+      // background loop on serverless-compatible runtimes.
+      after(async () => {
+        await synchronizeGlobalGeneralMeetings({ refreshSource: false });
       });
     }
     const tracked = scope === "all" ? [] : await getUserTrackedGpwInstruments(user.id);
@@ -70,10 +78,15 @@ export async function GET(request: Request) {
       sourceState: {
         status: state.status,
         lastCheckedAt: state.lastCheckedAt,
-        isRefreshing: state.isRefreshing,
+        lastSuccessfulSyncAt: state.lastSuccessAt,
+        isRefreshing: state.isRefreshing || shouldRefreshSource || projection.pending > 0,
+        isStale: state.isStale || projection.pending > 0,
+        projectionPending: projection.pending,
       },
     };
-    return NextResponse.json(response);
+    return NextResponse.json(response, {
+      headers: { "Cache-Control": "private, no-store, max-age=0" },
+    });
   } catch (error) {
     console.error("GET /api/general-meetings failed", {
       error: error instanceof Error ? error.name : "unknown",

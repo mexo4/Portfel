@@ -526,6 +526,10 @@ const schemaStatements = [
   `,
   "ALTER TABLE espi_reports ADD COLUMN IF NOT EXISTS corporate_events_projection_status TEXT",
   "ALTER TABLE espi_reports ADD COLUMN IF NOT EXISTS corporate_events_projected_at TEXT",
+  "ALTER TABLE espi_reports ADD COLUMN IF NOT EXISTS corporate_events_projection_version INTEGER",
+  "ALTER TABLE espi_reports ADD COLUMN IF NOT EXISTS issuer_metadata_version INTEGER",
+  "ALTER TABLE espi_reports ADD COLUMN IF NOT EXISTS issuer_metadata_checked_at TEXT",
+  "ALTER TABLE espi_reports ADD COLUMN IF NOT EXISTS source_checked_at TEXT",
   "ALTER TABLE espi_reports ADD COLUMN IF NOT EXISTS market TEXT NOT NULL DEFAULT 'UNKNOWN'",
   `
     UPDATE espi_reports
@@ -543,6 +547,9 @@ const schemaStatements = [
   "CREATE INDEX IF NOT EXISTS idx_espi_reports_ticker_published ON espi_reports(source_ticker, published_at DESC)",
   "CREATE INDEX IF NOT EXISTS idx_espi_reports_category_published ON espi_reports(category, published_at DESC)",
   "CREATE INDEX IF NOT EXISTS idx_espi_reports_type_published ON espi_reports(report_type, published_at DESC)",
+  "CREATE INDEX IF NOT EXISTS idx_espi_reports_projection_queue ON espi_reports(source, market, corporate_events_projection_version, published_at)",
+  "CREATE INDEX IF NOT EXISTS idx_espi_reports_issuer_metadata_queue ON espi_reports(source, issuer_metadata_version, published_at)",
+  "CREATE INDEX IF NOT EXISTS idx_espi_reports_source_checked ON espi_reports(source, source_checked_at)",
   "CREATE INDEX IF NOT EXISTS idx_espi_reports_correction_of ON espi_reports(correction_of_report_id) WHERE correction_of_report_id IS NOT NULL",
   `
     CREATE INDEX IF NOT EXISTS idx_espi_reports_search

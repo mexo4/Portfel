@@ -51,11 +51,36 @@ const getEventStatusLabel = (event: CorporateEvent) => {
   return null;
 };
 
+const formatSyncTime = (value?: string) => {
+  if (!value) return undefined;
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return undefined;
+  return new Intl.DateTimeFormat("pl-PL", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+};
+
+const toEventsResponse = (response: Awaited<ReturnType<typeof fetchGeneralMeetings>>): CorporateEventsResponse => ({
+  events: response.events,
+  sourceStates: [{
+    instrumentId: "global-gpw",
+    ticker: "GPW",
+    status: response.sourceState.status === "NOT_SYNCED" ? "NOT_FOUND" : response.sourceState.status,
+    lastCheckedAt: response.sourceState.lastCheckedAt,
+  }],
+  scope: "OK",
+});
+
 export default function CorporateEventsPanel({ portfolioId, portfolioIds, variant = "all" }: CorporateEventsPanelProps) {
   const [data, setData] = useState<CorporateEventsResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [hasError, setHasError] = useState(false);
   const [meetingScope, setMeetingScope] = useState<GeneralMeetingScope>("all");
+  const [meetingSyncState, setMeetingSyncState] = useState<Awaited<ReturnType<typeof fetchGeneralMeetings>>["sourceState"] | null>(null);
   const isMeetingView = variant === "general-meetings";
   const portfolioIdsKey = portfolioIds?.join(",") ?? "";
 
@@ -64,16 +89,10 @@ export default function CorporateEventsPanel({ portfolioId, portfolioIds, varian
 
     const request = isMeetingView
       ? fetchGeneralMeetings({ scope: meetingScope, days: 365, signal: controller.signal })
-          .then((response): CorporateEventsResponse => ({
-            events: response.events,
-            sourceStates: [{
-              instrumentId: "global-gpw",
-              ticker: "GPW",
-              status: response.sourceState.status === "NOT_SYNCED" ? "NOT_FOUND" : response.sourceState.status,
-              lastCheckedAt: response.sourceState.lastCheckedAt,
-            }],
-            scope: "OK",
-          }))
+          .then((response) => {
+            if (!controller.signal.aborted) setMeetingSyncState(response.sourceState);
+            return toEventsResponse(response);
+          })
       : fetchCorporateEvents({ portfolioId, portfolioIds: portfolioIdsKey ? portfolioIdsKey.split(",") : undefined, days: 60, signal: controller.signal });
 
     void request
@@ -95,6 +114,40 @@ export default function CorporateEventsPanel({ portfolioId, portfolioIds, varian
 
     return () => controller.abort();
   }, [isMeetingView, meetingScope, portfolioId, portfolioIdsKey]);
+
+  useEffect(() => {
+    if (!isMeetingView || !meetingSyncState?.isRefreshing) return;
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const poll = async () => {
+      try {
+        const response = await fetchGeneralMeetings({
+          scope: meetingScope,
+          days: 365,
+          signal: controller.signal,
+        });
+        if (controller.signal.aborted) return;
+        setData(toEventsResponse(response));
+        setMeetingSyncState(response.sourceState);
+        setHasError(false);
+        if (response.sourceState.isRefreshing) timer = setTimeout(() => void poll(), 8_000);
+      } catch (error) {
+        if (controller.signal.aborted || (error instanceof DOMException && error.name === "AbortError")) return;
+        // Keep the last saved calendar visible if a background refresh poll
+        // fails; the API cache remains the source of truth.
+        setMeetingSyncState((current) => current
+          ? { ...current, status: "TEMPORARILY_UNAVAILABLE", isRefreshing: false, isStale: true }
+          : current);
+      }
+    };
+
+    timer = setTimeout(() => void poll(), 8_000);
+    return () => {
+      controller.abort();
+      if (timer) clearTimeout(timer);
+    };
+  }, [isMeetingView, meetingScope, meetingSyncState?.isRefreshing]);
 
   const changeMeetingScope = (scope: GeneralMeetingScope) => {
     setIsLoading(true);
@@ -140,6 +193,17 @@ export default function CorporateEventsPanel({ portfolioId, portfolioIds, varian
             </button>
           ))}
         </div>
+      ) : null}
+
+      {isMeetingView && meetingSyncState ? (
+        <p className="corporate-events-state" aria-live="polite">
+          {meetingSyncState.isRefreshing
+            ? "Odświeżanie i uzupełnianie kalendarza GPW…"
+            : meetingSyncState.status === "SUCCESS" && !meetingSyncState.isStale
+              ? `Ostatnia udana synchronizacja: ${formatSyncTime(meetingSyncState.lastSuccessfulSyncAt) ?? "niedawno"}.`
+              : `Dane mogą być częściowe. Ostatnia udana synchronizacja: ${formatSyncTime(meetingSyncState.lastSuccessfulSyncAt) ?? "brak"}.`}
+          {meetingSyncState.projectionPending ? ` Pozostało raportów do sprawdzenia: ${meetingSyncState.projectionPending}.` : ""}
+        </p>
       ) : null}
 
       {isLoading ? <p className="corporate-events-state">Sprawdzanie zapisanych wydarzeń…</p> : null}

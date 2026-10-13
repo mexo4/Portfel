@@ -304,6 +304,14 @@ export const parseGpwEspiList = (
   const baseUrl = options.baseUrl ?? GPW_ESPI_BASE_URL;
   const sourcePrefix = options.sourcePrefix ?? "gpw";
   const sourceKind = options.sourceKind ?? "GPW";
+  let eligibleRows = 0;
+  let malformedRows = 0;
+  let titleFallbacks = 0;
+  const malformedByReason: Record<string, number> = {};
+  const markMalformed = (reason: string) => {
+    malformedRows += 1;
+    malformedByReason[reason] = (malformedByReason[reason] ?? 0) + 1;
+  };
 
   for (const item of document.matchAll(/<li\b[^>]*>([\s\S]*?)<\/li>/gi)) {
     const segment = item[1] ?? "";
@@ -311,33 +319,45 @@ export const parseGpwEspiList = (
       segment.match(/<span[^>]*class="[^"]*date[^"]*"[^>]*>([\s\S]*?)<\/span>/i)?.[1] ?? ""
     );
     if (!/(?:^|\|)\s*ESPI\s*(?:\||$)/i.test(metadata)) continue;
+    eligibleRows += 1;
 
     const href = decodeEspiHtml(
       segment.match(/<a\s+[^>]*href="([^"]*\bgeru_id=\d+[^"]*)"/i)?.[1] ?? ""
     );
     const geruId = href.match(/[?&]geru_id=(\d+)/i)?.[1];
-    if (!geruId) continue;
+    if (!geruId) {
+      markMalformed("missing_source_id");
+      continue;
+    }
 
+    const sourceUrl = new URL(href, baseUrl);
     const issuerLabel = espHtmlToText(
       segment.match(/<strong[^>]*class="[^"]*name[^"]*"[^>]*>[\s\S]*?<a[^>]*>([\s\S]*?)<\/a>/i)?.[1] ?? ""
     );
     const issuerMatch = issuerLabel.match(/^(.*?)\s*\(([A-Z]{2}[A-Z0-9]{10})\)\s*$/i);
     const issuerName = (issuerMatch?.[1] ?? issuerLabel).trim();
     const sourceIsin = issuerMatch?.[2]?.toUpperCase();
-    const title = espHtmlToText(segment.match(/<p[^>]*>([\s\S]*?)<\/p>/i)?.[1] ?? "");
+    const listTitle = espHtmlToText(segment.match(/<p[^>]*>([\s\S]*?)<\/p>/i)?.[1] ?? "");
+    const linkedTitle = sourceUrl.searchParams.get("title")?.trim() ?? "";
+    const title = listTitle || linkedTitle;
     const parts = metadata.split("|").map((part) => part.trim());
     const publishedAt = toWarsawIso(parts[0] ?? "");
     const reportKind = parts[1] ?? "";
     const reportNumber = parts[3] && parts[3] !== "-" ? parts[3] : undefined;
-    if (!issuerName || !title || !publishedAt) continue;
+    if (!issuerName || !publishedAt) {
+      if (!issuerName) markMalformed("missing_issuer");
+      if (!publishedAt) markMalformed("invalid_publication_date");
+      continue;
+    }
+    if (!listTitle) titleFallbacks += 1;
 
     const reportType = getGpwReportType(reportKind, title);
     candidates.push({
       sourceId: `${sourcePrefix}:${geruId}`,
-      sourceUrl: new URL(href, baseUrl).toString(),
+      sourceUrl: sourceUrl.toString(),
       sourceTitle: reportType === "CURRENT" && reportNumber
-        ? `${issuerName} (${reportNumber}) ${title}`
-        : `${issuerName} ${title}`,
+        ? `${issuerName} (${reportNumber}) ${title || "Raport ESPI"}`
+        : `${issuerName} ${title || `Raport ESPI${reportNumber ? ` ${reportNumber}` : ""}`}`,
       sourcePublishedAt: publishedAt,
       issuerName,
       sourceIsin,
@@ -351,6 +371,11 @@ export const parseGpwEspiList = (
 
   return {
     candidates: Array.from(new Map(candidates.map((item) => [item.sourceId, item])).values()),
+    /** Count source rows before normalization so a broken row cannot shrink a full page. */
+    eligibleRows,
+    malformedRows,
+    malformedByReason,
+    titleFallbacks,
     hasNextPage: candidates.length > 0,
   };
 };

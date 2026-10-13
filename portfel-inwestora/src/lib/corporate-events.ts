@@ -151,7 +151,10 @@ export type GeneralMeetingsResponse = {
   sourceState: {
     status: CorporateEventSourceStatus | "NOT_SYNCED";
     lastCheckedAt?: string;
+    lastSuccessfulSyncAt?: string;
     isRefreshing?: boolean;
+    isStale?: boolean;
+    projectionPending?: number;
   };
 };
 
@@ -176,13 +179,25 @@ const POLISH_MONTHS: Record<string, string> = {
   pazdziernika: "10",
   listopada: "11",
   grudnia: "12",
+  january: "01",
+  february: "02",
+  march: "03",
+  april: "04",
+  may: "05",
+  june: "06",
+  july: "07",
+  august: "08",
+  september: "09",
+  october: "10",
+  november: "11",
+  december: "12",
 };
 
 const DATE_PATTERN =
   /\b(\d{1,2})\s*(?:[.\-/]\s*)?([a-zA-ZąćęłńóśźżĄĆĘŁŃÓŚŹŻ]+)\s+(20\d{2})\b|\b(\d{1,2})[.\-/](\d{1,2})[.\-/](20\d{2})\b/g;
 
 const UNICODE_DATE_PATTERN =
-  /\b(\d{1,2})\s*(?:[.\-/]\s*)?([\p{L}]+)\s+(20\d{2})\b|\b(\d{1,2})[.\-/](\d{1,2})[.\-/](20\d{2})\b/gu;
+  /\b(\d{1,2})\s*(?:[.\-/]\s*)?([\p{L}]+)\s+(20\d{2})\b|\b(\d{1,2})[.\-/](\d{1,2})[.\-/](20\d{2})\b|\b([\p{L}]+)\s+(\d{1,2})(?:st|nd|rd|th)?[,]?\s+(20\d{2})\b/giu;
 
 const normalizeDocumentText = (value: string) =>
   value
@@ -229,8 +244,11 @@ const getIsoDateFromMatch = (match: RegExpExecArray) => {
   const numericDate = match[4] && match[5] && match[6]
     ? `${match[6]}-${match[5].padStart(2, "0")}-${match[4].padStart(2, "0")}`
     : null;
+  const englishMonthFirstDate = match[7] && match[8] && match[9]
+    ? toIsoDate(match[8], match[7], match[9])
+    : null;
 
-  return namedDate ?? numericDate;
+  return namedDate ?? numericDate ?? englishMonthFirstDate;
 };
 
 const subtractCalendarDays = (isoDate: string, days: number) => {
@@ -365,23 +383,31 @@ const getDateAfterKeyword = (
 };
 
 const GENERAL_MEETING_REFERENCE =
-  /waln(?:e|ego|emu|ym|ych)?\s+zgromadzeni(?:e|a|u|em)?(?:\s+akcjonariuszy)?|\b(?:wza|zwz|nwz)\b/iu;
+  /waln(?:e|ego|emu|ym|ych)?\s+zgromadzeni(?:e|a|u|em)?(?:\s+akcjonariuszy)?|\b(?:wza|zwz|nwz|agm|egm)\b|\b(?:annual|extraordinary|ordinary)\s+general\s+meeting\b|\bgeneral\s+meeting\b/iu;
 
 const GENERAL_MEETING_FALSE_NOTICE =
-  /projekt(?:y|u|em)?\s+uchwa|zgłoszeni(?:e|a)\s+projektu\s+uchwa|(?:uzupełnieni|zmian)[eaęy]?\s+porządku\s+obrad|żądani(?:e|a)\s+akcjonariusz|zgłoszeni(?:e|a)\s+kandydat|wykaz\s+akcjonariusz|lista\s+akcjonariusz[^\n.]{0,100}(?:głos|procent|%)|treść\s+uchwał\s+podjętych|uchwał(?:y|a)\s+podjęt|wynik(?:i|ów)?\s+głosowa|po\s+(?:odbyciu|zakończeniu)\s+(?:walnego|wza|zwz|nwz)|informacj[ae]\s+po\s+(?:walnym|wza|zwz|nwz)/iu;
+  /projekt(?:y|u|em)?\s+uchwal|zgloszeni(?:e|a)\s+projektu\s+uchwal|(?:uzupelnieni|zmian)[eaęy]?\s+porzadku\s+obrad|zadani(?:e|a)\s+akcjonariusz|zgloszeni(?:e|a)\s+kandydat|wykaz\s+akcjonariusz|lista\s+akcjonariusz[^\n.]{0,100}(?:glos|procent|%)|tresc\s+uchwal\s+podjetych|uchwal(?:y|a)\s+podjet|wynik(?:i|ow)?\s+glosowa|po\s+(?:odbyciu|zakonczeniu)\s+(?:walnego|wza|zwz|nwz)|informacj[ae]\s+po\s+(?:walnym|wza|zwz|nwz)|(?:minutes|results?\s+of\s+voting|resolutions?\s+adopted|draft\s+resolutions?|candidates?\s+for\s+the\s+board|agenda\s+amendment)[^\n.]{0,100}(?:general\s+meeting|\b(?:agm|egm)\b)/iu;
 
 const GENERAL_MEETING_FORMAL_NOTICE =
-  /(?:ogłoszeni[ea]\s+o\s+)?zwołani[eu]\s+(?:(?:zwyczajnego|nadzwyczajnego)\s+)?walnego\s+zgromadzenia|\bzwoł(?:uje|ał|ano)(?![\p{L}\p{N}_])[\s\S]{0,260}?(?:waln\w*\s+zgromadzeni\w*|\b(?:zwz|nwz|wza)\b)|(?:waln\w*\s+zgromadzeni\w*|\b(?:zwz|nwz)\b)[\s\S]{0,180}?(?:zostanie\s+zwołan\w*|zwołan\w*\s+na)|(?:zarząd|spółka|emitent)[\s\S]{0,160}?informuje[\s\S]{0,220}?(?:waln\w*\s+zgromadzeni\w*|\b(?:zwz|nwz)\b)[\s\S]{0,100}?odbędzie\s+się/iu;
+  /(?:ogloszeni[ae]\s+o\s+)?zwolani[eu]\s+(?:(?:zwyczajnego|nadzwyczajnego)\s+)?walnego\s+zgromadzenia|\bzwol(?:uje|a|al|ano|anie|aniu|ane|anego|anym)(?![\p{L}\p{N}_])[\s\S]{0,260}?(?:waln\w*\s+zgromadzeni\w*|\b(?:zwz|nwz|wza)\b)|(?:waln\w*\s+zgromadzeni\w*|\b(?:zwz|nwz)\b)[\s\S]{0,180}?(?:zostanie\s+zwolan\w*|zwolan\w*\s+na)|(?:zarzad|spolka|emitent)[\s\S]{0,160}?informuje[\s\S]{0,220}?(?:waln\w*\s+zgromadzeni\w*|\b(?:zwz|nwz)\b)[\s\S]{0,100}?odbedzie\s+sie|(?:informacj\w*\s+o\s+terminie|notice\s+(?:of|on)\s+(?:the\s+)?date)[\s\S]{0,180}?(?:waln\w*\s+zgromadzeni\w*|\b(?:zwz|nwz|wza|agm|egm)\b)|(?:notice\s+(?:of|convening)\s+(?:the\s+)?(?:annual|extraordinary|ordinary\s+)?general\s+meeting|(?:annual|extraordinary|ordinary)\s+general\s+meeting[\s\S]{0,180}?(?:will\s+be\s+held|is\s+convened|shall\s+be\s+held)|(?:board|company|issuer)[\s\S]{0,120}?(?:convenes|hereby\s+convenes)[\s\S]{0,150}?general\s+meeting)/iu;
 
 const GENERAL_MEETING_RESCHEDULE_NOTICE =
-  /zmian(?:a|y|ie|ę)\s+terminu[\s\S]{0,180}?(?:waln\w*\s+zgromadzeni\w*|\b(?:wza|zwz|nwz)\b)|(?:waln\w*\s+zgromadzeni\w*|\b(?:wza|zwz|nwz)\b)[\s\S]{0,180}?zmian(?:a|y|ie|ę)\s+terminu|(?:przełoż|przenies|zmienia\s+termin)[\s\S]{0,180}?(?:waln\w*\s+zgromadzeni\w*|\b(?:wza|zwz|nwz)\b)|(?:waln\w*\s+zgromadzeni\w*|\b(?:wza|zwz|nwz)\b)[\s\S]{0,180}?(?:przełoż|przenies|zmienia\s+termin)/iu;
+  /zmian(?:a|y|ie|e)\s+terminu[\s\S]{0,180}?(?:waln\w*\s+zgromadzeni\w*|\b(?:wza|zwz|nwz)\b)|(?:waln\w*\s+zgromadzeni\w*|\b(?:wza|zwz|nwz)\b)[\s\S]{0,180}?zmian(?:a|y|ie|e)\s+terminu|(?:przeloz|przenies|zmienia\s+termin)[\s\S]{0,180}?(?:waln\w*\s+zgromadzeni\w*|\b(?:wza|zwz|nwz)\b)|(?:waln\w*\s+zgromadzeni\w*|\b(?:wza|zwz|nwz)\b)[\s\S]{0,180}?(?:przeloz|przenies|zmienia\s+termin)|(?:change|reschedul|postpon)[^\n.]{0,160}(?:general\s+meeting|\b(?:agm|egm)\b)|(?:general\s+meeting|\b(?:agm|egm)\b)[^\n.]{0,160}(?:change|reschedul|postpon)/iu;
 
 const GENERAL_MEETING_CANCELLATION_NOTICE =
-  /odwołani[ea]\s+(?:(?:zwyczajnego|nadzwyczajnego)\s+)?walnego\s+zgromadzenia|odwołuj\w*[\s\S]{0,180}?(?:waln\w*\s+zgromadzeni\w*|\b(?:wza|zwz|nwz)\b)|(?:waln\w*\s+zgromadzeni\w*|\b(?:wza|zwz|nwz)\b)[\s\S]{0,260}?(?:zostało\s+odwołan\w*|nie\s+odbędzie\s+się|informuje\s+o\s+odwołaniu\s+(?:tego\s+)?zgromadzenia)/iu;
+  /odwolani[ae]\s+(?:(?:zwyczajnego|nadzwyczajnego)\s+)?walnego\s+zgromadzenia|odwoluj\w*[\s\S]{0,180}?(?:waln\w*\s+zgromadzeni\w*|\b(?:wza|zwz|nwz)\b)|(?:waln\w*\s+zgromadzeni\w*|\b(?:wza|zwz|nwz)\b)[\s\S]{0,260}?(?:zostalo\s+odwolan\w*|nie\s+odbedzie\s+sie|informuje\s+o\s+odwolaniu\s+(?:tego\s+)?zgromadzenia)|(?:cancel|withdraw)[^\n.]{0,180}(?:general\s+meeting|\b(?:agm|egm)\b)|(?:general\s+meeting|\b(?:agm|egm)\b)[^\n.]{0,180}(?:cancel|withdraw)/iu;
+const GENERAL_MEETING_CANCELLATION_SIGNAL =
+  /odwolani[ae]|odwoluj\w*|zostalo\s+odwolan\w*|nie\s+odbedzie\s+sie|informuje\s+o\s+odwolaniu|cancel|withdraw/iu;
+
+const normalizeGeneralMeetingText = (value: string) => value
+  .normalize("NFD")
+  .replace(/\p{Diacritic}/gu, "")
+  .replace(/[łŁ]/g, (character) => character === "Ł" ? "L" : "l")
+  .replace(/&amp;/gi, "&");
 
 const getGeneralMeetingType = (text: string): GeneralMeetingType | undefined => {
-  if (/\bnwz\b|nadzwyczajn\w*\s+waln\w*\s+zgromadzeni\w*/iu.test(text)) return "NWZ";
-  if (/\bzwz\b|(?<!nadzwy)zwyczajn\w*\s+waln\w*\s+zgromadzeni\w*/iu.test(text)) return "ZWZ";
+  if (/\bnwz\b|\begm\b|extraordinary\s+general\s+meeting|nadzwyczajn\w*\s+waln\w*\s+zgromadzeni\w*/iu.test(text)) return "NWZ";
+  if (/\bzwz\b|\bagm\b|annual\s+general\s+meeting|ordinary\s+general\s+meeting|(?<!nadzwy)zwyczajn\w*\s+waln\w*\s+zgromadzeni\w*/iu.test(text)) return "ZWZ";
   return undefined;
 };
 
@@ -392,9 +418,11 @@ const getGeneralMeetingIdentity = (
 
 const getSemanticMeetingDate = (text: string) => {
   const keywordPatterns = [
-    /\bzwoł(?:uje|ał|ano|ane|anego|anym)(?![\p{L}\p{N}_])[\s\S]{0,180}?\b(?:na\s+dzień|w\s+dniu|dnia)(?![\p{L}\p{N}_])/iu,
-    /(?:waln\w*\s+zgromadzeni\w*|\b(?:wza|zwz|nwz)\b)[\s\S]{0,160}?\b(?:odbędzie\s+się|zwołan\w*)\b[\s\S]{0,80}?\b(?:w\s+dniu|dnia|na\s+dzień)(?![\p{L}\p{N}_])/iu,
+    /\bzwol(?:uje|al|ano|ane|anego|anym|anie|aniu)(?![\p{L}\p{N}_])[\s\S]{0,180}?\b(?:na\s+dzien|w\s+dniu|dnia)(?![\p{L}\p{N}_])/iu,
+    /(?:waln\w*\s+zgromadzeni\w*|\b(?:wza|zwz|nwz)\b)[\s\S]{0,160}?\b(?:odbedzie\s+sie|zwolan\w*)\b[\s\S]{0,80}?\b(?:w\s+dniu|dnia|na\s+dzien)(?![\p{L}\p{N}_])/iu,
     /(?:waln\w*\s+zgromadzeni\w*|\b(?:wza|zwz|nwz)\b)[\s\S]{0,100}?\bw\s+dniu\b/iu,
+    /(?:general\s+meeting|\b(?:agm|egm)\b)[\s\S]{0,180}?\b(?:will\s+be\s+held|is\s+scheduled\s+to\s+take\s+place|shall\s+be\s+held|takes\s+place)\s+(?:on\s+)?/iu,
+    /\b(?:will\s+be\s+held|is\s+scheduled\s+to\s+take\s+place|shall\s+be\s+held)\s+on\s+/iu,
   ];
 
   for (const keyword of keywordPatterns) {
@@ -416,13 +444,13 @@ const getOfficialGeneralMeetingRegistrationDate = (text: string) => {
       (dateMatch.index ?? 0) + dateMatch[0].length,
       (dateMatch.index ?? 0) + dateMatch[0].length + 180
     );
-    if (/^[\s,;:()\w.]{0,60}?jest\s+dniem\s+rejestracji(?:\s+uczestnictwa)?\b/iu.test(afterDate)) {
+    if (/^\s*(?:(?:roku|r\.)\s*)?[,;:–—-]?\s*(?:jest\s+dniem\s+rejestracji|is\s+(?:the\s+)?record\s+date|is\s+the\s+registration\s+date)(?:\s+uczestnictwa)?\b/iu.test(afterDate)) {
       return date;
     }
   }
 
   const references = Array.from(
-    text.matchAll(/(?:dzień|dniem)\s+rejestracji(?:\s+uczestnictwa)?(?:\s+w\s+(?:walnym\s+zgromadzeniu|wza|zwz|nwz))?/giu)
+    text.matchAll(/(?:dzien|dniem)\s+rejestracji(?:\s+uczestnictwa)?(?:\s+w\s+(?:walnym\s+zgromadzeniu|wza|zwz|nwz))?|(?:record|registration)\s+date\s*:?/giu)
   );
 
   for (const reference of references) {
@@ -431,9 +459,9 @@ const getOfficialGeneralMeetingRegistrationDate = (text: string) => {
     const date = extractPolishDates(linkingText)[0];
     if (!date) continue;
 
-    const dateIndex = linkingText.search(/\b\d{1,2}\s*(?:[.\-/]\s*)?(?:[\p{L}]+\s+)?20\d{2}\b|\b\d{1,2}[.\-/]\d{1,2}[.\-/]20\d{2}\b/u);
+    const dateIndex = linkingText.search(/\b\d{1,2}\s*(?:[.\-/]\s*)?(?:[\p{L}]+\s+)?20\d{2}\b|\b[\p{L}]+\s+\d{1,2}(?:st|nd|rd|th)?[,]?\s+20\d{2}\b|\b\d{1,2}[.\-/]\d{1,2}[.\-/]20\d{2}\b/u);
     const beforeDate = dateIndex >= 0 ? linkingText.slice(0, dateIndex) : linkingText;
-    if (/(?:jest|przypada|ustal\w*|wyznacz\w*|na\s+dzień|:|–|—|-)/iu.test(beforeDate)) {
+    if (/(?:jest|przypada|ustal\w*|wyznacz\w*|na\s+dzien|:|–|—|-|is|shall\s+be)/iu.test(beforeDate)) {
       return date;
     }
   }
@@ -447,8 +475,8 @@ const getGeneralMeetingTime = (text: string, meetingDate: string) => {
     .filter((entry) => entry.date === meetingDate);
   if (dateOccurrences.length === 0) return undefined;
 
-  const timeMatches = Array.from(
-    text.matchAll(/\b(?:o\s+godzinie|na\s+godzinę|godz(?:ina)?\.?)\s*(\d{1,2})(?:[:.]([0-5]\d))?\b/giu)
+  const polishTimes = Array.from(
+    text.matchAll(/\b(?:o\s+godzin(?:ie|e)|na\s+godzine|godz(?:ina|ine)?\.?)\s*(\d{1,2})(?:[:.]([0-5]\d))?\b/giu)
   ).flatMap((match) => {
     const hour = Number(match[1]);
     if (!Number.isInteger(hour) || hour < 0 || hour > 23) return [];
@@ -457,6 +485,15 @@ const getGeneralMeetingTime = (text: string, meetingDate: string) => {
       index: match.index ?? 0,
     }];
   });
+  const englishTimes = Array.from(text.matchAll(/\b(?:at\s+)?(\d{1,2}):([0-5]\d)(?:\s*(a\.m\.|p\.m\.|am|pm))?(?=$|\s|[.,;])/giu)
+  ).flatMap((match) => {
+    let hour = Number(match[1]);
+    if (!Number.isInteger(hour) || hour < 0 || hour > 23 || (match[3] && hour > 12)) return [];
+    if (/p\.?m\.?/iu.test(match[3] ?? "") && hour < 12) hour += 12;
+    if (/a\.?m\.?/iu.test(match[3] ?? "") && hour === 12) hour = 0;
+    return [{ time: `${String(hour).padStart(2, "0")}:${match[2]}`, index: match.index ?? 0 }];
+  });
+  const timeMatches = [...polishTimes, ...englishTimes];
 
   const candidates = dateOccurrences.flatMap((date) =>
     timeMatches
@@ -479,7 +516,7 @@ const getGeneralMeetingRescheduleDates = (text: string) => {
   // report-reference list, not the actual old/new date pair.
   for (const oldDateLabel of context.matchAll(/\bz\s+dnia\b/giu)) {
     const tail = context.slice(oldDateLabel.index ?? 0, (oldDateLabel.index ?? 0) + 180);
-    const newDateLabelIndex = tail.search(/\bna\s+dzień(?![\p{L}\p{N}_])/iu);
+    const newDateLabelIndex = tail.search(/\bna\s+dzien(?![\p{L}\p{N}_])/iu);
     if (newDateLabelIndex < 0 || newDateLabelIndex > 110) continue;
 
     const oldDateContext = tail.slice(oldDateLabel[0].length, newDateLabelIndex);
@@ -494,7 +531,7 @@ const getGeneralMeetingRescheduleDates = (text: string) => {
   const previousEventDate =
     getDateAfterKeyword(
       context,
-      /(?:dotychczasow\w*|pierwotn\w*)\s+termin\w*[\s\S]{0,80}?(?:na\s+dzień|w\s+dniu|:)|zwołan\w*[\s\S]{0,80}?(?:na\s+dzień|w\s+dniu)|\bz\s+dnia\b/iu,
+      /(?:dotychczasow\w*|pierwotn\w*)\s+termin\w*[\s\S]{0,80}?(?:na\s+dzien|w\s+dniu|:)|zwolan\w*[\s\S]{0,80}?(?:na\s+dzien|w\s+dniu)|\bz\s+dnia\b/iu,
       100,
       "first",
       true
@@ -502,7 +539,7 @@ const getGeneralMeetingRescheduleDates = (text: string) => {
   const eventDate =
     getDateAfterKeyword(
       context,
-      /(?:nowy|zmienion\w*)\s+termin\w*[\s\S]{0,80}?(?:na\s+dzień|w\s+dniu|:)|(?:przełoż|przenies)\w*[\s\S]{0,80}?\bna(?:\s+dzień)?\b|zmienia\s+termin[\s\S]{0,80}?\bna(?:\s+dzień)?\b/iu,
+      /(?:nowy|zmienion\w*)\s+termin\w*[\s\S]{0,80}?(?:na\s+dzien|w\s+dniu|:)|(?:przeloz|przenies)\w*[\s\S]{0,80}?\bna(?:\s+dzien)?\b|zmienia\s+termin[\s\S]{0,80}?\bna(?:\s+dzien)?\b/iu,
       100,
       "first",
       true
@@ -516,35 +553,47 @@ const getGeneralMeetingRescheduleDates = (text: string) => {
 };
 
 const getGeneralMeetingEvents = (text: string): ParsedCorporateEvent[] => {
-  if (!GENERAL_MEETING_REFERENCE.test(text)) return [];
+  const meetingText = normalizeGeneralMeetingText(text);
+  if (!GENERAL_MEETING_REFERENCE.test(meetingText)) return [];
 
-  const meetingType = getGeneralMeetingType(text);
-  const reschedule = GENERAL_MEETING_RESCHEDULE_NOTICE.test(text);
-  const cancellation = GENERAL_MEETING_CANCELLATION_NOTICE.test(text);
+  const meetingType = getGeneralMeetingType(meetingText);
+  const reschedule = GENERAL_MEETING_RESCHEDULE_NOTICE.test(meetingText);
+  const cancellationMatch = meetingText.match(GENERAL_MEETING_CANCELLATION_NOTICE);
+  const cancellationSignalOffset = cancellationMatch?.[0].search(GENERAL_MEETING_CANCELLATION_SIGNAL) ?? -1;
+  const cancellationSignalIndex = cancellationMatch && cancellationSignalOffset >= 0
+    ? (cancellationMatch.index ?? 0) + cancellationSignalOffset
+    : -1;
+  const formalMatch = meetingText.match(GENERAL_MEETING_FORMAL_NOTICE);
+  // A convening notice may mention cancellation of an older meeting or use
+  // cancellation boilerplate later in the document. The explicit cancellation
+  // phrase must precede the current formal notice; the broad match's start can
+  // be the earlier meeting reference, so compare the actual cancellation
+  // signal within that match instead.
+  const cancellation = cancellationSignalIndex >= 0 &&
+    (!formalMatch || cancellationSignalIndex <= (formalMatch.index ?? 0));
 
   if (reschedule) {
-    const { previousEventDate, eventDate } = getGeneralMeetingRescheduleDates(text);
+    const { previousEventDate, eventDate } = getGeneralMeetingRescheduleDates(meetingText);
     if (!previousEventDate || !eventDate || previousEventDate === eventDate) return [];
 
     return [{
       eventType: "GENERAL_MEETING",
       eventDate,
-      eventTime: getGeneralMeetingTime(text, eventDate),
+      eventTime: getGeneralMeetingTime(meetingText, eventDate),
       previousEventDate,
       fiscalYear: Number(eventDate.slice(0, 4)),
       isScheduleChange: true,
       generalMeetingType: meetingType,
       generalMeetingAction: "RESCHEDULE",
       registrationDate:
-        getOfficialGeneralMeetingRegistrationDate(text) ??
+        getOfficialGeneralMeetingRegistrationDate(meetingText) ??
         getGeneralMeetingRegistrationDate(eventDate),
       isCancellation: false,
       eventIdentity: getGeneralMeetingIdentity(meetingType, previousEventDate),
     }];
   }
 
-  const formalMatch = text.match(GENERAL_MEETING_FORMAL_NOTICE);
-  const falseNoticeIndex = text.search(GENERAL_MEETING_FALSE_NOTICE);
+  const falseNoticeIndex = meetingText.search(GENERAL_MEETING_FALSE_NOTICE);
   const formalNoticeIndex = formalMatch?.index ?? -1;
   if (
     !cancellation &&
@@ -553,19 +602,19 @@ const getGeneralMeetingEvents = (text: string): ParsedCorporateEvent[] => {
     return [];
   }
 
-  const eventDate = getSemanticMeetingDate(text);
+  const eventDate = getSemanticMeetingDate(meetingText);
   if (!eventDate) return [];
 
   return [{
     eventType: "GENERAL_MEETING",
     eventDate,
-    eventTime: getGeneralMeetingTime(text, eventDate),
+    eventTime: getGeneralMeetingTime(meetingText, eventDate),
     fiscalYear: Number(eventDate.slice(0, 4)),
     isScheduleChange: false,
     generalMeetingType: meetingType,
     generalMeetingAction: cancellation ? "CANCELLATION" : "CONVENING",
     registrationDate:
-      getOfficialGeneralMeetingRegistrationDate(text) ??
+      getOfficialGeneralMeetingRegistrationDate(meetingText) ??
       getGeneralMeetingRegistrationDate(eventDate),
     isCancellation: cancellation,
     eventIdentity: getGeneralMeetingIdentity(meetingType, eventDate),

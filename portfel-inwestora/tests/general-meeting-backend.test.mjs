@@ -129,17 +129,18 @@ test("source failures update checks without deleting last valid corporate events
 });
 
 test("global WZA projection is independent from portfolio membership and logs synchronization counts", async () => {
-  const provider = await readFile(
-    new URL("../src/lib/server/corporate-events.ts", import.meta.url),
-    "utf8"
-  );
-  const api = await readFile(
-    new URL("../src/app/api/general-meetings/route.ts", import.meta.url),
-    "utf8"
-  );
+  const [provider, espi, api] = await Promise.all([
+    readFile(new URL("../src/lib/server/corporate-events.ts", import.meta.url), "utf8"),
+    readFile(new URL("../src/lib/server/espi.ts", import.meta.url), "utf8"),
+    readFile(new URL("../src/app/api/general-meetings/route.ts", import.meta.url), "utf8"),
+  ]);
 
   assert.match(provider, /synchronizeGlobalGeneralMeetings/);
   assert.match(provider, /corporate_events_projection_status/);
+  assert.match(provider, /GENERAL_MEETING_PROJECTION_BATCH_SIZE = 100/);
+  assert.match(provider, /report\.source_id NOT LIKE 'newconnect:%'/);
+  assert.match(provider, /report\.published_at >= \$1/);
+  assert.doesNotMatch(provider, /report\.category\s*=\s*'GENERAL_MEETING'/);
   assert.match(provider, /\[WZA SYNC\] fetched=/);
   assert.match(provider, /for \(const report of reports\)/);
   assert.doesNotMatch(provider, /ORDER BY report\.published_at ASC, report\.source_id ASC\s+LIMIT 1000/);
@@ -148,4 +149,10 @@ test("global WZA projection is independent from portfolio membership and logs sy
   assert.match(api, /addCalendarMonths\(today, 12\)/);
   assert.match(api, /instrument\.watched/);
   assert.match(api, /instrument\.held/);
+  assert.match(api, /projection\.pending > 0/);
+  assert.match(api, /Cache-Control.*private, no-store/);
+  assert.match(espi, /eligibleRows < 50/);
+  assert.match(espi, /createHash\("sha256"\)/);
+  assert.match(espi, /body_text IS DISTINCT FROM \$12/);
+  assert.match(espi, /corporate_events_projection_version = CASE/);
 });

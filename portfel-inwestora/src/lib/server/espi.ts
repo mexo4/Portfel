@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   ESPI_CATEGORY_LABELS,
   type EspiAttachment,
@@ -67,6 +67,9 @@ const ESPI_OVERLAP_DAYS = 4;
 const ESPI_OFFICIAL_REPAIR_DAYS = 370;
 const ESPI_FETCH_ATTEMPTS = 2;
 const ARTICLE_CONCURRENCY = 4;
+const ISSUER_METADATA_VERSION = 2;
+const ISSUER_RETRY_AFTER_DAYS = 7;
+const ISSUER_RECONCILIATION_BATCH_SIZE = 100;
 
 type EspiSyncStateRow = {
   status: EspiSourceStatus;
@@ -586,7 +589,22 @@ const upsertEspiReport = async (report: ParsedPapEspiReport) => {
               market = $4, source_ticker = $5, source_isin = $6, report_number = $7,
               report_type = $8, published_at = $9, source_title = $10, title = $11,
               body_text = $12, legal_basis = $13, category = $14, source_url = $15,
-              is_correction = $16, correction_target_report_number = $17, updated_at = $18
+              is_correction = $16, correction_target_report_number = $17,
+              source_checked_at = $18, updated_at = $18,
+              corporate_events_projection_status = CASE
+                WHEN source_title IS DISTINCT FROM $10
+                  OR title IS DISTINCT FROM $11
+                  OR body_text IS DISTINCT FROM $12
+                  OR issuer_id IS DISTINCT FROM COALESCE($2, issuer_id)
+                  OR market IS DISTINCT FROM $4
+                THEN NULL ELSE corporate_events_projection_status END,
+              corporate_events_projection_version = CASE
+                WHEN source_title IS DISTINCT FROM $10
+                  OR title IS DISTINCT FROM $11
+                  OR body_text IS DISTINCT FROM $12
+                  OR issuer_id IS DISTINCT FROM COALESCE($2, issuer_id)
+                  OR market IS DISTINCT FROM $4
+                THEN NULL ELSE corporate_events_projection_version END
           WHERE id = $19
         `,
         [
@@ -608,6 +626,7 @@ const upsertEspiReport = async (report: ParsedPapEspiReport) => {
               market = CASE WHEN market = 'UNKNOWN' THEN $2 ELSE market END,
               source_ticker = COALESCE(source_ticker, $3),
               source_isin = COALESCE(source_isin, $4),
+              source_checked_at = $5,
               updated_at = $5
           WHERE id = $6
         `,
@@ -620,10 +639,10 @@ const upsertEspiReport = async (report: ParsedPapEspiReport) => {
             id, source, source_id, issuer_id, issuer_name, source_ticker, source_isin,
             market, report_number, report_type, published_at, source_title, title, body_text,
             legal_basis, category, source_url, is_correction,
-            correction_target_report_number, discovered_at, updated_at
+            correction_target_report_number, source_checked_at, discovered_at, updated_at
           )
           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-                  $12, $13, $14, $15, $16, $17, $18, $19, $20, $20)
+                  $12, $13, $14, $15, $16, $17, $18, $19, $20, $20, $20)
         `,
         [
           id, PAP_SOURCE, report.sourceId, issuer?.id ?? null, report.issuerName,
@@ -682,10 +701,11 @@ const linkCorrection = async (reportId: string, report: ParsedPapEspiReport, iss
   }
 };
 
-const getStoredSourceIds = async (candidates: PapEspiListCandidate[]) => {
-  if (candidates.length === 0) return new Set<string>();
+const getStoredSourceState = async (candidates: PapEspiListCandidate[]) => {
+  if (candidates.length === 0) return { storedIds: new Set<string>(), sourceCheckedAt: new Map<string, string | null>() };
   const rows = await query<{
     source_id: string;
+    source_checked_at: string | null;
     source_isin: string | null;
     report_number: string | null;
     report_type: EspiReportType;
@@ -693,7 +713,7 @@ const getStoredSourceIds = async (candidates: PapEspiListCandidate[]) => {
     is_correction: boolean;
   }>(
     `
-      SELECT source_id, source_isin, report_number, report_type, published_at, is_correction
+      SELECT source_id, source_checked_at, source_isin, report_number, report_type, published_at, is_correction
       FROM espi_reports
       WHERE source = $1
         AND (
@@ -714,6 +734,7 @@ const getStoredSourceIds = async (candidates: PapEspiListCandidate[]) => {
     ]
   );
   const stored = new Set(rows.map((row) => row.source_id));
+  const sourceCheckedAt = new Map(rows.map((row) => [row.source_id, row.source_checked_at]));
   for (const candidate of candidates) {
     if (!candidate.sourceIsin || !candidate.sourcePublishedAt || !candidate.reportType) continue;
     const naturalMatch = rows.some((row) => {
@@ -734,7 +755,7 @@ const getStoredSourceIds = async (candidates: PapEspiListCandidate[]) => {
     });
     if (naturalMatch) stored.add(candidate.sourceId);
   }
-  return stored;
+  return { storedIds: stored, sourceCheckedAt };
 };
 
 /**
@@ -807,55 +828,97 @@ const reconcileStoredEspiMetadata = async () => {
     source_ticker: string | null;
     issuer_name: string;
     market: EspiMarket;
+    issuer_market: EspiMarket | null;
+    issuer_metadata_version: number | null;
+    issuer_metadata_checked_at: string | null;
   }>(
     `
-      SELECT id, source_id, issuer_id, source_title, body_text, report_number, report_type, category,
-             source_isin, source_ticker, issuer_name, market
-      FROM espi_reports
-      WHERE source = $1
-      ORDER BY published_at DESC
-      LIMIT 500
+      SELECT report.id, report.source_id, report.issuer_id, report.source_title, report.body_text,
+             report.report_number, report.report_type, report.category,
+             report.source_isin, report.source_ticker, report.issuer_name, report.market,
+             report.issuer_metadata_version, report.issuer_metadata_checked_at,
+             issuer.market AS issuer_market
+      FROM espi_reports AS report
+      LEFT JOIN corporate_event_instruments AS issuer ON issuer.id = report.issuer_id
+      WHERE report.source = $1
+        AND (
+          report.issuer_metadata_version IS DISTINCT FROM $2
+          OR (
+            report.issuer_id IS NULL
+            AND (report.issuer_metadata_checked_at IS NULL OR report.issuer_metadata_checked_at < $3)
+          )
+        )
+      ORDER BY report.published_at ASC, report.id ASC
+      LIMIT $4
     `,
-    [PAP_SOURCE]
+    [
+      PAP_SOURCE,
+      ISSUER_METADATA_VERSION,
+      new Date(Date.now() - ISSUER_RETRY_AFTER_DAYS * 24 * 60 * 60 * 1_000).toISOString(),
+      ISSUER_RECONCILIATION_BATCH_SIZE,
+    ]
   );
   let changed = 0;
+  let errors = 0;
   for (const row of rows) {
-    const classifiedReportType = classifyEspiReportType(row.source_title);
-    const reportType = classifiedReportType === "OTHER" && row.report_number
-      ? "CURRENT"
-      : classifiedReportType;
-    const category = classifyEspiCategory({
-      title: row.source_title,
-      body: row.body_text,
-      reportType,
-    });
-    const issuer = row.issuer_id
-      ? null
-      : await resolveEspiIssuer({
-          sourceIsin: row.source_isin ?? undefined,
-          sourceTicker: row.source_ticker ?? undefined,
-          issuerName: row.issuer_name,
-          market: row.market,
-        });
-    const inferredMarket: EspiMarket = row.market === "UNKNOWN"
-      ? issuer?.market ?? (row.source_id.startsWith("newconnect:") ? "NEWCONNECT" : "UNKNOWN")
-      : row.market;
-    if (reportType === row.report_type && category === row.category && !issuer && inferredMarket === row.market) continue;
-    await execute(
-      `
-        UPDATE espi_reports
-        SET report_type = $1,
-            category = $2,
-            issuer_id = COALESCE(issuer_id, $3),
-            market = $4,
-            updated_at = $5
-        WHERE id = $6
-      `,
-      [reportType, category, issuer?.id ?? null, inferredMarket, new Date().toISOString(), row.id]
-    );
-    changed += 1;
+    try {
+      const classifiedReportType = classifyEspiReportType(row.source_title);
+      const reportType = classifiedReportType === "OTHER" && row.report_number
+        ? "CURRENT"
+        : classifiedReportType;
+      const category = classifyEspiCategory({
+        title: row.source_title,
+        body: row.body_text,
+        reportType,
+      });
+      const issuer = row.issuer_id
+        ? null
+        : await resolveEspiIssuer({
+            sourceIsin: row.source_isin ?? undefined,
+            sourceTicker: row.source_ticker ?? undefined,
+            issuerName: row.issuer_name,
+            market: row.market,
+          });
+      const inferredMarket: EspiMarket = row.market === "UNKNOWN"
+        ? issuer?.market ?? row.issuer_market ?? (row.source_id.startsWith("newconnect:") ? "NEWCONNECT" : "UNKNOWN")
+        : row.market;
+      const now = new Date().toISOString();
+      await execute(
+        `
+          UPDATE espi_reports
+          SET report_type = $1,
+              category = $2,
+              issuer_id = COALESCE(issuer_id, $3),
+              market = $4,
+              issuer_metadata_version = $5,
+              issuer_metadata_checked_at = $6,
+              corporate_events_projection_status = NULL,
+              corporate_events_projection_version = NULL,
+              updated_at = $6
+          WHERE id = $7
+        `,
+        [
+          reportType,
+          category,
+          issuer?.id ?? null,
+          inferredMarket,
+          ISSUER_METADATA_VERSION,
+          now,
+          row.id,
+        ]
+      );
+      changed += 1;
+    } catch (error) {
+      errors += 1;
+      diagnose({
+        provider: PAP_SOURCE,
+        phase: "metadata-reconcile",
+        sourceId: row.source_id,
+        error: error instanceof Error ? error.name : "unknown",
+      });
+    }
   }
-  return changed;
+  return { changed, errors, attempted: rows.length, hasMore: rows.length === ISSUER_RECONCILIATION_BATCH_SIZE };
 };
 
 const reconcileCorrectionLinks = async () => {
@@ -918,14 +981,17 @@ export const synchronizePapEspi = async ({
   let pagesRead = 0;
   let skippedExisting = 0;
   let errors = 0;
+  let parseErrors = 0;
+  let titleFallbacks = 0;
+  let sourceFailure: EspiSourceStatus | null = null;
   let nextBackfillPage = state.nextBackfillPage;
   let backfillComplete = state.backfillComplete;
   let lastOverlapAt: string | undefined;
   try {
     const candidates: PapEspiListCandidate[] = [];
     const officialSources = [
-      { fetchList: fetchGpwList, parseList: parseGpwEspiList },
-      { fetchList: fetchNewConnectList, parseList: parseNewConnectEspiList },
+      { sourcePrefix: "gpw", fetchList: fetchGpwList, parseList: parseGpwEspiList },
+      { sourcePrefix: "newconnect", fetchList: fetchNewConnectList, parseList: parseNewConnectEspiList },
     ];
     const mainResponses = await Promise.all(officialSources.map((source) => source.fetchList()));
     const officialSourcesAvailable = mainResponses.some((response) => response.status === "SUCCESS");
@@ -935,20 +1001,33 @@ export const synchronizePapEspi = async ({
       const response = mainResponses[index]!;
       if (response.status !== "SUCCESS") {
         errors += 1;
+        sourceFailure ??= response.status;
         continue;
       }
       pagesRead += 1;
-      candidates.push(...officialSources[index]!.parseList(response.document).candidates);
+      const parsed = officialSources[index]!.parseList(response.document);
+      candidates.push(...parsed.candidates);
+      titleFallbacks += parsed.titleFallbacks ?? 0;
+      if (parsed.malformedRows > 0) {
+        errors += parsed.malformedRows;
+        parseErrors += parsed.malformedRows;
+      }
     }
 
-    if (!officialSourcesAvailable) {
-      const fallback = await fetchPapHtml(PAP_ESPI_FEED_URL);
-      if (fallback.status !== "SUCCESS") {
-        status = fallback.status;
+    // PAP's public ESPI channel is a supplement to the exchange union feed,
+    // not only a last-resort fallback. This repairs occasional missed market
+    // rows while the source URL/issuer/report identity deduplicates both feeds.
+    const papLatest = await fetchPapHtml(PAP_ESPI_FEED_URL);
+    if (papLatest.status === "SUCCESS") {
+      pagesRead += 1;
+      candidates.push(...parsePapEspiList(papLatest.document).candidates);
+    } else {
+      errors += 1;
+      sourceFailure ??= papLatest.status;
+      if (!officialSourcesAvailable) {
+        status = papLatest.status;
         throw new Error(`ESPI_LIST_${status}`);
       }
-      pagesRead += 1;
-      candidates.push(...parsePapEspiList(fallback.document).candidates);
     }
 
     const today = getWarsawDate();
@@ -962,7 +1041,7 @@ export const synchronizePapEspi = async ({
         ? boundedEarliest
         : addDays(today, -(ESPI_OVERLAP_DAYS - 1));
     const overlapDue = force || Boolean(requestedFrom) || !isFresh(state.lastOverlapAt ?? null, ESPI_OVERLAP_TTL_MS);
-    let overlapSucceeded = true;
+    let overlapSucceeded = errors === 0;
 
     if (officialSourcesAvailable && overlapDue) {
       // Date-specific GPW filtering is useful but has historically omitted an
@@ -971,41 +1050,103 @@ export const synchronizePapEspi = async ({
       // the old fixed first three pages.
       const officialRepairFrom = addDays(today, -ESPI_OFFICIAL_REPAIR_DAYS);
       for (const source of availableOfficialSources) {
-        const seenPageIds = new Set<string>();
+        const seenPageIds = new Set(candidates
+          .filter((candidate) => candidate.sourceId.startsWith(`${source.sourcePrefix}:`))
+          .map((candidate) => candidate.sourceId));
+        const seenPageSignatures = new Set<string>();
         for (let offset = 50; ; offset += 50) {
           const response = await source.fetchList({ offset });
           if (response.status !== "SUCCESS") {
             errors += 1;
+            sourceFailure ??= response.status;
             overlapSucceeded = false;
             break;
           }
           pagesRead += 1;
-          const pageCandidates = source.parseList(response.document).candidates;
+          const pageSignature = createHash("sha256").update(response.document).digest("hex");
+          if (seenPageSignatures.has(pageSignature)) {
+            errors += 1;
+            sourceFailure ??= "TEMPORARILY_UNAVAILABLE";
+            overlapSucceeded = false;
+            diagnose({ provider: source.sourcePrefix, phase: "pagination", status: "REPEATED_PAGE", offset });
+            break;
+          }
+          seenPageSignatures.add(pageSignature);
+          const parsedPage = source.parseList(response.document);
+          const pageCandidates = parsedPage.candidates;
+          titleFallbacks += parsedPage.titleFallbacks ?? 0;
+          if (parsedPage.malformedRows > 0) {
+            errors += parsedPage.malformedRows;
+            parseErrors += parsedPage.malformedRows;
+            overlapSucceeded = false;
+          }
           candidates.push(...pageCandidates);
+          if (parsedPage.eligibleRows === 0) break;
           const introducedNewCandidate = pageCandidates.some((candidate) => {
             if (seenPageIds.has(candidate.sourceId)) return false;
             seenPageIds.add(candidate.sourceId);
             return true;
           });
+          if (!introducedNewCandidate && pageCandidates.length > 0) {
+            errors += 1;
+            sourceFailure ??= "TEMPORARILY_UNAVAILABLE";
+            overlapSucceeded = false;
+            diagnose({ provider: source.sourcePrefix, phase: "pagination", status: "REPEATED_PAGE", offset });
+            break;
+          }
           const oldest = pageCandidates
             .map((candidate) => candidate.sourcePublishedAt?.slice(0, 10))
             .filter((value): value is string => Boolean(value))
             .sort()[0];
           if (
-            pageCandidates.length < 50 ||
-            !introducedNewCandidate ||
+            parsedPage.eligibleRows < 50 ||
             (oldest && oldest < officialRepairFrom)
           ) break;
         }
         for (let date = overlapFrom; date <= today; date = addDays(date, 1)) {
-          const response = await source.fetchList({ date: toGpwDate(date) });
-          if (response.status !== "SUCCESS") {
-            errors += 1;
-            overlapSucceeded = false;
-            continue;
+          const seenDateIds = new Set<string>();
+          const seenDatePageSignatures = new Set<string>();
+          for (let offset = 0; ; offset += 50) {
+            const response = await source.fetchList({ date: toGpwDate(date), offset });
+            if (response.status !== "SUCCESS") {
+              errors += 1;
+              sourceFailure ??= response.status;
+              overlapSucceeded = false;
+              break;
+            }
+            pagesRead += 1;
+            const pageSignature = createHash("sha256").update(response.document).digest("hex");
+            if (seenDatePageSignatures.has(pageSignature)) {
+              errors += 1;
+              sourceFailure ??= "TEMPORARILY_UNAVAILABLE";
+              overlapSucceeded = false;
+              diagnose({ provider: source.sourcePrefix, phase: "date-pagination", status: "REPEATED_PAGE", date, offset });
+              break;
+            }
+            seenDatePageSignatures.add(pageSignature);
+            const parsedPage = source.parseList(response.document);
+            titleFallbacks += parsedPage.titleFallbacks ?? 0;
+            if (parsedPage.malformedRows > 0) {
+              errors += parsedPage.malformedRows;
+              parseErrors += parsedPage.malformedRows;
+              overlapSucceeded = false;
+            }
+            candidates.push(...parsedPage.candidates);
+            if (parsedPage.eligibleRows === 0) break;
+            const introducedNewCandidate = parsedPage.candidates.some((candidate) => {
+              if (seenDateIds.has(candidate.sourceId)) return false;
+              seenDateIds.add(candidate.sourceId);
+              return true;
+            });
+            if (!introducedNewCandidate && parsedPage.candidates.length > 0) {
+              errors += 1;
+              sourceFailure ??= "TEMPORARILY_UNAVAILABLE";
+              overlapSucceeded = false;
+              diagnose({ provider: source.sourcePrefix, phase: "date-pagination", status: "REPEATED_PAGE", date, offset });
+              break;
+            }
+            if (parsedPage.eligibleRows < 50) break;
           }
-          pagesRead += 1;
-          candidates.push(...source.parseList(response.document).candidates);
         }
       }
       if (overlapSucceeded) lastOverlapAt = new Date().toISOString();
@@ -1037,6 +1178,7 @@ export const synchronizePapEspi = async ({
       const response = await fetchPapHtml(getFeedPageUrl(page));
       if (response.status !== "SUCCESS") {
         errors += 1;
+        sourceFailure ??= response.status;
         break;
       }
       pagesRead += 1;
@@ -1053,8 +1195,19 @@ export const synchronizePapEspi = async ({
     }
 
     const uniqueCandidates = Array.from(new Map(candidates.map((item) => [item.sourceId, item])).values());
-    const storedIds = await getStoredSourceIds(uniqueCandidates);
-    const pending = uniqueCandidates.filter((candidate) => !storedIds.has(candidate.sourceId));
+    const storedState = await getStoredSourceState(uniqueCandidates);
+    const detailRefreshBoundary = addDays(today, -90);
+    const pending = uniqueCandidates.filter((candidate) => {
+      if (!storedState.storedIds.has(candidate.sourceId)) return true;
+      // Re-read only recent exact source documents at most once per day. This
+      // detects source-side corrections/attachment edits without re-downloading
+      // the entire archive on every feed request. Cross-source duplicates are
+      // not fetched because their source id has no exact stored check record.
+      if (!storedState.sourceCheckedAt.has(candidate.sourceId)) return false;
+      const publishedDay = candidate.sourcePublishedAt?.slice(0, 10);
+      if (!publishedDay || publishedDay < detailRefreshBoundary) return false;
+      return !isFresh(storedState.sourceCheckedAt.get(candidate.sourceId) ?? null, 24 * 60 * 60 * 1_000);
+    });
     skippedExisting = uniqueCandidates.length - pending.length;
     const fetched = await mapWithConcurrency(pending, ARTICLE_CONCURRENCY, async (candidate) => {
       try {
@@ -1069,7 +1222,12 @@ export const synchronizePapEspi = async ({
       }
     });
     const parsedReports = fetched.flatMap((entry) => entry.report ? [entry.report] : []);
-    errors += fetched.filter((entry) => entry.status !== "SUCCESS" || !entry.report).length;
+    for (const entry of fetched) {
+      if (entry.status === "SUCCESS" && entry.report) continue;
+      errors += 1;
+      if (entry.status === "PARSE_ERROR") parseErrors += 1;
+      else sourceFailure ??= entry.status;
+    }
     const storedReports: Array<{ report: ParsedPapEspiReport; id: string; issuerId: string | null; created: boolean }> = [];
     for (const report of parsedReports) {
       try {
@@ -1081,10 +1239,37 @@ export const synchronizePapEspi = async ({
       }
     }
     for (const stored of storedReports) {
-      await linkCorrection(stored.id, stored.report, stored.issuerId);
+      try {
+        await linkCorrection(stored.id, stored.report, stored.issuerId);
+      } catch (error) {
+        errors += 1;
+        sourceFailure ??= "TEMPORARILY_UNAVAILABLE";
+        diagnose({ provider: PAP_SOURCE, phase: "correction-link", sourceId: stored.report.sourceId, error: error instanceof Error ? error.name : "unknown" });
+      }
     }
-    const metadataChanges = await reconcileStoredEspiMetadata();
-    await reconcileCorrectionLinks();
+    let metadataChanges = 0;
+    try {
+      const reconciliation = await reconcileStoredEspiMetadata();
+      metadataChanges = reconciliation.changed;
+      errors += reconciliation.errors;
+      if (reconciliation.errors > 0) sourceFailure ??= "TEMPORARILY_UNAVAILABLE";
+      if (reconciliation.hasMore) diagnose({ provider: PAP_SOURCE, phase: "metadata-reconcile", status: "CONTINUING", attempted: reconciliation.attempted });
+    } catch (error) {
+      errors += 1;
+      sourceFailure ??= "TEMPORARILY_UNAVAILABLE";
+      diagnose({ provider: PAP_SOURCE, phase: "metadata-reconcile", error: error instanceof Error ? error.name : "unknown" });
+    }
+    try {
+      await reconcileCorrectionLinks();
+    } catch (error) {
+      errors += 1;
+      sourceFailure ??= "TEMPORARILY_UNAVAILABLE";
+      diagnose({ provider: PAP_SOURCE, phase: "correction-reconcile", error: error instanceof Error ? error.name : "unknown" });
+    }
+
+    if (errors > 0 && status === "SUCCESS") {
+      status = parseErrors > 0 ? "PARSE_ERROR" : sourceFailure ?? "TEMPORARILY_UNAVAILABLE";
+    }
 
     if (pending.length > 0 && storedReports.length === 0) {
       status = fetched.find((entry) => entry.status !== "SUCCESS")?.status ?? "PARSE_ERROR";
@@ -1093,17 +1278,21 @@ export const synchronizePapEspi = async ({
     await releaseSyncLock({ token, status, nextBackfillPage, backfillComplete, lastOverlapAt });
     diagnose({
       provider: PAP_SOURCE,
-      status: "SUCCESS",
+      status,
       pagesRead,
       candidates: uniqueCandidates.length,
       parsed: parsedReports.length,
       skippedExisting,
       metadataChanges,
+      errors,
+      parseErrors,
+      titleFallbacks,
+      overlapComplete: overlapDue ? Boolean(lastOverlapAt) : undefined,
       durationMs: Date.now() - startedAt,
     });
     const created = storedReports.filter((entry) => entry.created).length;
     const duplicates = skippedExisting + storedReports.length - created;
-    console.info(`[ESPI SYNC] fetched=${uniqueCandidates.length} new=${created} duplicates=${duplicates} saved=${storedReports.length} errors=${errors}`);
+    console.info(`[ESPI SYNC] fetched=${uniqueCandidates.length} new=${created} duplicates=${duplicates} saved=${storedReports.length} titleFallbacks=${titleFallbacks} errors=${errors}`);
     return {
       status,
       insertedOrUpdated: storedReports.length,

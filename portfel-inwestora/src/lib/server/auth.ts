@@ -14,6 +14,7 @@ import { syncPortfolioCoreTablesInTransaction } from "@/lib/server/portfolio-cor
 import { enrichPortfolioBookIssuerCountries } from "@/lib/issuer-country";
 import {
   invalidateIssuerCountryCacheForIsin,
+  resolveIssuerCountryByInstrument,
   resolveIssuerCountryByIsin,
 } from "@/lib/server/issuer-country";
 import { normalizeIssuerIsin } from "@/lib/issuer-country";
@@ -826,7 +827,8 @@ export const getCurrentAccountData = async ({
   if (enrichIssuerCountries) {
     portfolioBook = await enrichPortfolioBookIssuerCountries(
       portfolioBook,
-      resolveIssuerCountryByIsin
+      resolveIssuerCountryByIsin,
+      resolveIssuerCountryByInstrument
     );
   }
 

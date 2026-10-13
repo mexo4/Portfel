@@ -161,24 +161,19 @@ export const getStockMarketClass = (group: PortfolioAssetGroup) => {
     return { id: "stock:gpw", label: "Akcje GPW" };
   }
 
-  const issuerCountry = getConfirmedIssuerCountry(group);
-
-  if (issuerCountry === "USA") {
-    return { id: "stock:usa", label: "Akcje amerykańskie" };
-  }
-
-  // For the three-way stock allocation, the user wants only verified U.S.
-  // issuers separated from GPW listings. Old records often have no reliable
-  // issuer-country provenance, so keep those visible in International rather
-  // than creating a fourth "unknown country" bucket. This does not alter the
-  // stored country metadata or financial values.
-  return { id: "stock:international", label: "Akcje międzynarodowe" };
+  // Issuer-country metadata is not complete enough across old broker imports
+  // to split non-GPW equities reliably into USA vs. international. In
+  // particular, an unknown issuer must not silently look like a confirmed
+  // non-US company. Keep the asset-class view to the two auditable listing
+  // buckets; verified issuer country remains available to geographic analysis.
+  return { id: "stock:foreign", label: "Akcje zagraniczne" };
 };
 
 /**
- * GPW and confirmed U.S. issuer metadata are explicit buckets. Other ordinary
- * stocks remain visible under International; we do not infer USA from a
- * listing venue or ticker suffix.
+ * Ordinary stocks are grouped by confirmed GPW listing vs. other listings.
+ * Issuer-country metadata remains available separately through
+ * getGeographicAllocation; incomplete provenance cannot create a misleading
+ * USA/international split in the asset-class chart.
  * ETFs intentionally remain a separate class because no look-through
  * allocation exists yet.
  */

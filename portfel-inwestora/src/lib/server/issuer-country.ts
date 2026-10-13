@@ -6,8 +6,10 @@ import {
 import {
   normalizeIssuerIsin,
   parseGleifIssuerCountry,
+  type IssuerCountryInstrumentIdentity,
   type IssuerCountryResolution,
 } from "@/lib/issuer-country";
+import { resolveEodhdCommonStockIsin } from "@/lib/server/eodhd";
 
 const GLEIF_API_URL = "https://api.gleif.org/api/v1/lei-records";
 const CONFIRMED_TTL_MS = 1000 * 60 * 60 * 24 * 180;
@@ -39,9 +41,12 @@ const isCachedIssuerCountry = (value: unknown): value is CachedIssuerCountry => 
   );
 };
 
-const toResolution = (value: CachedIssuerCountry | null): IssuerCountryResolution | null =>
+const toResolution = (
+  value: CachedIssuerCountry | null,
+  isin: string
+): IssuerCountryResolution | null =>
   value?.status === "confirmed"
-    ? { country: value.country, source: value.source, lei: value.lei }
+    ? { country: value.country, source: value.source, lei: value.lei, isin }
     : null;
 
 const fetchGleifIssuerCountry = async (
@@ -125,7 +130,7 @@ const resolveUncached = async (
     // Cache/database trouble must not block the public-source lookup.
   }
 
-  if (fresh) return toResolution(fresh);
+  if (fresh) return toResolution(fresh, isin);
 
   try {
     const latest = await fetchGleifIssuerCountry(
@@ -138,10 +143,10 @@ const resolveUncached = async (
 
     // Never downgrade a previously confirmed issuer because a source lookup
     // became empty or ambiguous after a transient upstream data change.
-    return toResolution(stale);
+    return toResolution(stale, isin);
   } catch {
     if ((generationByIsin.get(isin) ?? 0) !== generation) return null;
-    return toResolution(stale);
+    return toResolution(stale, isin);
   }
 };
 
@@ -158,6 +163,21 @@ export const resolveIssuerCountryByIsin = async (rawIsin: string) => {
   });
   inFlightByIsin.set(isin, pending);
   return pending;
+};
+
+/**
+ * Resolves legacy stock lots that predate persisted ISINs. EODHD Search is
+ * used only to recover a verified common-stock listing and its ISIN; the
+ * listing's Country field is not used. GLEIF remains the country authority.
+ */
+export const resolveIssuerCountryByInstrument = async (
+  identity: IssuerCountryInstrumentIdentity
+) => {
+  const existingIsin = normalizeIssuerIsin(identity.isin);
+  if (existingIsin) return resolveIssuerCountryByIsin(existingIsin);
+
+  const recoveredIsin = await resolveEodhdCommonStockIsin(identity);
+  return recoveredIsin ? resolveIssuerCountryByIsin(recoveredIsin) : null;
 };
 
 /** Explicit invalidation hook for a future authoritative issuer-profile refresh. */

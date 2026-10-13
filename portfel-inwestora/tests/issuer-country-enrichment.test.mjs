@@ -64,7 +64,7 @@ const linkedInstrument = (portfolioId, asset, isin, metadata = {}) => ({
 test("GLEIF country parser requires an issued legal entity and an exact valid ISIN", () => {
   assert.deepEqual(
     parseGleifIssuerCountry(gleifPayload({ lei: "5493006W3QUS5LMH6R84", country: "JP" }), TOYOTA_ISIN),
-    { country: "JP", source: "gleif-isin", lei: "5493006W3QUS5LMH6R84" },
+    { country: "JP", source: "gleif-isin", lei: "5493006W3QUS5LMH6R84", isin: TOYOTA_ISIN },
   );
   assert.equal(parseGleifIssuerCountry(gleifPayload({ lei: "5493006W3QUS5LMH6R84", country: "JP" }), "TM"), null);
   const notIssued = gleifPayload({ lei: "5493006W3QUS5LMH6R84", country: "JP" });
@@ -124,8 +124,7 @@ test("legacy XTB holdings are enriched through per-portfolio instrument IDs and 
   const allocation = getAssetClassAllocation(groups);
   const totalsByClass = Object.fromEntries(allocation.map(({ id, totalValue }) => [id, totalValue]));
   assert.deepEqual(totalsByClass, {
-    "stock:international": 1201.46,
-    "stock:usa": 868.09,
+    "stock:foreign": 2069.55,
     "stock:gpw": 4800.1,
     etf: 2478.42,
   });
@@ -212,4 +211,72 @@ test("conflicting legacy-lot and core-instrument ISINs fail closed rather than a
   );
   assert.equal(calls, 0);
   assert.equal(enriched.portfolios[0].assets[0].issuerCountrySource, undefined);
+});
+
+test("legacy imports without ISIN resolve through instrument identity and reach the Structure allocation", async () => {
+  const rexford = portfolioAsset({
+    id: "legacy-rexford-no-isin",
+    symbol: "REXR",
+    name: "Rexford Industrial",
+    provider: "yahoo",
+  });
+  const toyota = portfolioAsset({
+    id: "legacy-toyota-no-isin",
+    symbol: "TM",
+    name: "Toyota",
+    provider: "finnhub",
+  });
+  const portfolio = {
+    id: "legacy-no-isin",
+    name: "Legacy XTB",
+    assets: [rexford, toyota],
+    sales: [],
+    realizedAdjustments: [],
+    instruments: [linkedInstrument("legacy-no-isin", rexford, undefined), linkedInstrument("legacy-no-isin", toyota, undefined)],
+    createdAt: "2025-01-01T00:00:00.000Z",
+    updatedAt: "2025-01-02T00:00:00.000Z",
+  };
+  const identities = [];
+  const book = { portfolios: [portfolio], activePortfolioId: portfolio.id };
+
+  const enriched = await enrichPortfolioBookIssuerCountries(
+    book,
+    async () => { throw new Error("valid ISIN lookup should not be called for old no-ISIN lots"); },
+    async (identity) => {
+      identities.push(identity);
+      if (identity.symbol === "REXR") {
+        return { country: "US", source: "gleif-isin", lei: "549300MSLO0DF0EMX355", isin: REXFORD_ISIN };
+      }
+      if (identity.symbol === "TM") {
+        return { country: "JP", source: "gleif-isin", lei: "5493006W3QUS5LMH6R84", isin: TOYOTA_ISIN };
+      }
+      return null;
+    },
+  );
+
+  assert.deepEqual(identities.map(({ symbol, isin }) => ({ symbol, isin })), [
+    { symbol: "REXR", isin: undefined },
+    { symbol: "TM", isin: undefined },
+  ]);
+  const bySymbol = new Map(enriched.portfolios[0].assets.map((asset) => [asset.symbol, asset]));
+  assert.equal(bySymbol.get("REXR").issuerCountry, "US");
+  assert.equal(bySymbol.get("REXR").issuerCountrySource, "gleif-isin");
+  assert.equal(bySymbol.get("REXR").isin, REXFORD_ISIN);
+  assert.equal(bySymbol.get("TM").issuerCountry, "JP");
+  assert.equal(bySymbol.get("TM").issuerCountrySource, "gleif-isin");
+  assert.equal(bySymbol.get("TM").isin, TOYOTA_ISIN);
+
+  const allocation = getAssetClassAllocation(enriched.portfolios[0].assets.map((asset) => ({
+    key: asset.symbol,
+    name: asset.name,
+    symbol: asset.symbol,
+    kind: asset.kind,
+    totalValue: asset.symbol === "REXR" ? 868.09 : 1201.46,
+    lots: [asset],
+  })));
+  assert.equal(allocation.find(({ id }) => id === "stock:foreign")?.totalValue, 2069.55);
+  assert.equal(allocation.some(({ id }) => id === "stock:usa" || id === "stock:international"), false);
+  assert.equal(bySymbol.get("REXR").issuerCountry, "US");
+  assert.equal(bySymbol.get("TM").issuerCountry, "JP");
+  assert.equal(book.portfolios[0].assets[0].issuerCountrySource, undefined, "the stored input stays immutable");
 });

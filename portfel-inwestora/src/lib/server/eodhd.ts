@@ -20,6 +20,15 @@ type EodhdSearchItem = {
   Isin?: string | null;
 };
 
+export type EodhdIssuerIdentityLookup = {
+  symbol: string;
+  name: string;
+  providerId?: string;
+  provider?: string;
+  isin?: string;
+  exchange?: string;
+};
+
 type EodhdExchangeItem = {
   Code?: string;
   Name?: string;
@@ -77,6 +86,7 @@ const EODHD_SEARCH_CACHE_TTL_MS = 5 * 60 * 1_000;
 const EODHD_EXCHANGE_CACHE_TTL_MS = 24 * 60 * 60 * 1_000;
 const EODHD_QUOTE_CACHE_TTL_MS = 30_000;
 const FX_RATE_CACHE_TTL_MS = 5 * 60 * 1_000;
+const EODHD_ISSUER_SEARCH_CACHE_TTL_MS = 24 * 60 * 60 * 1_000;
 
 const EODHD_FALLBACK_EXCHANGES = [
   "WAR",
@@ -142,6 +152,7 @@ const DISPLAY_SUFFIX_TO_EODHD_EXCHANGES: Record<string, string[]> = {
 
 const quoteCache = new Map<string, { quote: AssetQuote; expiresAt: number }>();
 const fxRateCache = new Map<string, { rate: number; expiresAt: number }>();
+const issuerSearchInFlight = new Map<string, Promise<EodhdSearchItem[] | null>>();
 
 const hasEodhdApiKey = () => Boolean(EODHD_API_KEY);
 
@@ -383,6 +394,234 @@ const fetchExchangeListings = async (exchange: string, kind: EodhdSearchKind) =>
   return payload
     .map((item) => toEodhdListing(item, kind))
     .filter((item): item is EodhdListing => Boolean(item));
+};
+
+const EODHD_ISSUER_EXCHANGE_SUFFIXES: Record<string, string> = {
+  AS: "AS",
+  AU: "AU",
+  BE: "BE",
+  BSE: "BSE",
+  CO: "CO",
+  DE: "XETRA",
+  DU: "DU",
+  F: "F",
+  HK: "HK",
+  HM: "HM",
+  JK: "JK",
+  KL: "KL",
+  KO: "KO",
+  KQ: "KQ",
+  L: "LSE",
+  UK: "LSE",
+  MI: "MI",
+  MU: "MU",
+  MX: "MX",
+  NEO: "NEO",
+  NSE: "NSE",
+  PA: "PA",
+  PL: "WAR",
+  WA: "WAR",
+  STU: "STU",
+  SW: "SW",
+  SG: "SG",
+  TSE: "TSE",
+  TO: "TO",
+  TW: "TW",
+  US: "US",
+  V: "V",
+};
+
+const EODHD_ISSUER_EXCHANGE_ALIASES: Record<string, string> = {
+  "AUSTRALIAN SECURITIES EXCHANGE": "AU",
+  "NEW YORK STOCK EXCHANGE": "US",
+  "NEW YORK STOCK EXCHANGE INC": "US",
+  NYSE: "US",
+  NASDAQ: "US",
+  "NASDAQ GLOBAL MARKET": "US",
+  "NYSE ARCA": "US",
+  GPW: "WAR",
+  WARSAW: "WAR",
+  "WARSAW STOCK EXCHANGE": "WAR",
+  "LONDON STOCK EXCHANGE": "LSE",
+  LSE: "LSE",
+  "NASDAQ COPENHAGEN": "CO",
+  "TOKYO STOCK EXCHANGE": "TSE",
+  XETRA: "XETRA",
+};
+
+const getIssuerLookupCodeAndExchange = (value: string) => {
+  const normalized = normalizeSymbol(value);
+  const lastDot = normalized.lastIndexOf(".");
+  if (lastDot <= 0) return { code: normalized, exchange: undefined };
+
+  const suffix = normalized.slice(lastDot + 1);
+  const exchange = EODHD_ISSUER_EXCHANGE_SUFFIXES[suffix];
+  return exchange
+    ? { code: normalized.slice(0, lastDot), exchange }
+    : { code: normalized, exchange: undefined };
+};
+
+const normalizeIssuerLookupExchange = (value: string | undefined) => {
+  if (!value?.trim()) return undefined;
+  const normalized = normalizeText(value).toUpperCase().replace(/[^A-Z0-9]+/g, " ").trim();
+  return EODHD_ISSUER_EXCHANGE_ALIASES[normalized] ??
+    EODHD_ISSUER_EXCHANGE_SUFFIXES[normalized.replace(/\s+/g, "")] ??
+    normalized;
+};
+
+const ISSUER_NAME_SUFFIXES = new Set([
+  "adr",
+  "class",
+  "co",
+  "company",
+  "corp",
+  "corporation",
+  "depositary",
+  "inc",
+  "incorporated",
+  "limited",
+  "ltd",
+  "ordinary",
+  "plc",
+  "receipt",
+  "receipts",
+  "shares",
+]);
+
+const issuerNameTokens = (value: string) =>
+  normalizeText(value)
+    .split(/[^a-z0-9]+/)
+    .filter((token) => token.length > 1 && !ISSUER_NAME_SUFFIXES.has(token));
+
+const isCompatibleIssuerName = (left: string, right: string) => {
+  const leftTokens = Array.from(new Set(issuerNameTokens(left)));
+  const rightTokens = Array.from(new Set(issuerNameTokens(right)));
+  if (leftTokens.length === 0 || rightTokens.length === 0) return false;
+
+  const shorter = leftTokens.length <= rightTokens.length ? leftTokens : rightTokens;
+  const longer = leftTokens.length <= rightTokens.length ? rightTokens : leftTokens;
+  return shorter.every((token) => longer.includes(token));
+};
+
+const isCommonEquityType = (value: string | undefined) => {
+  const normalized = normalizeText(value ?? "");
+  return ["common stock", "ordinary share", "ordinary shares", "common shares"].includes(normalized);
+};
+
+const normalizeSearchIsin = (value: unknown) => {
+  const isin = typeof value === "string" ? value.trim().toUpperCase() : "";
+  return /^[A-Z]{2}[A-Z0-9]{9}[0-9]$/.test(isin) ? isin : undefined;
+};
+
+/**
+ * Resolve a listing ISIN only from an exact ticker/code + compatible company
+ * name + common-equity EODHD result. The Search API's Country field is the
+ * listing country and is deliberately never read here. Its result only gives
+ * us an ISIN to check against GLEIF's legal-entity record.
+ */
+export const parseEodhdCommonStockIsin = (
+  payload: unknown,
+  identity: EodhdIssuerIdentityLookup,
+  exchangeConstraint?: string
+) => {
+  if (!Array.isArray(payload)) return null;
+  const { code: identityCode, exchange: identityExchange } = getIssuerLookupCodeAndExchange(
+    identity.providerId?.trim() || identity.symbol
+  );
+  const fallbackCode = getIssuerLookupCodeAndExchange(identity.symbol).code;
+  const requestedCode = identityCode || fallbackCode;
+  const requiredExchange = normalizeIssuerLookupExchange(exchangeConstraint) ??
+    normalizeIssuerLookupExchange(identity.exchange) ??
+    identityExchange;
+  const candidates = new Set<string>();
+
+  for (const rawItem of payload) {
+    if (!rawItem || typeof rawItem !== "object" || Array.isArray(rawItem)) continue;
+    const item = rawItem as EodhdSearchItem;
+    const code = normalizeSymbol(item.Code ?? "");
+    const exchange = normalizeIssuerLookupExchange(item.Exchange);
+    const name = item.Name?.trim() ?? "";
+    const isin = normalizeSearchIsin(item.ISIN ?? item.Isin);
+
+    if (
+      code !== requestedCode ||
+      !isCommonEquityType(item.Type) ||
+      !isin ||
+      !name ||
+      !identity.name.trim() ||
+      !isCompatibleIssuerName(identity.name, name) ||
+      (requiredExchange && exchange !== requiredExchange)
+    ) {
+      continue;
+    }
+
+    candidates.add(isin);
+  }
+
+  return candidates.size === 1 ? Array.from(candidates)[0]! : null;
+};
+
+const fetchIssuerSearchPayload = async (query: string, exchange?: string) => {
+  if (!hasEodhdApiKey() || !query) return null;
+
+  const normalizedExchange = normalizeIssuerLookupExchange(exchange);
+  const cacheKey = `eodhd:issuer-search:v1:${normalizedExchange ?? "all"}:${normalizeSymbol(query)}`;
+  const existing = issuerSearchInFlight.get(cacheKey);
+  if (existing) return existing;
+
+  const pending = (async () => {
+    try {
+      const cached = await getCachedPayload<EodhdSearchItem[]>(
+        cacheKey,
+        EODHD_ISSUER_SEARCH_CACHE_TTL_MS
+      );
+      if (cached) return cached;
+    } catch {
+      // Provider lookup may continue when the shared cache is unavailable.
+    }
+
+    const url = new URL(`${EODHD_API_ROOT}/search/${encodeURIComponent(query)}`);
+    url.searchParams.set("api_token", EODHD_API_KEY);
+    url.searchParams.set("fmt", "json");
+    url.searchParams.set("type", "stock");
+    url.searchParams.set("limit", "50");
+    if (normalizedExchange) url.searchParams.set("exchange", normalizedExchange);
+
+    const payload = await fetchJson<unknown>(url.toString(), EODHD_SEARCH_TIMEOUT_MS);
+    if (!Array.isArray(payload)) return null;
+    const items = payload.filter(
+      (item): item is EodhdSearchItem => item !== null && typeof item === "object" && !Array.isArray(item)
+    );
+
+    try {
+      await setCachedPayload(cacheKey, items);
+    } catch {
+      // The public-source response remains useful even if the cache write fails.
+    }
+    return items;
+  })().finally(() => {
+    if (issuerSearchInFlight.get(cacheKey) === pending) issuerSearchInFlight.delete(cacheKey);
+  });
+
+  issuerSearchInFlight.set(cacheKey, pending);
+  return pending;
+};
+
+/**
+ * Recover a missing ISIN for a legacy stock lot. Search results are accepted
+ * only when the ticker, listing venue (when known), company name and ordinary
+ * share type agree. Multiple distinct matching ISINs fail closed.
+ */
+export const resolveEodhdCommonStockIsin = async (identity: EodhdIssuerIdentityLookup) => {
+  const lookupSource = identity.providerId?.trim() || identity.symbol.trim();
+  const primary = getIssuerLookupCodeAndExchange(lookupSource);
+  const fallback = getIssuerLookupCodeAndExchange(identity.symbol);
+  const query = primary.code || fallback.code;
+  const exchange = normalizeIssuerLookupExchange(identity.exchange) ?? primary.exchange ?? fallback.exchange;
+  if (!query || !identity.name.trim()) return null;
+
+  const payload = await fetchIssuerSearchPayload(query, exchange);
+  return payload ? parseEodhdCommonStockIsin(payload, identity, exchange) : null;
 };
 
 const searchExchangeFallbackListings = async (query: string, kind: EodhdSearchKind) => {

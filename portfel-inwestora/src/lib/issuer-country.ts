@@ -11,6 +11,17 @@ export type IssuerCountryResolution = {
   country: string;
   source: "gleif-isin";
   lei: string;
+  isin: string;
+};
+
+export type IssuerCountryInstrumentIdentity = {
+  symbol: string;
+  name: string;
+  provider?: string;
+  providerId?: string;
+  isin?: string;
+  marketCurrency?: string;
+  exchange?: string;
 };
 
 const TRUSTED_ISSUER_COUNTRY_SOURCES = new Set<IssuerCountrySource>([
@@ -72,7 +83,7 @@ export const parseGleifIssuerCountry = (
       continue;
     }
 
-    candidates.set(lei, { country, source: "gleif-isin", lei });
+    candidates.set(lei, { country, source: "gleif-isin", lei, isin: normalizedIsin });
   }
 
   return candidates.size === 1 ? Array.from(candidates.values())[0]! : null;
@@ -89,6 +100,37 @@ const getConsistentAssetIsin = (asset: PortfolioAsset, instrument?: PortfolioIns
   const instrumentIsin = normalizeIssuerIsin(instrument?.isin);
   if (assetIsin && instrumentIsin && assetIsin !== instrumentIsin) return undefined;
   return assetIsin ?? instrumentIsin;
+};
+
+const hasConflictingAssetIsins = (asset: PortfolioAsset, instrument?: PortfolioInstrument) => {
+  const assetIsin = normalizeIssuerIsin(asset.isin);
+  const instrumentIsin = normalizeIssuerIsin(instrument?.isin);
+  return Boolean(assetIsin && instrumentIsin && assetIsin !== instrumentIsin);
+};
+
+const getIssuerIdentity = (
+  asset: PortfolioAsset,
+  instrument?: PortfolioInstrument
+): IssuerCountryInstrumentIdentity => ({
+  symbol: asset.symbol,
+  name: asset.name || instrument?.name || asset.symbol,
+  provider: asset.provider ?? instrument?.provider,
+  providerId: asset.providerId ?? instrument?.providerId,
+  isin: getConsistentAssetIsin(asset, instrument),
+  marketCurrency: asset.marketCurrency ?? instrument?.marketCurrency,
+  exchange: asset.instrumentIdentity?.exchange,
+});
+
+const getIssuerIdentityKey = (identity: IssuerCountryInstrumentIdentity) => {
+  const isin = normalizeIssuerIsin(identity.isin);
+  if (isin) return `isin:${isin}`;
+
+  return [
+    identity.symbol.trim().toUpperCase(),
+    identity.providerId?.trim().toUpperCase() ?? "",
+    identity.exchange?.trim().toUpperCase() ?? "",
+    identity.name.trim().toLocaleLowerCase("en-US"),
+  ].join("|");
 };
 
 const getInstrumentIssuerCountry = (instrument?: PortfolioInstrument) => {
@@ -166,31 +208,46 @@ const mapWithConcurrency = async <T, R>(
  */
 export const enrichPortfolioBookIssuerCountries = async (
   book: PortfolioBook,
-  resolveByIsin: (isin: string) => Promise<IssuerCountryResolution | null>
+  resolveByIsin: (isin: string) => Promise<IssuerCountryResolution | null>,
+  resolveByIdentity?: (
+    identity: IssuerCountryInstrumentIdentity
+  ) => Promise<IssuerCountryResolution | null>
 ): Promise<PortfolioBook> => {
   const portfolios = book.portfolios.map(copyLinkedIssuerMetadata);
   const preparedBook = { ...book, portfolios };
-  const unresolvedIsins = new Set<string>();
+  const unresolvedIdentities = new Map<
+    string,
+    { isin?: string; identity: IssuerCountryInstrumentIdentity }
+  >();
 
   for (const portfolio of portfolios) {
     const instrumentsById = new Map((portfolio.instruments ?? []).map((instrument) => [instrument.id, instrument]));
     for (const asset of portfolio.assets) {
       if (!isOrdinaryStockAsset(asset) || isTrustedCountry(asset.issuerCountry, asset.issuerCountrySource)) continue;
       const instrument = getLinkedInstrument(portfolio, asset, instrumentsById);
-      const isin = getConsistentAssetIsin(asset, instrument);
-      if (isin) unresolvedIsins.add(isin);
+      if (hasConflictingAssetIsins(asset, instrument)) continue;
+      const identity = getIssuerIdentity(asset, instrument);
+      const isin = normalizeIssuerIsin(identity.isin);
+      if (!isin && !resolveByIdentity) continue;
+      unresolvedIdentities.set(getIssuerIdentityKey(identity), { isin, identity });
     }
   }
 
-  if (unresolvedIsins.size === 0) return preparedBook;
+  if (unresolvedIdentities.size === 0) return preparedBook;
 
   const resolutions = new Map<string, IssuerCountryResolution>();
-  await mapWithConcurrency(Array.from(unresolvedIsins), 4, async (isin) => {
+  await mapWithConcurrency(Array.from(unresolvedIdentities.entries()), 4, async ([key, target]) => {
     try {
-      const resolution = await resolveByIsin(isin);
-      if (resolution?.source === "gleif-isin" && /^[A-Z]{2}$/.test(resolution.country)) {
-        resolutions.set(isin, resolution);
-      }
+      const resolution = target.isin
+        ? await resolveByIsin(target.isin)
+        : await resolveByIdentity?.(target.identity);
+      const resolvedIsin = normalizeIssuerIsin(resolution?.isin) ?? target.isin;
+      if (
+        resolution?.source === "gleif-isin" &&
+        /^[A-Z]{2}$/.test(resolution.country) &&
+        /^[A-Z0-9]{20}$/.test(resolution.lei) &&
+        resolvedIsin
+      ) resolutions.set(key, { ...resolution, isin: resolvedIsin });
     } catch {
       // A single issuer lookup failure must not make existing portfolio data unavailable.
     }
@@ -211,15 +268,16 @@ export const enrichPortfolioBookIssuerCountries = async (
         }
 
         const instrument = getLinkedInstrument(portfolio, asset, instrumentsById);
-        const isin = getConsistentAssetIsin(asset, instrument);
-        const resolution = isin ? resolutions.get(isin) : undefined;
+        if (hasConflictingAssetIsins(asset, instrument)) return asset;
+        const identity = getIssuerIdentity(asset, instrument);
+        const resolution = resolutions.get(getIssuerIdentityKey(identity));
         if (!resolution) return asset;
 
         assetsChanged = true;
         if (instrument) resolutionByInstrumentId.set(instrument.id, resolution);
         return {
           ...asset,
-          isin: asset.isin ?? isin,
+          isin: normalizeIssuerIsin(asset.isin) ?? resolution.isin,
           issuerCountry: resolution.country,
           issuerCountrySource: resolution.source,
         };

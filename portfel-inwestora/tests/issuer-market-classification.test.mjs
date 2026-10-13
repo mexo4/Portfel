@@ -25,7 +25,7 @@ const stock = ({ symbol, value = 100, country, source, provider = "eodhd", curre
   }],
 });
 
-test("ordinary shares are split by GPW listing and confirmed issuer country", () => {
+test("ordinary shares are split into GPW and foreign listing buckets", () => {
   const groups = [
     stock({ symbol: "DNP.PL", value: 10, provider: "stooq", currency: "PLN" }),
     stock({ symbol: "XTB.PL", value: 20, provider: "stooq", currency: "PLN" }),
@@ -38,22 +38,21 @@ test("ordinary shares are split by GPW listing and confirmed issuer country", ()
   assert.deepEqual(
     getAssetClassAllocation(groups).map(({ id, label, totalValue }) => ({ id, label, totalValue })),
     [
-      { id: "stock:international", label: "Akcje międzynarodowe", totalValue: 110 },
+      { id: "stock:foreign", label: "Akcje zagraniczne", totalValue: 150 },
       { id: "stock:gpw", label: "Akcje GPW", totalValue: 60 },
-      { id: "stock:usa", label: "Akcje amerykańskie", totalValue: 40 },
     ],
   );
-  assert.equal(getStockMarketClass(groups[4]).id, "stock:international");
+  assert.equal(getStockMarketClass(groups[4]).id, "stock:foreign");
   assert.equal(groups.reduce((sum, item) => sum + item.totalValue, 0), 210);
 }
 );
 
-test("legacy stocks without confirmed issuer metadata remain visible as international, never unknown", () => {
+test("legacy stocks without confirmed issuer metadata remain visible as foreign, never unknown", () => {
   const legacy = stock({ symbol: "TM.US", country: "USA" });
   assert.equal(getConfirmedIssuerCountry(legacy), UNKNOWN_COUNTRY_LABEL);
   assert.deepEqual(getStockMarketClass(legacy), {
-    id: "stock:international",
-    label: "Akcje międzynarodowe",
+    id: "stock:foreign",
+    label: "Akcje zagraniczne",
   });
 });
 
@@ -73,8 +72,10 @@ test("allocation remains additive for SINGLE, ALL and CUSTOM portfolio scopes", 
   assert.equal(getTotal(["p2", "p3"]), 280); // CUSTOM
 });
 
-test("US aliases normalize, and conflicting issuer metadata falls back to international", () => {
-  assert.equal(getStockMarketClass(stock({ symbol: "AAPL", country: "United States of America", source: "issuer-profile" })).id, "stock:usa");
+test("issuer country stays available, while all non-GPW ordinary stocks share the foreign bucket", () => {
+  const apple = stock({ symbol: "AAPL", country: "United States of America", source: "issuer-profile" });
+  assert.equal(getConfirmedIssuerCountry(apple), "USA");
+  assert.equal(getStockMarketClass(apple).id, "stock:foreign");
   const conflicting = {
     ...stock({ symbol: "DUAL", country: "USA", source: "issuer-profile" }),
     lots: [
@@ -83,7 +84,7 @@ test("US aliases normalize, and conflicting issuer metadata falls back to intern
     ],
   };
   assert.equal(getConfirmedIssuerCountry(conflicting), UNKNOWN_COUNTRY_LABEL);
-  assert.equal(getStockMarketClass(conflicting).id, "stock:international");
+  assert.equal(getStockMarketClass(conflicting).id, "stock:foreign");
 });
 
 test("ETF and non-stock asset classes stay untouched and no fourth stock country bucket is emitted", () => {
@@ -95,7 +96,7 @@ test("ETF and non-stock asset classes stay untouched and no fourth stock country
   assert.deepEqual(result, [
     { id: "etf", label: "ETF", totalValue: 40 },
     { id: "crypto", label: "Krypto", totalValue: 30 },
-    { id: "stock:international", label: "Akcje międzynarodowe", totalValue: 20 },
+    { id: "stock:foreign", label: "Akcje zagraniczne", totalValue: 20 },
   ]);
   assert.equal(result.reduce((sum, item) => sum + item.totalValue, 0), 90);
   assert.equal(result.some((item) => item.id === "stock:issuer-country-unknown"), false);
@@ -138,8 +139,8 @@ test("legacy country strings remain stored but are not promoted without trusted 
   assert.equal(legacy?.issuerCountry, "USA");
   assert.equal(legacy?.issuerCountrySource, undefined);
   assert.equal(verified?.issuerCountrySource, "issuer-profile");
-  assert.equal(getStockMarketClass({ kind: "stock", totalValue: 10, lots: [legacy] }).id, "stock:international");
-  assert.equal(getStockMarketClass({ kind: "stock", totalValue: 10, lots: [verified] }).id, "stock:usa");
+  assert.equal(getStockMarketClass({ kind: "stock", totalValue: 10, lots: [legacy] }).id, "stock:foreign");
+  assert.equal(getStockMarketClass({ kind: "stock", totalValue: 10, lots: [verified] }).id, "stock:foreign");
 });
 
 test("EODHD exchange-country metadata is not copied into issuer country", async () => {
@@ -154,28 +155,30 @@ test("EODHD exchange-country metadata is not copied into issuer country", async 
 // 20261011; a seeded random permutation was traversed until 10 distinct
 // location+exchange pairs were selected. The CSV does not include ISINs.
 const INDEPENDENT_RANDOM_STOCK_SAMPLE = [
-  { ticker: "IMB", name: "Imperial Brands PLC", country: "United Kingdom", exchange: "London Stock Exchange", expected: "stock:international" },
-  { ticker: "ADNOCDIST", name: "Abu Dhabi National Oil Company for Distribution", country: "United Arab Emirates", exchange: "Abu Dhabi Securities Exchange", expected: "stock:international" },
-  { ticker: "DGX", name: "Quest Diagnostics Inc", country: "United States", exchange: "NYSE", expected: "stock:usa" },
-  { ticker: "GMAB", name: "Genmab", country: "Denmark", exchange: "OMX Nordic Exchange Copenhagen", expected: "stock:international" },
-  { ticker: "7453", name: "Ryohin Keikaku", country: "Japan", exchange: "Tokyo Stock Exchange", expected: "stock:international" },
-  { ticker: "6869", name: "Yangtze Optical Fibre and Cable", country: "China", exchange: "Hong Kong Exchanges and Clearing", expected: "stock:international" },
-  { ticker: "UHR", name: "The Swatch Group AG", country: "Switzerland", exchange: "SIX Swiss Exchange", expected: "stock:international" },
-  { ticker: "AEM", name: "Agnico Eagle Mines", country: "Canada", exchange: "Toronto Stock Exchange", expected: "stock:international" },
-  { ticker: "032830", name: "Samsung Life Ltd", country: "Korea (South)", exchange: "Korea Exchange", expected: "stock:international" },
-  { ticker: "ICICIPRULI", name: "ICICI Prudential Life Insurance Co", country: "India", exchange: "National Stock Exchange of India", expected: "stock:international" },
+  { ticker: "IMB", name: "Imperial Brands PLC", country: "United Kingdom", exchange: "London Stock Exchange", expected: "stock:foreign" },
+  { ticker: "ADNOCDIST", name: "Abu Dhabi National Oil Company for Distribution", country: "United Arab Emirates", exchange: "Abu Dhabi Securities Exchange", expected: "stock:foreign" },
+  { ticker: "DGX", name: "Quest Diagnostics Inc", country: "United States", exchange: "NYSE", expected: "stock:foreign" },
+  { ticker: "GMAB", name: "Genmab", country: "Denmark", exchange: "OMX Nordic Exchange Copenhagen", expected: "stock:foreign" },
+  { ticker: "7453", name: "Ryohin Keikaku", country: "Japan", exchange: "Tokyo Stock Exchange", expected: "stock:foreign" },
+  { ticker: "6869", name: "Yangtze Optical Fibre and Cable", country: "China", exchange: "Hong Kong Exchanges and Clearing", expected: "stock:foreign" },
+  { ticker: "UHR", name: "The Swatch Group AG", country: "Switzerland", exchange: "SIX Swiss Exchange", expected: "stock:foreign" },
+  { ticker: "AEM", name: "Agnico Eagle Mines", country: "Canada", exchange: "Toronto Stock Exchange", expected: "stock:foreign" },
+  { ticker: "032830", name: "Samsung Life Ltd", country: "Korea (South)", exchange: "Korea Exchange", expected: "stock:foreign" },
+  { ticker: "ICICIPRULI", name: "ICICI Prudential Life Insurance Co", country: "India", exchange: "National Stock Exchange of India", expected: "stock:foreign" },
 ];
 
 for (const sample of INDEPENDENT_RANDOM_STOCK_SAMPLE) {
-  test(`random stock sample classifies ${sample.ticker} (${sample.exchange}) from issuer location`, () => {
-    const result = getStockMarketClass(stock({
+  test(`random stock sample ${sample.ticker} (${sample.exchange}) keeps its country metadata and foreign market class`, () => {
+    const group = stock({
       symbol: sample.ticker,
       country: sample.country,
       source: "catalog",
       provider: "eodhd",
       currency: "USD",
-    }));
+    });
+    const result = getStockMarketClass(group);
     assert.equal(result.id, sample.expected, `${sample.name}: ${sample.country}`);
+    assert.equal(getConfirmedIssuerCountry(group), sample.country === "United States" ? "USA" : sample.country);
   });
 }
 
@@ -194,6 +197,6 @@ test("random stock sample sums to total without changing the ETF bucket", () => 
   ]);
   assert.equal(allocation.reduce((sum, item) => sum + item.totalValue, 0), 155);
   assert.equal(allocation.find((item) => item.id === "etf")?.totalValue, 100);
-  assert.equal(allocation.find((item) => item.id === "stock:usa")?.totalValue, 3);
-  assert.equal(allocation.find((item) => item.id === "stock:international")?.totalValue, 52);
+  assert.equal(allocation.find((item) => item.id === "stock:foreign")?.totalValue, 55);
+  assert.equal(allocation.some((item) => item.id === "stock:usa" || item.id === "stock:international"), false);
 });

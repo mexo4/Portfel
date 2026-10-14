@@ -122,6 +122,7 @@ import {
   toCurrencyCode,
   toDateInputValue,
 } from "@/lib/utils";
+import { getUserProfilePersistenceFingerprint } from "@/lib/profile";
 import {
   createEmptyTreasuryBondDraft,
   getTreasuryBondDisplayName,
@@ -1029,7 +1030,9 @@ export default function PortfolioApp({
   const initialWorkspaceFingerprintRef = useRef<string | null>(null);
   const hasCommittedInitialWorkspaceRef = useRef(false);
   const hasInitializedPortfolioPersistenceRef = useRef(false);
-  const hasSavedProfileRef = useRef(false);
+  const lastPersistedProfileFingerprintRef = useRef(
+    getUserProfilePersistenceFingerprint(initialProfile)
+  );
   const quoteRefreshSeqRef = useRef({ all: 0, crypto: 0 });
   const quoteRefreshPendingRef = useRef(0);
   const quoteRefreshInFlightRef = useRef<Promise<void> | null>(null);
@@ -2405,16 +2408,15 @@ export default function PortfolioApp({
   );
 
   useEffect(() => {
-    if (!hasSavedProfileRef.current) {
-      hasSavedProfileRef.current = true;
-      return;
-    }
+    const fingerprint = getUserProfilePersistenceFingerprint(profile);
+    if (fingerprint === lastPersistedProfileFingerprintRef.current) return;
 
     let isCancelled = false;
 
     const timeoutId = window.setTimeout(async () => {
       try {
         await saveUserProfile(profile);
+        lastPersistedProfileFingerprintRef.current = fingerprint;
 
         if (!isCancelled) {
           setSyncError(null);

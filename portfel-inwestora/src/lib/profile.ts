@@ -135,6 +135,14 @@ export const createEmptyUserProfile = (): UserProfile => ({
   updatedAt: "",
 });
 
+/** Stable identity for profile persistence; a timestamp-only change is not a user edit. */
+export const getUserProfilePersistenceFingerprint = (profile: UserProfile) => {
+  const persistedFields = Object.fromEntries(
+    Object.entries(profile).filter(([key]) => key !== "updatedAt")
+  );
+  return JSON.stringify(persistedFields);
+};
+
 export const normalizeUserProfile = (
   value: Partial<UserProfile> | null | undefined,
   fallback?: Partial<UserProfile>

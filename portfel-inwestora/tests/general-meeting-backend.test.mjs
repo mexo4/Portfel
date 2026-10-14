@@ -166,6 +166,13 @@ test("global WZA projection is independent from portfolio membership and logs sy
   assert.match(api, /instrument\.held/);
   assert.match(api, /projection\.pending > 0/);
   assert.match(api, /Cache-Control.*private, no-store/);
+  assert.match(api, /after\(async \(\) => \{[\s\S]*?synchronizeGlobalGeneralMeetings\(/);
+  assert.doesNotMatch(api, /const projection = await synchronizeGlobalGeneralMeetings\(\{ refreshSource: false \}\)/);
+  assert.match(api, /Never make the calendar's first response wait for projection/);
+  assert.match(api, /globalMeetingProjectionPending \|\| projectionCheckDue/);
+  assert.match(api, /PROJECTION_CHECK_COOLDOWN_MS = 60_000/);
+  assert.match(api, /globalMeetingProjectionPending = projection\.pending > 0/);
+  assert.match(api, /isRefreshing: initialState\.isRefreshing \|\| shouldRefreshSource \|\| globalMeetingProjectionInFlight/);
   assert.match(provider, /getGlobalGeneralMeetingSourceState = getGpwGeneralMeetingSyncState/);
   assert.match(provider, /if \(refreshSource\) await synchronizeGpwGeneralMeetingReports\(\)/);
   assert.match(espi, /eligibleRows < 50/);

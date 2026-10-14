@@ -35,6 +35,11 @@ const addCalendarMonths = (date: string, months: number) => {
 const getScope = (value: string | null): GeneralMeetingScope =>
   value === "watchlist" || value === "portfolio" ? value : "all";
 
+const PROJECTION_CHECK_COOLDOWN_MS = 60_000;
+let globalMeetingProjectionInFlight = false;
+let globalMeetingProjectionPending = false;
+let lastGlobalMeetingProjectionCheckAt = 0;
+
 export async function GET(request: Request) {
   const user = await getCurrentAuthenticatedUser();
   if (!user) return NextResponse.json({ error: "Brak autoryzacji." }, { status: 401 });
@@ -45,18 +50,38 @@ export async function GET(request: Request) {
 
   try {
     const initialState = await getGlobalGeneralMeetingSourceState();
-    const projection = await synchronizeGlobalGeneralMeetings({ refreshSource: false });
     const shouldRefreshSource = initialState.isStale && !initialState.isRefreshing;
-    if (shouldRefreshSource) {
+    const projectionCheckDue = Date.now() - lastGlobalMeetingProjectionCheckAt >= PROJECTION_CHECK_COOLDOWN_MS;
+    const shouldStartSync = !globalMeetingProjectionInFlight && (
+      shouldRefreshSource || globalMeetingProjectionPending || projectionCheckDue
+    );
+    if (shouldStartSync) {
+      globalMeetingProjectionInFlight = true;
+      lastGlobalMeetingProjectionCheckAt = Date.now();
+      // Never make the calendar's first response wait for projection of up to
+      // 100 ESPI reports. Existing WZA records can be rendered immediately;
+      // the source refresh and bounded projection batches continue after the
+      // response, while the client polls this endpoint for newly saved rows.
       after(async () => {
-        await synchronizeGlobalGeneralMeetings();
-      });
-    } else if (projection.pending > 0) {
-      // Keep projection backfills moving in bounded batches after responding.
-      // The client polls while this state is true, so there is no unbounded
-      // background loop on serverless-compatible runtimes.
-      after(async () => {
-        await synchronizeGlobalGeneralMeetings({ refreshSource: false });
+        try {
+          let projection = await synchronizeGlobalGeneralMeetings({
+            refreshSource: shouldRefreshSource,
+          });
+          // Complete a reasonable backlog in the background without turning a
+          // user-facing GET into a long-running request. If more remains, the
+          // next calendar poll starts another bounded batch.
+          for (let batch = 0; batch < 9 && projection.pending > 0; batch += 1) {
+            projection = await synchronizeGlobalGeneralMeetings({ refreshSource: false });
+          }
+          globalMeetingProjectionPending = projection.pending > 0;
+        } catch (error) {
+          globalMeetingProjectionPending = false;
+          console.error("WZA background synchronization failed", {
+            error: error instanceof Error ? error.name : "unknown",
+          });
+        } finally {
+          globalMeetingProjectionInFlight = false;
+        }
       });
     }
     const tracked = scope === "all" ? [] : await getUserTrackedGpwInstruments(user.id);
@@ -65,7 +90,6 @@ export async function GET(request: Request) {
       : tracked
           .filter((instrument) => scope === "watchlist" ? instrument.watched : instrument.held)
           .map((instrument) => instrument.canonicalKey);
-    const state = await getGlobalGeneralMeetingSourceState();
     const response: GeneralMeetingsResponse = {
       events: await getGlobalGeneralMeetings({
         fromDate: today,
@@ -76,12 +100,15 @@ export async function GET(request: Request) {
       }),
       scope,
       sourceState: {
-        status: state.status,
-        lastCheckedAt: state.lastCheckedAt,
-        lastSuccessfulSyncAt: state.lastSuccessAt,
-        isRefreshing: state.isRefreshing || shouldRefreshSource || projection.pending > 0,
-        isStale: state.isStale || projection.pending > 0,
-        projectionPending: projection.pending,
+        status: initialState.status,
+        lastCheckedAt: initialState.lastCheckedAt,
+        lastSuccessfulSyncAt: initialState.lastSuccessAt,
+        isRefreshing: initialState.isRefreshing || shouldRefreshSource || globalMeetingProjectionInFlight,
+        isStale: initialState.isStale,
+        // Projection backlog is intentionally not counted on the critical
+        // request path: its old COUNT over the full candidate horizon made
+        // otherwise-cached calendar reads appear stuck.
+        projectionPending: 0,
       },
     };
     return NextResponse.json(response, {

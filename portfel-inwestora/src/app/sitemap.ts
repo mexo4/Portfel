@@ -13,5 +13,8 @@ export default function sitemap(): MetadataRoute.Sitemap {
   if (process.env.MEXO_PUBLIC_GPW_CALENDAR_INDEXABLE === "true") {
     pages.push({ url: `${origin}/kalendarz-gpw`, changeFrequency: "daily", priority: 0.9 });
   }
+  if (process.env.MEXO_PUBLIC_DIVIDENDS_INDEXABLE === "true") {
+    pages.push({ url: `${origin}/kalendarz-dywidend`, changeFrequency: "daily", priority: 0.9 });
+  }
   return pages;
 }

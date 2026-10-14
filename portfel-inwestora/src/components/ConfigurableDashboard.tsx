@@ -235,7 +235,7 @@ function WidgetShell({ eyebrow, title, href, children }: {
     <section className="panel panel-compact dashboard-command-card">
       <div className="dashboard-command-card-head">
         <div><p className="eyebrow">{eyebrow}</p><h2 className="section-title">{title}</h2></div>
-        {href ? <Link href={href}>Zobacz</Link> : null}
+        {href ? <Link href={href} prefetch={false}>Zobacz</Link> : null}
       </div>
       {children}
     </section>
@@ -541,7 +541,7 @@ function LatestEspiWidget() {
   return <WidgetShell eyebrow="Rynek" title="Najnowsze ESPI" href={workspace.getReadHref("/market/espi")}>
     {state === "loading" ? <EmptyState>Wczytywanie raportów ESPI…</EmptyState>
       : state === "error" ? <EmptyState>Raporty ESPI są chwilowo niedostępne.</EmptyState>
-        : items.length ? <div className="dashboard-espi-list">{items.map((report) => <Link key={report.id} href={workspace.getReadHref(`/market/espi/${report.id}`)}><span><strong>{report.issuerName}</strong><small>{new Intl.DateTimeFormat("pl-PL", { timeZone: "Europe/Warsaw", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }).format(new Date(report.publishedAt))}</small></span><b>{report.title}</b><em>{ESPI_CATEGORY_LABELS[report.category]}</em></Link>)}</div>
+      : items.length ? <div className="dashboard-espi-list">{items.map((report) => <Link key={report.id} href={workspace.getReadHref(`/market/espi/${report.id}`)} prefetch={false}><span><strong>{report.issuerName}</strong><small>{new Intl.DateTimeFormat("pl-PL", { timeZone: "Europe/Warsaw", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }).format(new Date(report.publishedAt))}</small></span><b>{report.title}</b><em>{ESPI_CATEGORY_LABELS[report.category]}</em></Link>)}</div>
           : <EmptyState>Brak nowych raportów posiadanych lub obserwowanych spółek.</EmptyState>}
   </WidgetShell>;
 }

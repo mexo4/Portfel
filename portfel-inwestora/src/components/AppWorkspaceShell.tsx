@@ -157,7 +157,8 @@ const normalizeSearchText = (value: string) => value.normalize("NFD").replace(/[
 const isGroupActive = (route: WorkspaceRouteKey, group: NavigationGroup) => group.items.some((item) => item.key === route);
 
 function NavigationLink({ item, active, compact = false }: { item: NavigationItem; active: boolean; compact?: boolean }) {
-  return <Link href={item.href} className={active ? "workspace-nav-link is-active" : "workspace-nav-link"} aria-current={active ? "page" : undefined} title={compact ? item.label : undefined}><span className="workspace-nav-glyph"><WorkspaceIcon name={item.icon} /></span><span>{item.label}</span></Link>;
+  // The always-mounted navigation spans every section; let clicks fetch one route instead of preloading all of them at workspace startup.
+  return <Link href={item.href} prefetch={false} className={active ? "workspace-nav-link is-active" : "workspace-nav-link"} aria-current={active ? "page" : undefined} title={compact ? item.label : undefined}><span className="workspace-nav-glyph"><WorkspaceIcon name={item.icon} /></span><span>{item.label}</span></Link>;
 }
 
 export default function AppWorkspaceShell({ account, portfolios, selectedPortfolioId, portfolioScope, activeBaseCurrency, isPortfolioMutationPending, isLoggingOut, isAdmin, onPortfolioScopeChange, onBaseCurrencyChange, onQuickAdd, onLogout, children }: AppWorkspaceShellProps) {
@@ -265,7 +266,7 @@ export default function AppWorkspaceShell({ account, portfolios, selectedPortfol
 
   return <div className={isSidebarCollapsed ? "workspace-shell is-sidebar-collapsed" : "workspace-shell"}>
     <aside className="workspace-sidebar" aria-label="Główna nawigacja">
-      <div className="workspace-brand-row"><Link href={getWorkspaceHref("/dashboard")} className="workspace-brand" aria-label="Mexo — pulpit"><Image src="/mexo-mark-transparent.png" className="workspace-brand-mark" alt="" width={34} height={34} priority /><span className="workspace-brand-name">Mexo</span></Link><button type="button" className="workspace-sidebar-toggle" onClick={() => setIsSidebarCollapsed((current) => !current)} aria-label={isSidebarCollapsed ? "Rozwiń menu" : "Zwiń menu"} title={isSidebarCollapsed ? "Rozwiń menu" : "Zwiń menu"}><span aria-hidden="true">‹</span></button></div>
+      <div className="workspace-brand-row"><Link href={getWorkspaceHref("/dashboard")} prefetch={false} className="workspace-brand" aria-label="Mexo — pulpit"><Image src="/mexo-mark-transparent.png" className="workspace-brand-mark" alt="" width={34} height={34} priority /><span className="workspace-brand-name">Mexo</span></Link><button type="button" className="workspace-sidebar-toggle" onClick={() => setIsSidebarCollapsed((current) => !current)} aria-label={isSidebarCollapsed ? "Rozwiń menu" : "Zwiń menu"} title={isSidebarCollapsed ? "Rozwiń menu" : "Zwiń menu"}><span aria-hidden="true">‹</span></button></div>
       <nav className="workspace-sidebar-nav" aria-label="Sekcje aplikacji">
         {directNavigation.map((item) => <NavigationLink key={item.key} item={withWorkspaceContext(item)} active={route === item.key} compact={isSidebarCollapsed} />)}
         {visibleNavigationGroups.map((group) => {
@@ -289,14 +290,14 @@ export default function AppWorkspaceShell({ account, portfolios, selectedPortfol
         })}
       </nav>
       <div className="workspace-sidebar-bottom">
-        {isAdmin ? <Link href="/admin" className="workspace-nav-link" title={isSidebarCollapsed ? "Panel admina" : undefined}><span className="workspace-nav-glyph"><WorkspaceIcon name="admin" /></span><span>Panel admina</span></Link> : null}
+        {isAdmin ? <Link href="/admin" prefetch={false} className="workspace-nav-link" title={isSidebarCollapsed ? "Panel admina" : undefined}><span className="workspace-nav-glyph"><WorkspaceIcon name="admin" /></span><span>Panel admina</span></Link> : null}
         <NavigationLink item={withWorkspaceContext({ key: "settings", href: "/settings", label: "Ustawienia", icon: "settings" })} active={route === "settings"} compact={isSidebarCollapsed} />
         <div className="workspace-user-card"><span className="workspace-user-avatar" aria-hidden="true">{(account.email[0] ?? "M").toUpperCase()}</span><span className="workspace-user-copy"><strong>{account.email.split("@")[0]}</strong><small>{MEXO_TESTER_MODE ? "Tester" : account.subscriptionPlan === "pro" ? "Mexo Pro" : "Mexo Free"}</small></span></div>
       </div>
     </aside>
 
     <header className="workspace-mobile-header">
-      <Link href={getWorkspaceHref("/dashboard")} className="workspace-mobile-brand" aria-label="Mexo — pulpit"><Image src="/mexo-mark-transparent.png" alt="" width={34} height={34} priority /></Link>
+      <Link href={getWorkspaceHref("/dashboard")} prefetch={false} className="workspace-mobile-brand" aria-label="Mexo — pulpit"><Image src="/mexo-mark-transparent.png" alt="" width={34} height={34} priority /></Link>
       <PortfolioScopePicker portfolios={portfolios} selection={portfolioScope} disabled={isPortfolioMutationPending} mobile onApply={onPortfolioScopeChange} />
       <label className="workspace-mobile-header-currency"><span className="sr-only">Waluta prezentacji</span><select aria-label="Waluta prezentacji" value={activeBaseCurrency} onChange={(event) => onBaseCurrencyChange(event.target.value)} disabled={isPortfolioMutationPending}><option value="PLN">PLN</option><option value="USD">USD</option><option value="EUR">EUR</option><option value="GBP">GBP</option></select></label>
       <button ref={quickAddTriggerRef} type="button" className="workspace-mobile-quick-action" onClick={() => openQuickActions(true)} aria-label="Otwórz szybkie działania" aria-haspopup="dialog" aria-expanded={isQuickAddOpen}><WorkspaceIcon name="plus" /></button>
@@ -309,12 +310,12 @@ export default function AppWorkspaceShell({ account, portfolios, selectedPortfol
           <PortfolioScopePicker portfolios={portfolios} selection={portfolioScope} disabled={isPortfolioMutationPending} onApply={onPortfolioScopeChange} />
           <label className="workspace-currency-select"><span>Waluta prezentacji</span><select aria-label="Waluta prezentacji" value={activeBaseCurrency} onChange={(event) => onBaseCurrencyChange(event.target.value)} disabled={isPortfolioMutationPending}><option value="PLN">PLN</option><option value="USD">USD</option><option value="EUR">EUR</option><option value="GBP">GBP</option></select></label>
           <button ref={quickActionsTriggerRef} type="button" className="workspace-topbar-add" onClick={() => openQuickActions(false)} aria-label="Otwórz szybkie działania" aria-haspopup="dialog" aria-expanded={isQuickActionsOpen}><WorkspaceIcon name="plus" /><span>Szybkie działania</span></button>
-          <Link href={getWorkspaceHref("/settings")} className="workspace-profile-link" aria-label="Ustawienia konta">{(account.email[0] ?? "M").toUpperCase()}</Link>
+          <Link href={getWorkspaceHref("/settings")} prefetch={false} className="workspace-profile-link" aria-label="Ustawienia konta">{(account.email[0] ?? "M").toUpperCase()}</Link>
         </div>
       </header>
       <main className="workspace-content" id="workspace-content" tabIndex={-1}>
         <header className="workspace-page-header"><div><span className="workspace-breadcrumb">{meta.breadcrumb}</span><h1>{meta.title}</h1><p>{meta.description}</p></div></header>
-        {showSectionTabs ? <nav className="workspace-section-tabs" aria-label={`Sekcja ${currentNavigationGroup.label}`}>{currentNavigationGroup.items.map((item) => <Link key={item.key} href={getWorkspaceHref(item.href)} className={route === item.key ? "is-active" : undefined} aria-current={route === item.key ? "page" : undefined}>{item.label}</Link>)}</nav> : null}
+        {showSectionTabs ? <nav className="workspace-section-tabs" aria-label={`Sekcja ${currentNavigationGroup.label}`}>{currentNavigationGroup.items.map((item) => <Link key={item.key} href={getWorkspaceHref(item.href)} prefetch={false} className={route === item.key ? "is-active" : undefined} aria-current={route === item.key ? "page" : undefined}>{item.label}</Link>)}</nav> : null}
         {children}
       </main>
     </div>

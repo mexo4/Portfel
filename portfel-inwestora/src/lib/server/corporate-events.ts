@@ -15,9 +15,11 @@ import {
 import { getGpwTickerCore, isGpwSymbol, normalizeGpwSymbol } from "@/lib/ticker";
 import { execute, query, queryOne, withTransaction, type DatabaseTransaction } from "@/lib/server/db";
 import {
+  getGpwDividendSyncState,
   getStoredEspiReportsForCorporateEvents,
   getGpwGeneralMeetingSyncState,
   PAP_ESPI_FEED_URL,
+  synchronizeGpwDividendReports,
   synchronizeGpwGeneralMeetingReports,
   type GpwGeneralMeetingSourceSyncResult,
   type StoredEspiCorporateEventReport,
@@ -1606,6 +1608,229 @@ export const getGlobalGeneralMeetings = async ({
 };
 
 export const getGlobalGeneralMeetingSourceState = getGpwGeneralMeetingSyncState;
+
+export type GlobalDividendSyncResult = GlobalGeneralMeetingSyncResult;
+
+const DIVIDEND_PROJECTION_VERSION = 4;
+const DIVIDEND_PROJECTION_BATCH_SIZE = 100;
+const DIVIDEND_UNMATCHED_RETRY_MS = 7 * 24 * 60 * 60 * 1_000;
+
+let globalDividendSyncInFlight: Promise<GlobalDividendSyncResult> | null = null;
+
+const updateDividendProjectionStatus = (
+  reportId: string,
+  status: "SUCCESS" | "NO_EVENT" | "UNMATCHED" | "PARSE_ERROR"
+) => execute(
+  `
+    UPDATE espi_reports
+    SET dividend_projection_status = $1,
+        dividend_projected_at = $2,
+        dividend_projection_version = $3
+    WHERE id = $4
+  `,
+  [status, new Date().toISOString(), DIVIDEND_PROJECTION_VERSION, reportId]
+);
+
+/**
+ * Projects official, shared GPW ESPI publications into the same normalized
+ * corporate-events store used elsewhere in Mexo. Membership in a portfolio or
+ * watchlist is deliberately applied only while reading the calendar.
+ */
+export const synchronizeGlobalDividends = ({
+  force = false,
+  refreshSource = true,
+}: {
+  force?: boolean;
+  refreshSource?: boolean;
+} = {}) => {
+  if (globalDividendSyncInFlight) return globalDividendSyncInFlight;
+
+  globalDividendSyncInFlight = (async () => {
+    if (refreshSource) await synchronizeGpwDividendReports();
+    const publishedAfter = new Date(Date.now() - 730 * 24 * 60 * 60 * 1_000).toISOString();
+    const unmatchedRetryBefore = new Date(Date.now() - DIVIDEND_UNMATCHED_RETRY_MS).toISOString();
+    const reports = await query<GlobalGeneralMeetingReportRow>(
+      `
+        SELECT report.id, report.source_id, report.issuer_id, report.source_title,
+               report.title, report.body_text, report.published_at, report.source_url,
+               report.dividend_projection_status AS projection_status,
+               instrument.canonical_key, instrument.ticker, instrument.company_name,
+               instrument.isin, instrument.last_checked_at, instrument.last_source_status
+        FROM espi_reports AS report
+        LEFT JOIN corporate_event_instruments AS instrument ON instrument.id = report.issuer_id
+        WHERE report.source = 'PAP_ESPI'
+          AND report.published_at >= $1
+          AND report.source_id NOT LIKE 'newconnect:%'
+          AND report.market <> 'NEWCONNECT'
+          AND (instrument.market = 'GPW' OR (instrument.id IS NULL AND report.market IN ('GPW', 'UNKNOWN')))
+          AND (
+            report.category = 'DIVIDEND'
+            OR report.source_title ILIKE '%dywidend%'
+            OR report.title ILIKE '%dywidend%'
+            OR report.source_title ILIKE '%podzia%zysku%'
+            OR report.title ILIKE '%podzia%zysku%'
+          )
+          AND (
+            report.dividend_projection_version IS DISTINCT FROM $2
+            OR report.dividend_projection_status = 'PARSE_ERROR'
+            OR (
+              report.dividend_projection_status = 'UNMATCHED'
+              AND report.dividend_projected_at < $3
+            )
+            OR $5::boolean
+          )
+        ORDER BY report.published_at DESC, report.source_id DESC
+        LIMIT $4
+      `,
+      [publishedAfter, DIVIDEND_PROJECTION_VERSION, unmatchedRetryBefore, DIVIDEND_PROJECTION_BATCH_SIZE, force]
+    );
+
+    let created = 0;
+    let duplicates = 0;
+    let saved = 0;
+    let unmatched = 0;
+    let errors = 0;
+
+    for (const report of reports) {
+      try {
+        if (!report.issuer_id || !report.canonical_key || !report.ticker || !report.company_name) {
+          unmatched += 1;
+          await updateDividendProjectionStatus(report.id, "UNMATCHED");
+          diagnose({ provider: "global-espi-dividends", sourceId: report.source_id, status: "UNMATCHED" });
+          continue;
+        }
+
+        const events = parseCorporateEventDocument(`${report.source_title}\n${report.title}\n${report.body_text}`)
+          .filter((event) => event.eventType === "UPCOMING_DIVIDEND");
+        if (events.length === 0) {
+          await updateDividendProjectionStatus(report.id, "NO_EVENT");
+          continue;
+        }
+
+        const instrument: CanonicalInstrument = {
+          id: report.issuer_id,
+          canonical_key: report.canonical_key,
+          ticker: report.ticker,
+          company_name: report.company_name,
+          isin: report.isin,
+          last_checked_at: report.last_checked_at,
+          last_source_status: report.last_source_status,
+        };
+        const result = await withTransaction(async (transaction) => {
+          await transaction.query<{ locked: number }>(
+            "SELECT pg_advisory_xact_lock(hashtext($1)) AS locked",
+            [`corporate-events:${instrument.canonical_key}`]
+          );
+          const upsert = await upsertParsedEvents(transaction, instrument, {
+            events,
+            source: {
+              sourceType: report.source_url.includes("gpw.pl/komunikat")
+                ? "ISSUER_CURRENT_REPORT"
+                : "PAP_ESPI",
+              sourceUrl: report.source_url,
+              sourcePublishedAt: report.published_at,
+            },
+          });
+          await transaction.execute(
+            `
+              UPDATE espi_reports
+              SET dividend_projection_status = 'SUCCESS',
+                  dividend_projected_at = $1,
+                  dividend_projection_version = $2
+              WHERE id = $3
+            `,
+            [new Date().toISOString(), DIVIDEND_PROJECTION_VERSION, report.id]
+          );
+          return upsert;
+        });
+        created += result.created;
+        duplicates += result.duplicates;
+        saved += result.saved;
+      } catch (error) {
+        errors += 1;
+        try {
+          await updateDividendProjectionStatus(report.id, "PARSE_ERROR");
+        } catch (statusError) {
+          errors += 1;
+          diagnose({
+            provider: "global-espi-dividends",
+            sourceId: report.source_id,
+            phase: "status-update",
+            error: statusError instanceof Error ? statusError.name : "unknown",
+          });
+        }
+        diagnose({
+          provider: "global-espi-dividends",
+          sourceId: report.source_id,
+          status: "PARSE_ERROR",
+          error: error instanceof Error ? error.name : "unknown",
+          message: error instanceof Error ? error.message.slice(0, 160) : undefined,
+        });
+      }
+    }
+
+    const pendingResult = await queryOne<{ count: number | string }>(
+      `
+        SELECT COUNT(*) AS count
+        FROM espi_reports AS report
+        LEFT JOIN corporate_event_instruments AS instrument ON instrument.id = report.issuer_id
+        WHERE report.source = 'PAP_ESPI'
+          AND report.published_at >= $1
+          AND report.source_id NOT LIKE 'newconnect:%'
+          AND report.market <> 'NEWCONNECT'
+          AND (instrument.market = 'GPW' OR (instrument.id IS NULL AND report.market IN ('GPW', 'UNKNOWN')))
+          AND (
+            report.category = 'DIVIDEND'
+            OR report.source_title ILIKE '%dywidend%'
+            OR report.title ILIKE '%dywidend%'
+            OR report.source_title ILIKE '%podzia%zysku%'
+            OR report.title ILIKE '%podzia%zysku%'
+          )
+          AND (
+            report.dividend_projection_version IS DISTINCT FROM $2
+            OR report.dividend_projection_status = 'PARSE_ERROR'
+            OR (
+              report.dividend_projection_status = 'UNMATCHED'
+              AND report.dividend_projected_at < $3
+            )
+          )
+      `,
+      [publishedAfter, DIVIDEND_PROJECTION_VERSION, unmatchedRetryBefore]
+    );
+    const pending = Number(pendingResult?.count ?? 0);
+    console.info(`[DIVIDEND SYNC] fetched=${reports.length} new=${created} duplicates=${duplicates} saved=${saved} unmatched=${unmatched} pending=${pending} errors=${errors}`);
+    return { fetched: reports.length, created, duplicates, saved, unmatched, errors, pending };
+  })().finally(() => {
+    globalDividendSyncInFlight = null;
+  });
+
+  return globalDividendSyncInFlight;
+};
+
+export const getGlobalDividends = async ({
+  fromDate,
+  toDate,
+  canonicalKeys,
+}: {
+  fromDate: string;
+  toDate: string;
+  canonicalKeys?: string[];
+}) => {
+  if (canonicalKeys && canonicalKeys.length === 0) return [];
+  const instruments = canonicalKeys
+    ? await query<{ id: string }>(
+      "SELECT id FROM corporate_event_instruments WHERE market = 'GPW' AND canonical_key = ANY($1::text[])",
+      [canonicalKeys]
+    )
+    : await query<{ id: string }>(
+      "SELECT id FROM corporate_event_instruments WHERE market = 'GPW'"
+    );
+  const instrumentIds = instruments.map((instrument) => instrument.id);
+  if (instrumentIds.length === 0) return [];
+  return getStoredEvents(instrumentIds, fromDate, toDate, ["UPCOMING_DIVIDEND"]);
+};
+
+export const getGlobalDividendSourceState = getGpwDividendSyncState;
 
 export const getCorporateEventsForGpwPortfolio = async ({
   instruments,

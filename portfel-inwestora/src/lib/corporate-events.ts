@@ -158,6 +158,35 @@ export type GeneralMeetingsResponse = {
   };
 };
 
+export type DividendCalendarScope = GeneralMeetingScope;
+
+export type DividendCalendarResponse = {
+  events: CorporateEvent[];
+  scope: DividendCalendarScope;
+  sourceState: GeneralMeetingsResponse["sourceState"];
+};
+
+export type DividendCalendarDisplayStatus =
+  | "PROPOSED"
+  | "CONFIRMED"
+  | "AWAITING_PAYMENT"
+  | "PAYMENT_DATE_PASSED"
+  | "UNKNOWN";
+
+export const getDividendCalendarDisplayStatus = (
+  event: Pick<CorporateEvent, "status" | "recordDate" | "exDividendDate" | "paymentDate">,
+  today: string
+): DividendCalendarDisplayStatus => {
+  if (event.status === "PROPOSED") return "PROPOSED";
+  if (event.status !== "CONFIRMED" && event.status !== "CHANGED") return "UNKNOWN";
+  if (event.paymentDate && event.paymentDate < today) return "PAYMENT_DATE_PASSED";
+  const entitlementDate = event.recordDate ?? event.exDividendDate;
+  if (entitlementDate && entitlementDate < today && (!event.paymentDate || event.paymentDate >= today)) {
+    return "AWAITING_PAYMENT";
+  }
+  return "CONFIRMED";
+};
+
 export const getCorporateEventIdentityKey = (event: Pick<
   ParsedCorporateEvent,
   "eventType" | "fiscalPeriod" | "fiscalYear" | "eventIdentity"
@@ -619,8 +648,19 @@ const getDividendStatus = (text: string): Extract<
 > => {
   const normalized = text.toLocaleLowerCase("pl-PL");
 
+  // A proposal often says that the final decision will be taken by the AGM.
+  // A bare mention of the meeting must never promote it to a confirmed cash
+  // distribution.
   if (
-    /uchwa|zatwierdz|walne(?:go)?\s+zgromadzeni|przeznacz.{0,48}dywidend|postanawia.{0,48}(?:wyplac|wypłac)/u.test(
+    /propozyc|wniosek\s+zarz|rekomend|ostateczn.{0,32}decyzj.{0,80}(?:waln|wza|zwz)|warunkow.{0,48}(?:zgod|uchwa)/u.test(
+      normalized
+    ) && !/podj.{0,20}uchwa|uchwa.{0,40}(?:w\s+sprawie\s+)?(?:podzial|wyplat)|zatwierdz|postanawia.{0,48}(?:wyplac|wypłac)/u.test(normalized)
+  ) {
+    return "PROPOSED";
+  }
+
+  if (
+    /podj.{0,32}uchwa|uchwal(?:ił|ilo|iło|ono)|(?:^|\n)\s*uchwała\s+(?:(?:zwyczajnego|nadzwyczajnego)\s+)?walnego\s+zgromadzenia|uchwa.{0,40}(?:w\s+sprawie\s+)?(?:podzial|wypłat|wyplat)|zatwierdz|przeznacz.{0,48}dywidend|postanawia.{0,48}(?:wyplac|wypłac)|zgod[ae]\s+rady\s+nadzorczej.{0,80}wypłat.{0,40}zaliczk|decyzj[ae]\s+zarządu.{0,80}wypłat.{0,40}zaliczk/u.test(
       normalized
     )
   ) {
@@ -644,15 +684,19 @@ const getDividendAmounts = (text: string): ParsedDividendAmount[] => {
   const perSharePattern =
     /(?:^|[^\d])(\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{1,4})?)\s*(?:zł(?:ot(?:y|a|ych|e))?|zl(?:otych)?|pln)\s*(?:\([^)]{0,80}\)\s*)?(?:brutto\s*)?(?:na|\/)\s*(?:(?:jedn[aą]|1)\s*)?akcj/gi;
   const amountAfterPerSharePattern =
-    /(?:na|dla)\s*(?:(?:jedn[aą]|1)\s*)?akcj[ęe]\s*(?:przypada|wynosi|w\s+wysokości)?\s*(\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{1,4})?)\s*(?:zł(?:ot(?:y|a|ych|e))?|zl(?:otych)?|pln)/gi;
+    /(?:na|dla)\s*(?:(?:jedn[aą]|1)\s*)?akcj[ęe]\s*(?:(?:przeznacza\s+się|przypada|wynosi|w\s+wysokości)\s*)?(\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{1,4})?)\s*(?:zł(?:ot(?:y|a|ych|e))?|zl(?:otych)?|pln)/gi;
   const unicodePerSharePattern =
     /(?:^|[^\d])(\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{1,4})?)\s*(?:z\u0142(?:ot(?:y|a|ych|e))?|zl(?:otych)?|pln)\s*(?:\([^)]{0,80}\)\s*)?(?:brutto\s*)?(?:na|\/)\s*(?:(?:jedn(?:a|\u0105)|1)\s*)?akcj/giu;
   const unicodeAmountAfterPerSharePattern =
-    /(?:na|dla)\s*(?:(?:jedn(?:a|\u0105)|1)\s*)?akcj(?:\u0119|e)\s*(?:przypada|wynosi|w\s+wysoko\u015Bci)?\s*(\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{1,4})?)\s*(?:z\u0142(?:ot(?:y|a|ych|e))?|zl(?:otych)?|pln)/giu;
+    /(?:na|dla)\s*(?:(?:jedn(?:a|\u0105)|1)\s*)?akcj(?:\u0119|e)\s*(?:(?:przeznacza\s+si\u0119|przypada|wynosi|w\s+wysoko\u015Bci)\s*)?(\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{1,4})?)\s*(?:z\u0142(?:ot(?:y|a|ych|e))?|zl(?:otych)?|pln)/giu;
   const labeledAmountAfterPerSharePattern =
     /(?:kwota|wysokość)\s+dywidendy(?:\s+brutto)?\s+(?:na|dla)\s*(?:(?:jedn(?:ą|a)|1)\s*)?akcj[ęe]\s*(?::|wynosi(?:\s+obecnie)?|w\s+wysokości)?\s*(\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{1,4})?)\s*(?:zł(?:ot(?:y|a|ych|e))?|zl(?:otych)?|pln)/giu;
   const descriptiveAmountAfterPerSharePattern =
     /(?:kwota|wysokość)\s+dywidendy[\s\S]{0,220}?(?:na|dla)\s*(?:(?:jedn(?:ą|a)|1)\s*)?akcj[ęe][\s\S]{0,220}?(\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{1,4})?)\s*(?:zł(?:ot(?:y|a|ych|e))?|zl(?:otych)?|pln)/giu;
+  const amountWithWrittenWordsBeforePerSharePattern =
+    /(?:^|[^\d])(\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{1,4})?)\s*(?:zł(?:ot(?:y|a|ych|e))?|zl(?:otych)?|pln)(?:\s*(?:_[^_\n]{0,120}_|\([^)]{0,120}\)))?\s*(?:brutto\s*)?(?:na|\/)\s*(?:(?:jedn(?:ą|a)|1)\s*)?akcj/giu;
+  const naturalAmountAfterPerSharePattern =
+    /(?:na|dla)\s*(?:(?:jedn(?:ą|a)|1)\s*)?akcj[ęe]\s*(?:będzie\s+)?(?:przypadać|przypada|wynosi|w\s+wysokości)?\s*(?:kwota\s*)?(\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{1,4})?)\s*(?:zł(?:ot(?:y|a|ych|e))?|zl(?:otych)?|pln)/giu;
   const amounts: ParsedDividendAmount[] = [];
 
   for (const pattern of [
@@ -662,6 +706,8 @@ const getDividendAmounts = (text: string): ParsedDividendAmount[] => {
     unicodeAmountAfterPerSharePattern,
     labeledAmountAfterPerSharePattern,
     descriptiveAmountAfterPerSharePattern,
+    amountWithWrittenWordsBeforePerSharePattern,
+    naturalAmountAfterPerSharePattern,
   ]) {
     for (const match of text.matchAll(pattern)) {
       const amountText = match[1] ?? "";
@@ -723,6 +769,7 @@ const getAdvanceAdjustedDividend = (
 
 const getUpcomingDividendEvents = (text: string): ParsedCorporateEvent[] => {
   if (!/dywidend/i.test(text)) return [];
+  const documentStatus = getDividendStatus(text);
 
   const sectionMatches = Array.from(
     text.matchAll(
@@ -767,8 +814,8 @@ const getUpcomingDividendEvents = (text: string): ParsedCorporateEvent[] => {
       300
     );
     const sectionStatus = getDividendStatus(section);
-    const dividendStatus =
-      sectionStatus === "UNKNOWN" ? getDividendStatus(statusContext) : sectionStatus;
+    const contextStatus = sectionStatus === "UNKNOWN" ? getDividendStatus(statusContext) : sectionStatus;
+    const dividendStatus = contextStatus === "UNKNOWN" ? documentStatus : contextStatus;
 
     return amounts.flatMap((entry, index) => {
       const localContextAfter = section.slice(entry.index, entry.index + 260);

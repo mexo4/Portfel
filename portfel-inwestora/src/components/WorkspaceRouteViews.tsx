@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState } from "react";
 import AssetTable from "@/components/AssetTable";
 import ConfigurableDashboard from "@/components/ConfigurableDashboard";
 import CorporateEventsPanel from "@/components/CorporateEventsPanel";
+import GpwEventsWorkspace from "@/components/GpwEventsWorkspace";
 import UpcomingDividendsPanel from "@/components/UpcomingDividendsPanel";
 import WatchlistWorkspace from "@/components/WatchlistWorkspace";
 import PortfolioCharts from "@/components/PortfolioCharts";
@@ -106,7 +107,7 @@ export function WorkspaceInstrumentsPage() {
   return <div className="workspace-page workspace-instruments-page">{workspace.isAllPortfoliosSelected ? <section className="panel"><p className="eyebrow">Instrumenty</p><h2 className="section-title">Wybierz portfel docelowy</h2><p className="section-copy">Wyszukiwanie pozostaje dostępne, ale zapis instrumentu wymaga konkretnego portfela.</p><Link href={workspace.getReadHref("/portfolios")} className="ghost-button">Wybierz portfel</Link></section> : workspace.assetEntryWorkspace}</div>;
 }
 export function WorkspaceWatchlistPage() { return <WatchlistWorkspace />; }
-export function WorkspaceEventsPage() { const workspace = usePortfolioWorkspace(); return <div className="workspace-page"><CorporateEventsPanel portfolioId={workspace.portfolioScope.mode === "CUSTOM" ? "custom" : workspace.isAllRealPortfoliosSelected ? "all" : workspace.activePortfolioId} portfolioIds={workspace.portfolioScope.mode === "CUSTOM" ? workspace.selectedPortfolioIds : undefined} /></div>; }
+export function WorkspaceEventsPage() { const workspace = usePortfolioWorkspace(); return <div className="workspace-page"><GpwEventsWorkspace portfolioId={workspace.portfolioScope.mode === "CUSTOM" ? "custom" : workspace.isAllRealPortfoliosSelected ? "all" : workspace.activePortfolioId} portfolioIds={workspace.portfolioScope.mode === "CUSTOM" ? workspace.selectedPortfolioIds : undefined} /></div>; }
 export function WorkspaceGeneralMeetingsPage() { const workspace = usePortfolioWorkspace(); return <div className="workspace-page"><CorporateEventsPanel portfolioId={workspace.portfolioScope.mode === "CUSTOM" ? "custom" : workspace.isAllRealPortfoliosSelected ? "all" : workspace.activePortfolioId} portfolioIds={workspace.portfolioScope.mode === "CUSTOM" ? workspace.selectedPortfolioIds : undefined} variant="general-meetings" /></div>; }
 export function WorkspaceSettingsPage() { return <div className="workspace-page workspace-settings-page">{usePortfolioWorkspace().settingsWorkspace}</div>; }
 function SelectedPortfolioOverview() {

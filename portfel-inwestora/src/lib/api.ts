@@ -250,6 +250,20 @@ export const fetchGeneralMeetings = async ({
   );
 };
 
+export const fetchDividendCalendar = async ({
+  scope = "all",
+  signal,
+}: {
+  scope?: import("@/lib/corporate-events").DividendCalendarScope;
+  signal?: AbortSignal;
+}) => {
+  const params = new URLSearchParams({ scope });
+  return requestJson<import("@/lib/corporate-events").DividendCalendarResponse>(
+    `/api/dividend-calendar?${params.toString()}`,
+    { signal }
+  );
+};
+
 export const fetchWatchlist = async (signal?: AbortSignal) =>
   requestJson<{ items: WatchlistItem[] }>("/api/watchlist", { signal });
 

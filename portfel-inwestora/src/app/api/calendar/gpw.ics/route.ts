@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { parseIcalCategories, serializeIcal } from "@/lib/gpw-ical";
+import { parseIcalCategories, parseIcalTickers, serializeIcal } from "@/lib/gpw-ical";
 import { readPublicIcalEvents } from "@/lib/server/public-gpw-ical";
 
 export const runtime = "nodejs";
@@ -26,7 +26,8 @@ const addMonths = (value: string, months: number) => {
 export async function GET(request: Request) {
   const url = new URL(request.url);
   const categories = parseIcalCategories(url.searchParams.get("categories"));
-  if (!categories) {
+  const tickers = parseIcalTickers(url.searchParams.get("tickers"));
+  if (!categories || tickers === null) {
     return NextResponse.json({ error: "Wybierz reports, dividends i/lub meetings." }, {
       status: 400, headers: { "Cache-Control": "no-store" },
     });
@@ -35,8 +36,8 @@ export async function GET(request: Request) {
   const from = addDays(today, -60);
   const to = addMonths(today, 15);
   try {
-    const events = await readPublicIcalEvents(from, to, categories);
-    const body = serializeIcal(events, categories);
+    const events = await readPublicIcalEvents(from, to, categories, tickers);
+    const body = serializeIcal(events, categories, tickers);
     return new NextResponse(body, {
       status: 200,
       headers: {

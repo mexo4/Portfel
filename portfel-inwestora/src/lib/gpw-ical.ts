@@ -45,10 +45,30 @@ export const parseIcalCategories = (value: string | null): IcalCategory[] | null
   return ICAL_CATEGORIES.filter((category) => requested.includes(category));
 };
 
-export const getIcalSubscriptionUrl = (categories: readonly IcalCategory[]) => {
+/** Empty list = whole GPW. Malformed or excessive ticker filters must never broaden the feed. */
+export const parseIcalTickers = (value: string | null): string[] | null => {
+  if (value === null) return [];
+  if (value.length < 1 || value.length > 390) return null;
+  const parts = value.split(",").map((item) => item.trim().toUpperCase());
+  if (parts.some((ticker) => !/^[A-Z0-9]{1,12}$/.test(ticker))) return null;
+  const unique = [...new Set(parts)].sort();
+  return unique.length <= 30 ? unique : null;
+};
+
+export const ICAL_COLORS: Record<IcalCategory, { css: string; ical: string }> = {
+  reports: { css: "#4169e1", ical: "royalblue" },
+  dividends: { css: "#22a663", ical: "mediumseagreen" },
+  meetings: { css: "#ed8a23", ical: "darkorange" },
+};
+
+export const getIcalSubscriptionUrl = (categories: readonly IcalCategory[], tickers: readonly string[] = []) => {
   const ordered = ICAL_CATEGORIES.filter((category) => categories.includes(category));
   if (ordered.length === 0) throw new Error("Wybierz kategorię kalendarza.");
-  return `https://mexo.com.pl/api/calendar/gpw.ics?categories=${ordered.join(",")}`;
+  const normalized = tickers.length === 0 ? [] : parseIcalTickers(tickers.join(","));
+  if (normalized === null || (tickers.length > 0 && normalized.length === 0)) {
+    throw new Error("Niepoprawna lista spółek.");
+  }
+  return `https://mexo.com.pl/api/calendar/gpw.ics?categories=${ordered.join(",")}${normalized.length ? `&tickers=${normalized.join(",")}` : ""}`;
 };
 
 export const isValidIcalDate = (value: unknown): value is string => {
@@ -174,15 +194,20 @@ export const toIcalMilestones = (row: IcalSourceRow, from: string, to: string): 
 
 const utcStamp = (timestamp: string) => new Date(timestamp).toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
 
-export const serializeIcal = (events: readonly IcalMilestone[], categories: readonly IcalCategory[]) => {
-  const source = getIcalSubscriptionUrl(categories);
+export const serializeIcal = (
+  events: readonly IcalMilestone[], categories: readonly IcalCategory[], tickers: readonly string[] = []
+) => {
+  const source = getIcalSubscriptionUrl(categories, tickers);
   const chosen = ICAL_CATEGORIES.filter((category) => categories.includes(category));
-  const title = `Mexo — GPW (${chosen.join(" + ")})`;
+  const title = `Mexo — GPW (${chosen.join(" + ")})${tickers.length ? ` — ${tickers.join(", ")}` : ""}`;
+  const calendarColor = chosen.length === 1 ? ICAL_COLORS[chosen[0]!]!.ical : "slategray";
   const lines = [
     "BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Mexo//GPW Calendar//PL",
     "CALSCALE:GREGORIAN", "REFRESH-INTERVAL;VALUE=DURATION:PT6H", "X-PUBLISHED-TTL:PT6H",
     `NAME:${escapeIcalText(title)}`, `X-WR-CALNAME:${escapeIcalText(title)}`,
-    "X-WR-TIMEZONE:Europe/Warsaw", `SOURCE;VALUE=URI:${source}`,
+    "X-WR-TIMEZONE:Europe/Warsaw", `COLOR:${calendarColor}`,
+    ...(chosen.length === 1 ? [`X-APPLE-CALENDAR-COLOR:${ICAL_COLORS[chosen[0]!]!.css}`] : []),
+    `SOURCE;VALUE=URI:${source}`,
   ];
   const seen = new Set<string>();
   for (const event of [...events].sort((a, b) => a.date.localeCompare(b.date) || a.uid.localeCompare(b.uid))) {
@@ -198,6 +223,7 @@ export const serializeIcal = (events: readonly IcalMilestone[], categories: read
       `SUMMARY:${escapeIcalText(event.summary)}`,
       `DESCRIPTION:${escapeIcalText(event.description)}`,
       `URL:${event.sourceUrl}`, `CATEGORIES:${event.category.toUpperCase()}`,
+      `COLOR:${ICAL_COLORS[event.category].ical}`,
       `STATUS:${event.status}`, "TRANSP:TRANSPARENT", "END:VEVENT",
     );
   }

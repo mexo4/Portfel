@@ -1,18 +1,52 @@
-.root { border: 1px solid #d6e5e1; border-radius: 22px; margin: 8px 0 48px; padding: clamp(22px, 3vw, 35px); background: #f3f9f6; color: #16363c; }
-.head h2 { font-size: clamp(1.55rem, 3.2vw, 2.4rem); letter-spacing: -.05em; margin: 7px 0 12px; }
-.head p:not(.eyebrow) { max-width: 740px; font-size: .88rem; line-height: 1.65; color: #58717a; }
+.root { border: 1px solid #d6e5e1; border-radius: 22px; margin: 8px 0 48px; padding: clamp(20px, 3vw, 34px); background: #f3f9f6; color: #16363c; }
+.embedded { margin: 8px 0 22px; }
+.head h2 { font-size: clamp(1.45rem, 3vw, 2.15rem); letter-spacing: -.045em; margin: 7px 0 12px; line-height: 1.13; }
+.head p:not(.eyebrow) { max-width: 730px; font-size: .88rem; line-height: 1.6; color: #58717a; }
 .eyebrow { margin: 0; color: #0b8070; letter-spacing: .13em; font-size: .7rem; font-weight: 800; }
-.choices { display: flex; flex-wrap: wrap; gap: 10px; margin: 20px 0; }
-.choice { display: inline-flex; gap: 10px; align-items: center; border: 1px solid #cadaD5; border-radius: 10px; background: #fff; padding: 12px 14px; font-size: .84rem; cursor: pointer; font-weight: 700; }
-.choice input { accent-color: #097c6e; width: 17px; height: 17px; }
-.actions { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 13px; }
-.primary, .secondary { display: inline-flex; align-items: center; border: 1px solid #0d796c; padding: 12px 16px; border-radius: 10px; text-decoration: none; font: inherit; font-size: .84rem; font-weight: 750; cursor: pointer; }
+.choices { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin: 20px 0; }
+.choice { display: flex; gap: 9px; align-items: center; border: 1px solid #cbdad5; border-radius: 12px; background: #fff; padding: 13px 11px; font-size: .83rem; cursor: pointer; min-width: 0; }
+.choice input { accent-color: #097c6e; width: 17px; height: 17px; flex: none; }
+.choice strong, .choice small { display: block; }
+.choice strong { font-size: .82rem; }
+.choice small { font-weight: 450; font-size: .7rem; color: #597279; margin-top: 4px; line-height: 1.35; }
+.dot { display: inline-block; width: 11px; height: 11px; border-radius: 50%; background: #63748a; flex: none; }
+.reports .dot, .reportsDot { background: #4169e1; }
+.dividends .dot, .dividendsDot { background: #22a663; }
+.meetings .dot, .meetingsDot { background: #ed8a23; }
+.issuerSection { border: 1px solid #d0e0da; background: #fff; padding: 16px; border-radius: 12px; margin: 16px 0; }
+.fieldTitle { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; margin-bottom: 12px; }
+.fieldTitle strong { font-size: .95rem; }
+.fieldTitle span { color: #62747b; font-size: .75rem; }
+.chips { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; margin-bottom: 13px; }
+.chip { border: 1px solid #9bc8bb; border-radius: 20px; background: #e9f6f0; color: #15594f; font-weight: 700; padding: 7px 11px; cursor: pointer; }
+.chip span { margin-left: 6px; }
+.clear { border: 0; background: transparent; text-decoration: underline; color: #37625d; cursor: pointer; font-size: .77rem; }
+.searchWrap { position: relative; max-width: 530px; }
+.searchLabel { display: block; color: #49666b; font-size: .77rem; font-weight: 700; margin-bottom: 7px; }
+.search { display: block; box-sizing: border-box; width: 100%; background: #fff; color: #16363c; border: 1px solid #bed2ce; padding: 11px; border-radius: 9px; font: inherit; font-size: .83rem; }
+.suggestions { margin: 4px 0 0; padding: 4px; list-style: none; position: absolute; left: 0; right: 0; z-index: 20; max-height: 240px; overflow: auto; background: #fff; box-shadow: 0 12px 25px #142d3020; border: 1px solid #bfdbd3; border-radius: 9px; }
+.suggestions button { width: 100%; text-align: left; display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; border: none; background: transparent; padding: 10px; border-radius: 7px; color: #16363c; cursor: pointer; }
+.suggestions button:hover, .suggestions button:focus-visible { background: #e7f4ef; }
+.suggestions span { color: #60747b; font-size: .8rem; }
+.searchNote { font-size: .73rem; color: #6b7982; }
+.searchError { font-size: .75rem; color: #a02d2d; }
+.privacy { font-size: .73rem; color: #71848b; line-height: 1.5; margin: 11px 0 0; }
+.actions { display: flex; flex-wrap: wrap; gap: 10px; margin: 16px 0 12px; }
+.primary, .secondary { display: inline-flex; align-items: center; border: 1px solid #0d796c; padding: 11px 14px; border-radius: 10px; text-decoration: none; font: inherit; font-size: .83rem; font-weight: 750; cursor: pointer; }
 .primary { color: #fff; background: #0d796c; }
 .primary:disabled { opacity: .5; cursor: not-allowed; }
 .secondary { color: #09685f; background: #fff; }
 .urlLabel { display: block; font-size: .72rem; font-weight: 800; margin: 13px 0 6px; }
 .url { display: block; min-width: 0; width: 100%; box-sizing: border-box; border: 1px solid #c6d7d3; border-radius: 9px; padding: 12px; color: #274a50; background: #fff; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: .76rem; }
-.message { color: #087366; min-height: 18px; font-size: .75rem; margin: 8px 0; }
+.message { color: #087366; font-size: .75rem; margin: 8px 0; }
+.separate { margin-top: 23px; border-top: 1px solid #d5e3de; padding-top: 19px; }
+.separate h3 { font-size: 1rem; margin: 0 0 6px; }
+.separate p { color: #546e73; font-size: .78rem; line-height: 1.55; margin: 0 0 13px; }
+.separateList { display: grid; gap: 8px; }
+.separateRow { display: flex; align-items: center; gap: 11px; flex-wrap: wrap; background: #fff; padding: 11px 14px; border: 1px solid #dae7e1; border-radius: 10px; }
+.separateRow strong { font-size: .82rem; flex: 1; }
+.separateRow button, .separateRow a { background: transparent; color: #08796b; border: 0; font: inherit; font-size: .77rem; font-weight: 700; text-decoration: underline; cursor: pointer; }
 .help, .footnote { font-size: .75rem; line-height: 1.65; color: #506972; }
 .help a { color: #08796b; font-weight: 800; }
 .footnote { margin-bottom: 0; padding-top: 10px; border-top: 1px solid #d5e3de; }
+@media(max-width: 700px) { .choices { grid-template-columns: 1fr; } .root { border-radius: 15px; } }

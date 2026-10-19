@@ -18,9 +18,10 @@ const TYPES: Record<IcalCategory, IcalKind[]> = {
 
 /** Reads public GPW issuers only, never account, portfolio, or watchlist tables. */
 const loadIcalWindow = unstable_cache(
-  async (from: string, to: string, key: string): Promise<IcalMilestone[]> => {
+  async (from: string, to: string, key: string, tickerKey: string): Promise<IcalMilestone[]> => {
     const categories = key.split(",") as IcalCategory[];
     const types = categories.flatMap((category) => TYPES[category]);
+    const tickers = tickerKey ? tickerKey.split(",") : [];
     const rows = await query<IcalSourceRow>(
       `
         SELECT event.id, issuer.ticker, issuer.company_name,
@@ -43,6 +44,7 @@ const loadIcalWindow = unstable_cache(
           LIMIT 1
         ) AS source ON TRUE
         WHERE issuer.market = 'GPW'
+          AND ($5::text[] IS NULL OR UPPER(issuer.ticker) = ANY($5::text[]))
           AND event.event_type = ANY($3::text[])
           AND (event.active = TRUE OR event.status = 'CANCELLED')
           AND (
@@ -53,18 +55,21 @@ const loadIcalWindow = unstable_cache(
         ORDER BY event.event_date ASC, issuer.ticker ASC, event.id ASC
         LIMIT $4
       `,
-      [from, to, types, ROW_LIMIT + 1],
+      [from, to, types, ROW_LIMIT + 1, tickers.length ? tickers : null],
     );
     // Never silently publish a seemingly complete but cut-off subscription feed.
     if (rows.length > ROW_LIMIT) throw new Error("GPW_ICAL_RESULT_LIMIT");
     return rows.flatMap((row) => toIcalMilestones(row, from, to));
   },
-  ["mexo-public-gpw-ical-v1"],
+  ["mexo-public-gpw-ical-v2"],
   { revalidate: 5 * 60 },
 );
 
-export const readPublicIcalEvents = (from: string, to: string, categories: readonly IcalCategory[]) => {
+export const readPublicIcalEvents = (
+  from: string, to: string, categories: readonly IcalCategory[], tickers: readonly string[] = []
+) => {
   const key = ICAL_CATEGORIES.filter((category) => categories.includes(category)).join(",");
   if (!key) throw new Error("GPW_ICAL_EMPTY_SELECTION");
-  return loadIcalWindow(from, to, key);
+  const tickerKey = tickers.join(",");
+  return loadIcalWindow(from, to, key, tickerKey);
 };

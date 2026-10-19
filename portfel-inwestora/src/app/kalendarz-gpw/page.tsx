@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import PublicCalendarSubscription from "@/components/PublicCalendarSubscription";
 import {
   buildGpwCalendarGrid,
   getCalendarMonth,
@@ -157,6 +158,8 @@ export default async function PublicGpwCalendarPage({ searchParams }: PageProps)
           <span className={styles.heroVisualBottom}>01 / KALENDARZ GPW</span>
         </div>
       </section>
+
+      <PublicCalendarSubscription />
 
       <section id="kalendarz" className={styles.calendarSection} aria-labelledby="calendar-title">
         <div className={styles.sectionHeading}>

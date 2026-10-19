@@ -1,0 +1,18 @@
+.root { border: 1px solid #d6e5e1; border-radius: 22px; margin: 8px 0 48px; padding: clamp(22px, 3vw, 35px); background: #f3f9f6; color: #16363c; }
+.head h2 { font-size: clamp(1.55rem, 3.2vw, 2.4rem); letter-spacing: -.05em; margin: 7px 0 12px; }
+.head p:not(.eyebrow) { max-width: 740px; font-size: .88rem; line-height: 1.65; color: #58717a; }
+.eyebrow { margin: 0; color: #0b8070; letter-spacing: .13em; font-size: .7rem; font-weight: 800; }
+.choices { display: flex; flex-wrap: wrap; gap: 10px; margin: 20px 0; }
+.choice { display: inline-flex; gap: 10px; align-items: center; border: 1px solid #cadaD5; border-radius: 10px; background: #fff; padding: 12px 14px; font-size: .84rem; cursor: pointer; font-weight: 700; }
+.choice input { accent-color: #097c6e; width: 17px; height: 17px; }
+.actions { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 13px; }
+.primary, .secondary { display: inline-flex; align-items: center; border: 1px solid #0d796c; padding: 12px 16px; border-radius: 10px; text-decoration: none; font: inherit; font-size: .84rem; font-weight: 750; cursor: pointer; }
+.primary { color: #fff; background: #0d796c; }
+.primary:disabled { opacity: .5; cursor: not-allowed; }
+.secondary { color: #09685f; background: #fff; }
+.urlLabel { display: block; font-size: .72rem; font-weight: 800; margin: 13px 0 6px; }
+.url { display: block; min-width: 0; width: 100%; box-sizing: border-box; border: 1px solid #c6d7d3; border-radius: 9px; padding: 12px; color: #274a50; background: #fff; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: .76rem; }
+.message { color: #087366; min-height: 18px; font-size: .75rem; margin: 8px 0; }
+.help, .footnote { font-size: .75rem; line-height: 1.65; color: #506972; }
+.help a { color: #08796b; font-weight: 800; }
+.footnote { margin-bottom: 0; padding-top: 10px; border-top: 1px solid #d5e3de; }

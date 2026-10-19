@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import PublicCalendarSubscription from "@/components/PublicCalendarSubscription";
 import {
   getDividendDateKindLabel,
   getDividendHref,
@@ -243,6 +244,8 @@ export default async function PublicDividendCalendarPage({ searchParams }: PageP
           <div className={styles.asideFooter}>DYWIDENDY <span>{view === "year" ? String(year) : "GPW"}</span></div>
         </aside>
       </section>
+
+      <PublicCalendarSubscription />
 
       <section id="dywidendy" className={styles.calendarSection}>
         <div className={styles.sectionHeading}>

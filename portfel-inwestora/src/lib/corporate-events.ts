@@ -160,6 +160,8 @@ export type GeneralMeetingsResponse = {
 
 export type DividendCalendarScope = GeneralMeetingScope;
 
+export const GENERAL_MEETING_WINDOW_DAYS = 60;
+
 export type DividendCalendarResponse = {
   events: CorporateEvent[];
   scope: DividendCalendarScope;
@@ -1067,7 +1069,7 @@ export const getDaysUntilCorporateEvent = (eventDate: string, now = new Date()) 
   return Math.round((target - today) / 86_400_000);
 };
 
-const getWarsawDate = (now = new Date()) => {
+export const getWarsawDate = (now = new Date()) => {
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Europe/Warsaw",
     year: "numeric",
@@ -1076,6 +1078,20 @@ const getWarsawDate = (now = new Date()) => {
   }).formatToParts(now);
   const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
   return `${value.year}-${value.month}-${value.day}`;
+};
+
+export const addCalendarDays = (date: string, days: number) => {
+  const value = new Date(`${date}T12:00:00.000Z`);
+  value.setUTCDate(value.getUTCDate() + days);
+  return value.toISOString().slice(0, 10);
+};
+
+/** Calendar-day difference in Warsaw; independent from browser/server timezone. */
+export const getDaysUntilWarsawDate = (date: string, now = new Date()) => {
+  const today = getWarsawDate(now);
+  const start = new Date(`${today}T12:00:00.000Z`).getTime();
+  const target = new Date(`${date}T12:00:00.000Z`).getTime();
+  return Math.round((target - start) / 86_400_000);
 };
 
 /**

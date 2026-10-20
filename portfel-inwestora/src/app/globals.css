@@ -6366,17 +6366,61 @@ textarea {
 
 .corporate-event-registration {
   display: grid;
-  gap: 1px;
-  margin-top: 3px;
-  padding-left: 9px;
-  border-left: 2px solid rgba(13, 103, 98, 0.24);
-  color: #314d55;
-  font-size: 0.76rem;
-  line-height: 1.35;
+  grid-template-columns: 30px minmax(0, 1fr);
+  gap: 7px 10px;
+  margin-top: 7px;
+  padding: 10px 12px;
+  border: 1px solid rgba(13, 103, 98, 0.18);
+  border-radius: 10px;
+  color: #244c50;
+  background: rgba(212, 241, 234, 0.42);
+  font-size: 0.78rem;
+  line-height: 1.4;
 }
 
-.corporate-event-registration > span {
-  font-weight: 700;
+.corporate-event-registration.is-missing {
+  border-color: rgba(20, 35, 48, 0.12);
+  color: var(--muted);
+  background: rgba(20, 35, 48, 0.025);
+}
+
+.corporate-event-registration-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  color: #0c746c;
+  background: rgba(255, 255, 255, 0.74);
+}
+
+.corporate-event-registration-icon svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.corporate-event-registration-copy {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.corporate-event-registration-copy strong {
+  font-size: 0.7rem;
+  letter-spacing: 0.035em;
+  text-transform: uppercase;
+}
+
+.corporate-event-registration-copy > time,
+.corporate-event-registration-copy > span {
+  color: var(--text);
+  font-size: 0.9rem;
+  font-weight: 800;
 }
 
 .corporate-event-registration time {
@@ -6384,10 +6428,17 @@ textarea {
   font-variant-numeric: tabular-nums;
 }
 
-.corporate-event-registration > small {
+.corporate-event-registration-copy small {
+  color: #0b6963;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.corporate-event-registration-guidance {
+  grid-column: 2;
   color: var(--muted);
-  font-size: 0.7rem;
-  line-height: 1.35;
+  font-size: 0.68rem;
+  line-height: 1.4;
 }
 
 .corporate-event-source {

@@ -195,11 +195,14 @@ export const toIcalMilestones = (row: IcalSourceRow, from: string, to: string): 
 const utcStamp = (timestamp: string) => new Date(timestamp).toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
 
 export const serializeIcal = (
-  events: readonly IcalMilestone[], categories: readonly IcalCategory[], tickers: readonly string[] = []
+  events: readonly IcalMilestone[],
+  categories: readonly IcalCategory[],
+  tickers: readonly string[] = [],
+  options?: { sourceUrl?: string; title?: string },
 ) => {
-  const source = getIcalSubscriptionUrl(categories, tickers);
+  const source = options?.sourceUrl ?? getIcalSubscriptionUrl(categories, tickers);
   const chosen = ICAL_CATEGORIES.filter((category) => categories.includes(category));
-  const title = `Mexo — GPW (${chosen.join(" + ")})${tickers.length ? ` — ${tickers.join(", ")}` : ""}`;
+  const title = options?.title ?? `Mexo — GPW (${chosen.join(" + ")})${tickers.length ? ` — ${tickers.join(", ")}` : ""}`;
   const calendarColor = chosen.length === 1 ? ICAL_COLORS[chosen[0]!]!.ical : "slategray";
   const lines = [
     "BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Mexo//GPW Calendar//PL",

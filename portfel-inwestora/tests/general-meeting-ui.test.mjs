@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { getDashboardUpcomingEvents } from "../src/lib/dashboard-read-model.ts";
+import { addCalendarDays, getDaysUntilWarsawDate } from "../src/lib/corporate-events.ts";
 
 const readSource = (relativePath) =>
   readFile(new URL(`../${relativePath}`, import.meta.url), "utf8");
@@ -27,11 +28,27 @@ test("Wydarzenia GPW show meeting time, registration date and investor guidance"
   const panel = await readSource("src/components/CorporateEventsPanel.tsx");
 
   assert.match(panel, /event\.eventType === "GENERAL_MEETING"/);
-  assert.match(panel, /Dzień rejestracji:/);
-  assert.match(panel, /Data wskazana w ogłoszeniu emitenta · szczegóły uczestnictwa sprawdź u brokera/);
+  assert.match(panel, /Dzień rejestracji uczestnictwa/);
+  assert.match(panel, /Nie podano daty rejestracji/);
+  assert.match(panel, /Dzień rejestracji minął/);
   assert.match(panel, /godz\. \{formatEventTime\(event\.eventTime\)\}/);
   assert.match(panel, /Termin zmieniony/);
   assert.doesNotMatch(panel, /Brak potwierdzonych przyszłych terminów raportów/);
+});
+
+test("WZA range and registration countdown use exact Warsaw calendar days", async () => {
+  const [api, panel] = await Promise.all([
+    readSource("src/app/api/general-meetings/route.ts"),
+    readSource("src/components/CorporateEventsPanel.tsx"),
+  ]);
+  assert.equal(addCalendarDays("2026-10-19", 60), "2026-12-18");
+  assert.equal(getDaysUntilWarsawDate("2026-10-20", new Date("2026-10-19T22:30:00.000Z")), 0);
+  assert.equal(getDaysUntilWarsawDate("2026-10-21", new Date("2026-10-19T22:30:00.000Z")), 1);
+  assert.match(api, /GENERAL_MEETING_WINDOW_DAYS/);
+  assert.match(api, /addCalendarDays\(today, GENERAL_MEETING_WINDOW_DAYS\)/);
+  assert.doesNotMatch(api, /addCalendarMonths/);
+  assert.match(panel, /ZWZ i NWZ · 60 dni/);
+  assert.doesNotMatch(panel, /days: 365/);
 });
 
 test("cancelled meetings are not rendered as active upcoming events", async () => {

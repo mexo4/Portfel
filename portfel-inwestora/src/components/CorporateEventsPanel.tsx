@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import {
   getCorporateEventLabel,
   getDaysUntilCorporateEvent,
+  getDaysUntilWarsawDate,
   isCorporateEventSourceUnavailable,
   type CorporateEvent,
   type CorporateEventsResponse,
@@ -38,6 +39,15 @@ const getRelativeDateLabel = (eventDate: string) => {
   if (days === 0) return "dzisiaj";
   if (days === 1) return "jutro";
   return `za ${days} dni`;
+};
+
+const getRegistrationCountdown = (registrationDate?: string) => {
+  if (!registrationDate) return "Nie podano daty rejestracji";
+  const days = getDaysUntilWarsawDate(registrationDate);
+  if (days < 0) return "Dzień rejestracji minął";
+  if (days === 0) return "Dzień rejestracji przypada dzisiaj";
+  if (days === 1) return "Pozostał 1 dzień do dnia rejestracji";
+  return `Pozostało ${days} dni do dnia rejestracji`;
 };
 
 const formatEventTime = (eventTime: string) => {
@@ -88,7 +98,7 @@ export default function CorporateEventsPanel({ portfolioId, portfolioIds, varian
     const controller = new AbortController();
 
     const request = isMeetingView
-      ? fetchGeneralMeetings({ scope: meetingScope, days: 365, signal: controller.signal })
+      ? fetchGeneralMeetings({ scope: meetingScope, days: 60, signal: controller.signal })
           .then((response) => {
             if (!controller.signal.aborted) setMeetingSyncState(response.sourceState);
             return toEventsResponse(response);
@@ -124,7 +134,7 @@ export default function CorporateEventsPanel({ portfolioId, portfolioIds, varian
       try {
         const response = await fetchGeneralMeetings({
           scope: meetingScope,
-          days: 365,
+          days: 60,
           signal: controller.signal,
         });
         if (controller.signal.aborted) return;
@@ -172,7 +182,7 @@ export default function CorporateEventsPanel({ portfolioId, portfolioIds, varian
           <p className="eyebrow">Kalendarz GPW</p>
           <h2 className="section-title">{isMeetingView ? "Walne zgromadzenia" : "Wydarzenia GPW"}</h2>
         </div>
-        <span className="tag">{isMeetingView ? "ZWZ i NWZ · 12 miesięcy" : "raporty · WZA · 60 dni"}</span>
+        <span className="tag">{isMeetingView ? "ZWZ i NWZ · 60 dni" : "raporty · WZA · 60 dni"}</span>
       </div>
 
       {isMeetingView ? (
@@ -273,12 +283,17 @@ export default function CorporateEventsPanel({ portfolioId, portfolioIds, varian
                       </span>
                     ) : null}
                   </small>
-                  {isGeneralMeeting && registrationDate ? (
-                    <div className="corporate-event-registration">
-                      <span>
-                        Dzień rejestracji: <time dateTime={event.registrationDate}>{registrationDate.long}</time>
+                  {isGeneralMeeting ? (
+                    <div className={`corporate-event-registration ${registrationDate ? "has-date" : "is-missing"}`}>
+                      <span className="corporate-event-registration-icon" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" focusable="false"><path d="M7 2v3m10-3v3M4 9h16M5 4h14a1 1 0 0 1 1 1v15H4V5a1 1 0 0 1 1-1Zm3 9h3v3H8v-3Z" /></svg>
                       </span>
-                      <small>Data wskazana w ogłoszeniu emitenta · szczegóły uczestnictwa sprawdź u brokera</small>
+                      <span className="corporate-event-registration-copy">
+                        <strong>Dzień rejestracji uczestnictwa</strong>
+                        {registrationDate ? <time dateTime={event.registrationDate}>{registrationDate.long}</time> : <span>Nie podano</span>}
+                        <small>{getRegistrationCountdown(event.registrationDate)}</small>
+                      </span>
+                      <small className="corporate-event-registration-guidance">To nie jest automatycznie termin wszystkich formalności. Szczegóły uczestnictwa sprawdź w ogłoszeniu i u brokera.</small>
                     </div>
                   ) : null}
                 </div>

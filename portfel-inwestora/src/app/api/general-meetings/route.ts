@@ -6,31 +6,15 @@ import {
   synchronizeGlobalGeneralMeetings,
 } from "@/lib/server/corporate-events";
 import { getUserTrackedGpwInstruments } from "@/lib/server/espi";
-import type { GeneralMeetingScope, GeneralMeetingsResponse } from "@/lib/corporate-events";
+import {
+  GENERAL_MEETING_WINDOW_DAYS,
+  addCalendarDays,
+  getWarsawDate,
+  type GeneralMeetingScope,
+  type GeneralMeetingsResponse,
+} from "@/lib/corporate-events";
 
 export const runtime = "nodejs";
-
-const getWarsawDate = (date = new Date()) => {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Europe/Warsaw",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(date);
-  const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  return `${value.year}-${value.month}-${value.day}`;
-};
-
-const addCalendarMonths = (date: string, months: number) => {
-  const [year, month, day] = date.split("-").map(Number);
-  const targetMonth = month - 1 + months;
-  const targetYear = year + Math.floor(targetMonth / 12);
-  const normalizedMonth = ((targetMonth % 12) + 12) % 12;
-  const lastDay = new Date(Date.UTC(targetYear, normalizedMonth + 1, 0)).getUTCDate();
-  return new Date(Date.UTC(targetYear, normalizedMonth, Math.min(day, lastDay)))
-    .toISOString()
-    .slice(0, 10);
-};
 
 const getScope = (value: string | null): GeneralMeetingScope =>
   value === "watchlist" || value === "portfolio" ? value : "all";
@@ -93,9 +77,7 @@ export async function GET(request: Request) {
     const response: GeneralMeetingsResponse = {
       events: await getGlobalGeneralMeetings({
         fromDate: today,
-        // WZA is a market-wide calendar: it always shows the next twelve
-        // calendar months, rather than a caller-controlled 30/60/90-day slice.
-        toDate: addCalendarMonths(today, 12),
+        toDate: addCalendarDays(today, GENERAL_MEETING_WINDOW_DAYS),
         canonicalKeys,
       }),
       scope,

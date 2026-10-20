@@ -182,6 +182,27 @@ const schemaStatements = [
       ON password_reset_tokens(user_id)
   `,
   `
+    CREATE TABLE IF NOT EXISTS user_calendar_subscriptions (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      scope_mode TEXT NOT NULL,
+      categories_json TEXT NOT NULL,
+      portfolio_ids_json TEXT NOT NULL DEFAULT '[]',
+      manual_tickers_json TEXT NOT NULL DEFAULT '[]',
+      access_token TEXT NOT NULL UNIQUE,
+      token_hash TEXT NOT NULL UNIQUE,
+      token_version INTEGER NOT NULL DEFAULT 1,
+      revoked_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      CHECK (scope_mode IN ('ALL_GPW', 'PORTFOLIO', 'WATCHLIST', 'PORTFOLIO_AND_WATCHLIST', 'MANUAL'))
+    )
+  `,
+  "CREATE INDEX IF NOT EXISTS idx_calendar_subscriptions_user ON user_calendar_subscriptions(user_id, updated_at DESC)",
+  "CREATE INDEX IF NOT EXISTS idx_calendar_subscriptions_active_token ON user_calendar_subscriptions(token_hash) WHERE revoked_at IS NULL",
+  `
     CREATE TABLE IF NOT EXISTS market_cache (
       "key" TEXT PRIMARY KEY,
       payload_json TEXT NOT NULL,

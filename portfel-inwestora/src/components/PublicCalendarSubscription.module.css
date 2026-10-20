@@ -50,3 +50,34 @@
 .help a { color: #08796b; font-weight: 800; }
 .footnote { margin-bottom: 0; padding-top: 10px; border-top: 1px solid #d5e3de; }
 @media(max-width: 700px) { .choices { grid-template-columns: 1fr; } .root { border-radius: 15px; } }
+.saved { border: 1px solid #c9ded8; border-radius: 22px; margin: 8px 0 18px; padding: clamp(20px, 3vw, 32px); background: #fff; color: #16363c; }
+.savedHead, .builderHead { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.savedHead h3, .builderHead h3 { margin: 5px 0 0; font-size: 1.2rem; letter-spacing: -.025em; }
+.savedHead > span, .builderHead > span { color: #58717a; font-size: .75rem; }
+.savedIntro { max-width: 760px; color: #58717a; font-size: .82rem; line-height: 1.55; }
+.savedList { display: grid; gap: 10px; margin: 18px 0; }
+.savedCard { display: grid; grid-template-columns: minmax(170px, .8fr) minmax(220px, 1.2fr); gap: 10px 16px; padding: 14px; border: 1px solid #d5e3de; border-radius: 12px; background: #f8fbfa; }
+.savedCard > div:first-child { display: grid; gap: 4px; }
+.savedCard small { color: #64767c; font-size: .7rem; }
+.savedCard > input { min-width: 0; border: 1px solid #c7d8d4; border-radius: 8px; padding: 9px 10px; color: #36585e; background: #fff; font: .7rem ui-monospace, SFMono-Regular, Consolas, monospace; }
+.savedActions { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 7px; }
+.savedActions button, .savedActions a { border: 0; background: transparent; color: #08796b; font: inherit; font-size: .74rem; font-weight: 750; cursor: pointer; text-decoration: underline; }
+.savedActions .danger { color: #a13c3c; margin-left: auto; }
+.builder { margin-top: 22px; padding: 18px; border: 1px solid #cfe1dc; border-radius: 14px; background: #f3f9f6; }
+.formField { display: grid; gap: 6px; margin-top: 14px; color: #36585e; font-size: .75rem; font-weight: 750; }
+.formField input { width: 100%; box-sizing: border-box; border: 1px solid #bdd2cd; border-radius: 9px; padding: 11px; color: #16363c; background: #fff; font: inherit; }
+.scopeGrid, .portfolioGrid, .categoryGrid { margin: 16px 0 0; padding: 0; border: 0; }
+.scopeGrid legend, .portfolioGrid legend, .categoryGrid legend { margin-bottom: 8px; color: #36585e; font-size: .75rem; font-weight: 800; }
+.scopeGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.scopeGrid legend { grid-column: 1 / -1; }
+.scopeGrid label { display: flex; gap: 9px; align-items: flex-start; padding: 11px; border: 1px solid #cfddd9; border-radius: 10px; background: #fff; cursor: pointer; }
+.scopeGrid label.isSelected { border-color: #5da79b; box-shadow: 0 0 0 2px rgba(13, 121, 108, .08); }
+.scopeGrid strong, .scopeGrid small { display: block; }
+.scopeGrid strong { font-size: .78rem; }
+.scopeGrid small { margin-top: 3px; color: #687b80; font-size: .68rem; line-height: 1.35; }
+.portfolioGrid, .categoryGrid { display: flex; flex-wrap: wrap; gap: 8px 18px; }
+.portfolioGrid legend, .categoryGrid legend { width: 100%; }
+.portfolioGrid label, .categoryGrid label { font-size: .77rem; }
+.manualPicker { position: relative; margin-top: 14px; }
+.builderActions { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 18px; }
+@media(max-width:700px) { .saved { border-radius: 15px; } .savedCard { grid-template-columns: 1fr; } .savedActions { grid-column: 1; } .scopeGrid { grid-template-columns: 1fr; } .savedActions .danger { margin-left: 0; } }

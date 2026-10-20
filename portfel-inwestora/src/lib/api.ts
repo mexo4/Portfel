@@ -236,7 +236,7 @@ export const fetchCorporateEvents = async ({
 
 export const fetchGeneralMeetings = async ({
   scope = "all",
-  days = 365,
+  days = 60,
   signal,
 }: {
   scope?: import("@/lib/corporate-events").GeneralMeetingScope;

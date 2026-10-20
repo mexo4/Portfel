@@ -7,6 +7,7 @@ import {
   type IcalCategory,
 } from "@/lib/gpw-ical";
 import styles from "./PublicCalendarSubscription.module.css";
+import SavedCalendarSubscriptions from "@/components/SavedCalendarSubscriptions";
 
 const META: Record<IcalCategory, { title: string; description: string; css: string }> = {
   reports: { title: "Raporty okresowe", description: "Kwartalne, półroczne i roczne", css: "reports" },
@@ -28,8 +29,6 @@ export default function PublicCalendarSubscription({ embedded = false }: Props) 
 
   useEffect(() => {
     if (search.trim().length < 2) {
-      setMatches([]);
-      setSearchError("");
       return;
     }
     const controller = new AbortController();
@@ -81,6 +80,8 @@ export default function PublicCalendarSubscription({ embedded = false }: Props) 
   };
 
   return (
+    <>
+    {embedded ? <SavedCalendarSubscriptions /> : null}
     <section className={`${styles.root} ${embedded ? styles.embedded : ""}`} aria-labelledby={`${uid}-title`}>
       <div className={styles.head}>
         <p className={styles.eyebrow}>SUBSKRYPCJE ICALENDAR · GPW</p>
@@ -120,7 +121,7 @@ export default function PublicCalendarSubscription({ embedded = false }: Props) 
           <input id={`${uid}-search`} className={styles.search} type="search" value={search}
             onChange={(event) => setSearch(event.target.value)} autoComplete="off" maxLength={70}
             disabled={tickers.length >= 30} placeholder="Np. Dino, Orlen, XTB…" />
-          {matches.length > 0 ? (
+          {search.trim().length >= 2 && matches.length > 0 ? (
             <ul className={styles.suggestions} aria-label="Wyniki wyszukiwania spółek">
               {matches.map((issuer) => (
                 <li key={issuer.ticker}>
@@ -131,7 +132,7 @@ export default function PublicCalendarSubscription({ embedded = false }: Props) 
               ))}
             </ul>
           ) : search.trim().length >= 2 && !searchError ? <p className={styles.searchNote}>Brak wyników lub trwa wyszukiwanie.</p> : null}
-          {searchError ? <p className={styles.searchError} role="alert">{searchError}</p> : null}
+          {search.trim().length >= 2 && searchError ? <p className={styles.searchError} role="alert">{searchError}</p> : null}
         </div>
         <p className={styles.privacy}>Puste zaznaczenie oznacza cały rynek. Lista wybranych tickerów jest zapisana w publicznym adresie URL — nie ujawniaj linku, jeśli traktujesz tę listę jako prywatną.</p>
       </div>
@@ -163,5 +164,6 @@ export default function PublicCalendarSubscription({ embedded = false }: Props) 
       <p className={styles.help}><strong>Outlook:</strong> Kalendarz → Dodaj kalendarz → Subskrybuj z sieci Web → wklej adres HTTPS.</p>
       <p className={styles.footnote}>Użyj subskrypcji URL, nie jednorazowego importu .ics. Aktualizacje zależą od aplikacji (czasami ponad dobę). W kalendarzu są wyłącznie wydarzenia rozpoznane przez Mexo.</p>
     </section>
+    </>
   );
 }

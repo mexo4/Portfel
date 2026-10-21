@@ -150,7 +150,7 @@ test("global WZA projection is independent from portfolio membership and logs sy
   assert.match(provider, /synchronizeGlobalGeneralMeetings/);
   assert.match(provider, /corporate_events_projection_status/);
   assert.match(provider, /GENERAL_MEETING_PROJECTION_BATCH_SIZE = 100/);
-  assert.match(provider, /GENERAL_MEETING_PROJECTION_VERSION = 3/);
+  assert.match(provider, /GENERAL_MEETING_PROJECTION_VERSION = 4/);
   assert.match(provider, /report\.source_id NOT LIKE 'newconnect:%'/);
   assert.match(provider, /report\.published_at >= \$1/);
   assert.match(provider, /report\.category = 'GENERAL_MEETING'/);
@@ -161,7 +161,7 @@ test("global WZA projection is independent from portfolio membership and logs sy
   assert.doesNotMatch(provider, /ORDER BY report\.published_at ASC, report\.source_id ASC/);
   assert.match(provider, /SELECT id FROM corporate_event_instruments WHERE market = 'GPW'/);
   assert.match(api, /scope === "all"\s*\? \[\]/);
-  assert.match(api, /addCalendarDays\(today, GENERAL_MEETING_WINDOW_DAYS\)/);
+  assert.match(api, /addCalendarDays\(today, requestedDays\)/);
   assert.match(api, /instrument\.watched/);
   assert.match(api, /instrument\.held/);
   assert.match(api, /projection\.pending > 0/);

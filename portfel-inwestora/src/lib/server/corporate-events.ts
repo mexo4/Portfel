@@ -8,6 +8,7 @@ import {
   type CorporateEventType,
   type CorporateEventsResponse,
   getCorporateEventIdentityKey,
+  getStatutoryMeetingRegistrationDate,
   isCorporateEventSourceUnavailable,
   parseCorporateEventDocument,
   type ParsedCorporateEvent,
@@ -27,6 +28,7 @@ import {
 import { findGpwCatalogEntry } from "@/lib/server/gpw-catalog";
 import { getMarketCachePayload, setMarketCachePayload } from "@/lib/server/market-cache";
 import { fetchWithSystemTrust } from "@/lib/server/system-trust-fetch";
+import { readOfficialMeetingPdf } from "@/lib/server/general-meeting-pdf";
 import { normalizeText, uniqueBy } from "@/lib/utils";
 import type { PortfolioInstrument } from "@/types/portfolio";
 
@@ -1053,11 +1055,13 @@ const upsertParsedEvents = async (
               general_meeting_type = COALESCE($6, general_meeting_type),
               registration_date = CASE
                 WHEN $7::text IS NOT NULL THEN $7
+                WHEN event_date IS DISTINCT FROM $1 THEN NULL
                 WHEN registration_date_source = 'OFFICIAL' THEN registration_date
                 ELSE NULL
               END,
               registration_date_source = CASE
                 WHEN $7::text IS NOT NULL THEN 'OFFICIAL'
+                WHEN event_date IS DISTINCT FROM $1 THEN NULL
                 WHEN registration_date_source = 'OFFICIAL' THEN 'OFFICIAL'
                 ELSE NULL
               END,
@@ -1307,8 +1311,20 @@ const toCorporateEvent = (row: EventRow): CorporateEvent => ({
   fiscalPeriod: row.fiscal_period ?? undefined,
   fiscalYear: row.fiscal_year ?? undefined,
   generalMeetingType: row.general_meeting_type ?? undefined,
-  registrationDate: row.registration_date_source === "OFFICIAL"
-    ? row.registration_date ?? undefined
+  registrationDate: row.event_type === "GENERAL_MEETING"
+    ? row.registration_date_source === "OFFICIAL" && row.registration_date
+      ? row.registration_date
+      : getStatutoryMeetingRegistrationDate(row.event_date)
+    : undefined,
+  registrationDateSource: row.event_type === "GENERAL_MEETING"
+    ? row.registration_date_source === "OFFICIAL" && row.registration_date
+      ? "OFFICIAL"
+      : getStatutoryMeetingRegistrationDate(row.event_date)
+        ? "STATUTORY_CALCULATION"
+        : "UNKNOWN"
+    : undefined,
+  registrationDateConflict: row.event_type === "GENERAL_MEETING" && row.registration_date_source === "OFFICIAL" && !!row.registration_date
+    ? row.registration_date !== getStatutoryMeetingRegistrationDate(row.event_date)
     : undefined,
   dividendPerShare: row.dividend_per_share ?? undefined,
   dividendTotalPerShare: row.dividend_total_per_share ?? undefined,
@@ -1437,7 +1453,7 @@ export type GlobalGeneralMeetingSyncResult = {
   pending: number;
 };
 
-const GENERAL_MEETING_PROJECTION_VERSION = 3;
+const GENERAL_MEETING_PROJECTION_VERSION = 4;
 // A batch is deliberately small enough to keep the authenticated calendar API
 // responsive; the versioned queue continues on the next poll until empty.
 const GENERAL_MEETING_PROJECTION_BATCH_SIZE = 100;
@@ -1512,6 +1528,23 @@ export const synchronizeGlobalGeneralMeetings = ({
       `,
       [publishedAfter, GENERAL_MEETING_PROJECTION_VERSION, unmatchedRetryBefore, GENERAL_MEETING_PROJECTION_BATCH_SIZE, force]
     );
+    const attachmentRows = reports.length
+      ? await query<{ espi_report_id: string; name: string; source_url: string }>(
+          `SELECT espi_report_id, name, source_url FROM espi_report_attachments
+           WHERE espi_report_id = ANY($1::text[])
+             AND (media_type = 'application/pdf' OR name ~* '\\.pdf$' OR source_url ~* '\\.pdf($|[?])')
+           ORDER BY espi_report_id,
+             CASE WHEN name ~* '(ogłoszen|ogloszen|zwołan|zwolan|uczestnictw)' THEN 0 ELSE 1 END,
+             name`,
+          [reports.map((report) => report.id)]
+        )
+      : [];
+    const attachmentsByReport = new Map<string, typeof attachmentRows>();
+    for (const attachment of attachmentRows) {
+      const current = attachmentsByReport.get(attachment.espi_report_id) ?? [];
+      if (current.length < 2) current.push(attachment);
+      attachmentsByReport.set(attachment.espi_report_id, current);
+    }
 
     let created = 0;
     let duplicates = 0;
@@ -1530,6 +1563,28 @@ export const synchronizeGlobalGeneralMeetings = ({
 
         const events = parseCorporateEventDocument(`${report.source_title}\n${report.title}\n${report.body_text}`)
           .filter((event) => event.eventType === "GENERAL_MEETING");
+        if (events.length === 0 || events.some((event) => !event.registrationDate)) {
+          for (const attachment of attachmentsByReport.get(report.id) ?? []) {
+            try {
+              const text = await readOfficialMeetingPdf(attachment.source_url);
+              if (!text) continue;
+              const pdfEvents = parseCorporateEventDocument(text)
+                .filter((event) => event.eventType === "GENERAL_MEETING");
+              if (events.length === 0) {
+                events.push(...pdfEvents);
+              }
+              for (const event of events) {
+                const matching = pdfEvents.find((candidate) => candidate.eventDate === event.eventDate &&
+                  (!candidate.generalMeetingType || !event.generalMeetingType || candidate.generalMeetingType === event.generalMeetingType));
+                if (matching?.registrationDate) event.registrationDate = matching.registrationDate;
+              }
+              if (events.length > 0 && events.every((event) => event.registrationDate)) break;
+            } catch (attachmentError) {
+              diagnose({ provider: "global-espi-wza", sourceId: report.source_id,
+                phase: "attachment", error: attachmentError instanceof Error ? attachmentError.name : "unknown" });
+            }
+          }
+        }
         if (events.length === 0) {
           await updateGeneralMeetingProjectionStatus(report.id, "NO_EVENT");
           continue;
@@ -1663,7 +1718,7 @@ export const getGlobalGeneralMeetingSourceState = getGpwGeneralMeetingSyncState;
 
 export type GlobalDividendSyncResult = GlobalGeneralMeetingSyncResult;
 
-const DIVIDEND_PROJECTION_VERSION = 5;
+const DIVIDEND_PROJECTION_VERSION = 6;
 const DIVIDEND_PROJECTION_BATCH_SIZE = 100;
 const DIVIDEND_UNMATCHED_RETRY_MS = 7 * 24 * 60 * 60 * 1_000;
 const DIVIDEND_REPORT_CANDIDATE_SQL = `
@@ -1753,6 +1808,21 @@ export const synchronizeGlobalDividends = ({
       `,
       [publishedAfter, DIVIDEND_PROJECTION_VERSION, unmatchedRetryBefore, DIVIDEND_PROJECTION_BATCH_SIZE, force]
     );
+    const dividendAttachments = reports.length
+      ? await query<{ espi_report_id: string; name: string; source_url: string }>(
+          `SELECT espi_report_id, name, source_url FROM espi_report_attachments
+           WHERE espi_report_id = ANY($1::text[])
+             AND (media_type = 'application/pdf' OR name ~* '\\.pdf$')
+           ORDER BY espi_report_id,
+             CASE WHEN name ~* '(dywidend|zaliczk|uchwał|uchwal)' THEN 0 ELSE 1 END, name`,
+          [reports.map((report) => report.id)]
+        ) : [];
+    const dividendAttachmentsByReport = new Map<string, typeof dividendAttachments>();
+    for (const attachment of dividendAttachments) {
+      const current = dividendAttachmentsByReport.get(attachment.espi_report_id) ?? [];
+      if (current.length < 2) current.push(attachment);
+      dividendAttachmentsByReport.set(attachment.espi_report_id, current);
+    }
 
     let created = 0;
     let duplicates = 0;
@@ -1769,8 +1839,22 @@ export const synchronizeGlobalDividends = ({
           continue;
         }
 
-        const events = parseCorporateEventDocument(`${report.source_title}\n${report.title}\n${report.body_text}`)
+        let events = parseCorporateEventDocument(`${report.source_title}\n${report.title}\n${report.body_text}`)
           .filter((event) => event.eventType === "UPCOMING_DIVIDEND");
+        if (events.length === 0) {
+          for (const attachment of dividendAttachmentsByReport.get(report.id) ?? []) {
+            try {
+              const text = await readOfficialMeetingPdf(attachment.source_url);
+              if (!text) continue;
+              events = parseCorporateEventDocument(`${report.source_title}\n${text}`)
+                .filter((event) => event.eventType === "UPCOMING_DIVIDEND");
+              if (events.length) break;
+            } catch (attachmentError) {
+              diagnose({ provider: "global-espi-dividends", sourceId: report.source_id,
+                phase: "attachment", error: attachmentError instanceof Error ? attachmentError.name : "unknown" });
+            }
+          }
+        }
         if (events.length === 0) {
           await updateDividendProjectionStatus(report.id, "NO_EVENT");
           continue;

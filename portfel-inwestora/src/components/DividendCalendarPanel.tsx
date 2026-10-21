@@ -64,17 +64,30 @@ const isWithinFilter = (event: CorporateEvent, from: string, to: string) => {
 };
 
 const DividendSources = ({ event }: { event: CorporateEvent }) => {
+  const safeSourceUrl = (value: string) => {
+    try {
+      const url = new URL(value);
+      return url.protocol === "https:" || url.protocol === "http:" ? url.href : undefined;
+    } catch { return undefined; }
+  };
+  const getSourceLabel = (title?: string, publishedAt?: string) => {
+    const label = title?.trim();
+    if (label) return label;
+    const date = publishedAt && Number.isFinite(new Date(publishedAt).getTime())
+      ? formatDate(publishedAt.slice(0, 10)) : undefined;
+    return date ? `Oficjalny komunikat · ${date}` : "Oficjalny komunikat";
+  };
   const sources = Array.from(new Map(
     [event.source, ...(event.sources ?? [])]
-      .filter((source): source is NonNullable<CorporateEvent["source"]> => Boolean(source?.sourceUrl))
-      .map((source) => [source.sourceUrl, source])
+      .filter((source): source is NonNullable<CorporateEvent["source"]> => Boolean(source?.sourceUrl && safeSourceUrl(source.sourceUrl)))
+      .map((source) => [safeSourceUrl(source.sourceUrl), source])
   ).values());
   if (!sources.length) return null;
   const [primary, ...additional] = sources;
   return (
     <div className="dividend-calendar-sources">
-      <a className="corporate-event-source" href={primary!.sourceUrl} target="_blank" rel="noreferrer">
-        Źródło
+      <a className="corporate-event-source" href={primary!.sourceUrl} target="_blank" rel="noopener noreferrer">
+        {getSourceLabel(primary!.sourceTitle, primary!.sourcePublishedAt)}
       </a>
       {additional.length ? (
         <details>
@@ -82,8 +95,8 @@ const DividendSources = ({ event }: { event: CorporateEvent }) => {
           <ul>
             {additional.map((source) => (
               <li key={source.sourceUrl}>
-                <a href={source.sourceUrl} target="_blank" rel="noreferrer">
-                  {source.sourceTitle || "Oficjalny komunikat"}
+                <a href={source.sourceUrl} target="_blank" rel="noopener noreferrer">
+                  {getSourceLabel(source.sourceTitle, source.sourcePublishedAt)}
                 </a>
               </li>
             ))}
@@ -257,10 +270,8 @@ export default function DividendCalendarPanel() {
                   : "Kwota nieogłoszona"}</strong>
                 {event.dividendInstallment ? <span>Rata {event.dividendInstallment}</span> : null}
               </div>
-              <dl className="dividend-calendar-dates">
-                <div><dt>Dzień dywidendy</dt><dd>{event.recordDate ? formatDate(event.recordDate) : "Nie ogłoszono"}</dd></div>
-                <div><dt>Dzień wypłaty</dt><dd>{event.paymentDate ? formatDate(event.paymentDate) : "Nie ogłoszono"}</dd></div>
-              </dl>
+              <div className="dividend-calendar-date"><small>Dzień dywidendy</small><strong>{event.recordDate ? formatDate(event.recordDate) : "Nie ogłoszono"}</strong></div>
+              <div className="dividend-calendar-date"><small>Dzień wypłaty</small><strong>{event.paymentDate ? formatDate(event.paymentDate) : "Nie ogłoszono"}</strong></div>
               <span className={getStatusClass(event, today)}>{getStatusLabel(event, today)}</span>
               <DividendSources event={event} />
             </article>

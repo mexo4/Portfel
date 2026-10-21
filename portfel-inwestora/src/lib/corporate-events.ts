@@ -30,6 +30,8 @@ export const GENERAL_MEETING_ACTIONS = [
 
 export type GeneralMeetingAction = (typeof GENERAL_MEETING_ACTIONS)[number];
 
+export type GeneralMeetingRegistrationSource = "OFFICIAL" | "STATUTORY_CALCULATION" | "UNKNOWN";
+
 export type CorporateEventSourceType =
   | "ISSUER_CURRENT_REPORT"
   | "ISSUER_IR"
@@ -89,6 +91,8 @@ export type CorporateEvent = {
   fiscalYear?: number;
   generalMeetingType?: GeneralMeetingType;
   registrationDate?: string;
+  registrationDateSource?: GeneralMeetingRegistrationSource;
+  registrationDateConflict?: boolean;
   dividendPerShare?: number;
   dividendTotalPerShare?: number;
   dividendAdvancePerShare?: number;
@@ -165,7 +169,22 @@ export type GeneralMeetingsResponse = {
 
 export type DividendCalendarScope = GeneralMeetingScope;
 
-export const GENERAL_MEETING_WINDOW_DAYS = 60;
+export const GENERAL_MEETING_WINDOW_DAYS = 180;
+export const REPORT_WINDOW_DAYS = 365;
+export const CALENDAR_WINDOW_OPTIONS = [60, 180, 365] as const;
+export type CalendarWindowDays = (typeof CALENDAR_WINDOW_OPTIONS)[number];
+
+export const isCalendarWindowDays = (value: number): value is CalendarWindowDays =>
+  CALENDAR_WINDOW_OPTIONS.some((days) => days === value);
+
+/** Art. 406¹ KSH: calendar days, including weekends. Only call for a verified public-company WZA. */
+export const getStatutoryMeetingRegistrationDate = (meetingDate: string): string | undefined => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(meetingDate)) return undefined;
+  const date = new Date(`${meetingDate}T00:00:00.000Z`);
+  if (!Number.isFinite(date.getTime()) || date.toISOString().slice(0, 10) !== meetingDate) return undefined;
+  date.setUTCDate(date.getUTCDate() - 16);
+  return date.toISOString().slice(0, 10);
+};
 
 export type DividendCalendarResponse = {
   events: CorporateEvent[];
@@ -820,6 +839,13 @@ const getDividendRecordDate = (text: string) => {
   const directLabelDate =
     getDateAfterKeyword(
       text,
+      /dzie(?:ń|n)\s+nabycia\s+prawa\s+do\s+(?:dywidendy|zaliczki)\s*:?/iu,
+      80,
+      "first",
+      true
+    ) ??
+    getDateAfterKeyword(
+      text,
       /dniem\s+nabycia\s+prawa\s+do\s+(?:dywidendy|zaliczki)\s+(?:jest|będzie)\s+dzie[ńn]/iu,
       100,
       "first",
@@ -901,7 +927,7 @@ const getUpcomingDividendEvents = (text: string): ParsedCorporateEvent[] => {
         }))
       : [{ section: text, statusContext: "" }];
 
-  const candidates = sections.flatMap(({ section, statusContext }) => {
+  const candidates = sections.flatMap<ParsedCorporateEvent>(({ section, statusContext }) => {
     const parsedAmounts = getDividendAmounts(section);
     if (parsedAmounts.length === 0 && !cancellation) return [];
     const advanceAdjustment = getAdvanceAdjustedDividend(section, parsedAmounts);
@@ -915,12 +941,44 @@ const getUpcomingDividendEvents = (text: string): ParsedCorporateEvent[] => {
     );
     const paymentDate = getDateAfterKeyword(
       section,
-      /(?:termin|dzie[ńn]|dniem)\s+wyp.{0,3}at(?:y|a)|wyp.{0,3}at(?:a|y)\s+(?:dywidendy\s+)?(?:nastąpi|zostanie|ustalon|w\s+terminie)|payment\s*date/iu,
+      /(?:termin|dzie[ńn]|dniem)\s+wyp.{0,3}at(?:y|a)|wyp.{0,3}at(?:a|y)\s+(?:(?:dywidendy|środków)\s+)?(?:nastąpi|zostanie|ustalon|w\s+terminie)|payment\s*date/iu,
       300
     );
     const sectionStatus = getDividendStatus(section);
     const contextStatus = sectionStatus === "UNKNOWN" ? getDividendStatus(statusContext) : sectionStatus;
     const dividendStatus = contextStatus === "UNKNOWN" ? documentStatus : contextStatus;
+
+    // Some resolutions state the total per share once, then list payment
+    // tranches as "date (amount)". Only split when at least two dated amounts
+    // sum to the announced total; otherwise retain the regular parser path.
+    const paymentLabelIndex = section.search(/(?:termin|dzień)\s+wypłaty\s+dywidendy\s*:/iu);
+    const datedInstallments = paymentLabelIndex < 0 ? [] : Array.from(section.slice(paymentLabelIndex).matchAll(UNICODE_DATE_PATTERN))
+      .flatMap((match) => {
+        const date = getIsoDateFromMatch(match);
+        const after = section.slice(paymentLabelIndex + (match.index ?? 0) + match[0].length,
+          paymentLabelIndex + (match.index ?? 0) + match[0].length + 44);
+        const amountMatch = after.match(/^\s*(?:r\.?\s*)?\(\s*(\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{1,4})?)\s*(?:zł|zl|PLN)\s*\)/iu);
+        const amount = amountMatch ? toAmount(amountMatch[1]) : undefined;
+        return date && amount ? [{ date, amount }] : [];
+      });
+    const declaredTotal = parsedAmounts.length === 1 ? parsedAmounts[0]!.amount : undefined;
+    if (recordDate && declaredTotal && datedInstallments.length >= 2 &&
+      Math.abs(datedInstallments.reduce((sum, item) => sum + item.amount, 0) - declaredTotal) < 0.005) {
+      return datedInstallments.map((item, index) => ({
+        eventType: "UPCOMING_DIVIDEND" as const,
+        eventDate: recordDate,
+        fiscalYear,
+        isScheduleChange: DIVIDEND_SCHEDULE_CHANGE.test(section),
+        eventIdentity: ["dividend", fiscalYear ?? recordDate.slice(0, 4), index + 1].join(":"),
+        dividendPerShare: item.amount,
+        dividendTotalPerShare: declaredTotal,
+        dividendCurrency: parsedAmounts[0]!.currency,
+        recordDate,
+        paymentDate: item.date,
+        dividendInstallment: index + 1,
+        dividendStatus,
+      }));
+    }
 
     const eventAmounts = amounts.length > 0
       ? amounts

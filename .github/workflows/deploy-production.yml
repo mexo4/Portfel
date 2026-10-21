@@ -298,8 +298,8 @@ jobs:
 
           git fetch origin "$BRANCH"
           BUILD_REVISION="$(git rev-parse "origin/$BRANCH")"
-          if ! git -C "$REPO" diff --quiet "$PREVIOUS_REVISION" "$BUILD_REVISION" -- package-lock.json; then
-            echo "ERROR: package-lock.json changed. Refusing an in-place npm install while the old release is live."
+          if ! git -C "$REPO" diff --quiet "$PREVIOUS_REVISION" "$BUILD_REVISION" -- package.json package-lock.json; then
+            echo "ERROR: root dependency manifests changed. Refusing an in-place npm install while the old release is live."
             exit 1
           fi
           node - "$PREVIOUS_REVISION" "$BUILD_REVISION" <<'NODE'
@@ -308,15 +308,16 @@ jobs:
           const readManifest = (revision) => JSON.parse(execFileSync("git", ["show", `${revision}:portfel-inwestora/package.json`], { encoding: "utf8" }));
           const previousManifest = readManifest(previousRevision);
           const buildManifest = readManifest(buildRevision);
-          if (buildManifest.scripts?.start !== "node --use-system-ca ./scripts/start-production.mjs") {
+          const expectedStart = "node --use-system-ca ./scripts/start-production.mjs";
+          if (previousManifest.scripts?.start !== expectedStart || buildManifest.scripts?.start !== expectedStart) {
             console.error("ERROR: unexpected production start command; refusing activation.");
             process.exit(1);
           }
-          // The lockfile above protects installed dependencies. Permit non-start
-          // scripts (for tests/maintenance) to change without treating them as a
-          // runtime dependency change; keep the production start command pinned.
-          delete previousManifest.scripts;
-          delete buildManifest.scripts;
+          // This audited helper is test/maintenance-only and does not affect the
+          // production runtime or installed dependencies. Keep every other
+          // script and manifest field under the existing exact comparison.
+          delete previousManifest.scripts?.["audit:gpw-dividends"];
+          delete buildManifest.scripts?.["audit:gpw-dividends"];
           if (JSON.stringify(previousManifest) !== JSON.stringify(buildManifest)) {
             console.error("ERROR: application dependencies or manifest fields changed. Refusing in-place install.");
             process.exit(1);

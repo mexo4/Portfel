@@ -369,6 +369,46 @@ export const findGpwCatalogEntryByIsin = async (isin: string) => {
   return snapshot.items.find((item) => item.isin === normalizedIsin) ?? null;
 };
 
+/** The quotations table omits some less liquid issuers. Verify the exact ISIN
+ * against GPW's own issuer card before using its exchange ticker. */
+export const parseGpwIssuerCard = (html: string, isin: string) => {
+  const normalizedIsin = isin.trim().toUpperCase();
+  if (!/^[A-Z]{2}[A-Z0-9]{10}$/.test(normalizedIsin)) return null;
+  const heading = html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i)?.[1];
+  const headingText = heading ? decodeHtmlText(heading) : "";
+  const identity = headingText.match(/^(.+?)\s*\(([A-Z]{2}[A-Z0-9]{10})\)/i);
+  if (!identity || identity[2]?.toUpperCase() !== normalizedIsin) return null;
+  const ticker = html.match(/<input\b(?=[^>]*\bid=["']glsSkrot["'])(?=[^>]*\bvalue=["']([A-Z0-9]{1,8})["'])[^>]*>/i)?.[1];
+  if (!ticker) return null;
+  return createCatalogItem(`${ticker}.WA`, identity[1]!.trim(), normalizedIsin);
+};
+
+const issuerCardInFlight = new Map<string, Promise<GpwCatalogItem | null>>();
+export const findGpwIssuerCardByIsin = async (isin: string) => {
+  const normalizedIsin = isin.trim().toUpperCase();
+  if (!/^[A-Z]{2}[A-Z0-9]{10}$/.test(normalizedIsin)) return null;
+  const pending = issuerCardInFlight.get(normalizedIsin);
+  if (pending) return pending;
+  const lookup = (async () => {
+    try {
+      const response = await fetchWithSystemTrust(`https://www.gpw.pl/spolka?isin=${encodeURIComponent(normalizedIsin)}`, {
+        headers: { Accept: "text/html", "User-Agent": "Mexo/1.0 (+https://mexo.com.pl; GPW issuer verification)" },
+        cache: "no-store",
+        signal: AbortSignal.timeout(12_000),
+      });
+      return response.ok ? parseGpwIssuerCard(await response.text(), normalizedIsin) : null;
+    } catch {
+      return null;
+    }
+  })();
+  issuerCardInFlight.set(normalizedIsin, lookup);
+  try {
+    return await lookup;
+  } finally {
+    issuerCardInFlight.delete(normalizedIsin);
+  }
+};
+
 const normalizeIssuerNameForIdentity = (value: string) =>
   normalizeText(value)
     .replace(/\b(?:spolka akcyjna|s a|sa|se)\b/g, " ")

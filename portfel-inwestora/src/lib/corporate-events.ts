@@ -168,6 +168,7 @@ export type GeneralMeetingsResponse = {
 };
 
 export type DividendCalendarScope = GeneralMeetingScope;
+export type ReportCalendarResponse = GeneralMeetingsResponse;
 
 export const GENERAL_MEETING_WINDOW_DAYS = 180;
 export const REPORT_WINDOW_DAYS = 365;
@@ -344,13 +345,22 @@ const getFiscalPeriod = (value: string, eventType: CorporateEventType) => {
   if (eventType === "HALF_YEAR_REPORT") return "H1";
   if (eventType === "ANNUAL_REPORT") return "FY";
 
-  if (/(?:^|\s)(?:i|1|pierwsz(?:y|ego))\.?\s+kwartał/i.test(normalized)) return "Q1";
-  if (/(?:^|\s)(?:ii|2|drug(?:i|iego))\.?\s+kwartał/i.test(normalized)) return "Q2";
-  if (/(?:^|\s)(?:iii|3|trzec(?:i|iego))\.?\s+kwartał/i.test(normalized)) return "Q3";
-  if (/\btrzy\s+kwartały/i.test(normalized)) return "Q3";
-  if (/(?:^|\s)(?:iv|4|czwart(?:y|ego))\.?\s+kwartał/i.test(normalized)) return "Q4";
-
-  return undefined;
+  // Combined schedule paragraphs may contain Q1 and Q3 before the latter
+  // publication date. Use the nearest preceding fiscal period, not the first.
+  const periods = [
+    [/(?:^|\s)(?:i|1|pierwsz(?:y|ego))\.?\s+kwartał/giu, "Q1"],
+    [/(?:^|\s)(?:ii|2|drug(?:i|iego))\.?\s+kwartał/giu, "Q2"],
+    [/(?:^|\s)(?:iii|3|trzec(?:i|iego))\.?\s+kwartał/giu, "Q3"],
+    [/\btrzy\s+kwartały/giu, "Q3"],
+    [/(?:^|\s)(?:iv|4|czwart(?:y|ego))\.?\s+kwartał/giu, "Q4"],
+  ] as const;
+  let nearest: { index: number; period: string } | undefined;
+  for (const [pattern, period] of periods) {
+    for (const match of normalized.matchAll(pattern)) {
+      if ((match.index ?? -1) > (nearest?.index ?? -1)) nearest = { index: match.index!, period };
+    }
+  }
+  return nearest?.period;
 };
 
 const getFiscalYear = (value: string) => {
@@ -533,7 +543,7 @@ const getGeneralMeetingTime = (text: string, meetingDate: string) => {
   if (dateOccurrences.length === 0) return undefined;
 
   const polishTimes = Array.from(
-    text.matchAll(/\b(?:o\s+godzin(?:ie|e)|na\s+godzine|godz(?:ina|ine)?\.?)\s*(\d{1,2})(?:[:.]([0-5]\d))?\b/giu)
+    text.matchAll(/\b(?:o\s+godzin(?:ie|e)|na\s+godzine|na\s+g\.|godz(?:ina|ine)?\.?)\s*(\d{1,2})(?:[:.]([0-5]\d))?\b/giu)
   ).flatMap((match) => {
     const hour = Number(match[1]);
     if (!Number.isInteger(hour) || hour < 0 || hour > 23) return [];
@@ -685,8 +695,9 @@ const getDividendStatus = (text: string): Extract<
   const conditionalAdvance =
     /warunkiem\s+wypłat[yi][\s\S]{0,180}?zgod[ayę]\s+rady\s+nadzorczej|uchwał\w*\s+o\s+(?:przedłożeniu|skierowaniu)[\s\S]{0,140}?(?:wniosku|rekomendacji)|zamiar\w*\s+wypłat[yi]\s+zaliczk/u.test(normalized);
 
-  if (conditionalAdvance && !finalApproval) return "PROPOSED";
-  if (finalApproval) return "CONFIRMED";
+  const approvedByMeeting = /waln\w*\s+zgromadzeni\w*[\s\S]{0,180}?podj\w*[\s\S]{0,80}?uchwa\w*[\s\S]{0,100}?dywidend/u.test(normalized);
+  if (conditionalAdvance && !finalApproval && !approvedByMeeting) return "PROPOSED";
+  if (finalApproval || approvedByMeeting) return "CONFIRMED";
 
   // A proposal often says that the final decision will be taken by the AGM.
   // A bare mention of the meeting must never promote it to a confirmed cash
@@ -734,9 +745,11 @@ const getDividendAmounts = (text: string): ParsedDividendAmount[] => {
   const amountAfterPerSharePattern =
     /(?:na|dla)\s*(?:(?:jedn[aą]|1)\s*)?akcj[ęe]\s*(?:(?:przeznacza\s+się|przypada|wynosi|w\s+wysokości)\s*)?(\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{1,4})?)\s*(?:zł(?:ot(?:y|a|ych|e))?|zl(?:otych)?|pln|eur|usd|gbp)/gi;
   const unicodePerSharePattern =
-    /(?:^|[^\d])(\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{1,4})?)\s*(?:z\u0142(?:ot(?:y|a|ych|e))?|zl(?:otych)?|pln|eur|usd|gbp)\s*(?:\([^)]{0,80}\)\s*)?(?:brutto\s*)?(?:na|\/)\s*(?:(?:jedn(?:a|\u0105)|ka\u017cd(?:a|\u0105)|1)\s*)?akcj/giu;
+    /(?:^|[^\d])(\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{1,4})?)\s*(?:z\u0142(?:ot(?:y|a|ych|e))?|zl(?:otych)?|pln|eur|usd|gbp)\s*(?:\([^)]{0,80}\)\s*)?(?:brutto\s*)?(?:na|za|\/)\s*(?:(?:jedn(?:a|\u0105)|ka\u017cd(?:a|\u0105)|1)\s*)?akcj/giu;
   const unicodeAmountAfterPerSharePattern =
     /(?:na|dla)\s*(?:(?:jedn(?:a|\u0105)|1)\s*)?akcj(?:\u0119|e)\s*(?:(?:przeznacza\s+si\u0119|przypada|wynosi|w\s+wysoko\u015Bci)\s*)?(\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{1,4})?)\s*(?:z\u0142(?:ot(?:y|a|ych|e))?|zl(?:otych)?|pln|eur|usd|gbp)/giu;
+  const eachShareAmountPattern =
+    /(?:na|dla)\s+ka\u017cd(?:a|\u0105)\s+akcj(?:\u0119|e)\s+(?:przypada|wynosi|wyp\u0142ac\w*)\s+(\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{1,4})?)\s*(?:z\u0142|zl|pln|eur|usd|gbp)/giu;
   const labeledAmountAfterPerSharePattern =
     /(?:kwota|wysokość)\s+dywidendy(?:\s+brutto)?\s+(?:na|dla)\s*(?:(?:jedn(?:ą|a)|1)\s*)?akcj[ęe]\s*(?::|wynosi(?:\s+obecnie)?|w\s+wysokości)?\s*(\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{1,4})?)\s*(?:zł(?:ot(?:y|a|ych|e))?|zl(?:otych)?|pln|eur|usd|gbp)/giu;
   const descriptiveAmountAfterPerSharePattern =
@@ -756,6 +769,7 @@ const getDividendAmounts = (text: string): ParsedDividendAmount[] => {
     amountAfterPerSharePattern,
     unicodePerSharePattern,
     unicodeAmountAfterPerSharePattern,
+    eachShareAmountPattern,
     labeledAmountAfterPerSharePattern,
     descriptiveAmountAfterPerSharePattern,
     amountWithWrittenWordsBeforePerSharePattern,
@@ -1160,6 +1174,10 @@ export const parseCorporateEventDocument = (document: string): ParsedCorporateEv
     // publication dates, even when the same paragraph mentions omitted Q2/Q4
     // reports. A report date must come from the issuer's schedule segment.
     if (/rozporządzen/iu.test(segment)) continue;
+    // A fiscal-period boundary is not a publication appointment. Issuers may
+    // describe their financial year as "IV kwartał ... od ... do ..." directly
+    // below a real reporting schedule (LPP uses a February–January year).
+    if (!/\braport/iu.test(segment) && /\b(?:kwartał|półrocze)[\s\S]{0,70}?\bod\s+\d{1,2}[\s\S]{0,60}?\bdo\s+\d{1,2}/iu.test(segment)) continue;
     const dateMatches = Array.from(segment.matchAll(DATE_PATTERN));
 
     for (const dateMatch of dateMatches) {

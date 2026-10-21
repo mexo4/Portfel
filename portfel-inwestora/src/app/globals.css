@@ -120,7 +120,7 @@
 
 .dividend-calendar-row {
   display: grid;
-  grid-template-columns: minmax(0, 1.55fr) minmax(0, 1.2fr) minmax(0, 1.05fr) minmax(0, 1.05fr) minmax(0, 1fr) minmax(0, 1.2fr);
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1.15fr) minmax(0, 1.05fr) minmax(0, 1.05fr) minmax(0, 1fr) minmax(94px, .8fr);
   gap: 12px;
   align-items: center;
   padding: 16px;
@@ -156,6 +156,7 @@
 .dividend-calendar-amount strong {
   font-weight: 700;
   font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
 }
 
 .dividend-calendar-status {
@@ -207,7 +208,7 @@
 .dividend-calendar-sources li,
 .dividend-calendar-sources a {
   min-width: 0;
-  overflow-wrap: anywhere;
+  max-width: 100%;
 }
 
 @media (max-width: 1050px) {
@@ -6339,6 +6340,12 @@ textarea {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.corporate-event-ticker {
+  display: block;
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.35;
 }
 
 .corporate-event-copy > strong {

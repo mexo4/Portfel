@@ -256,6 +256,28 @@ export const fetchGeneralMeetings = async ({
   );
 };
 
+export const fetchGpwReports = async ({
+  scope = "all",
+  days = 365,
+  portfolioId,
+  portfolioIds,
+  signal,
+}: {
+  scope?: import("@/lib/corporate-events").GeneralMeetingScope;
+  days?: number;
+  portfolioId?: string;
+  portfolioIds?: string[];
+  signal?: AbortSignal;
+}) => {
+  const params = new URLSearchParams({ scope, days: String(days) });
+  if (portfolioId) params.set("portfolio", portfolioId);
+  if (portfolioIds?.length) params.set("portfolioIds", portfolioIds.join(","));
+  return requestJson<import("@/lib/corporate-events").ReportCalendarResponse>(
+    `/api/gpw-reports?${params.toString()}`,
+    { signal }
+  );
+};
+
 export const fetchDividendCalendar = async ({
   scope = "all",
   signal,

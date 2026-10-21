@@ -24,6 +24,7 @@ import {
   synchronizeGpwDividendReports,
   synchronizeGpwGeneralMeetingReports,
   synchronizeGpwReportScheduleReports,
+  resolveStoredGpwIssuer,
   type GpwGeneralMeetingSourceSyncResult,
   type StoredEspiCorporateEventReport,
 } from "@/lib/server/espi";
@@ -865,7 +866,8 @@ const sourceTimestamp = (value: string | undefined | null) => {
 export const shouldApplyEvent = (
   existing: ExistingEventRow | undefined,
   source: CorporateEventSourceReference,
-  parsed: ParsedCorporateEvent
+  parsed: ParsedCorporateEvent,
+  sameSourceReprojection = false
 ) => {
   if (!existing) return true;
   const incomingTimestamp = sourceTimestamp(source.sourcePublishedAt);
@@ -880,7 +882,10 @@ export const shouldApplyEvent = (
   if (existing.status === "CANCELLED") {
     // A later formal notice may legitimately convene the meeting again, but a
     // stale schedule discovered during backfill must never resurrect it.
-    return incomingTimestamp > 0 && incomingTimestamp > existingTimestamp;
+    return incomingTimestamp > 0 && (
+      incomingTimestamp > existingTimestamp ||
+      (sameSourceReprojection && incomingTimestamp === existingTimestamp)
+    );
   }
   if (existing.status === "CONFIRMED" && getParsedEventStatus(parsed) === "PROPOSED") {
     return false;
@@ -1013,7 +1018,14 @@ const upsertParsedEvents = async (
     }
     const now = new Date().toISOString();
     const eventId = existing?.id ?? randomUUID();
-    const apply = shouldApplyEvent(existing, batch.source, parsed);
+    const sameSourceReprojection = existing?.status === "CANCELLED" && (
+      await transaction.query<{ source_url: string }>(
+        `SELECT source_url FROM corporate_event_sources
+         WHERE corporate_event_id = $1 AND source_url = $2 LIMIT 1`,
+        [eventId, batch.source.sourceUrl]
+      )
+    ).length > 0;
+    const apply = shouldApplyEvent(existing, batch.source, parsed, sameSourceReprojection);
     const sourceId = randomUUID();
 
     if (!existing) {
@@ -1399,6 +1411,8 @@ const getStoredEvents = async (
           )
         ORDER BY
           (confirms_amount::int + confirms_record_date::int + confirms_payment_date::int + confirms_status::int) DESC,
+          CASE WHEN event.event_type IN ('QUARTERLY_REPORT', 'HALF_YEAR_REPORT', 'ANNUAL_REPORT')
+            THEN source_published_at END DESC NULLS LAST,
           source_priority DESC, source_published_at DESC NULLS LAST, discovered_at DESC
         LIMIT 1
       ) AS source ON TRUE
@@ -1444,6 +1458,9 @@ type GlobalGeneralMeetingReportRow = {
   id: string;
   source_id: string;
   issuer_id: string | null;
+  issuer_name: string;
+  source_isin: string | null;
+  source_ticker: string | null;
   source_title: string;
   title: string;
   body_text: string;
@@ -1458,6 +1475,19 @@ type GlobalGeneralMeetingReportRow = {
   last_source_status: CorporateEventSourceStatus | null;
 };
 
+const getProjectionInstrument = async (report: GlobalGeneralMeetingReportRow): Promise<CanonicalInstrument | null> => {
+  if (report.issuer_id && report.canonical_key && report.ticker && report.company_name) {
+    return { id: report.issuer_id, canonical_key: report.canonical_key, ticker: report.ticker,
+      company_name: report.company_name, isin: report.isin,
+      last_checked_at: report.last_checked_at, last_source_status: report.last_source_status };
+  }
+  const issuer = await resolveStoredGpwIssuer({ id: report.id, issuerName: report.issuer_name,
+    sourceIsin: report.source_isin, sourceTicker: report.source_ticker });
+  return issuer ? { id: issuer.id, canonical_key: issuer.canonical_key, ticker: issuer.ticker,
+    company_name: issuer.company_name, isin: issuer.isin,
+    last_checked_at: null, last_source_status: null } : null;
+};
+
 export type GlobalGeneralMeetingSyncResult = {
   fetched: number;
   created: number;
@@ -1468,7 +1498,7 @@ export type GlobalGeneralMeetingSyncResult = {
   pending: number;
 };
 
-const REPORT_SCHEDULE_PROJECTION_VERSION = 1;
+const REPORT_SCHEDULE_PROJECTION_VERSION = 2;
 const REPORT_SCHEDULE_BATCH_SIZE = 100;
 const REPORT_SCHEDULE_UNMATCHED_RETRY_MS = 7 * 24 * 60 * 60 * 1_000;
 const REPORT_SCHEDULE_CANDIDATE_SQL = `(
@@ -1516,7 +1546,8 @@ export const synchronizeGlobalReportSchedules = ({ force = false, refreshSource 
       OR $5::boolean
     )`;
     const reports = await query<GlobalGeneralMeetingReportRow>(
-      `SELECT report.id, report.source_id, report.issuer_id, report.source_title,
+      `SELECT report.id, report.source_id, report.issuer_id, report.issuer_name,
+              report.source_isin, report.source_ticker, report.source_title,
               report.title, report.body_text, report.published_at, report.source_url,
               report.report_schedule_projection_status AS projection_status,
               instrument.canonical_key, instrument.ticker, instrument.company_name,
@@ -1548,7 +1579,8 @@ export const synchronizeGlobalReportSchedules = ({ force = false, refreshSource 
     let errors = 0;
     for (const report of reports) {
       try {
-        if (!report.issuer_id || !report.canonical_key || !report.ticker || !report.company_name) {
+        const instrument = await getProjectionInstrument(report);
+        if (!instrument) {
           unmatched += 1;
           await updateReportScheduleProjectionStatus(report.id, "UNMATCHED");
           diagnose({ provider: "global-espi-report-schedule", sourceId: report.source_id, status: "UNMATCHED" });
@@ -1576,11 +1608,6 @@ export const synchronizeGlobalReportSchedules = ({ force = false, refreshSource 
           await updateReportScheduleProjectionStatus(report.id, "NO_EVENT");
           continue;
         }
-        const instrument: CanonicalInstrument = {
-          id: report.issuer_id, canonical_key: report.canonical_key, ticker: report.ticker,
-          company_name: report.company_name, isin: report.isin,
-          last_checked_at: report.last_checked_at, last_source_status: report.last_source_status,
-        };
         const result = await withTransaction(async (transaction) => {
           await transaction.query<{ locked: number }>(
             "SELECT pg_advisory_xact_lock(hashtext($1)) AS locked",
@@ -1624,7 +1651,32 @@ export const synchronizeGlobalReportSchedules = ({ force = false, refreshSource 
 
 export const getGlobalReportScheduleSourceState = getGpwReportScheduleSyncState;
 
-const GENERAL_MEETING_PROJECTION_VERSION = 4;
+/** Shared GPW report board. User scope is applied only at read time. */
+export const getGlobalReportSchedules = async ({
+  fromDate,
+  toDate,
+  canonicalKeys,
+}: {
+  fromDate: string;
+  toDate: string;
+  canonicalKeys?: string[];
+}) => {
+  if (canonicalKeys && canonicalKeys.length === 0) return [];
+  const instruments = canonicalKeys
+    ? await query<{ id: string }>(
+      "SELECT id FROM corporate_event_instruments WHERE market = 'GPW' AND canonical_key = ANY($1::text[])",
+      [canonicalKeys]
+    )
+    : await query<{ id: string }>(
+      "SELECT id FROM corporate_event_instruments WHERE market = 'GPW'"
+    );
+  if (!instruments.length) return [];
+  return getStoredEvents(instruments.map(({ id }) => id), fromDate, toDate,
+    ["QUARTERLY_REPORT", "HALF_YEAR_REPORT", "ANNUAL_REPORT"]);
+};
+
+// Re-evaluate old publications after correcting false cancellations and time parsing.
+const GENERAL_MEETING_PROJECTION_VERSION = 5;
 // A batch is deliberately small enough to keep the authenticated calendar API
 // responsive; the versioned queue continues on the next poll until empty.
 const GENERAL_MEETING_PROJECTION_BATCH_SIZE = 100;
@@ -1666,7 +1718,8 @@ export const synchronizeGlobalGeneralMeetings = ({
     const unmatchedRetryBefore = new Date(Date.now() - GENERAL_MEETING_UNMATCHED_RETRY_MS).toISOString();
     const reports = await query<GlobalGeneralMeetingReportRow>(
       `
-        SELECT report.id, report.source_id, report.issuer_id, report.source_title,
+        SELECT report.id, report.source_id, report.issuer_id, report.issuer_name,
+               report.source_isin, report.source_ticker, report.source_title,
                report.title, report.body_text, report.published_at, report.source_url,
                report.corporate_events_projection_status AS projection_status,
                instrument.canonical_key, instrument.ticker, instrument.company_name,
@@ -1725,7 +1778,8 @@ export const synchronizeGlobalGeneralMeetings = ({
 
     for (const report of reports) {
       try {
-        if (!report.issuer_id || !report.canonical_key || !report.ticker || !report.company_name) {
+        const instrument = await getProjectionInstrument(report);
+        if (!instrument) {
           unmatched += 1;
           await updateGeneralMeetingProjectionStatus(report.id, "UNMATCHED");
           diagnose({ provider: "global-espi-wza", sourceId: report.source_id, status: "UNMATCHED" });
@@ -1761,15 +1815,6 @@ export const synchronizeGlobalGeneralMeetings = ({
           continue;
         }
 
-        const instrument: CanonicalInstrument = {
-          id: report.issuer_id,
-          canonical_key: report.canonical_key,
-          ticker: report.ticker,
-          company_name: report.company_name,
-          isin: report.isin,
-          last_checked_at: report.last_checked_at,
-          last_source_status: report.last_source_status,
-        };
         const result = await withTransaction(async (transaction) => {
           await transaction.query<{ locked: number }>(
             "SELECT pg_advisory_xact_lock(hashtext($1)) AS locked",
@@ -1889,7 +1934,7 @@ export const getGlobalGeneralMeetingSourceState = getGpwGeneralMeetingSyncState;
 
 export type GlobalDividendSyncResult = GlobalGeneralMeetingSyncResult;
 
-const DIVIDEND_PROJECTION_VERSION = 6;
+const DIVIDEND_PROJECTION_VERSION = 7;
 const DIVIDEND_PROJECTION_BATCH_SIZE = 100;
 const DIVIDEND_UNMATCHED_RETRY_MS = 7 * 24 * 60 * 60 * 1_000;
 const DIVIDEND_REPORT_CANDIDATE_SQL = `
@@ -1952,7 +1997,8 @@ export const synchronizeGlobalDividends = ({
     const unmatchedRetryBefore = new Date(Date.now() - DIVIDEND_UNMATCHED_RETRY_MS).toISOString();
     const reports = await query<GlobalGeneralMeetingReportRow>(
       `
-        SELECT report.id, report.source_id, report.issuer_id, report.source_title,
+        SELECT report.id, report.source_id, report.issuer_id, report.issuer_name,
+               report.source_isin, report.source_ticker, report.source_title,
                report.title, report.body_text, report.published_at, report.source_url,
                report.dividend_projection_status AS projection_status,
                instrument.canonical_key, instrument.ticker, instrument.company_name,
@@ -2003,7 +2049,8 @@ export const synchronizeGlobalDividends = ({
 
     for (const report of reports) {
       try {
-        if (!report.issuer_id || !report.canonical_key || !report.ticker || !report.company_name) {
+        const instrument = await getProjectionInstrument(report);
+        if (!instrument) {
           unmatched += 1;
           await updateDividendProjectionStatus(report.id, "UNMATCHED");
           diagnose({ provider: "global-espi-dividends", sourceId: report.source_id, status: "UNMATCHED" });
@@ -2031,15 +2078,6 @@ export const synchronizeGlobalDividends = ({
           continue;
         }
 
-        const instrument: CanonicalInstrument = {
-          id: report.issuer_id,
-          canonical_key: report.canonical_key,
-          ticker: report.ticker,
-          company_name: report.company_name,
-          isin: report.isin,
-          last_checked_at: report.last_checked_at,
-          last_source_status: report.last_source_status,
-        };
         const result = await withTransaction(async (transaction) => {
           await transaction.query<{ locked: number }>(
             "SELECT pg_advisory_xact_lock(hashtext($1)) AS locked",

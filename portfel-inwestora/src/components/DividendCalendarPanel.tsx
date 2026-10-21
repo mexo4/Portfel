@@ -70,13 +70,13 @@ const DividendSources = ({ event }: { event: CorporateEvent }) => {
       return url.protocol === "https:" || url.protocol === "http:" ? url.href : undefined;
     } catch { return undefined; }
   };
-  const getSourceLabel = (title?: string, publishedAt?: string) => {
-    const label = title?.trim();
-    if (label) return label;
-    const date = publishedAt && Number.isFinite(new Date(publishedAt).getTime())
-      ? formatDate(publishedAt.slice(0, 10)) : undefined;
-    return date ? `Oficjalny komunikat · ${date}` : "Oficjalny komunikat";
-  };
+  const getSourceLabel = (source: NonNullable<CorporateEvent["source"]>) =>
+    source.sourceType === "PAP_ESPI" || new URL(source.sourceUrl).hostname.endsWith("gpw.pl")
+      ? "Raport ESPI" : "Źródło";
+  const getSourceHint = (source: NonNullable<CorporateEvent["source"]>) =>
+    source.sourceTitle?.trim() || (source.sourcePublishedAt
+      ? `Oficjalny komunikat z ${formatDate(source.sourcePublishedAt.slice(0, 10))}`
+      : "Oficjalny komunikat");
   const sources = Array.from(new Map(
     [event.source, ...(event.sources ?? [])]
       .filter((source): source is NonNullable<CorporateEvent["source"]> => Boolean(source?.sourceUrl && safeSourceUrl(source.sourceUrl)))
@@ -86,8 +86,8 @@ const DividendSources = ({ event }: { event: CorporateEvent }) => {
   const [primary, ...additional] = sources;
   return (
     <div className="dividend-calendar-sources">
-      <a className="corporate-event-source" href={primary!.sourceUrl} target="_blank" rel="noopener noreferrer">
-        {getSourceLabel(primary!.sourceTitle, primary!.sourcePublishedAt)}
+      <a className="corporate-event-source" href={primary!.sourceUrl} target="_blank" rel="noopener noreferrer" title={getSourceHint(primary!)}>
+        {getSourceLabel(primary!)}
       </a>
       {additional.length ? (
         <details>
@@ -95,8 +95,8 @@ const DividendSources = ({ event }: { event: CorporateEvent }) => {
           <ul>
             {additional.map((source) => (
               <li key={source.sourceUrl}>
-                <a href={source.sourceUrl} target="_blank" rel="noopener noreferrer">
-                  {getSourceLabel(source.sourceTitle, source.sourcePublishedAt)}
+                <a href={source.sourceUrl} target="_blank" rel="noopener noreferrer" title={getSourceHint(source)}>
+                  {getSourceLabel(source)}
                 </a>
               </li>
             ))}
@@ -255,7 +255,7 @@ export default function DividendCalendarPanel() {
         <p className="corporate-events-state">Brak dywidend spełniających wybrane kryteria.</p>
       ) : null}
 
-      {events.length ? (
+      {!isLoading && !hasError && events.length ? (
         <div className="dividend-calendar-list" aria-label="Nadchodzące dywidendy GPW">
           {events.map((event) => (
             <article className="dividend-calendar-row" key={event.id}>

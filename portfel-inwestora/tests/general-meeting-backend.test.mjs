@@ -62,6 +62,15 @@ test("a stale convening cannot resurrect a cancelled meeting, but a later formal
   );
 });
 
+test("a corrected projection may reactivate only its own source at the same timestamp", () => {
+  const cancelled = stored({ status: "CANCELLED", active: false,
+    source_published_at: "2026-10-07T12:35:54.000Z" });
+  const originalSource = source("2026-10-07T12:35:54.000Z");
+  assert.equal(shouldApplyEvent(cancelled, originalSource, meeting(), false), false);
+  assert.equal(shouldApplyEvent(cancelled, originalSource, meeting(), true), true);
+  assert.equal(shouldApplyEvent(cancelled, source("2026-10-06T12:35:54.000Z"), meeting(), true), false);
+});
+
 test("WZA uses a focused shared GPW synchronization lane and preserves each report source", async () => {
   const provider = await readFile(
     new URL("../src/lib/server/corporate-events.ts", import.meta.url),
@@ -150,7 +159,7 @@ test("global WZA projection is independent from portfolio membership and logs sy
   assert.match(provider, /synchronizeGlobalGeneralMeetings/);
   assert.match(provider, /corporate_events_projection_status/);
   assert.match(provider, /GENERAL_MEETING_PROJECTION_BATCH_SIZE = 100/);
-  assert.match(provider, /GENERAL_MEETING_PROJECTION_VERSION = 4/);
+  assert.match(provider, /GENERAL_MEETING_PROJECTION_VERSION = 5/);
   assert.match(provider, /report\.source_id NOT LIKE 'newconnect:%'/);
   assert.match(provider, /report\.published_at >= \$1/);
   assert.match(provider, /report\.category = 'GENERAL_MEETING'/);

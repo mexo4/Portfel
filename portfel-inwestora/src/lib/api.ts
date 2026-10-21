@@ -205,6 +205,8 @@ export const fetchCorporateEvents = async ({
   portfolioIds,
   instrumentId,
   days = 60,
+  meetingDays,
+  reportDays,
   eventTypes,
   signal,
 }: {
@@ -212,6 +214,8 @@ export const fetchCorporateEvents = async ({
   portfolioIds?: string[];
   instrumentId?: string;
   days?: number;
+  meetingDays?: number;
+  reportDays?: number;
   eventTypes?: CorporateEventType[];
   signal?: AbortSignal;
 }) => {
@@ -220,6 +224,8 @@ export const fetchCorporateEvents = async ({
     days: String(days),
   });
   if (portfolioIds?.length) params.set("portfolioIds", portfolioIds.join(","));
+  if (meetingDays !== undefined) params.set("meetingDays", String(meetingDays));
+  if (reportDays !== undefined) params.set("reportDays", String(reportDays));
 
   if (instrumentId) {
     params.set("instrumentId", instrumentId);
@@ -236,7 +242,7 @@ export const fetchCorporateEvents = async ({
 
 export const fetchGeneralMeetings = async ({
   scope = "all",
-  days = 60,
+  days = 180,
   signal,
 }: {
   scope?: import("@/lib/corporate-events").GeneralMeetingScope;

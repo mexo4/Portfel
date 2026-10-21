@@ -8,6 +8,7 @@ import {
 import { getUserTrackedGpwInstruments } from "@/lib/server/espi";
 import {
   GENERAL_MEETING_WINDOW_DAYS,
+  isCalendarWindowDays,
   addCalendarDays,
   getWarsawDate,
   type GeneralMeetingScope,
@@ -30,6 +31,10 @@ export async function GET(request: Request) {
 
   const { searchParams } = new URL(request.url);
   const scope = getScope(searchParams.get("scope"));
+  const requestedDays = Number(searchParams.get("days") ?? GENERAL_MEETING_WINDOW_DAYS);
+  if (!isCalendarWindowDays(requestedDays)) {
+    return NextResponse.json({ error: "Nieprawidłowy zakres kalendarza." }, { status: 400 });
+  }
   const today = getWarsawDate();
 
   try {
@@ -77,7 +82,7 @@ export async function GET(request: Request) {
     const response: GeneralMeetingsResponse = {
       events: await getGlobalGeneralMeetings({
         fromDate: today,
-        toDate: addCalendarDays(today, GENERAL_MEETING_WINDOW_DAYS),
+        toDate: addCalendarDays(today, requestedDays),
         canonicalKeys,
       }),
       scope,

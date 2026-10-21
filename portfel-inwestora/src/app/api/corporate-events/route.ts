@@ -17,7 +17,7 @@ import {
 import { normalizePortfolioBook } from "@/lib/portfolio-state";
 import { getAuthorizedPortfolioScopeIds } from "@/lib/portfolio-selection";
 import { getUserWatchlist, getWatchlistCorporateEventInputs } from "@/lib/server/watchlist";
-import { CORPORATE_EVENT_TYPES, type CorporateEvent, type CorporateEventType } from "@/lib/corporate-events";
+import { CORPORATE_EVENT_TYPES, isCalendarWindowDays, type CorporateEvent, type CorporateEventType } from "@/lib/corporate-events";
 import type { InvestmentPortfolio, PortfolioBook } from "@/types/portfolio";
 
 export const runtime = "nodejs";
@@ -235,12 +235,20 @@ export async function GET(request: Request) {
   );
   const fromDate = getWarsawDate();
   const days = getDays(searchParams.get("days"));
+  const meetingDaysValue = searchParams.get("meetingDays");
+  const reportDaysValue = searchParams.get("reportDays");
+  const meetingDays = Number(meetingDaysValue ?? days);
+  const reportDays = Number(reportDaysValue ?? days);
+  if ((meetingDaysValue !== null && !isCalendarWindowDays(meetingDays)) ||
+      (reportDaysValue !== null && !isCalendarWindowDays(reportDays))) {
+    return NextResponse.json({ error: "Nieprawidłowy zakres kalendarza." }, { status: 400 });
+  }
 
   try {
     const result = await getCorporateEventsForGpwPortfolio({
       instruments,
       fromDate,
-      toDate: addDays(fromDate, days),
+      toDate: addDays(fromDate, Math.max(meetingDays, reportDays)),
       eventTypes: requestedEventTypes.length > 0 ? requestedEventTypes : undefined,
     });
     // Watchlist rows are informational only. They never participate in the
@@ -279,7 +287,10 @@ export async function GET(request: Request) {
 
     return NextResponse.json({
       ...result,
-      events: projectedEvents,
+      events: projectedEvents.filter((event) =>
+        (event.eventType === "UPCOMING_DIVIDEND" ? event.paymentDate ?? event.eventDate : event.eventDate) <=
+          addDays(fromDate, event.eventType === "GENERAL_MEETING" ? meetingDays :
+            event.eventType === "UPCOMING_DIVIDEND" ? days : reportDays)),
       automaticPosting: {
         addedCount: synchronization.addedCount,
         manualMatchesCount: synchronization.manualMatchesCount,
@@ -287,7 +298,7 @@ export async function GET(request: Request) {
       },
       portfolioId: requestedPortfolioId === "custom" ? "custom" : isAggregateRequest ? "all" : portfolios[0]!.id,
       fromDate,
-      toDate: addDays(fromDate, days),
+      toDate: addDays(fromDate, Math.max(meetingDays, reportDays)),
     });
   } catch (error) {
     console.error("GET /api/corporate-events failed", {

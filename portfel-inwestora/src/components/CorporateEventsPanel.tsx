@@ -1,11 +1,16 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import {
   getCorporateEventLabel,
   getDaysUntilCorporateEvent,
   getDaysUntilWarsawDate,
   isCorporateEventSourceUnavailable,
+  CALENDAR_WINDOW_OPTIONS,
+  GENERAL_MEETING_WINDOW_DAYS,
+  REPORT_WINDOW_DAYS,
+  isCalendarWindowDays,
+  type CalendarWindowDays,
   type CorporateEvent,
   type CorporateEventsResponse,
   type GeneralMeetingScope,
@@ -85,35 +90,61 @@ const toEventsResponse = (response: Awaited<ReturnType<typeof fetchGeneralMeetin
   scope: "OK",
 });
 
+const subscribeCalendarRange = (onChange: () => void) => {
+  window.addEventListener("storage", onChange);
+  window.addEventListener("mexo-calendar-range", onChange);
+  return () => {
+    window.removeEventListener("storage", onChange);
+    window.removeEventListener("mexo-calendar-range", onChange);
+  };
+};
+const readCalendarRange = (key: string, fallback: CalendarWindowDays) => {
+  const value = Number(window.localStorage.getItem(key));
+  return isCalendarWindowDays(value) ? value : fallback;
+};
+const getMeetingRange = () => readCalendarRange("mexo-gpw-meeting-days", GENERAL_MEETING_WINDOW_DAYS);
+const getReportRange = () => readCalendarRange("mexo-gpw-report-days", REPORT_WINDOW_DAYS);
+const getDefaultMeetingRange = () => GENERAL_MEETING_WINDOW_DAYS;
+const getDefaultReportRange = () => REPORT_WINDOW_DAYS;
+
 export default function CorporateEventsPanel({ portfolioId, portfolioIds, variant = "all" }: CorporateEventsPanelProps) {
   const [data, setData] = useState<CorporateEventsResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [hasError, setHasError] = useState(false);
+  const [errorKey, setErrorKey] = useState<string | null>(null);
+  const [loadedKey, setLoadedKey] = useState<string | null>(null);
   const [meetingScope, setMeetingScope] = useState<GeneralMeetingScope>("all");
+  const meetingDays = useSyncExternalStore(subscribeCalendarRange, getMeetingRange, getDefaultMeetingRange);
+  const reportDays = useSyncExternalStore(subscribeCalendarRange, getReportRange, getDefaultReportRange);
   const [meetingSyncState, setMeetingSyncState] = useState<Awaited<ReturnType<typeof fetchGeneralMeetings>>["sourceState"] | null>(null);
   const isMeetingView = variant === "general-meetings";
   const portfolioIdsKey = portfolioIds?.join(",") ?? "";
+  const requestKey = [isMeetingView ? "meeting" : "all", meetingScope, meetingDays, reportDays, portfolioId, portfolioIdsKey].join(":");
+  const showingLoading = isLoading || (loadedKey !== requestKey && errorKey !== requestKey);
+  const hasError = errorKey === requestKey;
 
   useEffect(() => {
     const controller = new AbortController();
 
     const request = isMeetingView
-      ? fetchGeneralMeetings({ scope: meetingScope, days: 60, signal: controller.signal })
+      ? fetchGeneralMeetings({ scope: meetingScope, days: meetingDays, signal: controller.signal })
           .then((response) => {
             if (!controller.signal.aborted) setMeetingSyncState(response.sourceState);
             return toEventsResponse(response);
           })
-      : fetchCorporateEvents({ portfolioId, portfolioIds: portfolioIdsKey ? portfolioIdsKey.split(",") : undefined, days: 60, signal: controller.signal });
+      : fetchCorporateEvents({ portfolioId, portfolioIds: portfolioIdsKey ? portfolioIdsKey.split(",") : undefined,
+          days: Math.max(meetingDays, reportDays), meetingDays, reportDays, signal: controller.signal });
 
     void request
       .then((response) => {
         if (!controller.signal.aborted) {
           setData(response);
+          setLoadedKey(requestKey);
+          setErrorKey(null);
         }
       })
       .catch((error: unknown) => {
         if (!controller.signal.aborted && !(error instanceof DOMException && error.name === "AbortError")) {
-          setHasError(true);
+          setErrorKey(requestKey);
         }
       })
       .finally(() => {
@@ -123,7 +154,7 @@ export default function CorporateEventsPanel({ portfolioId, portfolioIds, varian
       });
 
     return () => controller.abort();
-  }, [isMeetingView, meetingScope, portfolioId, portfolioIdsKey]);
+  }, [isMeetingView, meetingScope, meetingDays, reportDays, portfolioId, portfolioIdsKey, requestKey]);
 
   useEffect(() => {
     if (!isMeetingView || !meetingSyncState?.isRefreshing) return;
@@ -134,13 +165,13 @@ export default function CorporateEventsPanel({ portfolioId, portfolioIds, varian
       try {
         const response = await fetchGeneralMeetings({
           scope: meetingScope,
-          days: 60,
+          days: meetingDays,
           signal: controller.signal,
         });
         if (controller.signal.aborted) return;
         setData(toEventsResponse(response));
         setMeetingSyncState(response.sourceState);
-        setHasError(false);
+        setErrorKey(null);
         if (response.sourceState.isRefreshing) timer = setTimeout(() => void poll(), 8_000);
       } catch (error) {
         if (controller.signal.aborted || (error instanceof DOMException && error.name === "AbortError")) return;
@@ -157,11 +188,18 @@ export default function CorporateEventsPanel({ portfolioId, portfolioIds, varian
       controller.abort();
       if (timer) clearTimeout(timer);
     };
-  }, [isMeetingView, meetingScope, meetingSyncState?.isRefreshing]);
+  }, [isMeetingView, meetingScope, meetingDays, meetingSyncState?.isRefreshing]);
+
+  const changeMeetingDays = (days: CalendarWindowDays) => {
+    window.localStorage.setItem("mexo-gpw-meeting-days", String(days));
+    window.dispatchEvent(new Event("mexo-calendar-range"));
+  };
+  const changeReportDays = (days: CalendarWindowDays) => {
+    window.localStorage.setItem("mexo-gpw-report-days", String(days));
+    window.dispatchEvent(new Event("mexo-calendar-range"));
+  };
 
   const changeMeetingScope = (scope: GeneralMeetingScope) => {
-    setIsLoading(true);
-    setHasError(false);
     setMeetingScope(scope);
   };
 
@@ -176,13 +214,28 @@ export default function CorporateEventsPanel({ portfolioId, portfolioIds, varian
       event.status !== "CANCELLED"
   );
   return (
-    <section className="panel panel-compact corporate-events-panel" aria-busy={isLoading}>
+    <section className="panel panel-compact corporate-events-panel" aria-busy={showingLoading}>
       <div className="corporate-events-head">
         <div>
           <p className="eyebrow">Kalendarz GPW</p>
           <h2 className="section-title">{isMeetingView ? "Walne zgromadzenia" : "Wydarzenia GPW"}</h2>
         </div>
-        <span className="tag">{isMeetingView ? "ZWZ i NWZ · 60 dni" : "raporty · WZA · 60 dni"}</span>
+        <span className="tag">{isMeetingView ? `ZWZ i NWZ · ${meetingDays} dni` : `raporty ${reportDays} dni · WZA ${meetingDays} dni`}</span>
+      </div>
+
+      <div className="corporate-events-ranges">
+        {!isMeetingView && (
+          <div className="corporate-events-range" role="group" aria-label="Zakres raportów okresowych">
+            <span>Raporty</span>
+            {CALENDAR_WINDOW_OPTIONS.map((days) => <button key={days} type="button" className={reportDays === days ? "is-active" : undefined}
+              aria-pressed={reportDays === days} onClick={() => changeReportDays(days)}>{days} dni</button>)}
+          </div>
+        )}
+        <div className="corporate-events-range" role="group" aria-label="Zakres walnych zgromadzeń">
+          <span>WZA</span>
+          {CALENDAR_WINDOW_OPTIONS.map((days) => <button key={days} type="button" className={meetingDays === days ? "is-active" : undefined}
+            aria-pressed={meetingDays === days} onClick={() => changeMeetingDays(days)}>{days} dni</button>)}
+        </div>
       </div>
 
       {isMeetingView ? (
@@ -216,16 +269,16 @@ export default function CorporateEventsPanel({ portfolioId, portfolioIds, varian
         </p>
       ) : null}
 
-      {isLoading ? <p className="corporate-events-state">Sprawdzanie zapisanych wydarzeń…</p> : null}
+      {showingLoading ? <p className="corporate-events-state">Sprawdzanie zapisanych wydarzeń…</p> : null}
       {hasError ? (
         <p className="field-note field-note-error mt-4">Nie udało się pobrać wydarzeń GPW. Spróbuj ponownie później.</p>
       ) : null}
 
-      {!isMeetingView && !isLoading && !hasError && data?.scope === "NO_GPW_INSTRUMENTS" ? (
+      {!isMeetingView && !showingLoading && !hasError && data?.scope === "NO_GPW_INSTRUMENTS" ? (
         <p className="corporate-events-state">Brak obecnie posiadanych lub obserwowanych spółek GPW.</p>
       ) : null}
 
-      {!isLoading && !hasError && data?.scope === "OK" && reportEvents.length === 0 ? (
+      {!showingLoading && !hasError && data?.scope === "OK" && reportEvents.length === 0 ? (
         <p className="corporate-events-state">
           {allSourcesUnavailable
             ? "Źródła wydarzeń są chwilowo niedostępne. Zachowamy ostatnie potwierdzone terminy, gdy będą dostępne."
@@ -239,7 +292,7 @@ export default function CorporateEventsPanel({ portfolioId, portfolioIds, varian
         </p>
       ) : null}
 
-      {reportEvents.length ? (
+      {!showingLoading && !hasError && reportEvents.length ? (
         <div className="corporate-events-list" aria-label={isMeetingView ? "Nadchodzące walne zgromadzenia" : "Nadchodzące wydarzenia"}>
           {reportEvents.map((event) => {
             const date = formatEventDateParts(event.eventDate);
@@ -292,8 +345,11 @@ export default function CorporateEventsPanel({ portfolioId, portfolioIds, varian
                         <strong>Dzień rejestracji uczestnictwa</strong>
                         {registrationDate ? <time dateTime={event.registrationDate}>{registrationDate.long}</time> : <span>Nie podano</span>}
                         <small>{getRegistrationCountdown(event.registrationDate)}</small>
+                        <small>{event.registrationDateSource === "OFFICIAL" ? "Data z oficjalnego ogłoszenia" :
+                          event.registrationDateSource === "STATUTORY_CALCULATION" ? "Wyliczono: 16 dni kalendarzowych przed WZA (art. 406¹ KSH)" : "Nie ustalono źródła daty"}</small>
+                        {event.registrationDateConflict ? <small>Uwaga: data ogłoszona różni się od terminu wyliczonego ustawowo. Sprawdź ogłoszenie.</small> : null}
                       </span>
-                      <small className="corporate-event-registration-guidance">To nie jest automatycznie termin wszystkich formalności. Szczegóły uczestnictwa sprawdź w ogłoszeniu i u brokera.</small>
+                      <small className="corporate-event-registration-guidance">Żądanie imiennego zaświadczenia składa się najpóźniej w pierwszym dniu powszednim po dniu rejestracji (art. 406³ KSH). Broker może mieć wcześniejszą godzinę graniczną.</small>
                     </div>
                   ) : null}
                 </div>

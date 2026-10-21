@@ -45,10 +45,10 @@ test("WZA range and registration countdown use exact Warsaw calendar days", asyn
   assert.equal(getDaysUntilWarsawDate("2026-10-20", new Date("2026-10-19T22:30:00.000Z")), 0);
   assert.equal(getDaysUntilWarsawDate("2026-10-21", new Date("2026-10-19T22:30:00.000Z")), 1);
   assert.match(api, /GENERAL_MEETING_WINDOW_DAYS/);
-  assert.match(api, /addCalendarDays\(today, GENERAL_MEETING_WINDOW_DAYS\)/);
+  assert.match(api, /addCalendarDays\(today, requestedDays\)/);
   assert.doesNotMatch(api, /addCalendarMonths/);
-  assert.match(panel, /ZWZ i NWZ · 60 dni/);
-  assert.doesNotMatch(panel, /days: 365/);
+  assert.match(panel, /ZWZ i NWZ · \$\{meetingDays\} dni/);
+  assert.match(panel, /CALENDAR_WINDOW_OPTIONS/);
 });
 
 test("cancelled meetings are not rendered as active upcoming events", async () => {

@@ -7,6 +7,7 @@
     "build": "next build",
     "start": "node --use-system-ca ./scripts/start-production.mjs",
     "test": "node --experimental-strip-types --import ./tests/register-alias-loader.mjs --test tests/**/*.test.mjs",
+    "audit:gpw-dividends": "node --experimental-strip-types --import ./tests/register-alias-loader.mjs scripts/validate-gpw-dividends-official.mjs",
     "migrate:sqlite-to-postgres": "node --experimental-strip-types scripts/migrate-sqlite-to-postgres.ts",
     "migrate:sqlite-to-postgres:apply": "node --experimental-strip-types scripts/migrate-sqlite-to-postgres.ts --apply",
     "lint": "eslint",

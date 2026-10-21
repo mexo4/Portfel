@@ -1,4 +1,5 @@
 /** Pure, server/client-neutral helpers for the public GPW events calendar. */
+import { getStatutoryMeetingRegistrationDate } from "@/lib/corporate-events";
 export const GPW_CALENDAR_CATEGORIES = ["all", "reports", "meetings", "dividends"] as const;
 export type GpwCalendarCategory = (typeof GPW_CALENDAR_CATEGORIES)[number];
 
@@ -202,7 +203,9 @@ export const expandGpwStoredCalendarEvent = (
     generalMeetingType: row.general_meeting_type ?? undefined,
     fiscalPeriod: row.fiscal_period ?? undefined,
     fiscalYear: row.fiscal_year ?? undefined,
-    registrationDate: row.registration_date ?? undefined,
+    registrationDate: row.event_type === "GENERAL_MEETING"
+      ? row.registration_date ?? getStatutoryMeetingRegistrationDate(row.event_date)
+      : undefined,
     dividendPerShare,
     dividendCurrency: row.dividend_currency ?? undefined,
     recordDate: row.record_date ?? undefined,

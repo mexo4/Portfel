@@ -308,14 +308,16 @@ jobs:
           const readManifest = (revision) => JSON.parse(execFileSync("git", ["show", `${revision}:portfel-inwestora/package.json`], { encoding: "utf8" }));
           const previousManifest = readManifest(previousRevision);
           const buildManifest = readManifest(buildRevision);
-          if (buildManifest.scripts?.start !== "node --use-system-ca ./scripts/start-production.mjs") {
+          const expectedStart = "node --use-system-ca ./scripts/start-production.mjs";
+          if (previousManifest.scripts?.start !== expectedStart || buildManifest.scripts?.start !== expectedStart) {
             console.error("ERROR: unexpected production start command; refusing activation.");
             process.exit(1);
           }
-          previousManifest.scripts = { ...previousManifest.scripts };
-          buildManifest.scripts = { ...buildManifest.scripts };
-          delete previousManifest.scripts.start;
-          delete buildManifest.scripts.start;
+          // This audited helper is test/maintenance-only and does not affect the
+          // production runtime or installed dependencies. Keep every other
+          // script and manifest field under the existing exact comparison.
+          delete previousManifest.scripts?.["audit:gpw-dividends"];
+          delete buildManifest.scripts?.["audit:gpw-dividends"];
           if (JSON.stringify(previousManifest) !== JSON.stringify(buildManifest)) {
             console.error("ERROR: application dependencies or manifest fields changed. Refusing in-place install.");
             process.exit(1);

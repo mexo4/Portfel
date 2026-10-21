@@ -70,6 +70,9 @@ const ESPI_OVERLAP_DAYS = 4;
 // page is treated as an exhausted/degraded pagination stream, so this never
 // relies on an arbitrary first-N-pages limit.
 const ESPI_OFFICIAL_REPAIR_DAYS = 370;
+const GPW_DIVIDEND_RECENT_DAYS = 7;
+const GPW_DIVIDEND_BACKFILL_DAYS_PER_SYNC = 21;
+const GPW_DIVIDEND_MAX_ROWS_PER_DAY = 2_000;
 const ESPI_FETCH_ATTEMPTS = 2;
 const ARTICLE_CONCURRENCY = 4;
 const ISSUER_METADATA_VERSION = 2;
@@ -1576,7 +1579,7 @@ const isPotentialGpwDividendCandidate = (candidate: PapEspiListCandidate) => {
     .replace(/[łŁ]/g, (character) => character === "Ł" ? "L" : "l")
     .toLocaleLowerCase("pl-PL");
 
-  return /dywidend|zaliczk\w*\s+(?:na\s+poczet\s+)?dywidend|podzial\w*\s+zysku|zysk\w*\s+za\s+rok|przeznaczen\w*\s+zysku/iu.test(text);
+  return /dywidend|zaliczk\w*\s+(?:na\s+poczet\s+)?(?:przewidywanej\s+)?dywidend|podzial\w*\s+(?:zysku|wyniku\s+finansowego)|zysk\w*\s+za\s+rok|przeznaczen\w*\s+(?:zysku|wyniku\s+finansowego)|uchwal\w*\s+(?:podjet\w*\s+)?na\s+(?:zwyczajnym\s+)?walnym\s+zgromadzeniu|tresc\s+uchwal\w*\s+podjet/iu.test(text);
 };
 
 export type GpwDividendSourceSyncResult = GpwGeneralMeetingSourceSyncResult;
@@ -1632,57 +1635,74 @@ export const synchronizeGpwDividendReports = ({ force = false }: { force?: boole
     let errors = 0;
     let overlapComplete = false;
     let lastOverlapAt: string | undefined;
+    let nextBackfillDay = Math.max(GPW_DIVIDEND_RECENT_DAYS, state.nextBackfillPage);
+    let backfillComplete = state.backfillComplete;
     const startedAt = Date.now();
 
     try {
       const today = getWarsawDate();
-      const repairBoundary = addDays(today, -ESPI_OFFICIAL_REPAIR_DAYS);
-      const priorOverlapDate = state.lastOverlapAt?.slice(0, 10);
-      const rollingBoundary = priorOverlapDate ? addDays(priorOverlapDate, -ESPI_OVERLAP_DAYS) : repairBoundary;
-      const stopBeforeDate = rollingBoundary < repairBoundary ? repairBoundary : rollingBoundary;
       const candidates: PapEspiListCandidate[] = [];
-      const pageSignatures = new Set<string>();
       const seenIds = new Set<string>();
 
-      for (let offset = 0; offset < 4_000; offset += 50) {
-        const response = await fetchGpwList({ offset });
-        if (response.status !== "SUCCESS") {
-          errors += 1;
-          status = response.status;
-          break;
-        }
-        pagesRead += 1;
-        const signature = createHash("sha256").update(response.document).digest("hex");
-        if (pageSignatures.has(signature)) {
-          errors += 1;
-          status = "TEMPORARILY_UNAVAILABLE";
-          diagnose({ provider: GPW_DIVIDEND_SOURCE, phase: "pagination", status: "REPEATED_PAGE", offset });
-          break;
-        }
-        pageSignatures.add(signature);
+      const collectDate = async (isoDate: string) => {
+        const pageSignatures = new Set<string>();
+        for (let offset = 0; offset < GPW_DIVIDEND_MAX_ROWS_PER_DAY; offset += 50) {
+          const response = await fetchGpwList({ offset, date: toGpwDate(isoDate) });
+          if (response.status !== "SUCCESS") {
+            errors += 1;
+            status = response.status;
+            diagnose({ provider: GPW_DIVIDEND_SOURCE, phase: "dated-page", date: isoDate, offset, status: response.status });
+            return false;
+          }
+          pagesRead += 1;
+          const signature = createHash("sha256").update(response.document).digest("hex");
+          if (pageSignatures.has(signature)) {
+            errors += 1;
+            status = "TEMPORARILY_UNAVAILABLE";
+            diagnose({ provider: GPW_DIVIDEND_SOURCE, phase: "dated-pagination", date: isoDate, status: "REPEATED_PAGE", offset });
+            return false;
+          }
+          pageSignatures.add(signature);
 
-        const parsedPage = parseGpwEspiList(response.document);
-        if (parsedPage.malformedRows > 0) errors += parsedPage.malformedRows;
-        const pageCandidates = parsedPage.candidates;
-        for (const candidate of pageCandidates) {
-          if (!seenIds.has(candidate.sourceId)) {
+          const parsedPage = parseGpwEspiList(response.document);
+          if (parsedPage.malformedRows > 0) errors += parsedPage.malformedRows;
+          for (const candidate of parsedPage.candidates) {
+            if (seenIds.has(candidate.sourceId)) continue;
             seenIds.add(candidate.sourceId);
             if (isPotentialGpwDividendCandidate(candidate)) candidates.push(candidate);
           }
+          if (parsedPage.eligibleRows < 50) return true;
         }
+        errors += 1;
+        status = "PARSE_ERROR";
+        diagnose({ provider: GPW_DIVIDEND_SOURCE, phase: "dated-pagination", date: isoDate, status: "ROW_LIMIT" });
+        return false;
+      };
 
-        if (parsedPage.eligibleRows === 0) {
-          overlapComplete = true;
-          break;
+      // Always repair the newest publications so a report cannot fall into a
+      // gap between hourly runs. The exact-date endpoint makes the overlap
+      // bounded and deterministic instead of repeatedly walking page zero.
+      overlapComplete = true;
+      for (let day = 0; day < GPW_DIVIDEND_RECENT_DAYS; day += 1) {
+        if (!await collectDate(addDays(today, -day))) overlapComplete = false;
+      }
+
+      // The same persisted cursor performs a rotating 12-month repair pass.
+      // Once a complete pass has been reached it wraps and continues to audit
+      // older dates without downloading the whole archive on every request.
+      for (let index = 0; index < GPW_DIVIDEND_BACKFILL_DAYS_PER_SYNC; index += 1) {
+        if (nextBackfillDay >= ESPI_OFFICIAL_REPAIR_DAYS) {
+          backfillComplete = true;
+          nextBackfillDay = GPW_DIVIDEND_RECENT_DAYS;
         }
-        const oldest = pageCandidates
-          .map((candidate) => candidate.sourcePublishedAt?.slice(0, 10))
-          .filter((value): value is string => Boolean(value))
-          .sort()[0];
-        if (parsedPage.eligibleRows < 50 || (oldest && oldest < stopBeforeDate)) {
-          overlapComplete = true;
-          break;
-        }
+        const day = nextBackfillDay;
+        const completed = await collectDate(addDays(today, -day));
+        if (!completed) break;
+        nextBackfillDay = day + 1;
+      }
+      if (nextBackfillDay >= ESPI_OFFICIAL_REPAIR_DAYS) {
+        backfillComplete = true;
+        nextBackfillDay = GPW_DIVIDEND_RECENT_DAYS;
       }
 
       const uniqueCandidates = Array.from(new Map(candidates.map((candidate) => [candidate.sourceId, candidate])).values());
@@ -1701,9 +1721,10 @@ export const synchronizeGpwDividendReports = ({ force = false }: { force?: boole
         if (response.status !== "SUCCESS") return { candidate, status: response.status, report: null };
         const report = parseGpwEspiReport(response.document, candidate);
         if (!report) return { candidate, status: "PARSE_ERROR" as const, report: null };
-        const events = parseCorporateEventDocument(`${report.sourceTitle}\n${report.title}\n${report.body}`)
-          .filter((event) => event.eventType === "UPCOMING_DIVIDEND");
-        return { candidate, status: "SUCCESS" as const, report: events.length ? report : null };
+        // Preserve every plausible official report. Parser improvements can
+        // then safely re-project old NO_EVENT rows without re-fetching the
+        // source or losing evidence that was not understood at ingestion time.
+        return { candidate, status: "SUCCESS" as const, report };
       });
 
       let parsed = 0;
@@ -1743,9 +1764,11 @@ export const synchronizeGpwDividendReports = ({ force = false }: { force?: boole
         source: GPW_DIVIDEND_SOURCE,
         status,
         errorCode: errors ? `DIVIDEND_SYNC_ERRORS_${errors}` : undefined,
+        nextBackfillPage: nextBackfillDay,
+        backfillComplete,
         lastOverlapAt,
       });
-      console.info(`[DIVIDEND SOURCE SYNC] pages=${pagesRead} candidates=${uniqueCandidates.length} fetched=${pending.length} parsed=${parsed} saved=${saved} duplicates=${duplicates} errors=${errors} durationMs=${Date.now() - startedAt}`);
+      console.info(`[DIVIDEND SOURCE SYNC] pages=${pagesRead} candidates=${uniqueCandidates.length} fetched=${pending.length} parsed=${parsed} saved=${saved} duplicates=${duplicates} errors=${errors} recentComplete=${overlapComplete} backfillDay=${nextBackfillDay}/${ESPI_OFFICIAL_REPAIR_DAYS} backfillComplete=${backfillComplete} durationMs=${Date.now() - startedAt}`);
       return {
         status,
         pagesRead,

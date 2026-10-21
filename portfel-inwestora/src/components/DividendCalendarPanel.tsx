@@ -63,6 +63,37 @@ const isWithinFilter = (event: CorporateEvent, from: string, to: string) => {
   return dates.some((date) => (!from || date >= from) && (!to || date <= to));
 };
 
+const DividendSources = ({ event }: { event: CorporateEvent }) => {
+  const sources = Array.from(new Map(
+    [event.source, ...(event.sources ?? [])]
+      .filter((source): source is NonNullable<CorporateEvent["source"]> => Boolean(source?.sourceUrl))
+      .map((source) => [source.sourceUrl, source])
+  ).values());
+  if (!sources.length) return null;
+  const [primary, ...additional] = sources;
+  return (
+    <div className="dividend-calendar-sources">
+      <a className="corporate-event-source" href={primary!.sourceUrl} target="_blank" rel="noreferrer">
+        Źródło
+      </a>
+      {additional.length ? (
+        <details>
+          <summary>Pozostałe źródła ({additional.length})</summary>
+          <ul>
+            {additional.map((source) => (
+              <li key={source.sourceUrl}>
+                <a href={source.sourceUrl} target="_blank" rel="noreferrer">
+                  {source.sourceTitle || "Oficjalny komunikat"}
+                </a>
+              </li>
+            ))}
+          </ul>
+        </details>
+      ) : null}
+    </div>
+  );
+};
+
 export default function DividendCalendarPanel() {
   const [data, setData] = useState<DividendCalendarResponse | null>(null);
   const [scope, setScope] = useState<DividendCalendarScope>("all");
@@ -192,9 +223,17 @@ export default function DividendCalendarPanel() {
         <p className="corporate-events-state" aria-live="polite">
           {data.sourceState.isRefreshing
             ? "Aktualizowanie oficjalnych komunikatów GPW…"
-            : data.sourceState.status === "SUCCESS" && !data.sourceState.isStale
+            : data.sourceState.status === "SUCCESS" && !data.sourceState.isStale && data.sourceState.sourceBackfillComplete
               ? `Ostatnia udana synchronizacja: ${formatSyncTime(data.sourceState.lastSuccessfulSyncAt) ?? "niedawno"}.`
-              : `Dane mogą być częściowe. Ostatnia udana synchronizacja: ${formatSyncTime(data.sourceState.lastSuccessfulSyncAt) ?? "brak"}.`}
+              : data.sourceState.status === "SUCCESS"
+                ? `Trwa uzupełnianie archiwum oficjalnych komunikatów. Ostatnia udana synchronizacja: ${formatSyncTime(data.sourceState.lastSuccessfulSyncAt) ?? "niedawno"}.`
+                : `Dane mogą być częściowe. Ostatnia udana synchronizacja: ${formatSyncTime(data.sourceState.lastSuccessfulSyncAt) ?? "brak"}.`}
+          {!data.sourceState.isRefreshing && (data.sourceState.projectionPending ?? 0) > 0
+            ? " Część pobranych komunikatów nadal czeka na weryfikację."
+            : ""}
+          {!data.sourceState.isRefreshing && ((data.sourceState.projectionErrors ?? 0) > 0 || (data.sourceState.projectionUnmatched ?? 0) > 0)
+            ? " Nie wszystkie komunikaty udało się obecnie jednoznacznie przetworzyć."
+            : ""}
         </p>
       ) : null}
       {isLoading ? <p className="corporate-events-state">Sprawdzanie zapisanych dywidend…</p> : null}
@@ -223,9 +262,7 @@ export default function DividendCalendarPanel() {
                 <div><dt>Dzień wypłaty</dt><dd>{event.paymentDate ? formatDate(event.paymentDate) : "Nie ogłoszono"}</dd></div>
               </dl>
               <span className={getStatusClass(event, today)}>{getStatusLabel(event, today)}</span>
-              {event.source?.sourceUrl ? (
-                <a className="corporate-event-source" href={event.source.sourceUrl} target="_blank" rel="noreferrer">Źródło</a>
-              ) : null}
+              <DividendSources event={event} />
             </article>
           ))}
         </div>

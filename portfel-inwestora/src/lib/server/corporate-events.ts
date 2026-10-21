@@ -82,6 +82,8 @@ type EventRow = {
   source_type: CorporateEventSourceType | null;
   source_url: string | null;
   source_source_published_at: string | null;
+  source_title: string | null;
+  sources_json: CorporateEventSourceReference[] | string | null;
 };
 
 type ExistingEventRow = Pick<
@@ -921,7 +923,7 @@ const upsertParsedEvents = async (
           WHERE instrument_id = $1
             AND event_type = $2
             AND event_identity = $3
-            AND ($2 = 'GENERAL_MEETING' OR active = TRUE)
+            AND ($2 IN ('GENERAL_MEETING', 'UPCOMING_DIVIDEND') OR active = TRUE)
           ORDER BY active DESC, updated_at DESC
           LIMIT 1
           FOR UPDATE
@@ -1059,7 +1061,7 @@ const upsertParsedEvents = async (
                 WHEN registration_date_source = 'OFFICIAL' THEN 'OFFICIAL'
                 ELSE NULL
               END,
-              dividend_per_share = $8,
+              dividend_per_share = COALESCE($8, dividend_per_share),
               dividend_total_per_share = COALESCE($9, dividend_total_per_share),
               dividend_advance_per_share = COALESCE($10, dividend_advance_per_share),
               dividend_currency = COALESCE($11, dividend_currency),
@@ -1107,12 +1109,19 @@ const upsertParsedEvents = async (
     await transaction.execute(
       `
         INSERT INTO corporate_event_sources (
-          id, corporate_event_id, source_type, source_url, source_published_at, source_priority, discovered_at
+          id, corporate_event_id, source_type, source_url, source_published_at, source_priority,
+          source_title, confirms_amount, confirms_record_date, confirms_payment_date,
+          confirms_status, discovered_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
         ON CONFLICT (corporate_event_id, source_url) DO UPDATE
         SET source_published_at = COALESCE(EXCLUDED.source_published_at, corporate_event_sources.source_published_at),
-            source_priority = GREATEST(corporate_event_sources.source_priority, EXCLUDED.source_priority)
+            source_priority = GREATEST(corporate_event_sources.source_priority, EXCLUDED.source_priority),
+            source_title = COALESCE(EXCLUDED.source_title, corporate_event_sources.source_title),
+            confirms_amount = corporate_event_sources.confirms_amount OR EXCLUDED.confirms_amount,
+            confirms_record_date = corporate_event_sources.confirms_record_date OR EXCLUDED.confirms_record_date,
+            confirms_payment_date = corporate_event_sources.confirms_payment_date OR EXCLUDED.confirms_payment_date,
+            confirms_status = corporate_event_sources.confirms_status OR EXCLUDED.confirms_status
       `,
       [
         sourceId,
@@ -1121,6 +1130,11 @@ const upsertParsedEvents = async (
         batch.source.sourceUrl,
         batch.source.sourcePublishedAt ?? null,
         toSourcePriority(batch.source, parsed),
+        batch.source.sourceTitle ?? null,
+        parsed.dividendPerShare !== undefined,
+        parsed.recordDate !== undefined,
+        parsed.paymentDate !== undefined,
+        getParsedEventStatus(parsed) !== "UNKNOWN",
         now,
       ]
     );
@@ -1161,11 +1175,10 @@ const upsertParsedEvents = async (
         WHERE instrument_id = $2
           AND event_type = 'UPCOMING_DIVIDEND'
           AND fiscal_year = $3
-          AND dividend_installment IS NOT NULL
           AND active = TRUE
-          AND NOT (event_identity = ANY($4::text[]))
+          AND event_identity = $4
       `,
-      [new Date().toISOString(), instrument.id, fiscalYear, expectedIdentities]
+      [new Date().toISOString(), instrument.id, fiscalYear, `dividend:${fiscalYear}:single`]
     );
   }
   return { created, duplicates, saved };
@@ -1269,6 +1282,20 @@ const refreshCanonicalInstrument = async (
   return refresh;
 };
 
+const getEventSources = (row: EventRow): CorporateEventSourceReference[] => {
+  const value = typeof row.sources_json === "string"
+    ? JSON.parse(row.sources_json) as CorporateEventSourceReference[]
+    : row.sources_json;
+  return Array.isArray(value)
+    ? value.map((source) => ({
+        sourceType: source.sourceType,
+        sourceUrl: source.sourceUrl,
+        sourcePublishedAt: source.sourcePublishedAt ?? undefined,
+        sourceTitle: source.sourceTitle ?? undefined,
+      }))
+    : [];
+};
+
 const toCorporateEvent = (row: EventRow): CorporateEvent => ({
   id: row.id,
   instrumentId: row.instrument_id,
@@ -1302,8 +1329,10 @@ const toCorporateEvent = (row: EventRow): CorporateEvent => ({
           sourceType: row.source_type,
           sourceUrl: row.source_url,
           sourcePublishedAt: row.source_source_published_at ?? undefined,
+          sourceTitle: row.source_title ?? undefined,
         }
       : undefined,
+  sources: getEventSources(row),
 });
 
 const getStoredEvents = async (
@@ -1324,21 +1353,44 @@ const getStoredEvents = async (
              event.ex_dividend_date, event.record_date, event.payment_date,
              event.dividend_installment, event.status, event.active, event.source_published_at,
              event.discovered_at, event.updated_at,
-             source.source_type, source.source_url,
-             source.source_published_at AS source_source_published_at
+             source.source_type, source.source_url, source.source_title,
+             source.source_published_at AS source_source_published_at,
+             source_list.sources_json
       FROM corporate_events AS event
       INNER JOIN corporate_event_instruments AS instrument ON instrument.id = event.instrument_id
       LEFT JOIN LATERAL (
-        SELECT source_type, source_url, source_published_at
+        SELECT source_type, source_url, source_published_at, source_title
         FROM corporate_event_sources
         WHERE corporate_event_id = event.id
           AND NOT (
             event.event_type = 'GENERAL_MEETING'
             AND source_url ~* '[?&]title=(opinia|stanowisko)'
           )
-        ORDER BY source_priority DESC, source_published_at DESC NULLS LAST, discovered_at DESC
+        ORDER BY
+          (confirms_amount::int + confirms_record_date::int + confirms_payment_date::int + confirms_status::int) DESC,
+          source_priority DESC, source_published_at DESC NULLS LAST, discovered_at DESC
         LIMIT 1
       ) AS source ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT jsonb_agg(
+          jsonb_build_object(
+            'sourceType', ranked.source_type,
+            'sourceUrl', ranked.source_url,
+            'sourcePublishedAt', ranked.source_published_at,
+            'sourceTitle', ranked.source_title
+          )
+          ORDER BY ranked.evidence_count DESC, ranked.source_priority DESC,
+                   ranked.source_published_at DESC NULLS LAST, ranked.discovered_at DESC
+        ) AS sources_json
+        FROM (
+          SELECT source_type, source_url, source_published_at, source_title,
+                 source_priority, discovered_at,
+                 confirms_amount::int + confirms_record_date::int +
+                 confirms_payment_date::int + confirms_status::int AS evidence_count
+          FROM corporate_event_sources
+          WHERE corporate_event_id = event.id
+        ) AS ranked
+      ) AS source_list ON TRUE
       WHERE ($1::text[] IS NULL OR event.instrument_id = ANY($1::text[]))
         AND event.active = TRUE
         AND ($4::text[] IS NULL OR event.event_type = ANY($4::text[]))
@@ -1611,9 +1663,32 @@ export const getGlobalGeneralMeetingSourceState = getGpwGeneralMeetingSyncState;
 
 export type GlobalDividendSyncResult = GlobalGeneralMeetingSyncResult;
 
-const DIVIDEND_PROJECTION_VERSION = 4;
+const DIVIDEND_PROJECTION_VERSION = 5;
 const DIVIDEND_PROJECTION_BATCH_SIZE = 100;
 const DIVIDEND_UNMATCHED_RETRY_MS = 7 * 24 * 60 * 60 * 1_000;
+const DIVIDEND_REPORT_CANDIDATE_SQL = `
+  (
+    report.category = 'DIVIDEND'
+    OR report.source_title ILIKE '%dywidend%'
+    OR report.title ILIKE '%dywidend%'
+    OR report.source_title ILIKE '%zaliczk%'
+    OR report.title ILIKE '%zaliczk%'
+    OR report.source_title ILIKE '%podzia%zysku%'
+    OR report.title ILIKE '%podzia%zysku%'
+    OR report.source_title ILIKE '%wyniku finansowego%'
+    OR report.title ILIKE '%wyniku finansowego%'
+    OR report.body_text ~* '(dzie[nń] dywidendy|ustalenia praw[a]? do dywidendy|ustalenia uprawnionych|wypłat[ay] dywidendy|zaliczk[a-ząćęłńóśźż ]{0,80}dywidend)'
+  )
+`;
+
+export type DividendProjectionDiagnostics = {
+  candidateReports: number;
+  recognized: number;
+  noEvent: number;
+  unmatched: number;
+  errors: number;
+  pending: number;
+};
 
 let globalDividendSyncInFlight: Promise<GlobalDividendSyncResult> | null = null;
 
@@ -1663,13 +1738,7 @@ export const synchronizeGlobalDividends = ({
           AND report.source_id NOT LIKE 'newconnect:%'
           AND report.market <> 'NEWCONNECT'
           AND (instrument.market = 'GPW' OR (instrument.id IS NULL AND report.market IN ('GPW', 'UNKNOWN')))
-          AND (
-            report.category = 'DIVIDEND'
-            OR report.source_title ILIKE '%dywidend%'
-            OR report.title ILIKE '%dywidend%'
-            OR report.source_title ILIKE '%podzia%zysku%'
-            OR report.title ILIKE '%podzia%zysku%'
-          )
+          AND ${DIVIDEND_REPORT_CANDIDATE_SQL}
           AND (
             report.dividend_projection_version IS DISTINCT FROM $2
             OR report.dividend_projection_status = 'PARSE_ERROR'
@@ -1729,6 +1798,7 @@ export const synchronizeGlobalDividends = ({
                 : "PAP_ESPI",
               sourceUrl: report.source_url,
               sourcePublishedAt: report.published_at,
+              sourceTitle: report.source_title || report.title,
             },
           });
           await transaction.execute(
@@ -1779,13 +1849,7 @@ export const synchronizeGlobalDividends = ({
           AND report.source_id NOT LIKE 'newconnect:%'
           AND report.market <> 'NEWCONNECT'
           AND (instrument.market = 'GPW' OR (instrument.id IS NULL AND report.market IN ('GPW', 'UNKNOWN')))
-          AND (
-            report.category = 'DIVIDEND'
-            OR report.source_title ILIKE '%dywidend%'
-            OR report.title ILIKE '%dywidend%'
-            OR report.source_title ILIKE '%podzia%zysku%'
-            OR report.title ILIKE '%podzia%zysku%'
-          )
+          AND ${DIVIDEND_REPORT_CANDIDATE_SQL}
           AND (
             report.dividend_projection_version IS DISTINCT FROM $2
             OR report.dividend_projection_status = 'PARSE_ERROR'
@@ -1805,6 +1869,47 @@ export const synchronizeGlobalDividends = ({
   });
 
   return globalDividendSyncInFlight;
+};
+
+export const getDividendProjectionDiagnostics = async (): Promise<DividendProjectionDiagnostics> => {
+  const publishedAfter = new Date(Date.now() - 730 * 24 * 60 * 60 * 1_000).toISOString();
+  const unmatchedRetryBefore = new Date(Date.now() - DIVIDEND_UNMATCHED_RETRY_MS).toISOString();
+  const row = await queryOne<Record<keyof DividendProjectionDiagnostics, number | string>>(
+    `
+      SELECT
+        COUNT(*) AS "candidateReports",
+        COUNT(*) FILTER (WHERE report.dividend_projection_status = 'SUCCESS') AS recognized,
+        COUNT(*) FILTER (WHERE report.dividend_projection_status = 'NO_EVENT') AS "noEvent",
+        COUNT(*) FILTER (WHERE report.dividend_projection_status = 'UNMATCHED') AS unmatched,
+        COUNT(*) FILTER (WHERE report.dividend_projection_status = 'PARSE_ERROR') AS errors,
+        COUNT(*) FILTER (
+          WHERE report.dividend_projection_version IS DISTINCT FROM $2
+             OR report.dividend_projection_status IS NULL
+             OR report.dividend_projection_status = 'PARSE_ERROR'
+             OR (
+               report.dividend_projection_status = 'UNMATCHED'
+               AND report.dividend_projected_at < $3
+             )
+        ) AS pending
+      FROM espi_reports AS report
+      LEFT JOIN corporate_event_instruments AS instrument ON instrument.id = report.issuer_id
+      WHERE report.source = 'PAP_ESPI'
+        AND report.published_at >= $1
+        AND report.source_id NOT LIKE 'newconnect:%'
+        AND report.market <> 'NEWCONNECT'
+        AND (instrument.market = 'GPW' OR (instrument.id IS NULL AND report.market IN ('GPW', 'UNKNOWN')))
+        AND ${DIVIDEND_REPORT_CANDIDATE_SQL}
+    `,
+    [publishedAfter, DIVIDEND_PROJECTION_VERSION, unmatchedRetryBefore]
+  );
+  return {
+    candidateReports: Number(row?.candidateReports ?? 0),
+    recognized: Number(row?.recognized ?? 0),
+    noEvent: Number(row?.noEvent ?? 0),
+    unmatched: Number(row?.unmatched ?? 0),
+    errors: Number(row?.errors ?? 0),
+    pending: Number(row?.pending ?? 0),
+  };
 };
 
 export const getGlobalDividends = async ({

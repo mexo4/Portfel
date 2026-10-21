@@ -4,6 +4,7 @@ import { getCurrentAuthenticatedUser } from "@/lib/server/auth";
 import {
   getGlobalDividends,
   getGlobalDividendSourceState,
+  getDividendProjectionDiagnostics,
   synchronizeGlobalDividends,
 } from "@/lib/server/corporate-events";
 import { getUserTrackedGpwInstruments } from "@/lib/server/espi";
@@ -83,6 +84,7 @@ export async function GET(request: Request) {
       : tracked
           .filter((instrument) => scope === "watchlist" ? instrument.watched : instrument.held)
           .map((instrument) => instrument.canonicalKey);
+    const diagnostics = await getDividendProjectionDiagnostics();
     const response: DividendCalendarResponse = {
       events: await getGlobalDividends({
         fromDate: today,
@@ -96,7 +98,10 @@ export async function GET(request: Request) {
         lastSuccessfulSyncAt: initialState.lastSuccessAt,
         isRefreshing: initialState.isRefreshing || shouldRefreshSource || dividendProjectionInFlight,
         isStale: initialState.isStale,
-        projectionPending: 0,
+        projectionPending: diagnostics.pending,
+        projectionErrors: diagnostics.errors,
+        projectionUnmatched: diagnostics.unmatched,
+        sourceBackfillComplete: initialState.backfillComplete,
       },
     };
     return NextResponse.json(response, {

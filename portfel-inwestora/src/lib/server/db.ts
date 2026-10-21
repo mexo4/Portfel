@@ -488,6 +488,11 @@ const schemaStatements = [
       UNIQUE (corporate_event_id, source_url)
     )
   `,
+  "ALTER TABLE corporate_event_sources ADD COLUMN IF NOT EXISTS source_title TEXT",
+  "ALTER TABLE corporate_event_sources ADD COLUMN IF NOT EXISTS confirms_amount BOOLEAN NOT NULL DEFAULT FALSE",
+  "ALTER TABLE corporate_event_sources ADD COLUMN IF NOT EXISTS confirms_record_date BOOLEAN NOT NULL DEFAULT FALSE",
+  "ALTER TABLE corporate_event_sources ADD COLUMN IF NOT EXISTS confirms_payment_date BOOLEAN NOT NULL DEFAULT FALSE",
+  "ALTER TABLE corporate_event_sources ADD COLUMN IF NOT EXISTS confirms_status BOOLEAN NOT NULL DEFAULT FALSE",
   "CREATE INDEX IF NOT EXISTS idx_corporate_event_sources_event_id ON corporate_event_sources(corporate_event_id)",
   `
     CREATE TABLE IF NOT EXISTS corporate_event_source_checks (

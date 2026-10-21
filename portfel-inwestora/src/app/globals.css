@@ -191,6 +191,35 @@
   background: rgba(255, 239, 202, 0.72);
 }
 
+.dividend-calendar-sources {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.dividend-calendar-sources details {
+  color: var(--muted);
+  font-size: .72rem;
+}
+
+.dividend-calendar-sources summary {
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.dividend-calendar-sources ul {
+  display: grid;
+  gap: 4px;
+  margin: 6px 0 0;
+  padding-left: 16px;
+}
+
+.dividend-calendar-sources li,
+.dividend-calendar-sources a {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 @media (max-width: 1050px) {
   .dividend-calendar-filters {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -230,6 +259,7 @@
   }
 
   .dividend-calendar-row .corporate-event-source,
+  .dividend-calendar-sources,
   .dividend-calendar-status {
     justify-self: start;
   }

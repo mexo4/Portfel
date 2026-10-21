@@ -74,6 +74,7 @@ export type CorporateEventSourceReference = {
   sourceType: CorporateEventSourceType;
   sourceUrl: string;
   sourcePublishedAt?: string;
+  sourceTitle?: string;
 };
 
 export type CorporateEvent = {
@@ -114,6 +115,7 @@ export type CorporateEvent = {
    * watchlist-only company is informational and never represents a claim. */
   trackingSource?: "HELD" | "WATCHLIST" | "HELD_AND_WATCHLIST";
   source?: CorporateEventSourceReference;
+  sources?: CorporateEventSourceReference[];
 };
 
 export type CorporateEventHistoryEntry = {
@@ -155,6 +157,9 @@ export type GeneralMeetingsResponse = {
     isRefreshing?: boolean;
     isStale?: boolean;
     projectionPending?: number;
+    projectionErrors?: number;
+    projectionUnmatched?: number;
+    sourceBackfillComplete?: boolean;
   };
 };
 
@@ -225,10 +230,10 @@ const POLISH_MONTHS: Record<string, string> = {
 };
 
 const DATE_PATTERN =
-  /\b(\d{1,2})\s*(?:[.\-/]\s*)?([a-zA-ZąćęłńóśźżĄĆĘŁŃÓŚŹŻ]+)\s+(20\d{2})\b|\b(\d{1,2})[.\-/](\d{1,2})[.\-/](20\d{2})\b/g;
+  /\b(\d{1,2})\s*(?:[.\-/]\s*)?([a-zA-ZąćęłńóśźżĄĆĘŁŃÓŚŹŻ]+)\s+(20\d{2})(?:\s*(?:roku|r)\.?)?(?!\d)|\b(\d{1,2})[.\-/](\d{1,2})[.\-/](20\d{2})(?:\s*(?:roku|r)\.?)?(?!\d)/g;
 
 const UNICODE_DATE_PATTERN =
-  /\b(\d{1,2})\s*(?:[.\-/]\s*)?([\p{L}]+)\s+(20\d{2})\b|\b(\d{1,2})[.\-/](\d{1,2})[.\-/](20\d{2})\b|\b([\p{L}]+)\s+(\d{1,2})(?:st|nd|rd|th)?[,]?\s+(20\d{2})\b/giu;
+  /\b(\d{1,2})\s*(?:[.\-/]\s*)?([\p{L}]+)\s+(20\d{2})(?:\s*(?:roku|r)\.?)?(?!\d)|\b(\d{1,2})[.\-/](\d{1,2})[.\-/](20\d{2})(?:\s*(?:roku|r)\.?)?(?!\d)|\b([\p{L}]+)\s+(\d{1,2})(?:st|nd|rd|th)?[,]?\s+(20\d{2})\b/giu;
 
 const normalizeDocumentText = (value: string) =>
   value
@@ -343,7 +348,12 @@ const getDividendFiscalYear = (value: string) => {
   const completedYear = value.match(
     /za\s+rok[^.]{0,120}zakończon[^.]{0,80}\b(20\d{2})\b/iu
   )?.[1];
-  return completedYear ? Number(completedYear) : getFiscalYear(value);
+  if (completedYear) return Number(completedYear);
+  const profitYear = value.match(
+    /(?:zysku|straty)(?:\s+netto)?(?:\s+spółki)?\s+za(?:\s+rok(?:\s+obrotowy)?)?\s+(20\d{2})(?:\s*\/\s*(20\d{2}))?/iu
+  );
+  if (profitYear?.[2]) return Number(profitYear[2]);
+  return profitYear?.[1] ? Number(profitYear[1]) : getFiscalYear(value);
 };
 
 const getCandidateSegments = (text: string) => {
@@ -650,6 +660,14 @@ const getDividendStatus = (text: string): Extract<
 > => {
   const normalized = text.toLocaleLowerCase("pl-PL");
 
+  const finalApproval =
+    /rada\s+nadzorcza[\s\S]{0,180}?(?:wyraziła|udzieliła|podjęła|postanowiła\s+wyrazić).{0,80}zgod|zgod[ae]\s+rady\s+nadzorczej|waln\w*\s+zgromadzeni\w*[\s\S]{0,120}?(?:podj.{0,24}uchwa|postanowi)|uchwał[ae]\s+(?:zwyczajnego|nadzwyczajnego)?\s*walnego\s+zgromadzenia/u.test(normalized);
+  const conditionalAdvance =
+    /warunkiem\s+wypłat[yi][\s\S]{0,180}?zgod[ayę]\s+rady\s+nadzorczej|uchwał\w*\s+o\s+(?:przedłożeniu|skierowaniu)[\s\S]{0,140}?(?:wniosku|rekomendacji)|zamiar\w*\s+wypłat[yi]\s+zaliczk/u.test(normalized);
+
+  if (conditionalAdvance && !finalApproval) return "PROPOSED";
+  if (finalApproval) return "CONFIRMED";
+
   // A proposal often says that the final decision will be taken by the AGM.
   // A bare mention of the meeting must never promote it to a confirmed cash
   // distribution.
@@ -680,25 +698,37 @@ type ParsedDividendAmount = {
   amount: number;
   index: number;
   installment: boolean;
+  currency: string;
+};
+
+const getDividendCurrency = (text: string, amountIndex: number) => {
+  const context = text.slice(Math.max(0, amountIndex - 24), amountIndex + 80);
+  const code = context.match(/\b(PLN|EUR|USD|GBP)\b/iu)?.[1]?.toUpperCase();
+  if (code) return code;
+  return /zł|zlot|złot|\bzl\b/iu.test(context) ? "PLN" : "PLN";
 };
 
 const getDividendAmounts = (text: string): ParsedDividendAmount[] => {
   const perSharePattern =
-    /(?:^|[^\d])(\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{1,4})?)\s*(?:zł(?:ot(?:y|a|ych|e))?|zl(?:otych)?|pln)\s*(?:\([^)]{0,80}\)\s*)?(?:brutto\s*)?(?:na|\/)\s*(?:(?:jedn[aą]|1)\s*)?akcj/gi;
+    /(?:^|[^\d])(\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{1,4})?)\s*(?:zł(?:ot(?:y|a|ych|e))?|zl(?:otych)?|pln|eur|usd|gbp)\s*(?:\([^)]{0,80}\)\s*)?(?:brutto\s*)?(?:na|\/)\s*(?:(?:jedn[aą]|1)\s*)?akcj/gi;
   const amountAfterPerSharePattern =
-    /(?:na|dla)\s*(?:(?:jedn[aą]|1)\s*)?akcj[ęe]\s*(?:(?:przeznacza\s+się|przypada|wynosi|w\s+wysokości)\s*)?(\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{1,4})?)\s*(?:zł(?:ot(?:y|a|ych|e))?|zl(?:otych)?|pln)/gi;
+    /(?:na|dla)\s*(?:(?:jedn[aą]|1)\s*)?akcj[ęe]\s*(?:(?:przeznacza\s+się|przypada|wynosi|w\s+wysokości)\s*)?(\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{1,4})?)\s*(?:zł(?:ot(?:y|a|ych|e))?|zl(?:otych)?|pln|eur|usd|gbp)/gi;
   const unicodePerSharePattern =
-    /(?:^|[^\d])(\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{1,4})?)\s*(?:z\u0142(?:ot(?:y|a|ych|e))?|zl(?:otych)?|pln)\s*(?:\([^)]{0,80}\)\s*)?(?:brutto\s*)?(?:na|\/)\s*(?:(?:jedn(?:a|\u0105)|1)\s*)?akcj/giu;
+    /(?:^|[^\d])(\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{1,4})?)\s*(?:z\u0142(?:ot(?:y|a|ych|e))?|zl(?:otych)?|pln|eur|usd|gbp)\s*(?:\([^)]{0,80}\)\s*)?(?:brutto\s*)?(?:na|\/)\s*(?:(?:jedn(?:a|\u0105)|ka\u017cd(?:a|\u0105)|1)\s*)?akcj/giu;
   const unicodeAmountAfterPerSharePattern =
-    /(?:na|dla)\s*(?:(?:jedn(?:a|\u0105)|1)\s*)?akcj(?:\u0119|e)\s*(?:(?:przeznacza\s+si\u0119|przypada|wynosi|w\s+wysoko\u015Bci)\s*)?(\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{1,4})?)\s*(?:z\u0142(?:ot(?:y|a|ych|e))?|zl(?:otych)?|pln)/giu;
+    /(?:na|dla)\s*(?:(?:jedn(?:a|\u0105)|1)\s*)?akcj(?:\u0119|e)\s*(?:(?:przeznacza\s+si\u0119|przypada|wynosi|w\s+wysoko\u015Bci)\s*)?(\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{1,4})?)\s*(?:z\u0142(?:ot(?:y|a|ych|e))?|zl(?:otych)?|pln|eur|usd|gbp)/giu;
   const labeledAmountAfterPerSharePattern =
-    /(?:kwota|wysokość)\s+dywidendy(?:\s+brutto)?\s+(?:na|dla)\s*(?:(?:jedn(?:ą|a)|1)\s*)?akcj[ęe]\s*(?::|wynosi(?:\s+obecnie)?|w\s+wysokości)?\s*(\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{1,4})?)\s*(?:zł(?:ot(?:y|a|ych|e))?|zl(?:otych)?|pln)/giu;
+    /(?:kwota|wysokość)\s+dywidendy(?:\s+brutto)?\s+(?:na|dla)\s*(?:(?:jedn(?:ą|a)|1)\s*)?akcj[ęe]\s*(?::|wynosi(?:\s+obecnie)?|w\s+wysokości)?\s*(\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{1,4})?)\s*(?:zł(?:ot(?:y|a|ych|e))?|zl(?:otych)?|pln|eur|usd|gbp)/giu;
   const descriptiveAmountAfterPerSharePattern =
-    /(?:kwota|wysokość)\s+dywidendy[\s\S]{0,220}?(?:na|dla)\s*(?:(?:jedn(?:ą|a)|1)\s*)?akcj[ęe][\s\S]{0,220}?(\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{1,4})?)\s*(?:zł(?:ot(?:y|a|ych|e))?|zl(?:otych)?|pln)/giu;
+    /(?:kwota|wysokość)\s+dywidendy[\s\S]{0,220}?(?:na|dla)\s*(?:(?:jedn(?:ą|a)|1)\s*)?akcj[ęe][\s\S]{0,220}?(\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{1,4})?)\s*(?:zł(?:ot(?:y|a|ych|e))?|zl(?:otych)?|pln|eur|usd|gbp)/giu;
   const amountWithWrittenWordsBeforePerSharePattern =
-    /(?:^|[^\d])(\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{1,4})?)\s*(?:zł(?:ot(?:y|a|ych|e))?|zl(?:otych)?|pln)(?:\s*(?:_[^_\n]{0,120}_|\([^)]{0,120}\)))?\s*(?:brutto\s*)?(?:na|\/)\s*(?:(?:jedn(?:ą|a)|1)\s*)?akcj/giu;
+    /(?:^|[^\d])(\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{1,4})?)\s*(?:zł(?:ot(?:y|a|ych|e))?|zl(?:otych)?|pln|eur|usd|gbp)(?:\s*(?:_[^_]{0,160}_|\([^)]{0,160}\)))?\s*(?:brutto\s*)?(?:na|\/)\s*(?:(?:jedn(?:ą|a)|1)\s*)?akcj/giu;
   const naturalAmountAfterPerSharePattern =
-    /(?:na|dla)\s*(?:(?:jedn(?:ą|a)|1)\s*)?akcj[ęe]\s*(?:będzie\s+)?(?:przypadać|przypada|wynosi|w\s+wysokości)?\s*(?:kwota\s*)?(\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{1,4})?)\s*(?:zł(?:ot(?:y|a|ych|e))?|zl(?:otych)?|pln)/giu;
+    /(?:na|dla)\s*(?:(?:jedn(?:ą|a)|1)\s*)?akcj[ęe](?:\s+(?:sp[oó]łki|emitenta))?\s*(?:będzie\s+)?(?:przypadać|przypada|wynosi|w\s+wysokości)?\s*(?:kwota\s*)?(\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{1,4})?)\s*(?:zł(?:ot(?:y|a|ych|e))?|zl(?:otych)?|pln|eur|usd|gbp)/giu;
+  const futureAmountAfterPerSharePattern =
+    /na\s+(?:(?:jedn(?:ą|a)|1)\s*)?akcj[ęe](?:\s+(?:sp[oó]łki|emitenta))?\s+będzie\s+przypadać\s+kwota\s+(\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{1,4})?)\s*(?:zł(?:ot(?:y|a|ych|e))?|zl(?:otych)?|pln|eur|usd|gbp)/giu;
+  const formalAmountAfterPerSharePattern =
+    /(?:przypadaj[aą]c\w*\s+)?na\s+(?:jedn[aą]\s+|1\s*)?akcj[ęe](?:\s+sp[oó]łki)?[,;:]?\s*(?:będzie\s+)?(?:wynosić|wyniesie|wynosi|przypadać)?\s*:?[\s\n]*(\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{1,4})?)\s*(?:zł(?:ot(?:y|a|ych|e))?|zl(?:otych)?|pln|eur|usd|gbp)/giu;
   const amounts: ParsedDividendAmount[] = [];
 
   for (const pattern of [
@@ -710,6 +740,8 @@ const getDividendAmounts = (text: string): ParsedDividendAmount[] => {
     descriptiveAmountAfterPerSharePattern,
     amountWithWrittenWordsBeforePerSharePattern,
     naturalAmountAfterPerSharePattern,
+    futureAmountAfterPerSharePattern,
+    formalAmountAfterPerSharePattern,
   ]) {
     for (const match of text.matchAll(pattern)) {
       const amountText = match[1] ?? "";
@@ -723,6 +755,7 @@ const getDividendAmounts = (text: string): ParsedDividendAmount[] => {
         amount,
         index,
         installment: /rat[ayęei]/i.test(nearby),
+        currency: getDividendCurrency(text, index),
       });
     }
   }
@@ -769,9 +802,91 @@ const getAdvanceAdjustedDividend = (
   return { amount: { ...sourceAmount, amount: remaining, installment: false }, total, advance };
 };
 
+const getDividendRecordDate = (text: string) => {
+  // Some issuers put the concrete date before the semantic label, for example
+  // "rekomenduje dzień 21 października ... jako dzień ... uprawnionych".
+  for (const match of text.matchAll(UNICODE_DATE_PATTERN)) {
+    const date = getIsoDateFromMatch(match);
+    if (!date) continue;
+    const index = match.index ?? 0;
+    const before = text.slice(Math.max(0, index - 90), index);
+    const after = text.slice(index + match[0].length, index + match[0].length + 260);
+    if (
+      /(?:rekomenduje|ustala|wyznacza|określa)(?:\s+na)?\s+dzie[ńn]\s*$/iu.test(before) &&
+      /jako\s+dzie[ńn][\s\S]{0,180}?(?:uprawnionych|praw\w*\s+do\s+(?:dywidendy|zaliczki))/iu.test(after)
+    ) return date;
+  }
+
+  const directLabelDate =
+    getDateAfterKeyword(
+      text,
+      /dniem\s+nabycia\s+prawa\s+do\s+(?:dywidendy|zaliczki)\s+(?:jest|będzie)\s+dzie[ńn]/iu,
+      100,
+      "first",
+      true
+    ) ??
+    getDateAfterKeyword(
+      text,
+      /dzie[ńn]\s+ustalenia\s+(?:akcjonariuszy\s+)?uprawnionych(?:\s+do\s+(?:dywidendy|zaliczki))?/iu,
+      220,
+      "first",
+      true
+    ) ??
+    getDateAfterKeyword(
+      text,
+      /dzie[ńn]\s+(?:ustalenia\s+praw(?:a)?\s+do\s+)?(?:dywidendy|zaliczki)|record\s*date/iu,
+      220,
+      "first",
+      true
+    ) ??
+    getDateAfterKeyword(
+      text,
+      /dzie[ńn][\s\S]{0,280}?ustala\s+się\s+listę\s+akcjonariuszy\s+uprawnionych[\s\S]{0,240}?(?:został\s+ustalony|ustalono)\s+na/iu,
+      80,
+      "first",
+      true
+    );
+  if (directLabelDate) return directLabelDate;
+
+  const labelPatterns = [
+    /dzie[ńn](?:,)?\s+(?:ustalenia|nabycia)\s+(?:prawa|praw|uprawnionych)[\s\S]{0,180}?(?:do\s+)?(?:dywidendy|zaliczki)?[\s\S]{0,100}?(?:ustalono|ustalony|wyznaczono|wyznaczony|przypada|będzie|jest|na)/iu,
+    /dniem\s+(?:ustalenia|nabycia)\s+(?:prawa|praw|uprawnionych)[\s\S]{0,220}?(?:do\s+(?:otrzymania\s+)?)?(?:dywidendy|zaliczki)?[\s\S]{0,100}?(?:będzie|jest|ustalono|wyznaczono)/iu,
+    /dniem\s+ustalenia\s+uprawnionych[\s\S]{0,220}?(?:dywidendy|zaliczki)[\s\S]{0,80}?(?:będzie|jest)/iu,
+    /(?:dzie[ńn]|dniem)(?:,)?\s+według[\s\S]{0,220}?(?:uprawnionych|prawa\s+do)[\s\S]{0,120}?(?:wyznaczono|ustalono|określono|będzie(?:\s+dzie[ńn])?|na)/iu,
+    /dzie[ńn]\s+(?:prawa\s+do|ustalenia\s+praw\s+do)\s+(?:dywidendy|zaliczki)/iu,
+    /record\s*date/iu,
+  ];
+  for (const pattern of labelPatterns) {
+    const date = getDateAfterKeyword(text, pattern, 360, "first", true);
+    if (date) return date;
+  }
+
+  return undefined;
+};
+
+const getPaymentDateBeforeAmount = (text: string, amountIndex: number) => {
+  const contextStart = Math.max(0, amountIndex - 280);
+  const context = text.slice(contextStart, amountIndex);
+  const dates = Array.from(context.matchAll(UNICODE_DATE_PATTERN)).flatMap((match) => {
+    const date = getIsoDateFromMatch(match);
+    if (!date) return [];
+    const afterDate = context.slice((match.index ?? 0) + match[0].length);
+    if (!/^\s*(?:r\.?\s*)?[-–—:;,]?\s*(?:wypłat|rat|transz)/iu.test(afterDate)) return [];
+    return [{ date, index: match.index ?? 0 }];
+  });
+  return dates.at(-1)?.date;
+};
+
+const DIVIDEND_CANCELLATION_NOTICE =
+  /(?:odwoł|anul|rezygnac)[\s\S]{0,140}?(?:wypłat[ayęy]|dywidend|zaliczk)|(?:dywidend|zaliczk)[\s\S]{0,140}?(?:nie\s+zostanie\s+wypłacon|odwoł|anul)/iu;
+
+const DIVIDEND_SCHEDULE_CHANGE =
+  /(?:zmian|nowy)[\s\S]{0,100}?(?:termin|dzie[ńn])[\s\S]{0,120}?(?:wypłat|dywidend|zaliczk)|(?:termin|dzie[ńn])[\s\S]{0,80}?(?:wypłat|dywidend|zaliczk)[\s\S]{0,100}?(?:uleg[łła]|zmien)/iu;
+
 const getUpcomingDividendEvents = (text: string): ParsedCorporateEvent[] => {
-  if (!/dywidend/i.test(text)) return [];
+  if (!/dywidend|zaliczk/i.test(text)) return [];
   const documentStatus = getDividendStatus(text);
+  const cancellation = DIVIDEND_CANCELLATION_NOTICE.test(text);
 
   const sectionMatches = Array.from(
     text.matchAll(
@@ -788,43 +903,34 @@ const getUpcomingDividendEvents = (text: string): ParsedCorporateEvent[] => {
 
   const candidates = sections.flatMap(({ section, statusContext }) => {
     const parsedAmounts = getDividendAmounts(section);
-    if (parsedAmounts.length === 0) return [];
+    if (parsedAmounts.length === 0 && !cancellation) return [];
     const advanceAdjustment = getAdvanceAdjustedDividend(section, parsedAmounts);
     const amounts = advanceAdjustment ? [advanceAdjustment.amount] : parsedAmounts;
     const fiscalYear = getDividendFiscalYear(section);
 
-    const recordDate =
-      getDateAfterKeyword(
-        section,
-        /dzie[\s\S]{0,280}?ustala\s+się\s+listę\s+akcjonariuszy\s+uprawnionych[\s\S]{0,240}?(?:został\s+ustalony|ustalono)\s+na/iu,
-        80,
-        "first",
-        true
-      ) ??
-      getDateAfterKeyword(
-        section,
-        /dzie.\s+(?:ustalenia\s+prawa\s+do\s+dywidendy|dywidendy)|record\s*date/iu,
-        220
-      );
+    const recordDate = getDividendRecordDate(section);
     const exDividendDate = getDateAfterKeyword(
       section,
       /ex(?:-|\s)?dividend(?:\s+date)?|ex-date/i
     );
     const paymentDate = getDateAfterKeyword(
       section,
-      /(?:termin|dzie.)\s+wyp.{0,3}at(?:y|a)|wyp.{0,3}at(?:a|y)\s+(?:dywidendy\s+)?(?:nastąpi|zostanie|ustalon|w\s+terminie)|payment\s*date/iu,
+      /(?:termin|dzie[ńn]|dniem)\s+wyp.{0,3}at(?:y|a)|wyp.{0,3}at(?:a|y)\s+(?:dywidendy\s+)?(?:nastąpi|zostanie|ustalon|w\s+terminie)|payment\s*date/iu,
       300
     );
     const sectionStatus = getDividendStatus(section);
     const contextStatus = sectionStatus === "UNKNOWN" ? getDividendStatus(statusContext) : sectionStatus;
     const dividendStatus = contextStatus === "UNKNOWN" ? documentStatus : contextStatus;
 
-    return amounts.flatMap((entry, index) => {
+    const eventAmounts = amounts.length > 0
+      ? amounts
+      : [{ amount: undefined, index: 0, installment: false, currency: "PLN" }];
+    return eventAmounts.flatMap((entry, index) => {
       const localContextAfter = section.slice(entry.index, entry.index + 260);
       const localContextBefore = section.slice(Math.max(0, entry.index - 240), entry.index);
       const localPaymentDateAfter = getDateAfterKeyword(
         localContextAfter,
-        /(?:termin|dzie.)\s+wyp.{0,3}at(?:y|a)|payment\s*date/iu,
+        /(?:termin|dzie[ńn]|dniem)\s+wyp.{0,3}at(?:y|a)|zostanie\s+wyp.{0,3}acon\w*|payment\s*date/iu,
         250,
         "first"
       );
@@ -849,9 +955,10 @@ const getUpcomingDividendEvents = (text: string): ParsedCorporateEvent[] => {
         true
       );
       const resolvedPaymentDate =
+        getPaymentDateBeforeAmount(section, entry.index) ??
         getDateAfterKeyword(
           localContextAfter,
-          /(?:termin|dzie.)\s+wyp.{0,3}at(?:y|a)|payment\s*date/iu,
+          /(?:termin|dzie[ńn]|dniem)\s+wyp.{0,3}at(?:y|a)|payment\s*date/iu,
           250,
           "first"
         ) ??
@@ -860,7 +967,8 @@ const getUpcomingDividendEvents = (text: string): ParsedCorporateEvent[] => {
         localInstallmentDateAfter ??
         localPaymentDateAfter ??
         paymentDate;
-      const eventDate = recordDate ?? exDividendDate ?? resolvedPaymentDate;
+      const cancellationDate = cancellation ? extractPolishDates(section).at(-1) : undefined;
+      const eventDate = recordDate ?? exDividendDate ?? resolvedPaymentDate ?? cancellationDate;
 
       // A source that does not publish any date is useful context for a human,
       // but it is not an upcoming calendar event. Do not invent a technical
@@ -872,7 +980,7 @@ const getUpcomingDividendEvents = (text: string): ParsedCorporateEvent[] => {
         eventType: "UPCOMING_DIVIDEND" as const,
         eventDate,
         fiscalYear,
-        isScheduleChange: false,
+        isScheduleChange: DIVIDEND_SCHEDULE_CHANGE.test(section),
         // Amounts and dates can change between a proposal and the final
         // resolution. The annual distribution + installment is the durable
         // identity, so a correction updates one pending event instead of
@@ -885,12 +993,13 @@ const getUpcomingDividendEvents = (text: string): ParsedCorporateEvent[] => {
         dividendPerShare: entry.amount,
         dividendTotalPerShare: advanceAdjustment?.total,
         dividendAdvancePerShare: advanceAdjustment?.advance,
-        dividendCurrency: "PLN",
+        dividendCurrency: entry.currency,
         exDividendDate,
         recordDate,
         paymentDate: resolvedPaymentDate,
         dividendInstallment: installment,
         dividendStatus,
+        isCancellation: cancellation,
       }];
     });
   });

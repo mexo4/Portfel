@@ -38,7 +38,9 @@ const loadIcalWindow = unstable_cache(
           FROM corporate_event_sources AS evidence
           WHERE evidence.corporate_event_id = event.id
             AND evidence.source_url LIKE 'https://%'
-          ORDER BY evidence.source_priority DESC,
+          ORDER BY (evidence.confirms_amount::int + evidence.confirms_record_date::int +
+                    evidence.confirms_payment_date::int + evidence.confirms_status::int) DESC,
+                   evidence.source_priority DESC,
                    evidence.source_published_at DESC NULLS LAST,
                    evidence.discovered_at DESC
           LIMIT 1

@@ -127,4 +127,17 @@ test("public page is not indexed by default without explicit approved rights set
   assert.match(page, /MEXO_PUBLIC_GPW_CALENDAR_INDEXABLE === "true"/);
   assert.match(sitemap, /MEXO_PUBLIC_GPW_CALENDAR_INDEXABLE === "true"/);
   assert.doesNotMatch(page, /getCurrentAuthenticatedUser|getCurrentAccountData/);
+  assert.doesNotMatch(page, /PublicCalendarSubscription/);
+});
+
+test("every in-month day is a keyboard-operable button and navigation preserves scroll and filters", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const client = await readFile(new URL("../src/app/kalendarz-gpw/PublicCalendarClient.tsx", import.meta.url), "utf8");
+  assert.match(client, /<button type="button" key=\{day\.date\}/);
+  assert.match(client, /aria-pressed=\{selectedDate === day\.date\}/);
+  assert.match(client, /onClick=\{\(\) => setSelectedDate\(day\.date\)\}/);
+  assert.match(client, /Brak wydarzeń w wybranym dniu/);
+  assert.match(client, /scroll=\{false\}/);
+  assert.match(client, /router\.push\(getGpwCalendarHref\(month\.key, nextCategory, search\), \{ scroll: false \}\)/);
+  assert.match(client, /getGpwCalendarHref\(getCalendarMonth\(undefined\)\.key, category, company\)/);
 });

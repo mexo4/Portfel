@@ -44,7 +44,9 @@ const readCalendarMonth = unstable_cache(
           FROM corporate_event_sources AS evidence
           WHERE evidence.corporate_event_id = event.id
             AND evidence.source_url LIKE 'https://%'
-          ORDER BY (evidence.confirms_amount::int + evidence.confirms_record_date::int +
+          ORDER BY CASE WHEN event.event_type IN ('QUARTERLY_REPORT', 'HALF_YEAR_REPORT', 'ANNUAL_REPORT')
+                        THEN evidence.source_published_at END DESC NULLS LAST,
+                   (evidence.confirms_amount::int + evidence.confirms_record_date::int +
                     evidence.confirms_payment_date::int + evidence.confirms_status::int) DESC,
                    evidence.source_priority DESC,
                    evidence.source_published_at DESC NULLS LAST,
@@ -74,8 +76,8 @@ const readCalendarMonth = unstable_cache(
     const updatedDates = sourceRows.map((row) => row.updated_at).filter(Boolean).sort();
     return { events, truncated, latestRecordUpdatedAt: updatedDates.at(-1) };
   },
-  ["mexo-public-gpw-calendar-v1"],
-  { revalidate: 15 * 60 }
+  ["mexo-public-gpw-calendar-v2"],
+  { revalidate: 2 * 60 }
 );
 
 export const getPublicGpwCalendarMonth = async (

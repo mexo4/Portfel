@@ -41,6 +41,7 @@ import type { InvestmentPortfolio, PortfolioInstrument } from "@/types/portfolio
 const PAP_SOURCE = "PAP_ESPI" as const;
 const GPW_WZA_SOURCE = "GPW_WZA" as const;
 const GPW_DIVIDEND_SOURCE = "GPW_DIVIDENDS" as const;
+const GPW_REPORT_SCHEDULE_SOURCE = "GPW_REPORT_SCHEDULES" as const;
 export const getEspiSourcePriority = (sourceId: string) => {
   if (sourceId.startsWith("gpw:")) return 0;
   if (sourceId.startsWith("newconnect:")) return 1;
@@ -54,6 +55,7 @@ const NEWCONNECT_ESPI_SEARCH_URL = `${NEWCONNECT_ESPI_BASE_URL}/ajaxindex.php`;
 const ESPI_REFRESH_TTL_MS = 10 * 60 * 1_000;
 const GPW_WZA_REFRESH_TTL_MS = 60 * 60 * 1_000;
 const GPW_DIVIDEND_REFRESH_TTL_MS = 60 * 60 * 1_000;
+const GPW_REPORT_SCHEDULE_REFRESH_TTL_MS = 60 * 60 * 1_000;
 const ESPI_OVERLAP_TTL_MS = 24 * 60 * 60 * 1_000;
 const ESPI_SOURCE_TIMEOUT_MS = 15_000;
 const ESPI_LOCK_TTL_MS = 3 * 60 * 1_000;
@@ -631,7 +633,17 @@ const upsertEspiReport = async (report: ParsedPapEspiReport) => {
                   OR body_text IS DISTINCT FROM $12
                   OR issuer_id IS DISTINCT FROM COALESCE($2, issuer_id)
                   OR market IS DISTINCT FROM $4
-                THEN NULL ELSE dividend_projection_version END
+                THEN NULL ELSE dividend_projection_version END,
+              report_schedule_projection_status = CASE
+                WHEN source_title IS DISTINCT FROM $10 OR title IS DISTINCT FROM $11
+                  OR body_text IS DISTINCT FROM $12 OR issuer_id IS DISTINCT FROM COALESCE($2, issuer_id)
+                  OR market IS DISTINCT FROM $4
+                THEN NULL ELSE report_schedule_projection_status END,
+              report_schedule_projection_version = CASE
+                WHEN source_title IS DISTINCT FROM $10 OR title IS DISTINCT FROM $11
+                  OR body_text IS DISTINCT FROM $12 OR issuer_id IS DISTINCT FROM COALESCE($2, issuer_id)
+                  OR market IS DISTINCT FROM $4
+                THEN NULL ELSE report_schedule_projection_version END
           WHERE id = $19
         `,
         [
@@ -1570,6 +1582,135 @@ export const synchronizeGpwGeneralMeetingReports = ({ force = false }: { force?:
   });
 
   return gpwGeneralMeetingSyncInFlight;
+};
+
+/** Only official schedule/correction notices, never inferred publication dates. */
+export const isPotentialGpwReportScheduleCandidate = (candidate: PapEspiListCandidate) => {
+  const title = `${candidate.sourceTitle} ${candidate.title ?? ""}`
+    .normalize("NFD").replace(/\p{Diacritic}/gu, "")
+    .replace(/[łŁ]/g, (character) => character === "Ł" ? "L" : "l")
+    .toLocaleLowerCase("pl-PL");
+  return /(?:termin\w*|harmonogram\w*|kalendarz\w*|dat\w*|zmian\w*)[\s\S]{0,100}raport\w*\s+(?:okresow\w*|finansow\w*|roczn\w*|polroczn\w*|kwartaln\w*)|raport\w*\s+(?:okresow\w*|finansow\w*)[\s\S]{0,100}(?:termin\w*|harmonogram\w*|kalendarz\w*|publikacj\w*)/iu.test(title);
+};
+
+let gpwReportScheduleSyncInFlight: Promise<GpwGeneralMeetingSourceSyncResult> | null = null;
+
+export const getGpwReportScheduleSyncState = () =>
+  getEspiSyncState(GPW_REPORT_SCHEDULE_SOURCE, GPW_REPORT_SCHEDULE_REFRESH_TTL_MS);
+
+/** A bounded, shared GPW source lane. A persisted date cursor repairs old schedules gradually. */
+export const synchronizeGpwReportScheduleReports = ({ force = false }: { force?: boolean } = {}): Promise<GpwGeneralMeetingSourceSyncResult> => {
+  if (gpwReportScheduleSyncInFlight) return gpwReportScheduleSyncInFlight;
+  gpwReportScheduleSyncInFlight = (async () => {
+    const state = await getGpwReportScheduleSyncState();
+    const empty = { status: state.status === "NOT_SYNCED" ? "NOT_FOUND" as const : state.status,
+      pagesRead: 0, candidates: 0, fetched: 0, parsed: 0, saved: 0, duplicates: 0, errors: 0, locked: false };
+    if (!force && !state.isStale) return empty;
+    const token = await acquireSyncLock(GPW_REPORT_SCHEDULE_SOURCE);
+    if (!token) return { ...empty, locked: true };
+
+    const startedAt = Date.now();
+    let status: EspiSourceStatus = "SUCCESS";
+    let pagesRead = 0;
+    let errors = 0;
+    let nextBackfillDay = Math.max(3, state.nextBackfillPage);
+    let backfillComplete = state.backfillComplete;
+    try {
+      const today = getWarsawDate();
+      const candidates = new Map<string, PapEspiListCandidate>();
+      const collectDate = async (day: string) => {
+        const signatures = new Set<string>();
+        for (let offset = 0; offset < 2_000; offset += 50) {
+          const response = await fetchGpwList({ date: toGpwDate(day), offset });
+          if (response.status !== "SUCCESS") {
+            status = response.status;
+            errors += 1;
+            diagnose({ provider: GPW_REPORT_SCHEDULE_SOURCE, date: day, offset, status });
+            return false;
+          }
+          pagesRead += 1;
+          const signature = createHash("sha256").update(response.document).digest("hex");
+          if (signatures.has(signature)) {
+            status = "PARSE_ERROR";
+            errors += 1;
+            diagnose({ provider: GPW_REPORT_SCHEDULE_SOURCE, date: day, offset, status: "REPEATED_PAGE" });
+            return false;
+          }
+          signatures.add(signature);
+          const page = parseGpwEspiList(response.document);
+          if (page.malformedRows) errors += page.malformedRows;
+          for (const candidate of page.candidates) {
+            if (isPotentialGpwReportScheduleCandidate(candidate)) candidates.set(candidate.sourceId, candidate);
+          }
+          if (page.eligibleRows < 50) return true;
+        }
+        status = "PARSE_ERROR";
+        errors += 1;
+        diagnose({ provider: GPW_REPORT_SCHEDULE_SOURCE, date: day, status: "ROW_LIMIT" });
+        return false;
+      };
+
+      // The newest three days are always overlapped, including weekends.
+      for (let day = 0; day < 3; day += 1) await collectDate(addDays(today, -day));
+      // Only advance the repair cursor after a complete date, so failures retry.
+      for (let count = 0; count < 21; count += 1) {
+        if (nextBackfillDay >= ESPI_OFFICIAL_REPAIR_DAYS) {
+          backfillComplete = true;
+          nextBackfillDay = 3;
+        }
+        if (!await collectDate(addDays(today, -nextBackfillDay))) break;
+        nextBackfillDay += 1;
+      }
+
+      const uniqueCandidates = [...candidates.values()];
+      const stored = await getStoredSourceState(uniqueCandidates);
+      const pending = uniqueCandidates.filter((candidate) => !stored.storedIds.has(candidate.sourceId) ||
+        Boolean(candidate.sourcePublishedAt && candidate.sourcePublishedAt.slice(0, 10) >= addDays(today, -30) &&
+          stored.sourceCheckedAt.has(candidate.sourceId) &&
+          !isFresh(stored.sourceCheckedAt.get(candidate.sourceId) ?? null, 24 * 60 * 60 * 1_000)));
+      const fetched = await mapWithConcurrency(pending, ARTICLE_CONCURRENCY, async (candidate) => {
+        const response = await fetchOfficialHtml(candidate.sourceUrl);
+        if (response.status !== "SUCCESS") return { candidate, status: response.status, report: null };
+        const report = parseGpwEspiReport(response.document, candidate);
+        return { candidate, status: report ? "SUCCESS" as const : "PARSE_ERROR" as const, report };
+      });
+      let parsed = 0;
+      let saved = 0;
+      let duplicates = 0;
+      for (const item of fetched) {
+        if (item.status !== "SUCCESS" || !item.report) {
+          errors += 1;
+          status = item.status;
+          diagnose({ provider: GPW_REPORT_SCHEDULE_SOURCE, sourceId: item.candidate.sourceId, status: item.status });
+          continue;
+        }
+        parsed += 1;
+        try {
+          const result = await upsertEspiReport(item.report);
+          await linkCorrection(result.id, item.report, result.issuerId);
+          saved += 1;
+          if (!result.created) duplicates += 1;
+        } catch (error) {
+          errors += 1;
+          status = "TEMPORARILY_UNAVAILABLE";
+          diagnose({ provider: GPW_REPORT_SCHEDULE_SOURCE, sourceId: item.candidate.sourceId,
+            phase: "store", error: error instanceof Error ? error.name : "unknown" });
+        }
+      }
+      if (errors && status === "SUCCESS") status = "PARSE_ERROR";
+      await releaseSyncLock({ token, source: GPW_REPORT_SCHEDULE_SOURCE, status,
+        nextBackfillPage: nextBackfillDay, backfillComplete });
+      console.info(`[REPORT SCHEDULE SOURCE SYNC] pages=${pagesRead} candidates=${uniqueCandidates.length} fetched=${pending.length} parsed=${parsed} saved=${saved} duplicates=${duplicates} errors=${errors} backfillDay=${nextBackfillDay}/${ESPI_OFFICIAL_REPAIR_DAYS} durationMs=${Date.now() - startedAt}`);
+      return { status, pagesRead, candidates: uniqueCandidates.length, fetched: pending.length,
+        parsed, saved, duplicates, errors, locked: false };
+    } catch (error) {
+      await releaseSyncLock({ token, source: GPW_REPORT_SCHEDULE_SOURCE,
+        status: "TEMPORARILY_UNAVAILABLE", errorCode: error instanceof Error ? error.name : "UNKNOWN" });
+      diagnose({ provider: GPW_REPORT_SCHEDULE_SOURCE, error: error instanceof Error ? error.name : "unknown" });
+      return { ...empty, status: "TEMPORARILY_UNAVAILABLE" as const, pagesRead, errors: Math.max(errors, 1) };
+    }
+  })().finally(() => { gpwReportScheduleSyncInFlight = null; });
+  return gpwReportScheduleSyncInFlight;
 };
 
 const isPotentialGpwDividendCandidate = (candidate: PapEspiListCandidate) => {

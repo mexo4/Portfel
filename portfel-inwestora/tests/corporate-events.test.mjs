@@ -72,6 +72,49 @@ test("parses the verified GPW schedules from the POC without production hardcode
   assert.ok(findEvent(parseCorporateEventDocument(sourceFixtures.diagnostyka), "QUARTERLY_REPORT", "Q3", "2026-11-26"));
 });
 
+test("an official annual schedule yields separate FY, H1 and Q3 events including December", () => {
+  const document = `
+    Terminy publikacji raportów okresowych w roku finansowym 2026:
+    Jednostkowy i skonsolidowany raport za 2025: 26 marca 2026 roku.
+    Skonsolidowany raport za I półrocze 2026: 17 września 2026 roku.
+    Rozszerzony skonsolidowany raport za I kwartał 2026: 11 czerwca 2026 roku.
+    Rozszerzony skonsolidowany raport za III kwartał 2026: 03 grudnia 2026 roku.
+  `;
+  const events = parseCorporateEventDocument(document);
+  assert.ok(findEvent(events, "ANNUAL_REPORT", "FY", "2026-03-26"));
+  assert.ok(findEvent(events, "HALF_YEAR_REPORT", "H1", "2026-09-17"));
+  assert.ok(findEvent(events, "QUARTERLY_REPORT", "Q1", "2026-06-11"));
+  assert.ok(findEvent(events, "QUARTERLY_REPORT", "Q3", "2026-12-03"));
+  assert.equal(new Set(events.map(getCorporateEventIdentityKey)).size, 4);
+});
+
+test("fiscal-year H1 schedules preserve December dates without inventing payment events", () => {
+  const cases = [
+    "Skonsolidowany raport za I półrocze roku obrotowego 2026/2027: 10 grudnia 2026 roku.",
+    "Półroczny skonsolidowany raport za półrocze roku obrotowego 2026/2027 – termin publikacji 15 grudnia 2026 roku.",
+    "Raport półroczny za I półrocze roku obrotowego 2026/2027 – zostanie opublikowany 17 grudnia 2026 r.",
+  ];
+  for (const [index, document] of cases.entries()) {
+    const expected = ["2026-12-10", "2026-12-15", "2026-12-17"][index];
+    assert.ok(findEvent(parseCorporateEventDocument(document), "HALF_YEAR_REPORT", "H1", expected));
+  }
+});
+
+test("a newer formal PAP report schedule supersedes an old generic IR page", () => {
+  const existing = {
+    status: "CONFIRMED", source_type: "ISSUER_IR", source_priority: 200,
+    source_published_at: "2023-03-31T11:21:52.000Z",
+  };
+  const source = {
+    sourceType: "PAP_ESPI", sourceUrl: "https://pap-mediaroom.pl/official-report",
+    sourcePublishedAt: "2026-01-15T07:22:00.000Z",
+  };
+  assert.equal(shouldApplyEvent(existing, source, {
+    eventType: "QUARTERLY_REPORT", eventDate: "2026-12-03", fiscalPeriod: "Q3", fiscalYear: 2026,
+    isScheduleChange: false,
+  }), true);
+});
+
 test("supports Polish word dates, dotted dates and dashed dates", () => {
   assert.deepEqual(extractPolishDates("20 sierpnia 2026, 20.08.2026, 20-08-2026"), ["2026-08-20"]);
 });

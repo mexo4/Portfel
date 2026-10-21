@@ -55,7 +55,11 @@
 .monthButton:hover,.todayButton:hover { color: #06695e; background: #eff9f6; }
 .calendarGrid { display: grid; grid-template-columns: repeat(7,minmax(0,1fr)); gap: 5px; }
 .weekday { text-align: center; color: #758892; font-size: .73rem; font-weight: 800; padding: 10px 0; }
-.calendarCell { display: flex; min-width: 0; min-height: 67px; flex-direction: column; align-items: center; justify-content: flex-start; padding: 8px 2px 4px; border: 1px solid transparent; border-radius: 10px; background: #f6f8f5; }
+.calendarCell { display: flex; width: 100%; min-width: 0; min-height: 67px; flex-direction: column; align-items: center; justify-content: flex-start; padding: 8px 2px 4px; border: 1px solid transparent; border-radius: 10px; background: #f6f8f5; color: inherit; font: inherit; }
+button.calendarCell { cursor: pointer; }
+button.calendarCell:hover { border-color: #8bcac0; background: #eff9f6; }
+button.calendarCell:focus-visible { outline: 3px solid #0e8072; outline-offset: 2px; }
+.selectedDay,.selectedDay.currentDay { border-color: #0e8072; background: #ddf4ed; box-shadow: inset 0 0 0 1px #0e8072; }
 .outsideMonth { background: transparent; opacity: .32; }
 .dayNumber { display: inline-flex; align-items: center; justify-content: center; width: 29px; height: 29px; font-family: var(--font-mono); font-size: .77rem; color: #29404a; }
 .currentDay { border-color: rgba(15,118,110,.42); background: #e6f7f2; }
@@ -75,6 +79,9 @@
 .agendaHeading { padding: 0 23px 20px; margin-bottom: 4px; border-bottom: 1px solid #edf0ee; }
 .agendaHeading > span { border-radius: 30px; padding: 8px 12px; background: #eef5f3; color: #3f6968; font-family: var(--font-mono); font-size: .74rem; white-space: nowrap; }
 .agendaScroll { max-height: 780px; overflow-y: auto; scrollbar-color: #d3dfdb transparent; }
+.showAll { width: 100%; border: 0; border-top: 1px solid #edf0ee; padding: 13px 22px; background: #fff; color: #0b766e; font: inherit; font-size: .78rem; font-weight: 800; cursor: pointer; text-align: left; }
+.showAll:hover { background: #eff9f6; }
+.showAll:focus-visible { outline: 3px solid #0e8072; outline-offset: -3px; }
 .agendaDay { scroll-margin-top: 20px; padding: 17px 22px 20px; border-bottom: 1px solid #edf0ee; }
 .agendaDate { display: flex; align-items: baseline; gap: 11px; margin-bottom: 13px; color: #536e78; }
 .agendaDate strong { font-size: 1.5rem; font-family: var(--font-mono); font-weight: 600; color: #162f3b; }

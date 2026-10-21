@@ -19,9 +19,11 @@ import {
   getGpwDividendSyncState,
   getStoredEspiReportsForCorporateEvents,
   getGpwGeneralMeetingSyncState,
+  getGpwReportScheduleSyncState,
   PAP_ESPI_FEED_URL,
   synchronizeGpwDividendReports,
   synchronizeGpwGeneralMeetingReports,
+  synchronizeGpwReportScheduleReports,
   type GpwGeneralMeetingSourceSyncResult,
   type StoredEspiCorporateEventReport,
 } from "@/lib/server/espi";
@@ -140,6 +142,10 @@ const GPW_ISSUER_SOURCE_REGISTRY: Record<string, IssuerSource[]> = {
     },
   ],
   LPP: [
+    {
+      type: "ISSUER_CURRENT_REPORT",
+      url: "https://www.lpp.com/raporty/rb-01-2026-terminy-publikacji-raportow-okresowych-w-2026-roku/",
+    },
     {
       type: "ISSUER_CURRENT_REPORT",
       url: "https://www.lpp.com/raporty/rb-16-2026-informacja-na-temat-dywidendy/",
@@ -895,6 +901,15 @@ export const shouldApplyEvent = (
     return incomingTimestamp > 0 && incomingTimestamp >= existingTimestamp;
   }
   if (
+    (parsed.eventType === "QUARTERLY_REPORT" || parsed.eventType === "HALF_YEAR_REPORT" || parsed.eventType === "ANNUAL_REPORT") &&
+    existing.source_type === "ISSUER_IR" && source.sourceType === "PAP_ESPI" &&
+    incomingTimestamp > existingTimestamp
+  ) {
+    // A dated formal issuer communication syndicated by PAP beats an older,
+    // generic IR page even when that page has a higher base adapter priority.
+    return true;
+  }
+  if (
     incomingPriority > existing.source_priority &&
     (incomingTimestamp === 0 || existingTimestamp === 0)
   ) {
@@ -1452,6 +1467,162 @@ export type GlobalGeneralMeetingSyncResult = {
   errors: number;
   pending: number;
 };
+
+const REPORT_SCHEDULE_PROJECTION_VERSION = 1;
+const REPORT_SCHEDULE_BATCH_SIZE = 100;
+const REPORT_SCHEDULE_UNMATCHED_RETRY_MS = 7 * 24 * 60 * 60 * 1_000;
+const REPORT_SCHEDULE_CANDIDATE_SQL = `(
+  report.source_title ILIKE '%termin%raport%' OR report.title ILIKE '%termin%raport%'
+  OR report.source_title ILIKE '%raport%termin%' OR report.title ILIKE '%raport%termin%'
+  OR report.source_title ILIKE '%harmonogram%raport%' OR report.title ILIKE '%harmonogram%raport%'
+  OR report.source_title ILIKE '%kalendarz%raport%' OR report.title ILIKE '%kalendarz%raport%'
+  OR report.source_title ILIKE '%dat%publikacj%raport%' OR report.title ILIKE '%dat%publikacj%raport%'
+)`;
+
+let globalReportScheduleSyncInFlight: Promise<GlobalGeneralMeetingSyncResult> | null = null;
+
+const updateReportScheduleProjectionStatus = (
+  reportId: string,
+  status: "SUCCESS" | "NO_EVENT" | "UNMATCHED" | "PARSE_ERROR"
+) => execute(
+  `UPDATE espi_reports
+   SET report_schedule_projection_status = $1,
+       report_schedule_projected_at = $2,
+       report_schedule_projection_version = $3
+   WHERE id = $4`,
+  [status, new Date().toISOString(), REPORT_SCHEDULE_PROJECTION_VERSION, reportId]
+);
+
+/** Projects official annual schedules once globally; private holdings never affect ingestion. */
+export const synchronizeGlobalReportSchedules = ({ force = false, refreshSource = true }: {
+  force?: boolean;
+  refreshSource?: boolean;
+} = {}): Promise<GlobalGeneralMeetingSyncResult> => {
+  if (globalReportScheduleSyncInFlight) return globalReportScheduleSyncInFlight;
+  globalReportScheduleSyncInFlight = (async () => {
+    if (refreshSource) await synchronizeGpwReportScheduleReports();
+    const publishedAfter = new Date(Date.now() - 730 * 24 * 60 * 60 * 1_000).toISOString();
+    const unmatchedRetryBefore = new Date(Date.now() - REPORT_SCHEDULE_UNMATCHED_RETRY_MS).toISOString();
+    const candidateWhere = `
+      report.source = 'PAP_ESPI' AND report.published_at >= $1
+      AND report.source_id NOT LIKE 'newconnect:%' AND report.market IS DISTINCT FROM 'NEWCONNECT'
+      AND (instrument.market = 'GPW' OR (instrument.id IS NULL AND report.market IN ('GPW', 'UNKNOWN')))
+      AND ${REPORT_SCHEDULE_CANDIDATE_SQL}`;
+    const pendingWhere = `(
+      report.report_schedule_projection_version IS DISTINCT FROM $2
+      OR report.report_schedule_projection_status = 'PARSE_ERROR'
+      OR (report.report_schedule_projection_status = 'UNMATCHED'
+          AND report.report_schedule_projected_at < $3)
+      OR $5::boolean
+    )`;
+    const reports = await query<GlobalGeneralMeetingReportRow>(
+      `SELECT report.id, report.source_id, report.issuer_id, report.source_title,
+              report.title, report.body_text, report.published_at, report.source_url,
+              report.report_schedule_projection_status AS projection_status,
+              instrument.canonical_key, instrument.ticker, instrument.company_name,
+              instrument.isin, instrument.last_checked_at, instrument.last_source_status
+       FROM espi_reports AS report
+       LEFT JOIN corporate_event_instruments AS instrument ON instrument.id = report.issuer_id
+       WHERE ${candidateWhere} AND ${pendingWhere}
+       ORDER BY report.published_at DESC, report.source_id DESC LIMIT $4`,
+      [publishedAfter, REPORT_SCHEDULE_PROJECTION_VERSION, unmatchedRetryBefore, REPORT_SCHEDULE_BATCH_SIZE, force]
+    );
+    const attachmentRows = reports.length ? await query<{ espi_report_id: string; name: string; source_url: string }>(
+      `SELECT espi_report_id, name, source_url FROM espi_report_attachments
+       WHERE espi_report_id = ANY($1::text[])
+         AND (media_type = 'application/pdf' OR name ~* '\\.pdf$')
+       ORDER BY espi_report_id,
+         CASE WHEN name ~* '(termin|harmonogram|raport|kalendarz)' THEN 0 ELSE 1 END, name`,
+      [reports.map((report) => report.id)]
+    ) : [];
+    const attachmentsByReport = new Map<string, typeof attachmentRows>();
+    for (const attachment of attachmentRows) {
+      const list = attachmentsByReport.get(attachment.espi_report_id) ?? [];
+      if (list.length < 3) list.push(attachment);
+      attachmentsByReport.set(attachment.espi_report_id, list);
+    }
+    let created = 0;
+    let duplicates = 0;
+    let saved = 0;
+    let unmatched = 0;
+    let errors = 0;
+    for (const report of reports) {
+      try {
+        if (!report.issuer_id || !report.canonical_key || !report.ticker || !report.company_name) {
+          unmatched += 1;
+          await updateReportScheduleProjectionStatus(report.id, "UNMATCHED");
+          diagnose({ provider: "global-espi-report-schedule", sourceId: report.source_id, status: "UNMATCHED" });
+          continue;
+        }
+        const parsed = parseCorporateEventDocument(`${report.source_title}\n${report.title}\n${report.body_text}`)
+          .filter((event) => event.eventType === "QUARTERLY_REPORT" || event.eventType === "HALF_YEAR_REPORT" || event.eventType === "ANNUAL_REPORT");
+        const events = new Map(parsed.map((event) => [
+          [getCorporateEventIdentityKey(event), event.eventDate].join(":"), event,
+        ]));
+        for (const attachment of attachmentsByReport.get(report.id) ?? []) {
+          try {
+            const text = await readOfficialMeetingPdf(attachment.source_url);
+            if (!text) continue;
+            for (const event of parseCorporateEventDocument(`${report.source_title}\n${text}`)) {
+              if (event.eventType !== "QUARTERLY_REPORT" && event.eventType !== "HALF_YEAR_REPORT" && event.eventType !== "ANNUAL_REPORT") continue;
+              events.set([getCorporateEventIdentityKey(event), event.eventDate].join(":"), event);
+            }
+          } catch (error) {
+            diagnose({ provider: "global-espi-report-schedule", sourceId: report.source_id,
+              phase: "attachment", error: error instanceof Error ? error.name : "unknown" });
+          }
+        }
+        if (events.size === 0) {
+          await updateReportScheduleProjectionStatus(report.id, "NO_EVENT");
+          continue;
+        }
+        const instrument: CanonicalInstrument = {
+          id: report.issuer_id, canonical_key: report.canonical_key, ticker: report.ticker,
+          company_name: report.company_name, isin: report.isin,
+          last_checked_at: report.last_checked_at, last_source_status: report.last_source_status,
+        };
+        const result = await withTransaction(async (transaction) => {
+          await transaction.query<{ locked: number }>(
+            "SELECT pg_advisory_xact_lock(hashtext($1)) AS locked",
+            [`corporate-events:${instrument.canonical_key}`]
+          );
+          const upsert = await upsertParsedEvents(transaction, instrument, {
+            events: [...events.values()],
+            source: { sourceType: "ISSUER_CURRENT_REPORT", sourceUrl: report.source_url,
+              sourcePublishedAt: report.published_at, sourceTitle: report.source_title || report.title },
+          });
+          await transaction.execute(
+            `UPDATE espi_reports SET report_schedule_projection_status = 'SUCCESS',
+              report_schedule_projected_at = $1, report_schedule_projection_version = $2 WHERE id = $3`,
+            [new Date().toISOString(), REPORT_SCHEDULE_PROJECTION_VERSION, report.id]
+          );
+          return upsert;
+        });
+        created += result.created;
+        duplicates += result.duplicates;
+        saved += result.saved;
+      } catch (error) {
+        errors += 1;
+        try { await updateReportScheduleProjectionStatus(report.id, "PARSE_ERROR"); }
+        catch { errors += 1; }
+        diagnose({ provider: "global-espi-report-schedule", sourceId: report.source_id,
+          status: "PARSE_ERROR", error: error instanceof Error ? error.name : "unknown" });
+      }
+    }
+    const count = await queryOne<{ count: number | string }>(
+      `SELECT COUNT(*) AS count FROM espi_reports AS report
+       LEFT JOIN corporate_event_instruments AS instrument ON instrument.id = report.issuer_id
+       WHERE ${candidateWhere} AND ${pendingWhere}`,
+      [publishedAfter, REPORT_SCHEDULE_PROJECTION_VERSION, unmatchedRetryBefore, REPORT_SCHEDULE_BATCH_SIZE, false]
+    );
+    const pending = Number(count?.count ?? 0);
+    console.info(`[REPORT SCHEDULE SYNC] fetched=${reports.length} new=${created} duplicates=${duplicates} saved=${saved} unmatched=${unmatched} pending=${pending} errors=${errors}`);
+    return { fetched: reports.length, created, duplicates, saved, unmatched, errors, pending };
+  })().finally(() => { globalReportScheduleSyncInFlight = null; });
+  return globalReportScheduleSyncInFlight;
+};
+
+export const getGlobalReportScheduleSourceState = getGpwReportScheduleSyncState;
 
 const GENERAL_MEETING_PROJECTION_VERSION = 4;
 // A batch is deliberately small enough to keep the authenticated calendar API

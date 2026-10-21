@@ -13,8 +13,19 @@ import {
   buildTrackedGpwInstruments,
   classifyEspiHttpStatus,
   getEspiSourcePriority,
+  isPotentialGpwReportScheduleCandidate,
   validateEspiFeedFilters,
 } from "../src/lib/server/espi.ts";
+
+test("official report schedule discovery is generic and excludes unrelated reports", () => {
+  for (const title of [
+    "Terminy publikacji raportów okresowych w 2026 roku",
+    "Harmonogram przekazywania raportów okresowych w roku obrotowym 2026/2027",
+    "Zmiana terminu publikacji raportu półrocznego",
+  ]) assert.equal(isPotentialGpwReportScheduleCandidate({ sourceTitle: title }), true);
+  for (const title of ["Raport półroczny za 2026", "Zawarcie istotnej umowy", "Zmiana harmonogramu skupu akcji"])
+    assert.equal(isPotentialGpwReportScheduleCandidate({ sourceTitle: title }), false);
+});
 
 const candidate = {
   sourceId: "pap:607780",

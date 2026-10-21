@@ -327,11 +327,11 @@ const getEventType = (value: string): CorporateEventType | null => {
     return "HALF_YEAR_REPORT";
   }
 
-  if (/\broczn(?:y|e|ego|ym)?\b/.test(normalized)) {
+  if (/\broczn(?:y|e|ego|ym)?\b|\braport(?:y|u|ow)?\s+(?:jednostkow\w*\s+i\s+skonsolidowan\w*\s+)?za\s+(?:rok(?:\s+obrotowy)?\s+)?20\d{2}(?:\s*\/\s*20\d{2})?\b/.test(normalized)) {
     return "ANNUAL_REPORT";
   }
 
-  if (/kwartaln(?:y|e|ego|ym)?|\b[ivx]{1,3}\.?\s+kwartał|\b[1-4]\.?\s+kwartał/.test(normalized)) {
+  if (/kwartaln(?:y|e|ego|ym)?|\b[ivx]{1,3}\.?\s+kwartał|\b[1-4]\.?\s+kwartał|\btrzy\s+kwartały/.test(normalized)) {
     return "QUARTERLY_REPORT";
   }
 
@@ -347,6 +347,7 @@ const getFiscalPeriod = (value: string, eventType: CorporateEventType) => {
   if (/(?:^|\s)(?:i|1|pierwsz(?:y|ego))\.?\s+kwartał/i.test(normalized)) return "Q1";
   if (/(?:^|\s)(?:ii|2|drug(?:i|iego))\.?\s+kwartał/i.test(normalized)) return "Q2";
   if (/(?:^|\s)(?:iii|3|trzec(?:i|iego))\.?\s+kwartał/i.test(normalized)) return "Q3";
+  if (/\btrzy\s+kwartały/i.test(normalized)) return "Q3";
   if (/(?:^|\s)(?:iv|4|czwart(?:y|ego))\.?\s+kwartał/i.test(normalized)) return "Q4";
 
   return undefined;

@@ -83,7 +83,9 @@ test("dividend reader keeps two dated installments and payment-after-record even
 
 test("dividend layout uses six stable desktop columns and safe nonempty source labels", async () => {
   const [css, component] = await Promise.all([source("src/app/globals.css"), source("src/components/DividendCalendarPanel.tsx")]);
-  assert.match(css, /\.dividend-calendar-row\s*\{[\s\S]*?grid-template-columns: minmax\(0, 1\.55fr\)[^;]+;/);
+  const desktopColumns = css.match(/\.dividend-calendar-row\s*\{[\s\S]*?grid-template-columns:\s*([^;]+);/)?.[1] ?? "";
+  assert.equal((desktopColumns.match(/minmax\(/g) ?? []).length, 6);
+  assert.match(desktopColumns, /minmax\(94px,\s*\.8fr\)/);
   assert.match(css, /@media \(max-width: 680px\)[\s\S]*?\.dividend-calendar-row\s*\{[\s\S]*?grid-template-columns: minmax\(0, 1fr\)/);
   assert.match(component, /getSourceLabel/);
   assert.match(component, /noopener noreferrer/);

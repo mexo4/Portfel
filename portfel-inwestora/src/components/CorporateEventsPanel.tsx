@@ -3,7 +3,6 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import {
   getCorporateEventLabel,
-  getDaysUntilCorporateEvent,
   getDaysUntilWarsawDate,
   isCorporateEventSourceUnavailable,
   CALENDAR_WINDOW_OPTIONS,
@@ -15,12 +14,12 @@ import {
   type CorporateEventsResponse,
   type GeneralMeetingScope,
 } from "@/lib/corporate-events";
-import { fetchCorporateEvents, fetchGeneralMeetings } from "@/lib/api";
+import { fetchCorporateEvents, fetchGeneralMeetings, fetchGpwReports } from "@/lib/api";
 
 type CorporateEventsPanelProps = {
   portfolioId: string;
   portfolioIds?: string[];
-  variant?: "all" | "general-meetings";
+  variant?: "all" | "general-meetings" | "reports";
 };
 
 const formatEventDateParts = (date: string) => {
@@ -40,7 +39,7 @@ const formatEventDateParts = (date: string) => {
 };
 
 const getRelativeDateLabel = (eventDate: string) => {
-  const days = getDaysUntilCorporateEvent(eventDate);
+  const days = getDaysUntilWarsawDate(eventDate);
   if (days === 0) return "dzisiaj";
   if (days === 1) return "jutro";
   return `za ${days} dni`;
@@ -71,6 +70,7 @@ const formatSyncTime = (value?: string) => {
   const date = new Date(value);
   if (!Number.isFinite(date.getTime())) return undefined;
   return new Intl.DateTimeFormat("pl-PL", {
+    timeZone: "Europe/Warsaw",
     day: "2-digit",
     month: "2-digit",
     year: "numeric",
@@ -106,19 +106,29 @@ const getMeetingRange = () => readCalendarRange("mexo-gpw-meeting-days", GENERAL
 const getReportRange = () => readCalendarRange("mexo-gpw-report-days", REPORT_WINDOW_DAYS);
 const getDefaultMeetingRange = () => GENERAL_MEETING_WINDOW_DAYS;
 const getDefaultReportRange = () => REPORT_WINDOW_DAYS;
+const readScope = (key: string): GeneralMeetingScope => {
+  const value = window.localStorage.getItem(key);
+  return value === "watchlist" || value === "portfolio" ? value : "all";
+};
+const getMeetingScope = () => readScope("mexo-gpw-meeting-scope");
+const getReportScope = () => readScope("mexo-gpw-report-scope");
+const getDefaultScope = (): GeneralMeetingScope => "all";
 
 export default function CorporateEventsPanel({ portfolioId, portfolioIds, variant = "all" }: CorporateEventsPanelProps) {
   const [data, setData] = useState<CorporateEventsResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [errorKey, setErrorKey] = useState<string | null>(null);
   const [loadedKey, setLoadedKey] = useState<string | null>(null);
-  const [meetingScope, setMeetingScope] = useState<GeneralMeetingScope>("all");
+  const meetingScope = useSyncExternalStore(subscribeCalendarRange, getMeetingScope, getDefaultScope);
+  const reportScope = useSyncExternalStore(subscribeCalendarRange, getReportScope, getDefaultScope);
   const meetingDays = useSyncExternalStore(subscribeCalendarRange, getMeetingRange, getDefaultMeetingRange);
   const reportDays = useSyncExternalStore(subscribeCalendarRange, getReportRange, getDefaultReportRange);
   const [meetingSyncState, setMeetingSyncState] = useState<Awaited<ReturnType<typeof fetchGeneralMeetings>>["sourceState"] | null>(null);
+  const [reportSyncState, setReportSyncState] = useState<Awaited<ReturnType<typeof fetchGpwReports>>["sourceState"] | null>(null);
   const isMeetingView = variant === "general-meetings";
+  const isReportView = variant === "reports";
   const portfolioIdsKey = portfolioIds?.join(",") ?? "";
-  const requestKey = [isMeetingView ? "meeting" : "all", meetingScope, meetingDays, reportDays, portfolioId, portfolioIdsKey].join(":");
+  const requestKey = [variant, isMeetingView ? meetingScope : reportScope, meetingDays, reportDays, portfolioId, portfolioIdsKey].join(":");
   const showingLoading = isLoading || (loadedKey !== requestKey && errorKey !== requestKey);
   const hasError = errorKey === requestKey;
 
@@ -131,6 +141,13 @@ export default function CorporateEventsPanel({ portfolioId, portfolioIds, varian
             if (!controller.signal.aborted) setMeetingSyncState(response.sourceState);
             return toEventsResponse(response);
           })
+      : isReportView
+        ? fetchGpwReports({ scope: reportScope, days: reportDays, portfolioId,
+            portfolioIds: portfolioIdsKey ? portfolioIdsKey.split(",") : undefined, signal: controller.signal })
+            .then((response) => {
+              if (!controller.signal.aborted) setReportSyncState(response.sourceState);
+              return toEventsResponse(response);
+            })
       : fetchCorporateEvents({ portfolioId, portfolioIds: portfolioIdsKey ? portfolioIdsKey.split(",") : undefined,
           days: Math.max(meetingDays, reportDays), meetingDays, reportDays, signal: controller.signal });
 
@@ -154,7 +171,7 @@ export default function CorporateEventsPanel({ portfolioId, portfolioIds, varian
       });
 
     return () => controller.abort();
-  }, [isMeetingView, meetingScope, meetingDays, reportDays, portfolioId, portfolioIdsKey, requestKey]);
+  }, [isMeetingView, isReportView, meetingScope, reportScope, meetingDays, reportDays, portfolioId, portfolioIdsKey, requestKey]);
 
   useEffect(() => {
     if (!isMeetingView || !meetingSyncState?.isRefreshing) return;
@@ -190,6 +207,33 @@ export default function CorporateEventsPanel({ portfolioId, portfolioIds, varian
     };
   }, [isMeetingView, meetingScope, meetingDays, meetingSyncState?.isRefreshing]);
 
+  useEffect(() => {
+    if (!isReportView || !reportSyncState?.isRefreshing) return;
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const poll = async () => {
+      try {
+        const response = await fetchGpwReports({ scope: reportScope, days: reportDays, portfolioId,
+          portfolioIds: portfolioIdsKey ? portfolioIdsKey.split(",") : undefined, signal: controller.signal });
+        if (controller.signal.aborted) return;
+        setData(toEventsResponse(response));
+        setReportSyncState(response.sourceState);
+        setErrorKey(null);
+        if (response.sourceState.isRefreshing) timer = setTimeout(() => void poll(), 8_000);
+      } catch (error) {
+        if (controller.signal.aborted || (error instanceof DOMException && error.name === "AbortError")) return;
+        setReportSyncState((current) => current
+          ? { ...current, status: "TEMPORARILY_UNAVAILABLE", isRefreshing: false, isStale: true }
+          : current);
+      }
+    };
+    timer = setTimeout(() => void poll(), 8_000);
+    return () => {
+      controller.abort();
+      if (timer) clearTimeout(timer);
+    };
+  }, [isReportView, reportScope, reportDays, portfolioId, portfolioIdsKey, reportSyncState?.isRefreshing]);
+
   const changeMeetingDays = (days: CalendarWindowDays) => {
     window.localStorage.setItem("mexo-gpw-meeting-days", String(days));
     window.dispatchEvent(new Event("mexo-calendar-range"));
@@ -200,7 +244,12 @@ export default function CorporateEventsPanel({ portfolioId, portfolioIds, varian
   };
 
   const changeMeetingScope = (scope: GeneralMeetingScope) => {
-    setMeetingScope(scope);
+    window.localStorage.setItem("mexo-gpw-meeting-scope", scope);
+    window.dispatchEvent(new Event("mexo-calendar-range"));
+  };
+  const changeReportScope = (scope: GeneralMeetingScope) => {
+    window.localStorage.setItem("mexo-gpw-report-scope", scope);
+    window.dispatchEvent(new Event("mexo-calendar-range"));
   };
 
   const allSourcesUnavailable =
@@ -209,7 +258,8 @@ export default function CorporateEventsPanel({ portfolioId, portfolioIds, varian
   const reportEvents = (data?.events ?? []).filter(
     (event) =>
       event.eventType !== "UPCOMING_DIVIDEND" &&
-      (variant !== "general-meetings" || event.eventType === "GENERAL_MEETING") &&
+      (isMeetingView ? event.eventType === "GENERAL_MEETING" :
+        !isReportView || event.eventType === "QUARTERLY_REPORT" || event.eventType === "HALF_YEAR_REPORT" || event.eventType === "ANNUAL_REPORT") &&
       event.active !== false &&
       event.status !== "CANCELLED"
   );
@@ -218,9 +268,9 @@ export default function CorporateEventsPanel({ portfolioId, portfolioIds, varian
       <div className="corporate-events-head">
         <div>
           <p className="eyebrow">Kalendarz GPW</p>
-          <h2 className="section-title">{isMeetingView ? "Walne zgromadzenia" : "Wydarzenia GPW"}</h2>
+          <h2 className="section-title">{isMeetingView ? "Walne zgromadzenia" : isReportView ? "Raporty" : "Wydarzenia GPW"}</h2>
         </div>
-        <span className="tag">{isMeetingView ? `ZWZ i NWZ · ${meetingDays} dni` : `raporty ${reportDays} dni · WZA ${meetingDays} dni`}</span>
+        <span className="tag">{isMeetingView ? `ZWZ i NWZ · ${meetingDays} dni` : isReportView ? `raporty · ${reportDays} dni` : `raporty ${reportDays} dni · WZA ${meetingDays} dni`}</span>
       </div>
 
       <div className="corporate-events-ranges">
@@ -231,26 +281,26 @@ export default function CorporateEventsPanel({ portfolioId, portfolioIds, varian
               aria-pressed={reportDays === days} onClick={() => changeReportDays(days)}>{days} dni</button>)}
           </div>
         )}
-        <div className="corporate-events-range" role="group" aria-label="Zakres walnych zgromadzeń">
+        {!isReportView && <div className="corporate-events-range" role="group" aria-label="Zakres walnych zgromadzeń">
           <span>WZA</span>
           {CALENDAR_WINDOW_OPTIONS.map((days) => <button key={days} type="button" className={meetingDays === days ? "is-active" : undefined}
             aria-pressed={meetingDays === days} onClick={() => changeMeetingDays(days)}>{days} dni</button>)}
-        </div>
+        </div>}
       </div>
 
-      {isMeetingView ? (
-        <div className="corporate-events-scope" role="group" aria-label="Zakres walnych zgromadzeń">
+      {isMeetingView || isReportView ? (
+        <div className="corporate-events-scope" role="group" aria-label={isMeetingView ? "Zakres walnych zgromadzeń" : "Zakres raportów"}>
           {([
             ["all", "Wszystkie"],
             ["watchlist", "Obserwowane"],
             ["portfolio", "W portfelu"],
           ] as const).map(([scope, label]) => (
             <button
-              className={meetingScope === scope ? "is-active" : undefined}
+              className={(isMeetingView ? meetingScope : reportScope) === scope ? "is-active" : undefined}
               key={scope}
               type="button"
-              aria-pressed={meetingScope === scope}
-              onClick={() => changeMeetingScope(scope)}
+              aria-pressed={(isMeetingView ? meetingScope : reportScope) === scope}
+              onClick={() => (isMeetingView ? changeMeetingScope : changeReportScope)(scope)}
             >
               {label}
             </button>
@@ -266,6 +316,16 @@ export default function CorporateEventsPanel({ portfolioId, portfolioIds, varian
               ? `Ostatnie sprawdzenie oficjalnego źródła: ${formatSyncTime(meetingSyncState.lastSuccessfulSyncAt) ?? "niedawno"}.`
               : `Dane mogą być częściowe. Ostatnie sprawdzenie źródła: ${formatSyncTime(meetingSyncState.lastSuccessfulSyncAt) ?? "brak"}.`}
           {meetingSyncState.projectionPending ? ` Pozostałe oficjalne raporty do weryfikacji: ${meetingSyncState.projectionPending}.` : ""}
+        </p>
+      ) : null}
+      {isReportView && reportSyncState ? (
+        <p className="corporate-events-state" aria-live="polite">
+          {reportSyncState.isRefreshing
+            ? "Odświeżanie oficjalnych harmonogramów raportów GPW…"
+            : reportSyncState.status === "SUCCESS" && !reportSyncState.isStale
+              ? `Ostatnie sprawdzenie źródła: ${formatSyncTime(reportSyncState.lastSuccessfulSyncAt) ?? "niedawno"}.`
+              : `Dane mogą być częściowe. Ostatnie udane sprawdzenie: ${formatSyncTime(reportSyncState.lastSuccessfulSyncAt) ?? "brak"}.`}
+          {reportSyncState.sourceBackfillComplete === false ? " Trwa uzupełnianie archiwum komunikatów." : ""}
         </p>
       ) : null}
 
@@ -288,7 +348,11 @@ export default function CorporateEventsPanel({ portfolioId, portfolioIds, varian
                 : meetingScope === "watchlist"
                   ? "Brak nadchodzących walnych zgromadzeń dla obserwowanych spółek."
                   : "Brak nadchodzących walnych zgromadzeń dla spółek w portfelu."
-              : "Brak potwierdzonych przyszłych wydarzeń dla śledzonych spółek."}
+              : isReportView
+                ? (reportScope === "all" ? "Brak potwierdzonych terminów raportów w wybranym okresie." :
+                  reportScope === "watchlist" ? "Brak terminów raportów dla obserwowanych spółek." :
+                  "Brak terminów raportów dla spółek w portfelu.")
+                : "Brak potwierdzonych przyszłych wydarzeń dla śledzonych spółek."}
         </p>
       ) : null}
 
@@ -310,6 +374,7 @@ export default function CorporateEventsPanel({ portfolioId, portfolioIds, varian
                 </time>
                 <div className="corporate-event-copy">
                   <strong>{event.companyName}</strong>
+                  {event.ticker ? <small className="corporate-event-ticker">{event.ticker}</small> : null}
                   <div className="corporate-event-title-line">
                     <span>{getCorporateEventLabel(event)}</span>
                     {isGeneralMeeting && event.generalMeetingType ? (

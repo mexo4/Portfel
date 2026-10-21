@@ -271,7 +271,7 @@ test("global dividend ingestion is separate from WZA projection and resilient", 
   assert.match(source, /nextBackfillDay = Math\.max\(GPW_DIVIDEND_RECENT_DAYS/);
   assert.match(source, /Preserve every plausible official report/);
   assert.match(projection, /synchronizeGlobalDividends/);
-  assert.match(projection, /DIVIDEND_PROJECTION_VERSION = 6/);
+  assert.match(projection, /DIVIDEND_PROJECTION_VERSION = 7/);
   assert.match(projection, /getDividendProjectionDiagnostics/);
   assert.match(projection, /sourceTitle: report\.source_title \|\| report\.title/);
   assert.match(projection, /DIVIDEND_PROJECTION_BATCH_SIZE = 100/);

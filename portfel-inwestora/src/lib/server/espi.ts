@@ -29,6 +29,7 @@ import { normalizePortfolioBook } from "@/lib/portfolio-state";
 import {
   findGpwCatalogEntry,
   findGpwCatalogEntryByExactName,
+  findGpwIssuerCardByIsin,
   findGpwCatalogEntryByIsin,
 } from "@/lib/server/gpw-catalog";
 import { execute, query, queryOne, withTransaction } from "@/lib/server/db";
@@ -77,7 +78,7 @@ const GPW_DIVIDEND_BACKFILL_DAYS_PER_SYNC = 21;
 const GPW_DIVIDEND_MAX_ROWS_PER_DAY = 2_000;
 const ESPI_FETCH_ATTEMPTS = 2;
 const ARTICLE_CONCURRENCY = 4;
-const ISSUER_METADATA_VERSION = 2;
+const ISSUER_METADATA_VERSION = 3;
 const ISSUER_RETRY_AFTER_DAYS = 7;
 const ISSUER_RECONCILIATION_BATCH_SIZE = 100;
 
@@ -450,12 +451,13 @@ const resolveGpwIssuer = async (
   const sourceTicker = report.sourceTicker?.trim().toUpperCase();
   const existing = await findExistingIssuer(
     sourceIsin,
-    isReliableTicker(sourceTicker) ? sourceTicker : undefined
+    // Never let a reused ticker override a different, explicit issuer ISIN.
+    !sourceIsin && isReliableTicker(sourceTicker) ? sourceTicker : undefined
   );
   if (existing) return existing;
 
   const catalogEntry = sourceIsin
-    ? await findGpwCatalogEntryByIsin(sourceIsin)
+    ? await findGpwCatalogEntryByIsin(sourceIsin) ?? await findGpwIssuerCardByIsin(sourceIsin)
     : isReliableTicker(sourceTicker)
       ? await findGpwCatalogEntry(sourceTicker!)
       : await findGpwCatalogEntryByExactName(report.issuerName);
@@ -486,6 +488,39 @@ const resolveGpwIssuer = async (
       RETURNING id, canonical_key, ticker, company_name, isin, market
     `,
     [id, canonicalKey, catalogEntry.isin ?? sourceIsin ?? null, ticker, catalogEntry.name, now]
+  );
+};
+
+/** Retry a previously cached public report against an exact official GPW
+ * ISIN/card without re-fetching its full ESPI body or touching user data. */
+export const resolveStoredGpwIssuer = async (report: {
+  id: string;
+  issuerName: string;
+  sourceIsin: string | null;
+  sourceTicker: string | null;
+}) => {
+  const issuer = await resolveGpwIssuer({
+    issuerName: report.issuerName,
+    sourceIsin: report.sourceIsin ?? undefined,
+    sourceTicker: report.sourceTicker ?? undefined,
+  });
+  if (!issuer) return null;
+  await execute(
+    `UPDATE espi_reports SET issuer_id = $1, market = 'GPW',
+       issuer_metadata_version = $2, issuer_metadata_checked_at = $3, updated_at = $3
+     WHERE id = $4 AND issuer_id IS NULL AND market <> 'NEWCONNECT'`,
+    [issuer.id, ISSUER_METADATA_VERSION, new Date().toISOString(), report.id]
+  );
+  return queryOne<{
+    id: string; canonical_key: string; ticker: string; company_name: string;
+    isin: string | null; market: EspiMarket;
+  }>(
+    `SELECT instrument.id, instrument.canonical_key, instrument.ticker,
+            instrument.company_name, instrument.isin, instrument.market
+     FROM espi_reports AS report JOIN corporate_event_instruments AS instrument
+       ON instrument.id = report.issuer_id
+     WHERE report.id = $1 AND instrument.market = 'GPW'`,
+    [report.id]
   );
 };
 

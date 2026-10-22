@@ -7,6 +7,11 @@ import {
   type PublicGpwCalendarEvent,
 } from "@/lib/public-gpw-calendar";
 import { getPublicGpwCalendarMonth } from "@/lib/server/public-gpw-calendar";
+import {
+  getGlobalDividendSourceState,
+  getGlobalGeneralMeetingSourceState,
+  getGlobalReportScheduleSourceState,
+} from "@/lib/server/corporate-events";
 import { queuePublicGpwCalendarSync } from "@/lib/server/public-gpw-sync";
 import PublicCalendarClient from "./PublicCalendarClient";
 import styles from "./page.module.css";
@@ -52,11 +57,26 @@ export default async function PublicGpwCalendarPage({ searchParams }: PageProps)
   let lastUpdated: string | undefined;
   let truncated = false;
   let sourceUnavailable = false;
+  let coverageNotice: string | null = null;
   try {
     const result = await getPublicGpwCalendarMonth(month.start, month.end, category, company);
     events = result.events;
     lastUpdated = result.latestRecordUpdatedAt;
     truncated = result.truncated;
+    try {
+      const sourceStates = await Promise.all([
+        getGlobalReportScheduleSourceState(),
+        getGlobalGeneralMeetingSourceState(),
+        getGlobalDividendSourceState(),
+      ]);
+      if (sourceStates.some((state) => !state.backfillComplete)) {
+        coverageNotice = "Uzupełniamy archiwum oficjalnych ogłoszeń. Kalendarz może jeszcze nie zawierać wszystkich terminów.";
+      } else if (sourceStates.some((state) => state.status !== "SUCCESS")) {
+        coverageNotice = "Co najmniej jedno źródło jest chwilowo niedostępne. Pokazujemy ostatnie zapisane wydarzenia.";
+      }
+    } catch {
+      coverageNotice = "Nie można teraz potwierdzić kompletności danych. Pokazujemy ostatnie zapisane wydarzenia.";
+    }
   } catch (error) {
     sourceUnavailable = true;
     console.error("[public-gpw-calendar] unable to read public GPW events", error instanceof Error ? error.name : "unknown");
@@ -103,7 +123,7 @@ export default async function PublicGpwCalendarPage({ searchParams }: PageProps)
         <PublicCalendarClient key={`${month.key}:${category}:${company}`} month={month} category={category} company={company} events={events} sourceUnavailable={sourceUnavailable} />
         <div className={styles.dataDisclaimer}>
           <div><strong>Transparentność danych</strong><p>Terminy pochodzą z publicznych komunikatów spółek i źródeł giełdowych, do których prowadzą linki. To zestawienie pomocnicze: może nie obejmować wszystkich wydarzeń lub zmian.</p></div>
-          <div className={styles.dataMeta}>{lastUpdated ? `Ostatnia zmiana zapisanych wydarzeń: ${formatPublishedAt(lastUpdated)}` : "Brak potwierdzonej daty aktualizacji"}{truncated ? <span>Wyniki częściowe — zawęź filtry.</span> : null}</div>
+          <div className={styles.dataMeta}>{lastUpdated ? `Ostatnia zmiana zapisanych wydarzeń: ${formatPublishedAt(lastUpdated)}` : "Brak potwierdzonej daty aktualizacji"}{coverageNotice ? <span>{coverageNotice}</span> : null}{truncated ? <span>Wyniki częściowe — zawęź filtry.</span> : null}</div>
         </div>
       </section>
 

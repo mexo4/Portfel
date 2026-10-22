@@ -1,0 +1,10 @@
+[Unit]
+Description=Run Mexo GPW calendar synchronization every two hours
+
+[Timer]
+OnCalendar=*-*-* 00/2:15:00
+Persistent=true
+Unit=mexo-gpw-calendar-sync.service
+
+[Install]
+WantedBy=timers.target

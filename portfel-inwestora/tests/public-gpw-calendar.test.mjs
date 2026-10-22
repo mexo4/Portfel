@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { parseCorporateEventDocument } from "../src/lib/corporate-events.ts";
 import {
   buildGpwCalendarGrid,
   expandGpwStoredCalendarEvent,
@@ -23,6 +24,21 @@ const dividend = {
   status: "CONFIRMED", updated_at: "2026-10-10T00:00:00Z",
   source_url: "https://www.gpw.pl/przyklad", source_published_at: "2026-10-10T00:00:00Z",
 };
+
+test("a new 2028 issuer schedule reaches the public calendar read model", () => {
+  const parsed = parseCorporateEventDocument("Raport kwartalny za I kwartał roku finansowego 2027/2028 - 24 lutego 2028 r.");
+  assert.equal(parsed.length, 1);
+  const month = getCalendarMonth("2028-02", "2028-02");
+  const visible = expandGpwStoredCalendarEvent({
+    ...dividend, id: "future-report", ticker: "ABC", company_name: "Spółka testowa",
+    event_type: parsed[0].eventType, event_date: parsed[0].eventDate,
+    fiscal_period: parsed[0].fiscalPeriod, fiscal_year: parsed[0].fiscalYear,
+    fiscal_year_label: parsed[0].fiscalYearLabel, payment_date: null,
+  }, month.start, month.end);
+  assert.equal(visible.length, 1);
+  assert.equal(visible[0].date, "2028-02-24");
+  assert.equal(visible[0].kind, "QUARTERLY_REPORT");
+});
 
 test("October 2026 boundaries, Polish label and month navigation", () => {
   assert.deepEqual(

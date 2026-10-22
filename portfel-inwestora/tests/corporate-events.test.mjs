@@ -186,6 +186,46 @@ test("Synektik and Syn2Bio use financial, not calendar quarters", () => {
   ]);
 });
 
+test("wrapped ESPI schedule bullets preserve fiscal quarters and dates", () => {
+  const events = parseCorporateEventDocument(`Spółka w roku obrotowym 2026, trwającym od 1 października 2026 r. do 30 września 2027 r.:
+- skonsolidowany raport kwartalny _SA-QSr_ za IV kwartał roku finansowego 2025 _a
+III kwartał roku kalendarzowego 2026_ - 18 listopada 2026 r.
+- skonsolidowany raport roczny za rok finansowy 2025 - 22 grudnia 2026 r.
+- skonsolidowany raport kwartalny _SA-QSr_ za I kwartał roku finansowego 2026 _a IV
+kwartał roku kalendarzowego 2026_ - 24 lutego 2027 r.
+- skonsolidowany raport półroczny _SA-PSr_ za I półrocze roku finansowego 2026 _okres:
+IV kwartał roku kalendarzowego 2026 i I kwartał roku kalendarzowego 2027_ - 23 czerwca
+2027 r.
+- skonsolidowany raport kwartalny _SA-QSr_ za III kwartał roku finansowego 2026 _a
+II kwartał roku kalendarzowego 2027_ - 4 sierpnia 2027 r.`);
+  assert.deepEqual(events.map(({ eventType, fiscalPeriod, fiscalYear, eventDate }) =>
+    [eventType, fiscalPeriod, fiscalYear, eventDate]), [
+    ["QUARTERLY_REPORT", "Q4", 2025, "2026-11-18"],
+    ["ANNUAL_REPORT", "FY", 2025, "2026-12-22"],
+    ["QUARTERLY_REPORT", "Q1", 2026, "2027-02-24"],
+    ["HALF_YEAR_REPORT", "H1", 2026, "2027-06-23"],
+    ["QUARTERLY_REPORT", "Q3", 2026, "2027-08-04"],
+  ]);
+});
+
+test("a newly announced 2028 fiscal schedule needs no year-specific registry", () => {
+  const schedule = parseCorporateEventDocument(`Terminy przekazywania raportów okresowych w roku obrotowym 2027/2028:
+- raport kwartalny za I kwartał roku finansowego 2027/2028 - 24 lutego 2028 r.
+- raport półroczny za I półrocze roku finansowego 2027/2028 - 20 czerwca 2028 r.
+- raport roczny za rok finansowy 2027/2028 - 27 września 2028 r.`);
+  assert.deepEqual(schedule.map(({ eventType, fiscalPeriod, fiscalYearLabel, eventDate }) =>
+    [eventType, fiscalPeriod, fiscalYearLabel, eventDate]), [
+    ["QUARTERLY_REPORT", "Q1", "2027/2028", "2028-02-24"],
+    ["HALF_YEAR_REPORT", "H1", "2027/2028", "2028-06-20"],
+    ["ANNUAL_REPORT", "FY", "2027/2028", "2028-09-27"],
+  ]);
+  const correction = parseCorporateEventDocument(`Zmiana terminu publikacji raportu kwartalnego za I kwartał roku finansowego 2027/2028.
+Raport kwartalny za I kwartał roku finansowego 2027/2028 zostanie opublikowany 23 lutego 2028 r. zamiast 24 lutego 2028 r.`);
+  assert.equal(correction.length, 1);
+  assert.equal(correction[0].eventDate, "2028-02-23");
+  assert.equal(correction[0].previousEventDate, "2028-02-24");
+});
+
 test("period boundaries, selected data and old corrected dates are not report appointments", () => {
   assert.deepEqual(parseCorporateEventDocument("Raport za IV kwartał 2026 roku zakończony na dzień 31 stycznia 2027 r."), []);
   const lpp = parseCorporateEventDocument(`Skonsolidowany raport za III kwartał 2026: 03 grudnia 2026 roku.\nW związku z tym rok finansowy trwa od 1 lutego 2026 roku do 31 stycznia 2027 roku.\nIV kwartał 2026 - od 1 listopada 2026 do 31 stycznia 2027.`);

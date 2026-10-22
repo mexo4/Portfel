@@ -1,0 +1,12 @@
+[Unit]
+Description=Mexo central GPW calendar synchronization
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/opt/mexo/repo/portfel-inwestora
+EnvironmentFile=/etc/mexo/gpw-calendar-sync.env
+ExecStart=/usr/bin/node --experimental-strip-types --import ./tests/register-alias-loader.mjs ./scripts/run-gpw-calendar-sync.mjs --run
+TimeoutStartSec=30min

@@ -1537,7 +1537,8 @@ export type GlobalGeneralMeetingSyncResult = {
   pending: number;
 };
 
-const REPORT_SCHEDULE_PROJECTION_VERSION = 3;
+// Re-evaluate previously successful documents after fixing wrapped PDF rows.
+const REPORT_SCHEDULE_PROJECTION_VERSION = 4;
 const REPORT_SCHEDULE_BATCH_SIZE = 100;
 const REPORT_SCHEDULE_UNMATCHED_RETRY_MS = 7 * 24 * 60 * 60 * 1_000;
 const REPORT_SCHEDULE_CANDIDATE_SQL = `(

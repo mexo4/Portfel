@@ -357,6 +357,14 @@ const getFiscalPeriod = (value: string, eventType: CorporateEventType) => {
   if (eventType === "HALF_YEAR_REPORT") return "H1";
   if (eventType === "ANNUAL_REPORT") return "FY";
 
+  // The issuer's financial quarter takes precedence over the explanatory
+  // calendar-quarter comparison, which ESPI PDFs sometimes render as _a ..._.
+  const financial = normalized.match(/\b(i{1,3}|iv|[1-4])\.?\s+kwartał\s+roku\s+finansowego/iu);
+  if (financial) {
+    const quarter = { i: "Q1", ii: "Q2", iii: "Q3", iv: "Q4", "1": "Q1", "2": "Q2", "3": "Q3", "4": "Q4" } as const;
+    return quarter[financial[1]!.toLowerCase() as keyof typeof quarter];
+  }
+
   // This function receives one report clause, not the entire schedule.
   const periods = [
     [/\b(?:i|1|pierwsz(?:y|ego))\.?\s+kwartał/giu, "Q1"],
@@ -376,6 +384,8 @@ const getFiscalPeriod = (value: string, eventType: CorporateEventType) => {
 
 const getFiscalYearLabel = (value: string) => {
   const withoutCalendarComparison = value.replace(/\([^)]*roku\s+kalendarzowego[^)]*\)/giu, " ");
+  const financialYear = withoutCalendarComparison.match(/\b(?:za\s+)?rok\s+finansowy\s+(20\d{2})(?:\s*\/\s*(20\d{2}))?/iu);
+  if (financialYear?.[1]) return financialYear[2] ? `${financialYear[1]}/${financialYear[2]}` : financialYear[1];
   const endingYear = withoutCalendarComparison.match(/\broku?\s+obrotow\w*\s+kończąc\w*\s+się\s+(?:w\s+dniu\s+)?\d{1,2}\s+\p{L}+\s+(20\d{2})/iu)?.[1];
   const explicit = withoutCalendarComparison.match(
     /(?:za\s+)?(?:[ivx1-4]+\.?\s+)?(?:kwartał|półrocze|roku|rok|raport\s+roczny)(?:\s+roku)?\s+(?:finansowego|obrotowego)?\s*(20\d{2})(?:\s*\/\s*(20\d{2}))?/iu
@@ -423,6 +433,19 @@ const getCandidateSegments = (text: string) => {
   let sectionType: CorporateEventType | null = null;
   for (let index = 0; index < lines.length; index += 1) {
     let line = lines[index];
+    // ESPI/PDF extraction wraps a single bullet over several physical lines.
+    // Join only its continuation, stopping before the next report bullet.
+    if (/^[-–—•]\s*(?:skonsolidowan\w*|jednostkow\w*|rozszerzon\w*|raport\w*)/iu.test(line)
+      && isReportType(getEventType(line)) && extractPolishDates(line).length === 0) {
+      for (let continuation = 0; continuation < 4; continuation += 1) {
+        const next = lines[index + 1];
+        if (!next || /^[-–—•]\s*(?:skonsolidowan\w*|jednostkow\w*|rozszerzon\w*|raport\w*)/iu.test(next)
+          || /^Zarząd\b/iu.test(next)) break;
+        line += ` ${next}`;
+        index += 1;
+        if (extractPolishDates(line).length > 0) break;
+      }
+    }
     // PDF text extraction may wrap the publication year onto the next line.
     // Join only a numeric year continuation, never a second report row.
     if (isReportType(getEventType(line)) && extractPolishDates(line).length === 0 &&

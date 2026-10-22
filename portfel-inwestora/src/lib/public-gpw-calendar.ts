@@ -21,6 +21,7 @@ export type PublicGpwCalendarEvent = {
   generalMeetingType?: "ZWZ" | "NWZ";
   fiscalPeriod?: string;
   fiscalYear?: number;
+  fiscalYearLabel?: string;
   registrationDate?: string;
   dividendPerShare?: number;
   dividendCurrency?: string;
@@ -94,9 +95,10 @@ export const getGpwEventLabel = (event: PublicGpwCalendarEvent) => {
     if (event.recordDate === event.date) return "Dzień dywidendy";
     return "Wydarzenie dywidendowe";
   }
-  if (event.kind === "ANNUAL_REPORT") return "Raport roczny";
-  if (event.kind === "HALF_YEAR_REPORT") return "Raport półroczny";
-  return "Raport kwartalny";
+  const period = [event.fiscalPeriod, event.fiscalYearLabel ?? event.fiscalYear].filter(Boolean).join(" ");
+  if (event.kind === "ANNUAL_REPORT") return `Raport roczny${period ? ` ${period}` : ""}`;
+  if (event.kind === "HALF_YEAR_REPORT") return `Raport półroczny${period ? ` ${period}` : ""}`;
+  return `Raport kwartalny${period ? ` ${period}` : ""}`;
 };
 
 export const getGpwEventStatusLabel = (status: PublicGpwCalendarEvent["status"]) => {
@@ -161,6 +163,7 @@ export type PublicGpwStoredEventRow = {
   event_time: string | null;
   fiscal_period: string | null;
   fiscal_year: number | null;
+  fiscal_year_label?: string | null;
   general_meeting_type: "ZWZ" | "NWZ" | null;
   registration_date: string | null;
   dividend_per_share: number | string | null;
@@ -203,6 +206,7 @@ export const expandGpwStoredCalendarEvent = (
     generalMeetingType: row.general_meeting_type ?? undefined,
     fiscalPeriod: row.fiscal_period ?? undefined,
     fiscalYear: row.fiscal_year ?? undefined,
+    fiscalYearLabel: row.fiscal_year_label ?? undefined,
     registrationDate: row.event_type === "GENERAL_MEETING"
       ? row.registration_date ?? getStatutoryMeetingRegistrationDate(row.event_date)
       : undefined,

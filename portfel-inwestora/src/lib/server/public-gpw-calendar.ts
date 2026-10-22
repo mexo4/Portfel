@@ -33,7 +33,7 @@ const readCalendarMonth = unstable_cache(
       `
         SELECT event.id, issuer.ticker, issuer.company_name,
                event.event_type, event.event_date, event.event_time,
-               event.fiscal_period, event.fiscal_year, event.general_meeting_type,
+               event.fiscal_period, event.fiscal_year, event.fiscal_year_label, event.general_meeting_type,
                event.registration_date, event.dividend_per_share, event.dividend_currency,
                event.record_date, event.payment_date, event.status, event.updated_at,
                source.source_url, source.source_published_at

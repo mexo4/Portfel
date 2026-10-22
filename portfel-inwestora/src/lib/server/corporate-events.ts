@@ -33,6 +33,7 @@ import { getMarketCachePayload, setMarketCachePayload } from "@/lib/server/marke
 import { fetchWithSystemTrust } from "@/lib/server/system-trust-fetch";
 import { readOfficialMeetingPdf } from "@/lib/server/general-meeting-pdf";
 import { normalizeText, uniqueBy } from "@/lib/utils";
+import { planReportScheduleReprojection, type StoredReportProjection } from "@/lib/report-schedule-reprojection";
 import type { PortfolioInstrument } from "@/types/portfolio";
 
 const EVENT_REFRESH_TTL_MS = 24 * 60 * 60 * 1_000;
@@ -68,6 +69,9 @@ type EventRow = {
   event_time: string | null;
   fiscal_period: string | null;
   fiscal_year: number | null;
+  fiscal_year_label: string | null;
+  period_start: string | null;
+  period_end: string | null;
   general_meeting_type: "ZWZ" | "NWZ" | null;
   registration_date: string | null;
   registration_date_source: "OFFICIAL" | null;
@@ -953,6 +957,26 @@ const upsertParsedEvents = async (
         [instrument.id, parsed.eventType, eventIdentity]
       )
     )[0];
+    if (!existing && (parsed.eventType === "QUARTERLY_REPORT" || parsed.eventType === "HALF_YEAR_REPORT" || parsed.eventType === "ANNUAL_REPORT") &&
+      parsed.fiscalYearLabel?.includes("/") && parsed.fiscalYear) {
+      // Older projections used only the last numeric year. Reuse their row ID
+      // (and therefore ICS UID) only when this very source owned the legacy row.
+      const legacyIdentity = [parsed.eventType, parsed.fiscalPeriod ?? "", parsed.fiscalYear].join(":");
+      existing = (
+        await transaction.query<ExistingEventRow>(
+          `SELECT event.id, event.event_date, event.status, event.source_published_at,
+                  event.source_priority, event.source_type, event.updated_at,
+                  event.active, event.general_meeting_type, event.event_identity
+           FROM corporate_events AS event
+           JOIN corporate_event_sources AS provenance ON provenance.corporate_event_id = event.id
+           WHERE event.instrument_id = $1 AND event.event_type = $2
+             AND event.event_identity = $3 AND event.active = TRUE
+             AND provenance.source_url = $4
+           ORDER BY event.updated_at DESC LIMIT 1 FOR UPDATE OF event`,
+          [instrument.id, parsed.eventType, legacyIdentity, batch.source.sourceUrl]
+        )
+      )[0];
+    }
     if (!existing && parsed.eventType === "UPCOMING_DIVIDEND") {
       const calendarYear = (
         parsed.recordDate ?? parsed.exDividendDate ?? parsed.paymentDate ?? parsed.eventDate
@@ -1113,7 +1137,7 @@ const upsertParsedEvents = async (
           parsed.eventTime ?? null,
           parsed.fiscalPeriod ?? null,
           parsed.fiscalYear ?? null,
-          existing.event_identity || eventIdentity,
+          parsed.fiscalYearLabel?.includes("/") ? eventIdentity : existing.event_identity || eventIdentity,
           parsed.generalMeetingType ?? null,
           parsed.registrationDate ?? null,
           parsed.dividendPerShare ?? null,
@@ -1135,6 +1159,17 @@ const upsertParsedEvents = async (
       );
     } else {
       duplicates += 1;
+    }
+
+    if (apply && (parsed.eventType === "QUARTERLY_REPORT" || parsed.eventType === "HALF_YEAR_REPORT" || parsed.eventType === "ANNUAL_REPORT")) {
+      await transaction.execute(
+        `UPDATE corporate_events SET fiscal_year_label = COALESCE($2, fiscal_year_label),
+                 period_start = COALESCE($3, period_start), period_end = COALESCE($4, period_end)
+         WHERE id = $1 AND (fiscal_year_label IS DISTINCT FROM COALESCE($2, fiscal_year_label)
+           OR period_start IS DISTINCT FROM COALESCE($3, period_start)
+           OR period_end IS DISTINCT FROM COALESCE($4, period_end))`,
+        [eventId, parsed.fiscalYearLabel ?? null, parsed.periodStart ?? null, parsed.periodEnd ?? null]
+      );
     }
 
     await transaction.execute(
@@ -1337,6 +1372,9 @@ const toCorporateEvent = (row: EventRow): CorporateEvent => ({
   eventTime: row.event_time ?? undefined,
   fiscalPeriod: row.fiscal_period ?? undefined,
   fiscalYear: row.fiscal_year ?? undefined,
+  fiscalYearLabel: row.fiscal_year_label ?? undefined,
+  periodStart: row.period_start ?? undefined,
+  periodEnd: row.period_end ?? undefined,
   generalMeetingType: row.general_meeting_type ?? undefined,
   registrationDate: row.event_type === "GENERAL_MEETING"
     ? row.registration_date_source === "OFFICIAL" && row.registration_date
@@ -1389,7 +1427,8 @@ const getStoredEvents = async (
     `
       SELECT event.id, event.instrument_id, instrument.ticker, instrument.company_name,
              event.event_type, event.event_date, event.event_time, event.fiscal_period,
-             event.fiscal_year, event.general_meeting_type, event.registration_date,
+             event.fiscal_year, event.fiscal_year_label, event.period_start, event.period_end,
+             event.general_meeting_type, event.registration_date,
              event.registration_date_source,
              event.dividend_per_share, event.dividend_total_per_share,
              event.dividend_advance_per_share, event.dividend_currency,
@@ -1498,7 +1537,7 @@ export type GlobalGeneralMeetingSyncResult = {
   pending: number;
 };
 
-const REPORT_SCHEDULE_PROJECTION_VERSION = 2;
+const REPORT_SCHEDULE_PROJECTION_VERSION = 3;
 const REPORT_SCHEDULE_BATCH_SIZE = 100;
 const REPORT_SCHEDULE_UNMATCHED_RETRY_MS = 7 * 24 * 60 * 60 * 1_000;
 const REPORT_SCHEDULE_CANDIDATE_SQL = `(
@@ -1507,6 +1546,8 @@ const REPORT_SCHEDULE_CANDIDATE_SQL = `(
   OR report.source_title ILIKE '%harmonogram%raport%' OR report.title ILIKE '%harmonogram%raport%'
   OR report.source_title ILIKE '%kalendarz%raport%' OR report.title ILIKE '%kalendarz%raport%'
   OR report.source_title ILIKE '%dat%publikacj%raport%' OR report.title ILIKE '%dat%publikacj%raport%'
+  OR report.source_title ILIKE '%dat%przekazywan%raport%' OR report.title ILIKE '%dat%przekazywan%raport%'
+  OR report.source_title ILIKE '%termin%przekazywan%raport%' OR report.title ILIKE '%termin%przekazywan%raport%'
 )`;
 
 let globalReportScheduleSyncInFlight: Promise<GlobalGeneralMeetingSyncResult> | null = null;
@@ -1569,7 +1610,7 @@ export const synchronizeGlobalReportSchedules = ({ force = false, refreshSource 
     const attachmentsByReport = new Map<string, typeof attachmentRows>();
     for (const attachment of attachmentRows) {
       const list = attachmentsByReport.get(attachment.espi_report_id) ?? [];
-      if (list.length < 3) list.push(attachment);
+      list.push(attachment);
       attachmentsByReport.set(attachment.espi_report_id, list);
     }
     let created = 0;
@@ -1591,15 +1632,18 @@ export const synchronizeGlobalReportSchedules = ({ force = false, refreshSource 
         const events = new Map(parsed.map((event) => [
           [getCorporateEventIdentityKey(event), event.eventDate].join(":"), event,
         ]));
-        for (const attachment of attachmentsByReport.get(report.id) ?? []) {
+        const reportAttachments = attachmentsByReport.get(report.id) ?? [];
+        let parseComplete = reportAttachments.length <= 3;
+        for (const attachment of reportAttachments.slice(0, 3)) {
           try {
             const text = await readOfficialMeetingPdf(attachment.source_url);
-            if (!text) continue;
+            if (!text) { parseComplete = false; continue; }
             for (const event of parseCorporateEventDocument(`${report.source_title}\n${text}`)) {
               if (event.eventType !== "QUARTERLY_REPORT" && event.eventType !== "HALF_YEAR_REPORT" && event.eventType !== "ANNUAL_REPORT") continue;
               events.set([getCorporateEventIdentityKey(event), event.eventDate].join(":"), event);
             }
           } catch (error) {
+            parseComplete = false;
             diagnose({ provider: "global-espi-report-schedule", sourceId: report.source_id,
               phase: "attachment", error: error instanceof Error ? error.name : "unknown" });
           }
@@ -1613,11 +1657,37 @@ export const synchronizeGlobalReportSchedules = ({ force = false, refreshSource 
             "SELECT pg_advisory_xact_lock(hashtext($1)) AS locked",
             [`corporate-events:${instrument.canonical_key}`]
           );
+          const oldProjections = await transaction.query<StoredReportProjection>(
+            `SELECT event.id, event.event_identity, event.event_date,
+                    ARRAY_AGG(DISTINCT provenance.source_url) AS source_urls
+             FROM corporate_events AS event
+             JOIN corporate_event_sources AS target ON target.corporate_event_id = event.id AND target.source_url = $2
+             JOIN corporate_event_sources AS provenance ON provenance.corporate_event_id = event.id
+             WHERE event.instrument_id = $1 AND event.active = TRUE
+               AND event.event_type IN ('QUARTERLY_REPORT', 'HALF_YEAR_REPORT', 'ANNUAL_REPORT')
+             GROUP BY event.id, event.event_identity, event.event_date`,
+            [instrument.id, report.source_url]
+          );
+          const projectionPlan = planReportScheduleReprojection(
+            oldProjections, [...events.values()], report.source_url, parseComplete
+          );
           const upsert = await upsertParsedEvents(transaction, instrument, {
             events: [...events.values()],
             source: { sourceType: "ISSUER_CURRENT_REPORT", sourceUrl: report.source_url,
               sourcePublishedAt: report.published_at, sourceTitle: report.source_title || report.title },
           });
+          if (projectionPlan.deactivateIds.length > 0) {
+            await transaction.execute(
+              `UPDATE corporate_events SET active = FALSE, status = 'CANCELLED', updated_at = $2
+               WHERE id = ANY($1::text[]) AND active = TRUE`,
+              [projectionPlan.deactivateIds, new Date().toISOString()]
+            );
+          }
+          if (projectionPlan.ambiguousIds.length > 0 || !parseComplete) {
+            diagnose({ provider: "global-espi-report-schedule", sourceId: report.source_id,
+              phase: "reprojection-review", ambiguous: projectionPlan.ambiguousIds.length,
+              parseComplete });
+          }
           await transaction.execute(
             `UPDATE espi_reports SET report_schedule_projection_status = 'SUCCESS',
               report_schedule_projected_at = $1, report_schedule_projection_version = $2 WHERE id = $3`,

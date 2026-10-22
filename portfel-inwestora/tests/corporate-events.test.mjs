@@ -163,6 +163,95 @@ test("associates each date with the nearest report when a schedule is one paragr
   assert.equal(events.length, 2);
 });
 
+test("Kęty and Budimex official rows keep Q1 and Q3 separate", () => {
+  const kety = parseCorporateEventDocument(`Skonsolidowany raport kwartalny:\n-za I kwartał 2026 r. - 22 kwietnia 2026 roku,\n-za III kwartał 2026 r. - 26 października 2026 roku,`);
+  assert.ok(findEvent(kety, "QUARTERLY_REPORT", "Q1", "2026-04-22"));
+  assert.ok(findEvent(kety, "QUARTERLY_REPORT", "Q3", "2026-10-26"));
+  assert.equal(kety.length, 2);
+  const budimex = parseCorporateEventDocument(`Skonsolidowane raporty kwartalne Grupy Budimex:\n- za I kwartał 2026 r. - 6 maja 2026 r.\n- za III kwartał 2026 r. - 27 października 2026 r.`);
+  assert.ok(findEvent(budimex, "QUARTERLY_REPORT", "Q1", "2026-05-06"));
+  assert.ok(findEvent(budimex, "QUARTERLY_REPORT", "Q3", "2026-10-27"));
+  assert.equal(budimex.length, 2);
+});
+
+test("Synektik and Syn2Bio use financial, not calendar quarters", () => {
+  const synektik = parseCorporateEventDocument(`Zarząd informuje o terminach raportów w roku obrotowym 2026, trwającym od 1 października 2026 r. do 30 września 2027 r.:\n- skonsolidowany raport kwartalny za IV kwartał roku finansowego 2025 (a III kwartał roku kalendarzowego 2026) - 18 listopada 2026 r.\n- skonsolidowany raport kwartalny za I kwartał roku finansowego 2026 (a IV kwartał roku kalendarzowego 2026) - 24 lutego 2027 r.\n- skonsolidowany raport półroczny za I półrocze roku finansowego 2026 (okres: IV kwartał roku kalendarzowego 2026 i I kwartał roku kalendarzowego 2027) - 23 czerwca 2027 r.\n- skonsolidowany raport kwartalny za III kwartał roku finansowego 2026 (a II kwartał roku kalendarzowego 2027) - 4 sierpnia 2027 r.`);
+  assert.deepEqual(synektik.map(({ fiscalPeriod, fiscalYear, eventDate }) => [fiscalPeriod, fiscalYear, eventDate]), [
+    ["Q4", 2025, "2026-11-18"], ["Q1", 2026, "2027-02-24"],
+    ["H1", 2026, "2027-06-23"], ["Q3", 2026, "2027-08-04"],
+  ]);
+  const syn2bio = parseCorporateEventDocument(`- jednostkowy raport kwartalny za I kwartał roku finansowego 2026 (a IV kwartał roku kalendarzowego 2026) – 17 lutego 2027 r.\n- jednostkowy raport półroczny za I półrocze roku finansowego 2026 (okres: IV kwartał roku kalendarzowego 2026 i I kwartał roku kalendarzowego 2027) – 30 czerwca 2027 r.\n- jednostkowy raport kwartalny za III kwartał roku finansowego 2026 (a II kwartał roku kalendarzowego 2027) – 11 sierpnia 2027 r.`);
+  assert.deepEqual(syn2bio.map(({ fiscalPeriod, fiscalYear, eventDate }) => [fiscalPeriod, fiscalYear, eventDate]), [
+    ["Q1", 2026, "2027-02-17"], ["H1", 2026, "2027-06-30"], ["Q3", 2026, "2027-08-11"],
+  ]);
+});
+
+test("period boundaries, selected data and old corrected dates are not report appointments", () => {
+  assert.deepEqual(parseCorporateEventDocument("Raport za IV kwartał 2026 roku zakończony na dzień 31 stycznia 2027 r."), []);
+  const lpp = parseCorporateEventDocument(`Skonsolidowany raport za III kwartał 2026: 03 grudnia 2026 roku.\nW związku z tym rok finansowy trwa od 1 lutego 2026 roku do 31 stycznia 2027 roku.\nIV kwartał 2026 - od 1 listopada 2026 do 31 stycznia 2027.`);
+  assert.equal(lpp.length, 1);
+  assert.ok(findEvent(lpp, "QUARTERLY_REPORT", "Q3", "2026-12-03"));
+  const mbank = parseCorporateEventDocument(`Zmiana terminu publikacji Skonsolidowanego raportu kwartalnego za III kwartał 2026 r. oraz wybranych niezaudytowanych danych finansowych za IV kwartał 2026 r.\nSkonsolidowany raport kwartalny za III kwartał 2026 r. zostanie opublikowany 28 października 2026 r. zamiast 29 października 2026 r., zaś wybrane niezaudytowane dane finansowe za IV kwartał 2026 r. zostaną opublikowane 4 lutego 2027 r. zamiast 5 lutego 2027 r.`);
+  assert.deepEqual(mbank.map(({ fiscalPeriod, eventDate, previousEventDate }) => [fiscalPeriod, eventDate, previousEventDate]), [["Q3", "2026-10-28", "2026-10-29"]]);
+});
+
+test("GreenX and AB use publication dates, never fiscal period ends", () => {
+  const greenx = parseCorporateEventDocument(`Harmonogram publikacji raportów za rok obrotowy kończący się w 2027 r. (tj. od 1 lipca 2026 do 30 czerwca 2027 r.).\n- Raport kwartalny za okres lipiec-wrzesień 2026 r. (pierwszy kwartał) - 30 października 2026 r.\n- Raport roczny 2027 (za rok obrotowy kończący się 30 czerwca 2027 r.) - 30 września 2027 r.`);
+  assert.ok(findEvent(greenx, "QUARTERLY_REPORT", "Q1", "2026-10-30"));
+  assert.ok(findEvent(greenx, "ANNUAL_REPORT", "FY", "2027-09-30"));
+  assert.equal(greenx.some((event) => event.eventDate === "2027-06-30"), false);
+  const ab = parseCorporateEventDocument(`- Raport za I kwartał (01-10-2026 - 31-12-2026) roku obrotowego 2026/2027 zostanie opublikowany w dniu 22-02-2027 r.\n- Raport za III kwartał (01-04-2027 - 30-06-2027) roku obrotowego 2026/2027 zostanie opublikowany w dniu 23-08-2027 r.`);
+  assert.deepEqual(ab.map(({ fiscalPeriod, fiscalYearLabel, eventDate, periodStart, periodEnd }) =>
+    [fiscalPeriod, fiscalYearLabel, eventDate, periodStart, periodEnd]), [
+    ["Q1", "2026/2027", "2027-02-22", "2026-10-01", "2026-12-31"],
+    ["Q3", "2026/2027", "2027-08-23", "2027-04-01", "2027-06-30"],
+  ]);
+});
+
+test("standalone and consolidated reports share a calendar event only when their dates agree", () => {
+  const together = parseCorporateEventDocument(`Raport jednostkowy za 2025 rok - 26 marca 2026 r.\nSkonsolidowany raport roczny za 2025 rok - 26 marca 2026 r.`);
+  assert.equal(together.length, 1);
+  const separately = parseCorporateEventDocument(`Raport jednostkowy za 2025 rok - 26 marca 2026 r.\nSkonsolidowany raport roczny za 2025 rok - 27 marca 2026 r.`);
+  assert.equal(separately.length, 2);
+  assert.equal(new Set(separately.map(getCorporateEventIdentityKey)).size, 2);
+});
+
+test("official Orange, PKO BP, KGHM and PZU schedule formats stay discoverable", () => {
+  const orange = parseCorporateEventDocument(`Rozszerzone skonsolidowane raporty kwartalne:\n- za I kwartał 2026 r. - w dniu 22.04.2026 r.\n- za III kwartał 2026 r. - w dniu 26.10.2026 r.\nRaport roczny za 2026 r. - w dniu 05.03.2027 r.`);
+  assert.ok(findEvent(orange, "QUARTERLY_REPORT", "Q3", "2026-10-26"));
+  assert.ok(findEvent(orange, "ANNUAL_REPORT", "FY", "2027-03-05"));
+  const pko = parseCorporateEventDocument(`4) skonsolidowany raport kwartalny GKB za III kwartał 2026 r. - 5 listopada 2026 r.`);
+  assert.ok(findEvent(pko, "QUARTERLY_REPORT", "Q3", "2026-11-05"));
+  const kghm = parseCorporateEventDocument(`Skonsolidowane raporty kwartalne:\n- za I kwartał 2026 roku - 13 maja 2026 r.\n- za III kwartał 2026 roku - 18 listopada 2026 r.`);
+  assert.ok(findEvent(kghm, "QUARTERLY_REPORT", "Q3", "2026-11-18"));
+  const pzu = parseCorporateEventDocument(`- skonsolidowany raport kwartalny za III kwartał 2026 r. - 19 listopada 2026 r.`);
+  assert.ok(findEvent(pzu, "QUARTERLY_REPORT", "Q3", "2026-11-19"));
+});
+
+test("PDF-extracted wrapped publication year does not disappear", () => {
+  const events = parseCorporateEventDocument(`Harmonogram raportów za rok obrotowy kończący się w 2027 r.\n• Raport kwartalny za okres lipiec–wrzesień 2026 r. (pierwszy kwartał) – 30 października\n2026 r.\n• Raport roczny 2027 (za rok obrotowy kończący się 30 czerwca 2027 r.) – 30 września 2027 r.`);
+  assert.ok(findEvent(events, "QUARTERLY_REPORT", "Q1", "2026-10-30"));
+  assert.ok(findEvent(events, "ANNUAL_REPORT", "FY", "2027-09-30"));
+});
+
+test("December H1 reports from official issuer schedules keep publication dates", () => {
+  const betacom = parseCorporateEventDocument(`Skonsolidowany raport półroczny zawierający skrócone jednostkowe informacje finansowe:
+– za I półrocze roku obrotowego kończącego się 31 marca 2027 r., tj. na dzień 30 września 2026 r. – 11 grudnia 2026 r.`);
+  assert.ok(findEvent(betacom, "HALF_YEAR_REPORT", "H1", "2026-12-11"), JSON.stringify(betacom));
+  assert.equal(betacom[0]?.fiscalYearLabel, "2026/2027");
+  assert.equal(betacom[0]?.periodEnd, "2026-09-30");
+  assert.equal(betacom.some((item) => item.eventDate === "2026-09-30"), false);
+
+  const komputronik = parseCorporateEventDocument(`Półroczny skonsolidowany raport za półrocze roku obrotowego 2026/2027 zakończone w dniu 30 września 2026 roku - termin publikacji 15 grudnia 2026 roku.`);
+  assert.ok(findEvent(komputronik, "HALF_YEAR_REPORT", "H1", "2026-12-15"));
+  assert.equal(komputronik.some((item) => item.eventDate === "2026-09-30"), false);
+
+  const intersport = parseCorporateEventDocument(`Raport półroczny:
+- za I półrocze roku obrotowego 2026/2027 trwające od 1 kwietnia 2026 r. do 30 września 2026 r. - zostanie opublikowany 17 grudnia 2026 r.`);
+  assert.ok(findEvent(intersport, "HALF_YEAR_REPORT", "H1", "2026-12-17"));
+  assert.equal(intersport.some((item) => item.eventDate === "2026-09-30"), false);
+});
+
 test("uses a market-scoped GPW canonical identity, never a bare global ticker", () => {
   const dinoFirstUser = {
     id: "portfolio-a:instrument:stock:DNP",

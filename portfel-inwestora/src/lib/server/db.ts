@@ -527,6 +527,18 @@ const schemaStatements = [
   `,
   "CREATE INDEX IF NOT EXISTS idx_corporate_event_history_event_id ON corporate_event_history(corporate_event_id)",
   `
+    CREATE TABLE IF NOT EXISTS corporate_event_projection_changes (
+      id TEXT PRIMARY KEY,
+      corporate_event_id TEXT NOT NULL,
+      previous_row JSONB NOT NULL,
+      reason TEXT NOT NULL,
+      source_url TEXT NOT NULL,
+      changed_at TEXT NOT NULL,
+      FOREIGN KEY (corporate_event_id) REFERENCES corporate_events(id) ON DELETE CASCADE
+    )
+  `,
+  "CREATE INDEX IF NOT EXISTS idx_corporate_event_projection_changes_event_id ON corporate_event_projection_changes(corporate_event_id)",
+  `
     CREATE TABLE IF NOT EXISTS espi_reports (
       id TEXT PRIMARY KEY,
       source TEXT NOT NULL,

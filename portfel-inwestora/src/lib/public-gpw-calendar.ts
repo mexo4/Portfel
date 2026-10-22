@@ -222,7 +222,10 @@ export const expandGpwStoredCalendarEvent = (
   };
   const results: PublicGpwCalendarEvent[] = [];
   if (row.event_date >= from && row.event_date <= to) {
-    results.push({ ...base, id: row.id, kind: row.event_type, date: row.event_date });
+    const kind = row.event_type === "UPCOMING_DIVIDEND" &&
+      row.payment_date === row.event_date && row.record_date !== row.event_date
+      ? "DIVIDEND_PAYMENT" : row.event_type;
+    results.push({ ...base, id: row.id, kind, date: row.event_date });
   }
   if (
     row.event_type === "UPCOMING_DIVIDEND" &&

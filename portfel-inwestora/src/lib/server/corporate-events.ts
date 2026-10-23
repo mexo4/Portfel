@@ -35,7 +35,7 @@ import { getMarketCachePayload, setMarketCachePayload } from "@/lib/server/marke
 import { fetchWithSystemTrust } from "@/lib/server/system-trust-fetch";
 import { readOfficialMeetingPdf } from "@/lib/server/general-meeting-pdf";
 import { normalizeText, uniqueBy } from "@/lib/utils";
-import { planReportScheduleReprojection, type StoredReportProjection } from "@/lib/report-schedule-reprojection";
+import { getReportScheduleProjectionStatus, planReportScheduleReprojection, type StoredReportProjection } from "@/lib/report-schedule-reprojection";
 import {
   isDividendReportSuperseded,
   planDividendFinalResolution,
@@ -1551,9 +1551,10 @@ export type GlobalGeneralMeetingSyncResult = {
 };
 
 // Re-evaluate previously successful documents after fixing wrapped PDF rows.
-const REPORT_SCHEDULE_PROJECTION_VERSION = 5;
+const REPORT_SCHEDULE_PROJECTION_VERSION = 6;
 const REPORT_SCHEDULE_BATCH_SIZE = 100;
 const REPORT_SCHEDULE_UNMATCHED_RETRY_MS = 7 * 24 * 60 * 60 * 1_000;
+const REPORT_SCHEDULE_PARSE_RETRY_MS = 24 * 60 * 60 * 1_000;
 const REPORT_SCHEDULE_CANDIDATE_SQL = `(
   report.source_title ILIKE '%termin%raport%' OR report.title ILIKE '%termin%raport%'
   OR report.source_title ILIKE '%raport%termin%' OR report.title ILIKE '%raport%termin%'
@@ -1588,6 +1589,7 @@ export const synchronizeGlobalReportSchedules = ({ force = false, refreshSource 
     if (refreshSource) await synchronizeGpwReportScheduleReports();
     const publishedAfter = new Date(Date.now() - 730 * 24 * 60 * 60 * 1_000).toISOString();
     const unmatchedRetryBefore = new Date(Date.now() - REPORT_SCHEDULE_UNMATCHED_RETRY_MS).toISOString();
+    const parseRetryBefore = new Date(Date.now() - REPORT_SCHEDULE_PARSE_RETRY_MS).toISOString();
     const candidateWhere = `
       report.source = 'PAP_ESPI' AND report.published_at >= $1
       AND report.source_id NOT LIKE 'newconnect:%' AND report.market IS DISTINCT FROM 'NEWCONNECT'
@@ -1595,7 +1597,8 @@ export const synchronizeGlobalReportSchedules = ({ force = false, refreshSource 
       AND ${REPORT_SCHEDULE_CANDIDATE_SQL}`;
     const pendingWhere = `(
       report.report_schedule_projection_version IS DISTINCT FROM $2
-      OR report.report_schedule_projection_status = 'PARSE_ERROR'
+      OR (report.report_schedule_projection_status = 'PARSE_ERROR'
+          AND report.report_schedule_projected_at < $6)
       OR (report.report_schedule_projection_status = 'UNMATCHED'
           AND report.report_schedule_projected_at < $3)
       OR $5::boolean
@@ -1611,7 +1614,7 @@ export const synchronizeGlobalReportSchedules = ({ force = false, refreshSource 
        LEFT JOIN corporate_event_instruments AS instrument ON instrument.id = report.issuer_id
        WHERE ${candidateWhere} AND ${pendingWhere}
        ORDER BY report.published_at DESC, report.source_id DESC LIMIT $4`,
-      [publishedAfter, REPORT_SCHEDULE_PROJECTION_VERSION, unmatchedRetryBefore, REPORT_SCHEDULE_BATCH_SIZE, force]
+      [publishedAfter, REPORT_SCHEDULE_PROJECTION_VERSION, unmatchedRetryBefore, REPORT_SCHEDULE_BATCH_SIZE, force, parseRetryBefore]
     );
     const attachmentRows = reports.length ? await query<{ espi_report_id: string; name: string; source_url: string }>(
       `SELECT espi_report_id, name, source_url FROM espi_report_attachments
@@ -1663,7 +1666,8 @@ export const synchronizeGlobalReportSchedules = ({ force = false, refreshSource 
           }
         }
         if (events.size === 0) {
-          await updateReportScheduleProjectionStatus(report.id, "NO_EVENT");
+          await updateReportScheduleProjectionStatus(report.id, getReportScheduleProjectionStatus(0, parseComplete));
+          if (!parseComplete) errors += 1;
           continue;
         }
         const result = await withTransaction(async (transaction) => {
@@ -1691,11 +1695,8 @@ export const synchronizeGlobalReportSchedules = ({ force = false, refreshSource 
               sourcePublishedAt: report.published_at, sourceTitle: report.source_title || report.title },
           });
           if (projectionPlan.deactivateIds.length > 0) {
-            await transaction.execute(
-              `UPDATE corporate_events SET active = FALSE, status = 'CANCELLED', updated_at = $2
-               WHERE id = ANY($1::text[]) AND active = TRUE`,
-              [projectionPlan.deactivateIds, new Date().toISOString()]
-            );
+            await deactivateEventProjection(transaction, projectionPlan.deactivateIds,
+              "REPORT_SCHEDULE_REPROJECTION", report.source_url);
           }
           if (projectionPlan.ambiguousIds.length > 0 || !parseComplete) {
             diagnose({ provider: "global-espi-report-schedule", sourceId: report.source_id,
@@ -1703,15 +1704,17 @@ export const synchronizeGlobalReportSchedules = ({ force = false, refreshSource 
               parseComplete });
           }
           await transaction.execute(
-            `UPDATE espi_reports SET report_schedule_projection_status = 'SUCCESS',
+            `UPDATE espi_reports SET report_schedule_projection_status = $4,
               report_schedule_projected_at = $1, report_schedule_projection_version = $2 WHERE id = $3`,
-            [new Date().toISOString(), REPORT_SCHEDULE_PROJECTION_VERSION, report.id]
+            [new Date().toISOString(), REPORT_SCHEDULE_PROJECTION_VERSION, report.id,
+              getReportScheduleProjectionStatus(events.size, parseComplete)]
           );
           return upsert;
         });
         created += result.created;
         duplicates += result.duplicates;
         saved += result.saved;
+        if (!parseComplete) errors += 1;
       } catch (error) {
         errors += 1;
         try { await updateReportScheduleProjectionStatus(report.id, "PARSE_ERROR"); }
@@ -1724,7 +1727,7 @@ export const synchronizeGlobalReportSchedules = ({ force = false, refreshSource 
       `SELECT COUNT(*) AS count FROM espi_reports AS report
        LEFT JOIN corporate_event_instruments AS instrument ON instrument.id = report.issuer_id
        WHERE ${candidateWhere} AND ${pendingWhere}`,
-      [publishedAfter, REPORT_SCHEDULE_PROJECTION_VERSION, unmatchedRetryBefore, REPORT_SCHEDULE_BATCH_SIZE, false]
+      [publishedAfter, REPORT_SCHEDULE_PROJECTION_VERSION, unmatchedRetryBefore, REPORT_SCHEDULE_BATCH_SIZE, false, parseRetryBefore]
     );
     const pending = Number(count?.count ?? 0);
     console.info(`[REPORT SCHEDULE SYNC] fetched=${reports.length} new=${created} duplicates=${duplicates} saved=${saved} unmatched=${unmatched} pending=${pending} errors=${errors}`);
@@ -2084,7 +2087,7 @@ const getDividendReprojectionCandidates = async (
   [instrumentId, sourceUrl, recordDates, DIVIDEND_REPROJECTION_MAX_EVENTS]
 );
 
-const deactivateDividendProjection = async (
+const deactivateEventProjection = async (
   transaction: DatabaseTransaction,
   ids: string[],
   reason: string,
@@ -2239,7 +2242,7 @@ export const synchronizeGlobalDividends = ({
                 parseCorporateEventDocument(`${item.source_title}\n${item.title}\n${item.body_text}`));
               const plan = planDividendRejectedAmendment(old, getDividendAmendmentEvidence(reportText),
                 report.source_url, corroboratingEvents);
-              await deactivateDividendProjection(transaction, plan.deactivateIds,
+              await deactivateEventProjection(transaction, plan.deactivateIds,
                 "CORROBORATED_NON_BINDING_AMENDMENT", report.source_url);
               if (plan.ambiguousIds.length) diagnose({ provider: "global-espi-dividends", sourceId: report.source_id,
                 phase: "reprojection-review", ambiguous: plan.ambiguousIds.length });
@@ -2276,9 +2279,9 @@ export const synchronizeGlobalDividends = ({
               sourceTitle: report.source_title || report.title,
             },
           });
-          await deactivateDividendProjection(transaction, sourcePlan.deactivateIds,
+          await deactivateEventProjection(transaction, sourcePlan.deactivateIds,
             "SAME_SOURCE_REPARSE", report.source_url);
-          await deactivateDividendProjection(transaction, finalPlan.deactivateIds.filter((id) =>
+          await deactivateEventProjection(transaction, finalPlan.deactivateIds.filter((id) =>
             !sourcePlan.deactivateIds.includes(id)), "FINAL_DIVIDEND_RESOLUTION", report.source_url);
           if (sourcePlan.ambiguousIds.length) diagnose({ provider: "global-espi-dividends", sourceId: report.source_id,
             phase: "reprojection-review", ambiguous: sourcePlan.ambiguousIds.length });

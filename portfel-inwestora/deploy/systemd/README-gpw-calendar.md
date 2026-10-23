@@ -15,10 +15,11 @@ Keep this timer disabled until a reviewed release is installed. Use the read-onl
 ```sh
 node scripts/audit-public-gpw-calendar.mjs --month=2026-11
 node scripts/audit-public-gpw-calendar.mjs --month=2026-12
-node scripts/preview-gpw-report-reprojection.mjs --dry-run --limit=50
+node --experimental-strip-types --import ./tests/register-alias-loader.mjs scripts/preview-gpw-report-reprojection.mjs --dry-run --limit=50
 ```
 
 The source audit also supports `--source-ids=gpw:...` and reports parsed events and dividend reprojection decisions. It does not apply those decisions. Compare report dates and dividend entitlements/payments with the linked official issuer notices. Review `duplicateGroups`, `excluded`, ambiguous rows, projection errors, and the bounded backlog. A zero-error build alone is not evidence that the calendar data are complete.
+The report reprojection preview supports the same bounded `--source-ids=gpw:123,gpw:456` filter and starts its database transaction in read-only mode. Use it to review ambiguous rows before any later production projection.
 
 If a PDF attachment is unavailable, the source remains in `PARSE_ERROR` for retry. The body of an official report can establish that its *own* shareholder amendment was non-binding, but its old-date projection is withdrawn only when a separate, later official report confirms the proposed new payment date and amount. The withdrawal is restricted to exclusively attributed payment-only rows and retains a previous-row audit snapshot. Do not infer the contents of the inaccessible attachment or automatically retire events also supported by another official source.
 

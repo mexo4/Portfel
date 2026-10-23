@@ -14,6 +14,13 @@ export type ReportReprojectionPlan = {
   missingIdentities: string[];
 };
 
+/** A failed or skipped attachment is inconclusive, even when body text yielded events. */
+export const getReportScheduleProjectionStatus = (
+  eventCount: number,
+  parseComplete: boolean
+): "SUCCESS" | "NO_EVENT" | "PARSE_ERROR" =>
+  !parseComplete ? "PARSE_ERROR" : eventCount > 0 ? "SUCCESS" : "NO_EVENT";
+
 /** Never retire a projection confirmed by another source. An empty/failed
  * parse is inconclusive, so it cannot withdraw previously published events. */
 export const planReportScheduleReprojection = (

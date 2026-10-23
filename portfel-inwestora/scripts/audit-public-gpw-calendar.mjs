@@ -245,7 +245,8 @@ try {
     selectedSourceParsed: selectedSourceReports.rows.map((report) => ({
       sourceId: report.source_id,
       changeNotice: /\bzmian(?:a|y|ie|ę)\s+(?:harmonogramu\s+)?terminu\b|\bnowy termin(?: publikacji)?\b/iu.test(`${report.source_title}\n${report.title}\n${report.body_text}`),
-      candidateSegments: getCandidateSegments(report.body_text).filter((segment) => /(?:publikacj|opublikowan|przekazan)/iu.test(segment.text)),
+      candidateSegments: getCandidateSegments(report.body_text).filter((segment) =>
+        /(?:raport|kwartał|półrocz|roczn)/iu.test(segment.text) && /20\d{2}/u.test(segment.text)),
       events: parseCorporateEventDocument(`${report.source_title}\n${report.title}\n${report.body_text}`),
     })),
     catalogMatches,

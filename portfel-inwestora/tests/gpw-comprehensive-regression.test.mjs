@@ -36,6 +36,55 @@ test("official AB wrapped schedule uses publication dates, never period-end/lega
     ["2027-02-22", "2027-06-08", "2027-08-23", "2028-01-07"]);
 });
 
+test("realistic LPP section heading does not swallow its Q3 bullet or legal citation", () => {
+  const events = parseCorporateEventDocument(`Terminy publikacji raportów okresowych w 2026 roku
+    3. Skonsolidowane raporty kwartalne:
+    - Rozszerzony skonsolidowany raport za I kwartał 2026: 11 czerwca 2026 roku;
+    - Rozszerzony skonsolidowany raport za III kwartał 2026: 03 grudnia 2026 roku.
+    Na podstawie § 62 Rozporządzenia Ministra Finansów z dnia 29 marca 2018 roku
+    spółka nie będzie publikowała odrębnych raportów.`);
+  const quarters = events.filter((event) => event.eventType === "QUARTERLY_REPORT");
+  assert.deepEqual(quarters.map((event) => [event.fiscalPeriod, event.eventDate]),
+    [["Q1", "2026-06-11"], ["Q3", "2026-12-03"]]);
+});
+
+test("realistic GreenX PDF text retains wrapped publication year and fiscal quarters", () => {
+  const events = parseCorporateEventDocument(`Harmonogram publikacji raportów okresowych za rok obrotowy 2027.
+    - Raport kwartalny za okres lipiec-wrzesień 2026 r. _pierwszy kwartał_ - 30 października 2026 r.
+    - Raport kwartalny za okres październik-grudzień 2026 r. _drugi kwartał_ - 29 stycznia 2027 r.
+    - Raport kwartalny za okres styczeń-marzec 2027 r. _trzeci kwartał_ - 30 kwietnia 2027 r.
+    - Raport kwartalny za okres kwiecień-czerwiec 2027 r. _czwarty kwartał_ - 30 lipca 2027 r.
+    - Raport roczny 2027 _za rok obrotowy kończący się 30 czerwca 2027 r._ - 30 września
+    2027 r.`);
+  assert.deepEqual(events.filter((event) => event.eventType === "QUARTERLY_REPORT")
+    .map((event) => event.fiscalPeriod), ["Q1", "Q2", "Q3", "Q4"]);
+  assert.ok(events.some((event) => event.eventType === "ANNUAL_REPORT" &&
+    event.eventDate === "2027-09-30"));
+  assert.equal(events.some((event) => event.eventDate === "2027-06-30"), false);
+});
+
+test("selected Budimex financial data are not a second half-year report", () => {
+  const events = parseCorporateEventDocument(`Terminy przekazywania raportów:
+    3. Skonsolidowany raport Grupy Budimex za I półrocze 2026 r. - 21 sierpnia 2026 r.
+    Jednocześnie Zarząd informuje, że wybrane dane finansowe ze skonsolidowanego
+    raportu półrocznego Grupy Budimex za I półrocze 2026 r. zostaną opublikowane
+    28 lipca 2026 roku.`);
+  assert.deepEqual(events.filter((event) => event.eventType === "HALF_YEAR_REPORT")
+    .map((event) => event.eventDate), ["2026-08-21"]);
+});
+
+test("wrapped mBank correction keeps new and previous dates, not selected Q4 data", () => {
+  const events = parseCorporateEventDocument(`Zmiana terminu publikacji raportu finansowego za III kwartał 2026 r.
+    W nawiązaniu do raportu bieżącego nr 59/2025 Zarząd informuje o zmianie terminu publikacji
+    Skonsolidowanego raportu kwartalnego za III kwartał 2026
+    r. zostanie opublikowany 28 października 2026 r. zamiast 29 października 2026 r.,
+    zaś wybrane niezaudytowane dane finansowe za IV kwartał 2026 r. zostaną opublikowane
+    4 lutego 2027 r. zamiast 5 lutego 2027 r.`);
+  assert.deepEqual(events.filter((event) => event.eventType === "QUARTERLY_REPORT")
+    .map((event) => [event.fiscalPeriod, event.eventDate, event.previousEventDate]),
+    [["Q3", "2026-10-28", "2026-10-29"]]);
+});
+
 test("non-calendar fiscal schedules keep the announced half-year publication date", () => {
   const examples = [
     ["Grodno", "15.12.2026"],

@@ -351,6 +351,7 @@ const getFiscalPeriod = (value: string, eventType: CorporateEventType) => {
   // Calendar-quarter explanations in parentheses are not the issuer's fiscal
   // quarter (Synektik/Syn2Bio use an October--September financial year).
   const normalized = value.toLocaleLowerCase("pl-PL")
+    .replace(/_/g, " ")
     .replace(/\([^)]*kwartał(?:u|y)?\s+roku\s+kalendarzowego[^)]*\)/gu, " ")
     .replace(/\([^)]*rok\s+kalendarzow[^)]*\)/gu, " ");
 
@@ -434,6 +435,22 @@ export const getCandidateSegments = (text: string) => {
   let sectionType: CorporateEventType | null = null;
   for (let index = 0; index < lines.length; index += 1) {
     let line = lines[index];
+    // A numbered section heading is not a report row. Treat it as context
+    // before the continuation logic can swallow several following bullets.
+    if (/^\d+[.)]\s+(?:(?:rozszerzone|skonsolidowane)\s+)*raporty\s+(?:roczne|kwartalne|półroczne)(?:\s+[^:]{0,50})?:\s*$/iu.test(line)) {
+      sectionType = getEventType(line);
+      continue;
+    }
+    // PDF text extraction sometimes wraps only the year of an announced
+    // publication date, even though a fiscal period date already occurred.
+    if (isReportType(getEventType(line)) && /[-–—]\s*\d{1,2}\s+\p{L}+\s*$/u.test(line) &&
+      /^20\d{2}\s*r\.?\s*$/iu.test(lines[index + 1] ?? "")) {
+      line += ` ${lines[++index]}`;
+    }
+    if (isReportType(getEventType(line)) && /\b20\d{2}\s*$/u.test(line) &&
+      /^r\.?\s+(?:zostanie|będzie)\s+(?:opublikowan|przekazan)/iu.test(lines[index + 1] ?? "")) {
+      line += ` ${lines[++index]}`;
+    }
     // Numbered ESPI rows and "- za I półrocze" rows can wrap just before
     // their date. A detached continuation loses its report type entirely.
     if (/^(?:\d+[.)]\s+(?:roczn|kwartaln|półroczn|skonsolidowan|jednostkow|raport)|[-–—•]\s+za\s+)/iu.test(line) &&
@@ -500,7 +517,7 @@ export const getCandidateSegments = (text: string) => {
         continue;
       }
     }
-    for (const clause of line.split(/(?:;|,\s*(?=[-–—]\s*za\s+[ivx1-4])|(?<=[.,])\s+(?=raport\s+(?:roczny|półroczny|kwartalny)))\s*(?=(?:[-–—]\s*)?(?:skonsolidowan|jednostkow|rozszerzon|raport|za\s+[ivx1-4]))/iu)) {
+    for (const clause of line.split(/(?:;|,\s*(?=[-–—]\s*za\s+[ivx1-4])|(?<=[.,])\s+(?=(?:(?:skonsolidowan|jednostkow|rozszerzon)\w*\s+)?raport\s+(?:roczn|półroczn|kwartaln)))\s*(?=(?:[-–—]\s*)?(?:skonsolidowan|jednostkow|rozszerzon|raport|za\s+[ivx1-4]))/iu)) {
       segments.push({ text: clause, sectionType });
     }
   }
@@ -549,9 +566,17 @@ const parseReportScheduleEvents = (text: string) => {
   const scheduleYearLabel = scheduleYearMatch?.[1]
     ? [scheduleYearMatch[1], scheduleYearMatch[2]].filter(Boolean).join("/")
     : text.match(/\brok\s+obrotowy\s+kończąc\w*\s+się\s+w\s+(20\d{2})/iu)?.[1];
-  for (const segment of getCandidateSegments(text)) {
+  // An issuer may announce selected preliminary data from a future report
+  // before publishing the report itself. ESPI line wraps can separate
+  // "selected data" from "half-year report", so classify the entire clause
+  // before segmenting it into potential calendar appointments.
+  const scheduleText = text.replace(
+    /\bwybran\p{L}*\s+(?:niezaudytowan\p{L}*\s+)?dan\p{L}*\s+finansow\p{L}*[\s\S]{0,350}?(?:zostan\p{L}*\s+(?:opublikowan|przekazan)\p{L}*[\s\S]{0,100}?20\d{2}\s*(?:roku|r\.?))/giu,
+    " "
+  );
+  for (const segment of getCandidateSegments(scheduleText)) {
     const clause = segment.text;
-    if (/\brozporządzen|\bwybrane\s+(?:niezaudytowane\s+)?dane\s+finansowe/iu.test(clause)) continue;
+    if (/\brozporządzen|\bwybrane\s+(?:niezaudytowane\s+)?dane\s+finansowe|\bdane\s+finansowe\s+ze\s+skonsolidowanego\s+raportu/iu.test(clause)) continue;
     if (/\b(?:nie\s+będzie|nie\s+przekaże|nie\s+publikuje)\b/iu.test(clause)) continue;
     if (/\b(?:okresy\s+sprawozdawcze|trwa\s+od)\b/iu.test(clause)) continue;
     const type = getEventType(clause) ?? segment.sectionType;

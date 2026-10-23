@@ -889,6 +889,13 @@ const getDividendStatus = (text: string): Extract<
     return "CONFIRMED";
   }
 
+  // A board can adopt its own recommendation, but the report may explicitly
+  // say the dividend still requires a future shareholder decision. Such a
+  // board resolution is not an approved dividend distribution.
+  if (/ostateczn\w*\s+decyzj\w*[\s\S]{0,160}?podjet\w*\s+zostanie[\s\S]{0,100}?waln\w*\s+zgromadzen/u.test(folded)) {
+    return "PROPOSED";
+  }
+
   const finalApproval =
     /rada\s+nadzorcza[\s\S]{0,180}?(?:wyraziła|udzieliła|podjęła|postanowiła\s+wyrazić).{0,80}zgod|zgod[ae]\s+rady\s+nadzorczej|waln\w*\s+zgromadzeni\w*[\s\S]{0,120}?(?:podj.{0,24}uchwa|postanowi)|uchwał[ae]\s+(?:zwyczajnego|nadzwyczajnego)?\s*walnego\s+zgromadzenia/u.test(normalized);
   const conditionalAdvance =
@@ -1162,6 +1169,15 @@ export const isNonBindingDividendDraftNotice = (text: string) => {
   return /zglos\w*[\s\S]{0,120}?(?:propozycj\w*\s+)?zmian\w*\s+do\s+uchwaly/u.test(folded) &&
     !/walne\s+zgromadzenie[\s\S]{0,180}?podjelo[\s\S]{0,180}?uchwale[\s\S]{0,120}?(?:podzialu\s+zysku|wyplacie\s+dywidendy|wyplaty\s+dywidendy)/u.test(folded) &&
     !/uchwala\s+nr\s*\d+[\s\S]{0,120}?(?:podzialu\s+zysku|wyplacie\s+dywidendy|wyplaty\s+dywidendy)/u.test(folded);
+};
+
+export const getDividendAmendmentEvidence = (text: string) => {
+  const paymentClause = text.match(/termin\s+wyp[łl]aty\s+dywidendy\s+z\s+dnia\s+[^\n]{0,110}/iu)?.[0] ?? "";
+  const [previousPaymentDate, proposedPaymentDate] = extractPolishDates(paymentClause);
+  const amountClause = text.match(/(?:podwyższeni\w*|zmian\w*)\s+dywidendy\s+z\s+[\d,.]+\s*(?:zł|PLN)[\s\S]{0,80}?do\s+([\d,.]+)\s*(?:zł|PLN)/iu);
+  const proposedAmount = amountClause ? Number(amountClause[1].replace(",", ".")) : NaN;
+  return { previousPaymentDate, proposedPaymentDate,
+    proposedAmount: Number.isFinite(proposedAmount) ? proposedAmount : undefined };
 };
 
 const getUpcomingDividendEvents = (text: string): ParsedCorporateEvent[] => {

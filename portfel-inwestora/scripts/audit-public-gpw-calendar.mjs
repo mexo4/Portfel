@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs";
 import { Pool } from "pg";
 import nextEnv from "@next/env";
-import { getCandidateSegments, isNonBindingDividendDraftNotice, parseCorporateEventDocument } from "../src/lib/corporate-events.ts";
-import { planDividendFinalResolution, planDividendSourceReprojection } from "../src/lib/dividend-reprojection.ts";
+import { getCandidateSegments, getDividendAmendmentEvidence, isNonBindingDividendDraftNotice, parseCorporateEventDocument } from "../src/lib/corporate-events.ts";
+import { planDividendFinalResolution, planDividendRejectedAmendment, planDividendSourceReprojection } from "../src/lib/dividend-reprojection.ts";
 
 // This diagnostic never initializes application schema, fetches a source or writes data.
 nextEnv.loadEnvConfig(process.env.MEXO_LOCAL_ENV_DIR || process.cwd());
@@ -87,11 +87,18 @@ try {
           OR source_title ILIKE '%' || term || '%')
     ORDER BY published_at DESC LIMIT 120`, [inspect]) : { rows: [] };
   const selectedSourceReports = sourceIds.length ? await client.query(`
-    SELECT source_id, issuer_id, issuer_name, source_title, title, body_text, published_at,
+    SELECT id, source_id, issuer_id, issuer_name, source_title, title, body_text, published_at,
       source_url, report_schedule_projection_status, dividend_projection_status
     FROM espi_reports
     WHERE source = 'PAP_ESPI' AND source_id = ANY($1::text[])
     ORDER BY published_at DESC LIMIT 50`, [sourceIds]) : { rows: [] };
+  const selectedSourceAttachments = selectedSourceReports.rows.length ? await client.query(`
+    SELECT report.source_id, attachment.name, attachment.media_type, attachment.source_url
+    FROM espi_report_attachments AS attachment
+    JOIN espi_reports AS report ON report.id = attachment.espi_report_id
+    WHERE attachment.espi_report_id = ANY($1::text[])
+    ORDER BY report.source_id, attachment.name LIMIT 150`,
+  [selectedSourceReports.rows.map((report) => report.id)]) : { rows: [] };
   const selectedSourcePlans = [];
   for (const report of selectedSourceReports.rows) {
     if (!report.issuer_id) continue;
@@ -111,12 +118,31 @@ try {
       GROUP BY event.id ORDER BY event.event_date DESC, event.id LIMIT 100`,
       [report.issuer_id, report.source_url, recordDates])).rows;
     const nonBinding = isNonBindingDividendDraftNotice(reportText);
-    selectedSourcePlans.push({ sourceId: report.source_id, nonBinding, parsed: parsed.map((event) => ({
+    const later = nonBinding ? (await client.query(`
+      SELECT source_id, source_title, title, body_text FROM espi_reports
+      WHERE source = 'PAP_ESPI' AND issuer_id = $1 AND source_url <> $2
+        AND published_at > $3 AND published_at < $4
+        AND (source_title ILIKE '%dywidend%' OR title ILIKE '%dywidend%')
+      ORDER BY published_at ASC LIMIT 25`,
+    [report.issuer_id, report.source_url, report.published_at,
+      new Date(Date.parse(report.published_at) + 180 * 24 * 60 * 60 * 1_000).toISOString()])).rows : [];
+    const corroboratingEvents = later.flatMap((item) => parseCorporateEventDocument(
+      `${item.source_title}\n${item.title}\n${item.body_text}`));
+    selectedSourcePlans.push({ sourceId: report.source_id, nonBinding,
+      corroboratingSources: later.map((item) => item.source_id),
+      oldProjections: old.map(({ id, event_identity, event_date, record_date, payment_date,
+        dividend_installment, dividend_per_share, status, source_urls }) => ({
+        id, event_identity, event_date, record_date, payment_date, dividend_installment,
+        dividend_per_share, status, source_urls,
+      })),
+      parsed: parsed.map((event) => ({
       identity: event.eventIdentity, date: event.eventDate, recordDate: event.recordDate,
       paymentDate: event.paymentDate, amount: event.dividendPerShare, status: event.dividendStatus,
     })), sourcePlan: planDividendSourceReprojection(old.filter((event) => event.source_urls.includes(report.source_url)),
       parsed, report.source_url, true, nonBinding),
-      finalPlan: planDividendFinalResolution(old, parsed, report.published_at) });
+      finalPlan: planDividendFinalResolution(old, parsed, report.published_at),
+      amendmentPlan: planDividendRejectedAmendment(old, getDividendAmendmentEvidence(reportText),
+        report.source_url, corroboratingEvents) });
   }
   const targetScheduleReports = inspect.length ? await client.query(`
     SELECT report.source_id, report.issuer_name, report.source_title, report.published_at,
@@ -213,6 +239,7 @@ try {
     eventQuality: eventQuality.rows[0],
     inspectedReports: inspectedReports.rows,
     selectedSourceReports: selectedSourceReports.rows,
+    selectedSourceAttachments: selectedSourceAttachments.rows,
     selectedSourcePlans,
     targetScheduleReports: targetScheduleReports.rows,
     selectedSourceParsed: selectedSourceReports.rows.map((report) => ({

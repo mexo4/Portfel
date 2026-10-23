@@ -8,6 +8,7 @@ import {
   type CorporateEventType,
   type CorporateEventsResponse,
   getCorporateEventIdentityKey,
+  getDividendAmendmentEvidence,
   getStatutoryMeetingRegistrationDate,
   isNonBindingDividendDraftNotice,
   isCorporateEventSourceUnavailable,
@@ -38,6 +39,7 @@ import { planReportScheduleReprojection, type StoredReportProjection } from "@/l
 import {
   isDividendReportSuperseded,
   planDividendFinalResolution,
+  planDividendRejectedAmendment,
   planDividendSourceReprojection,
   type StoredDividendProjection,
 } from "@/lib/dividend-reprojection";
@@ -2186,6 +2188,7 @@ export const synchronizeGlobalDividends = ({
         }
 
         const reportText = `${report.source_title}\n${report.title}\n${report.body_text}`;
+        const nonBindingDraft = isNonBindingDividendDraftNotice(reportText);
         let events = parseCorporateEventDocument(reportText)
           .filter((event) => event.eventType === "UPCOMING_DIVIDEND");
         let parseComplete = true;
@@ -2193,7 +2196,12 @@ export const synchronizeGlobalDividends = ({
           for (const attachment of dividendAttachmentsByReport.get(report.id) ?? []) {
             try {
               const text = await readOfficialMeetingPdf(attachment.source_url);
-              if (!text) { parseComplete = false; continue; }
+              if (!text) {
+                parseComplete = false;
+                diagnose({ provider: "global-espi-dividends", sourceId: report.source_id,
+                  phase: "attachment-unavailable" });
+                continue;
+              }
               events = parseCorporateEventDocument(`${report.source_title}\n${text}`)
                 .filter((event) => event.eventType === "UPCOMING_DIVIDEND");
               if (events.length) break;
@@ -2205,23 +2213,42 @@ export const synchronizeGlobalDividends = ({
           }
         }
         if (events.length === 0) {
-          if (!parseComplete) {
-            await updateDividendProjectionStatus(report.id, "PARSE_ERROR");
-            errors += 1;
-            continue;
-          }
-          if (isNonBindingDividendDraftNotice(reportText)) {
+          // The public body establishes a proposal, not an adopted resolution.
+          // If its PDF is unavailable, only independent later official proof
+          // can justify retiring exclusively attributed stale projections.
+          if (nonBindingDraft) {
             await withTransaction(async (transaction) => {
               await transaction.query<{ locked: number }>(
                 "SELECT pg_advisory_xact_lock(hashtext($1)) AS locked",
                 [`corporate-events:${instrument.canonical_key}`]
               );
               const old = await getDividendReprojectionCandidates(transaction, instrument.id, report.source_url, []);
-              const plan = planDividendSourceReprojection(old, [], report.source_url, true, true);
-              await deactivateDividendProjection(transaction, plan.deactivateIds, "NON_BINDING_DRAFT", report.source_url);
+              const publicationTimestamp = Date.parse(report.published_at);
+              const later = !Number.isFinite(publicationTimestamp) ? [] : await transaction.query<{
+                source_title: string; title: string; body_text: string;
+              }>(
+                `SELECT source_title, title, body_text FROM espi_reports
+                 WHERE source = 'PAP_ESPI' AND issuer_id = $1 AND source_url <> $2
+                   AND published_at > $3 AND published_at < $4
+                   AND (source_title ILIKE '%dywidend%' OR title ILIKE '%dywidend%')
+                 ORDER BY published_at ASC LIMIT 25`,
+                [report.issuer_id, report.source_url, report.published_at,
+                  new Date(publicationTimestamp + 180 * 24 * 60 * 60 * 1_000).toISOString()]
+              );
+              const corroboratingEvents = later.flatMap((item) =>
+                parseCorporateEventDocument(`${item.source_title}\n${item.title}\n${item.body_text}`));
+              const plan = planDividendRejectedAmendment(old, getDividendAmendmentEvidence(reportText),
+                report.source_url, corroboratingEvents);
+              await deactivateDividendProjection(transaction, plan.deactivateIds,
+                "CORROBORATED_NON_BINDING_AMENDMENT", report.source_url);
               if (plan.ambiguousIds.length) diagnose({ provider: "global-espi-dividends", sourceId: report.source_id,
                 phase: "reprojection-review", ambiguous: plan.ambiguousIds.length });
             });
+          }
+          if (!parseComplete) {
+            await updateDividendProjectionStatus(report.id, "PARSE_ERROR");
+            errors += 1;
+            continue;
           }
           await updateDividendProjectionStatus(report.id, "NO_EVENT");
           continue;
@@ -2235,7 +2262,7 @@ export const synchronizeGlobalDividends = ({
           const old = await getDividendReprojectionCandidates(transaction, instrument.id, report.source_url,
             events.map((event) => event.recordDate).filter((date): date is string => Boolean(date)));
           const sourced = old.filter((event) => event.source_urls.includes(report.source_url));
-          const sourcePlan = planDividendSourceReprojection(sourced, events, report.source_url, parseComplete, false);
+          const sourcePlan = planDividendSourceReprojection(sourced, events, report.source_url, parseComplete, nonBindingDraft);
           const superseded = isDividendReportSuperseded(old, events, report.published_at);
           const finalPlan = planDividendFinalResolution(old, events, report.published_at);
           const upsert = superseded ? { created: 0, duplicates: events.length, saved: 0 } : await upsertParsedEvents(transaction, instrument, {

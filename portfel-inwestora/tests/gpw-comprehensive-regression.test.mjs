@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parseCorporateEventDocument, isNonBindingDividendDraftNotice } from "../src/lib/corporate-events.ts";
+import { getDividendAmendmentEvidence, parseCorporateEventDocument, isNonBindingDividendDraftNotice } from "../src/lib/corporate-events.ts";
 import {
   isDividendReportSuperseded,
   planDividendFinalResolution,
+  planDividendRejectedAmendment,
   planDividendSourceReprojection,
 } from "../src/lib/dividend-reprojection.ts";
 import { expandGpwStoredCalendarEvent, getGpwEventLabel } from "../src/lib/public-gpw-calendar.ts";
@@ -110,6 +111,30 @@ test("a non-binding no-event report retires its own stale projection, not a shar
   assert.deepEqual(planDividendSourceReprojection(previous, [], source, true, true).deactivateIds, ["false"]);
 });
 
+test("an unavailable proposal PDF never retires rows without an independent final resolution", () => {
+  const source = "https://www.gpw.pl/komunikat?geru_id=492936";
+  const notice = `Akcjonariusz zgłosiła następujące zmiany do uchwały nr 7:
+    1. podwyższenie dywidendy z 0,80 zł na jedną akcję do 1,00 zł na jedną akcję,
+    2. dzień dywidendy z 18.09.2026 r. na 06.07.2026 r.,
+    3. termin wypłaty dywidendy z dnia 10.12.2026 r. na 31.07.2026 r.`;
+  const falseRows = [
+    { ...old("old-amount", "dividend:2026:1", "2026-12-10", 1, source), record_date: null,
+      dividend_per_share: 0.8, payment_date: "2026-12-10" },
+    { ...old("new-amount-old-date", "dividend:2026:2", "2026-12-10", 2, source), record_date: null,
+      dividend_per_share: 1, payment_date: "2026-12-10" },
+  ];
+  const final = dividends(`Walne Zgromadzenie podjęło uchwałę o wypłacie dywidendy
+    1,00 zł na akcję. Dzień dywidendy 6 lipca 2026 r., dzień wypłaty 31 lipca 2026 r.`);
+  const evidence = getDividendAmendmentEvidence(notice);
+  assert.deepEqual(planDividendRejectedAmendment(falseRows, evidence, source, []).deactivateIds, []);
+  assert.deepEqual(planDividendRejectedAmendment(falseRows, evidence, source, final).deactivateIds,
+    ["old-amount", "new-amount-old-date"]);
+  const shared = { ...falseRows[0], source_urls: [source, "https://issuer.example/final"] };
+  assert.deepEqual(planDividendRejectedAmendment([shared], evidence, source, final).deactivateIds, []);
+  assert.deepEqual(planDividendRejectedAmendment(falseRows, evidence, source,
+    [{ ...final[0], dividendPerShare: 0.8 }]).deactivateIds, []);
+});
+
 test("confirmed installments replace a stale single and excess installments, but preserve two real payments", () => {
   const final = dividends(`Dywidenda za 2025 rok. Zwyczajne Walne Zgromadzenie podjęło uchwałę.
     Łączna dywidenda wynosi 48,97 zł na akcję i będzie wypłacana w dwóch ratach.
@@ -138,6 +163,39 @@ test("confirmed installments replace a stale single and excess installments, but
   const unrelated = { ...old("other-year", "dividend:2024:single", "2026-08-19", null),
     source_published_at: "2026-05-01T00:00:00Z" };
   assert.deepEqual(planDividendFinalResolution([unrelated], final, "2026-06-18T15:42:50Z").deactivateIds, []);
+});
+
+test("a final multi-rate dividend retires only the older prior-year proposal with the same record date", () => {
+  const final = dividends(`Zarząd Grupy Kęty informuje, że Zwyczajne Walne Zgromadzenie
+    podjęło uchwałę w sprawie wypłaty dywidendy. Jako dzień dywidendy określono
+    19 sierpnia 2026 r., termin wypłaty ustalono na 3 września 2026 r. i 4 listopada 2026 r.
+    Dywidenda wynosi 48,97 zł na akcję, w tym pierwsza rata 16,33 zł na akcję,
+    druga rata 32,64 zł na akcję.`);
+  assert.equal(final.length, 2);
+  const proposal = { ...old("proposal", "dividend:2025:single", "2026-08-19", null,
+    "https://www.gpw.pl/komunikat?geru_id=486015&title=Wniosek+Zarzadu+w+sprawie+dywidendy"),
+    payment_date: null, source_published_at: "2026-04-20T16:08:59Z" };
+  const sameAmountButUnrelated = { ...proposal, id: "unrelated", source_urls: ["https://example.org/other"] };
+  const newer = { ...proposal, id: "newer", source_published_at: "2026-07-01T00:00:00Z" };
+  const wrongDate = { ...proposal, id: "wrong-date", record_date: "2026-08-20" };
+  const plan = planDividendFinalResolution([proposal, sameAmountButUnrelated, newer, wrongDate],
+    final, "2026-06-18T15:42:50Z");
+  assert.deepEqual(plan.deactivateIds, ["proposal"]);
+});
+
+test("an older board recommendation cannot recreate a distribution after the shareholders decide", () => {
+  const proposal = dividends(`Wniosek Zarządu w sprawie podziału zysku za 2025 rok.
+    Zarząd podjął uchwałę, w której postanowił zarekomendować Walnemu Zgromadzeniu
+    dywidendę 49,05 zł na akcję. Dzień dywidendy: 19 sierpnia 2026 r.
+    Ostateczna decyzja dotycząca podziału zysku i wypłaty dywidendy podjęta zostanie
+    przez Zwyczajne Walne Zgromadzenie.`);
+  assert.equal(proposal.length, 1);
+  assert.equal(proposal[0].dividendStatus, "PROPOSED");
+  const finalRate = { ...old("confirmed", "dividend:2026:1", "2026-08-19", 1),
+    source_published_at: "2026-06-18T15:42:50Z" };
+  assert.equal(isDividendReportSuperseded([finalRate], proposal, "2026-04-20T12:00:00Z"), true);
+  assert.equal(isDividendReportSuperseded([{ ...finalRate, record_date: "2026-08-20" }], proposal,
+    "2026-04-20T12:00:00Z"), false);
 });
 
 test("a stored dividend whose event date is its payment date is labeled as payment", () => {

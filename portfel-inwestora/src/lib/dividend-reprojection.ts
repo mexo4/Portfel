@@ -1,4 +1,4 @@
-import type { ParsedCorporateEvent } from "@/lib/corporate-events";
+import type { ParsedCorporateEvent, getDividendAmendmentEvidence } from "@/lib/corporate-events";
 
 export type StoredDividendProjection = {
   id: string;
@@ -50,6 +50,35 @@ export const planDividendSourceReprojection = (
   return result;
 };
 
+/** A shareholder's proposed amendment is not itself a resolution. When its
+ * PDF is unavailable, retire an old-date projection only if a separate,
+ * later official report confirms the proposed new payment date and amount.
+ * Otherwise leave the row for review rather than guessing the vote's result. */
+export const planDividendRejectedAmendment = (
+  existing: StoredDividendProjection[],
+  evidence: ReturnType<typeof getDividendAmendmentEvidence>,
+  sourceUrl: string,
+  laterOfficialEvents: ParsedCorporateEvent[]
+): DividendReprojectionPlan => {
+  const result: DividendReprojectionPlan = { deactivateIds: [], retainedIds: [], ambiguousIds: [] };
+  const oldDate = evidence.previousPaymentDate;
+  const confirmedDate = evidence.proposedPaymentDate;
+  const confirmedAmount = evidence.proposedAmount;
+  const corroborated = Boolean(oldDate && confirmedDate && confirmedAmount !== undefined &&
+    laterOfficialEvents.some((event) => event.eventType === "UPCOMING_DIVIDEND" &&
+      event.dividendStatus === "CONFIRMED" && event.paymentDate === confirmedDate &&
+      event.dividendPerShare !== undefined && Math.abs(event.dividendPerShare - confirmedAmount!) < 0.005));
+  for (const old of existing) {
+    if (corroborated && old.payment_date === oldDate && old.record_date === null &&
+      old.source_urls.length === 1 && old.source_urls[0] === sourceUrl) {
+      result.deactivateIds.push(old.id);
+    } else {
+      result.ambiguousIds.push(old.id);
+    }
+  }
+  return result;
+};
+
 /** A final resolution explicitly stating one or several installments can
  * supersede a stale, different installment shape for the SAME record date.
  * This does not merge unrelated distributions merely by ticker or year. */
@@ -78,6 +107,21 @@ export const planDividendFinalResolution = (
     const amountIsReused = old.dividend_per_share !== null &&
       (Math.abs(old.dividend_per_share - total) < 0.005 || confirmed.some((event) =>
         event.dividendPerShare !== undefined && Math.abs(old.dividend_per_share! - event.dividendPerShare) < 0.005));
+    // Older proposals often name the profit year, while a later resolution
+    // without that phrase falls back to the record year. The prior-year,
+    // single-payment proposal is still the same distribution when the record
+    // date matches and the final resolution explicitly splits it into rates.
+    const proposalYear = /^dividend:(20\d{2}):single$/.exec(old.event_identity)?.[1];
+    const replacedPriorYearProposal = confirmed.length > 1 && proposalYear &&
+      Number(proposalYear) === Number(confirmed[0]!.recordDate!.slice(0, 4)) - 1 &&
+      old.dividend_installment === null && old.payment_date === null &&
+      old.source_urls.length === 1 && /(?:wniosek|propozycj)/iu.test(old.source_urls[0]!) &&
+      old.source_published_at && publishedAt &&
+      Date.parse(old.source_published_at) < Date.parse(publishedAt);
+    if (old.record_date === confirmed[0]!.recordDate && replacedPriorYearProposal) {
+      result.deactivateIds.push(old.id);
+      continue;
+    }
     if (old.record_date !== confirmed[0]!.recordDate || !distribution ||
       !old.event_identity.startsWith(`${distribution}:`)) {
       result.retainedIds.push(old.id);
@@ -102,7 +146,8 @@ export const isDividendReportSuperseded = (
   if (!publishedAt || !Number.isFinite(Date.parse(publishedAt))) return false;
   const dividends = parsed.filter((event) => event.eventType === "UPCOMING_DIVIDEND");
   return dividends.length > 0 && dividends.every((event) => event.recordDate && existing.some((old) =>
-    old.record_date === event.recordDate && old.event_identity === event.eventIdentity &&
-    old.status === "CONFIRMED" &&
+    old.record_date === event.recordDate && old.status === "CONFIRMED" &&
+    (old.event_identity === event.eventIdentity ||
+      (event.dividendStatus === "PROPOSED" && old.dividend_installment !== null)) &&
     old.source_published_at && Date.parse(old.source_published_at) > Date.parse(publishedAt)));
 };

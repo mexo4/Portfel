@@ -901,6 +901,21 @@ export const shouldApplyEvent = (
       (sameSourceReprojection && incomingTimestamp === existingTimestamp)
     );
   }
+  const isReportSchedule = parsed.eventType === "QUARTERLY_REPORT" ||
+    parsed.eventType === "HALF_YEAR_REPORT" ||
+    parsed.eventType === "ANNUAL_REPORT";
+  if (
+    sameSourceReprojection &&
+    isReportSchedule &&
+    parsed.eventDate !== existing.event_date
+  ) {
+    // A schedule can be corrected in place at the same canonical publication
+    // URL. Syndicated copies may carry a later timestamp than the issuer's
+    // schedule even though both refer to the exact same report. Trust a
+    // changed parse only when this exact source already owns the event, and
+    // only when the date actually changed; this keeps retries idempotent.
+    return true;
+  }
   if (existing.status === "CONFIRMED" && getParsedEventStatus(parsed) === "PROPOSED") {
     return false;
   }
@@ -1054,13 +1069,16 @@ const upsertParsedEvents = async (
       !parsed.recordDate && existing?.record_date ? existing.record_date : parsed.eventDate;
     const now = new Date().toISOString();
     const eventId = existing?.id ?? randomUUID();
-    const sameSourceReprojection = existing?.status === "CANCELLED" && (
+    const isReportSchedule = parsed.eventType === "QUARTERLY_REPORT" ||
+      parsed.eventType === "HALF_YEAR_REPORT" ||
+      parsed.eventType === "ANNUAL_REPORT";
+    const sameSourceReprojection = Boolean(existing && isReportSchedule && (
       await transaction.query<{ source_url: string }>(
         `SELECT source_url FROM corporate_event_sources
          WHERE corporate_event_id = $1 AND source_url = $2 LIMIT 1`,
         [eventId, batch.source.sourceUrl]
       )
-    ).length > 0;
+    ).length > 0);
     const apply = shouldApplyEvent(existing, batch.source, parsed, sameSourceReprojection);
     const sourceId = randomUUID();
 
@@ -1603,6 +1621,13 @@ export const synchronizeGlobalReportSchedules = ({ force = false, refreshSource 
           AND report.report_schedule_projected_at < $3)
       OR $5::boolean
     )`;
+    const pendingCountWhere = `(
+      report.report_schedule_projection_version IS DISTINCT FROM $2
+      OR (report.report_schedule_projection_status = 'PARSE_ERROR'
+          AND report.report_schedule_projected_at < $4)
+      OR (report.report_schedule_projection_status = 'UNMATCHED'
+          AND report.report_schedule_projected_at < $3)
+    )`;
     const reports = await query<GlobalGeneralMeetingReportRow>(
       `SELECT report.id, report.source_id, report.issuer_id, report.issuer_name,
               report.source_isin, report.source_ticker, report.source_title,
@@ -1726,8 +1751,8 @@ export const synchronizeGlobalReportSchedules = ({ force = false, refreshSource 
     const count = await queryOne<{ count: number | string }>(
       `SELECT COUNT(*) AS count FROM espi_reports AS report
        LEFT JOIN corporate_event_instruments AS instrument ON instrument.id = report.issuer_id
-       WHERE ${candidateWhere} AND ${pendingWhere}`,
-      [publishedAfter, REPORT_SCHEDULE_PROJECTION_VERSION, unmatchedRetryBefore, REPORT_SCHEDULE_BATCH_SIZE, false, parseRetryBefore]
+       WHERE ${candidateWhere} AND ${pendingCountWhere}`,
+      [publishedAfter, REPORT_SCHEDULE_PROJECTION_VERSION, unmatchedRetryBefore, parseRetryBefore]
     );
     const pending = Number(count?.count ?? 0);
     console.info(`[REPORT SCHEDULE SYNC] fetched=${reports.length} new=${created} duplicates=${duplicates} saved=${saved} unmatched=${unmatched} pending=${pending} errors=${errors}`);

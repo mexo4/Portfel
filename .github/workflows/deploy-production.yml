@@ -298,10 +298,6 @@ jobs:
 
           git fetch origin "$BRANCH"
           BUILD_REVISION="$(git rev-parse "origin/$BRANCH")"
-          if ! git -C "$REPO" diff --quiet "$PREVIOUS_REVISION" "$BUILD_REVISION" -- package.json package-lock.json; then
-            echo "ERROR: root dependency manifests changed. Refusing an in-place npm install while the old release is live."
-            exit 1
-          fi
           node - "$PREVIOUS_REVISION" "$BUILD_REVISION" <<'NODE'
           const { execFileSync } = require("node:child_process");
           const [previousRevision, buildRevision] = process.argv.slice(2);
@@ -309,32 +305,39 @@ jobs:
           const previousManifest = readManifest(previousRevision);
           const buildManifest = readManifest(buildRevision);
           const expectedStart = "node --use-system-ca ./scripts/start-production.mjs";
-          if (previousManifest.scripts?.start !== expectedStart || buildManifest.scripts?.start !== expectedStart) {
+          if (previousManifest.scripts?.start !== expectedStart || buildManifest.scripts?.start !== expectedStart ||
+              previousManifest.scripts?.build !== buildManifest.scripts?.build) {
             console.error("ERROR: unexpected production start command; refusing activation.");
             process.exit(1);
           }
-          // This audited helper is test/maintenance-only and does not affect the
-          // production runtime or installed dependencies. Keep every other
-          // script and manifest field under the existing exact comparison.
-          delete previousManifest.scripts?.["audit:gpw-dividends"];
-          delete buildManifest.scripts?.["audit:gpw-dividends"];
-          if (JSON.stringify(previousManifest) !== JSON.stringify(buildManifest)) {
-            console.error("ERROR: application dependencies or manifest fields changed. Refusing in-place install.");
+          // Dependencies are installed and built in an isolated release tree,
+          // never in the live shared node_modules. Keep lifecycle scripts and
+          // all non-dependency manifest settings pinned to the previous release.
+          const stripReleaseDependencies = (manifest) => {
+            const copy = structuredClone(manifest);
+            delete copy.dependencies;
+            delete copy.devDependencies;
+            delete copy.optionalDependencies;
+            delete copy.peerDependencies;
+            delete copy.scripts?.["audit:gpw-dividends"];
+            return copy;
+          };
+          const previousRoot = JSON.parse(execFileSync("git", ["show", `${previousRevision}:package.json`], { encoding: "utf8" }));
+          const buildRoot = JSON.parse(execFileSync("git", ["show", `${buildRevision}:package.json`], { encoding: "utf8" }));
+          if (JSON.stringify(previousRoot) !== JSON.stringify(buildRoot)) {
+            console.error("ERROR: root workspace configuration changed; refusing this release until the deploy workflow explicitly supports it.");
+            process.exit(1);
+          }
+          if (JSON.stringify(stripReleaseDependencies(previousManifest)) !== JSON.stringify(stripReleaseDependencies(buildManifest))) {
+            console.error("ERROR: non-dependency application manifest settings changed; refusing activation.");
             process.exit(1);
           }
           NODE
-          git checkout "$BRANCH"
-          git reset --hard "origin/$BRANCH"
-          RESET_REVISION="$(git rev-parse HEAD)"
-          if [ "$RESET_REVISION" != "$BUILD_REVISION" ]; then
-            echo "ERROR: repository reset did not reach requested revision (current ${RESET_REVISION:0:12}, expected ${BUILD_REVISION:0:12})."
-            exit 1
-          fi
-          echo "Repository is staged at ${BUILD_REVISION:0:12}; previous revision was ${PREVIOUS_REVISION:0:12}."
           BUILD_SUFFIX="$(date -u +%Y%m%dT%H%M%SZ)-$$"
           RELEASE_TARGET=".mexo-releases/$BUILD_REVISION-$BUILD_SUFFIX"
-          TEMP_TSCONFIG=".mexo-tsconfig-$BUILD_SUFFIX.json"
-          TEMP_TSCONFIG_CREATED=0
+          RELEASE_SOURCE="$APP/$RELEASE_TARGET/source"
+          RELEASE_APP="$RELEASE_SOURCE/portfel-inwestora"
+          ACTIVE_NEXT_TARGET="$RELEASE_TARGET/source/portfel-inwestora/.next"
           PREVIOUS_NEXT_TARGET=""
           PREVIOUS_NEXT_IS_DIRECTORY=0
           SWITCHED=0
@@ -345,9 +348,6 @@ jobs:
             trap - ERR
             set +e
             echo "ERROR: remote deployment failed at script line $failed_line (exit $status); restoring the previous source and build."
-            if [ "$TEMP_TSCONFIG_CREATED" = "1" ] && [[ "$TEMP_TSCONFIG" =~ ^\.mexo-tsconfig-[A-Za-z0-9._-]+\.json$ ]]; then
-              rm -f -- "$APP/$TEMP_TSCONFIG"
-            fi
             if [ -n "$PREVIOUS_NEXT_TARGET" ] && [ -d "$APP/$PREVIOUS_NEXT_TARGET" ] && { [ "$SWITCHED" = "1" ] || [ ! -e "$APP/.next" ]; }; then
               if [ "$PREVIOUS_NEXT_IS_DIRECTORY" = "1" ]; then
                 if [ -L "$APP/.next" ]; then
@@ -362,42 +362,50 @@ jobs:
               fi
             fi
             git -C "$REPO" reset --hard "$PREVIOUS_REVISION"
-            sudo -n systemctl restart mexo
+            if [ "$SWITCHED" = "1" ]; then sudo -n systemctl restart mexo; fi
             exit "$status"
           }
-          trap rollback_on_error ERR
 
           mkdir -p "$RELEASES"
           if [[ ! "$RELEASE_TARGET" =~ ^\.mexo-releases/[a-f0-9]{40}-[0-9]{8}T[0-9]{6}Z-[0-9]+$ ]]; then echo "Invalid release directory"; exit 1; fi
           if [ -e "$APP/$RELEASE_TARGET" ]; then echo "Release directory already exists; refusing to overwrite it."; exit 1; fi
-          # The old workflow generated this file after restart, so Next never
-          # reliably included it in the running artifact. Revision is now a
-          # dynamic no-store API route instead.
-          rm -f "$APP/public/mexo-build-revision.txt"
-
-          cd "$REPO"
-          if [ ! -x "$REPO/node_modules/.bin/next" ] && [ ! -x "$APP/node_modules/.bin/next" ]; then
-            echo "ERROR: Next.js CLI is missing from both repository and application node_modules; no dependency install was attempted."
+          mkdir -p "$RELEASE_SOURCE"
+          git -C "$REPO" archive "$BUILD_REVISION" | tar -x -C "$RELEASE_SOURCE"
+          test -f "$RELEASE_SOURCE/package-lock.json"
+          test -f "$RELEASE_APP/package.json"
+          # Keep the production environment outside the release and Git. Next
+          # reads the same protected file through this release-local symlink.
+          if [ -f "$APP/.env.production" ]; then
+            ln -s "$APP/.env.production" "$RELEASE_APP/.env.production"
+          else
+            echo "ERROR: protected production environment file is missing; staged dependencies/build remain isolated and the live service is untouched."
             exit 1
           fi
-          echo "Next.js CLI is present; building directly into immutable release directory $RELEASE_TARGET."
-          node "$APP/scripts/create-staging-tsconfig.mjs" "$TEMP_TSCONFIG" "$RELEASE_TARGET"
-          TEMP_TSCONFIG_CREATED=1
+          echo "Installing this release's locked dependencies in its isolated source tree."
+          cd "$RELEASE_SOURCE"
+          npm ci --no-audit --no-fund
           CIRCLE_NODE_TOTAL=2 \
           NEXT_TELEMETRY_DISABLED=1 \
           MEXO_BUILD_REVISION="$BUILD_REVISION" \
-          MEXO_BUILD_DIST_DIR="$RELEASE_TARGET" \
-          MEXO_BUILD_TSCONFIG="$TEMP_TSCONFIG" \
+          MEXO_BUILD_DIST_DIR=".next" \
           NODE_OPTIONS="--max-old-space-size=768" \
             npm --workspace portfel-inwestora run build -- --webpack
-          test -f "$APP/$RELEASE_TARGET/BUILD_ID"
-          rm -f -- "$APP/$TEMP_TSCONFIG"
-          TEMP_TSCONFIG_CREATED=0
-          if [ -n "$(git -C "$REPO" status --porcelain --untracked-files=no)" ]; then
-            echo "ERROR: build changed tracked production source outside the generated staging config; refusing activation."
+          test -f "$RELEASE_APP/.next/BUILD_ID"
+
+          # Only move the tracked source checkout after the release has built.
+          trap rollback_on_error ERR
+          git checkout "$BRANCH"
+          git reset --hard "origin/$BRANCH"
+          RESET_REVISION="$(git rev-parse HEAD)"
+          if [ "$RESET_REVISION" != "$BUILD_REVISION" ]; then
+            echo "ERROR: repository reset did not reach requested revision (current ${RESET_REVISION:0:12}, expected ${BUILD_REVISION:0:12})."
             exit 1
           fi
-
+          echo "Repository is staged at ${BUILD_REVISION:0:12}; previous revision was ${PREVIOUS_REVISION:0:12}."
+          if [ -n "$(git -C "$REPO" status --porcelain --untracked-files=no)" ]; then
+            echo "ERROR: isolated build changed tracked production source; refusing activation."
+            exit 1
+          fi
           if [ -L "$APP/.next" ]; then
             PREVIOUS_NEXT_TARGET="$(readlink "$APP/.next")"
             case "$PREVIOUS_NEXT_TARGET" in
@@ -413,7 +421,7 @@ jobs:
             exit 1
           fi
 
-          ln -s "$RELEASE_TARGET" "$APP/.next-new-$BUILD_SUFFIX"
+          ln -s "$ACTIVE_NEXT_TARGET" "$APP/.next-new-$BUILD_SUFFIX"
           SWITCHED=1
           mv -Tf "$APP/.next-new-$BUILD_SUFFIX" "$APP/.next"
           sudo -n systemctl restart mexo
@@ -494,7 +502,7 @@ jobs:
           fi
           previous_revision="$(printf '%s\n' "$REMOTE_OUTPUT" | sed -n 's/^PREVIOUS_REVISION=//p' | tail -n 1)"
           previous_target="$(printf '%s\n' "$REMOTE_OUTPUT" | sed -n 's/^PREVIOUS_NEXT_TARGET=//p' | tail -n 1)"
-          if [[ ! "$previous_revision" =~ ^[0-9a-f]{40}$ ]] || [[ ! "$previous_target" =~ ^(\.mexo-releases/[A-Za-z0-9._-]+|\.next-rollback-[A-Za-z0-9._-]+)$ ]]; then
+          if [[ ! "$previous_revision" =~ ^[0-9a-f]{40}$ ]] || [[ ! "$previous_target" =~ ^(\.mexo-releases/[a-f0-9]{40}-[0-9]{8}T[0-9]{6}Z-[0-9]+(/source/portfel-inwestora/\.next)?|\.next-rollback-[A-Za-z0-9._-]+)$ ]]; then
             echo "ERROR: deployment did not return a valid rollback target."
             exit 1
           fi
@@ -511,7 +519,7 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$RESTORE_REVISION" =~ ^[0-9a-f]{40}$ ]]
-          [[ "$RESTORE_NEXT_TARGET" =~ ^(\.mexo-releases/[A-Za-z0-9._-]+|\.next-rollback-[A-Za-z0-9._-]+)$ ]]
+          [[ "$RESTORE_NEXT_TARGET" =~ ^(\.mexo-releases/[a-f0-9]{40}-[0-9]{8}T[0-9]{6}Z-[0-9]+(/source/portfel-inwestora/\.next)?|\.next-rollback-[A-Za-z0-9._-]+)$ ]]
           ssh \
             -i ~/.ssh/mexo-production \
             -o BatchMode=yes \
@@ -605,7 +613,7 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$PREVIOUS_REVISION" =~ ^[0-9a-f]{40}$ ]]
-          [[ "$PREVIOUS_NEXT_TARGET" =~ ^(\.mexo-releases/[A-Za-z0-9._-]+|\.next-rollback-[A-Za-z0-9._-]+)$ ]]
+          [[ "$PREVIOUS_NEXT_TARGET" =~ ^(\.mexo-releases/[a-f0-9]{40}-[0-9]{8}T[0-9]{6}Z-[0-9]+(/source/portfel-inwestora/\.next)?|\.next-rollback-[A-Za-z0-9._-]+)$ ]]
           ssh \
             -i ~/.ssh/mexo-production \
             -o BatchMode=yes \

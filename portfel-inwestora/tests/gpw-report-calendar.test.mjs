@@ -31,6 +31,15 @@ test("report route selects only official GPW report event types at the read laye
   assert.doesNotMatch(route, /getGlobalGeneralMeetings\(/);
 });
 
+test("report schedule pending count uses contiguous PostgreSQL parameter indexes", () => {
+  const service = read("../src/lib/server/corporate-events.ts");
+  const start = service.indexOf("export const synchronizeGlobalReportSchedules");
+  const end = service.indexOf("export const getGlobalReportScheduleSourceState", start);
+  const sync = service.slice(start, end);
+  assert.match(sync, /const pendingCountWhere = `\([\s\S]*?report_schedule_projection_version IS DISTINCT FROM \$2[\s\S]*?report_schedule_projected_at < \$4[\s\S]*?\)`;/);
+  assert.match(sync, /WHERE \$\{candidateWhere\} AND \$\{pendingCountWhere\}`,[\s\S]*?\[publishedAfter, REPORT_SCHEDULE_PROJECTION_VERSION, unmatchedRetryBefore, parseRetryBefore\]/);
+});
+
 test("portfolio report scope excludes closed holdings and refuses foreign portfolio ids", () => {
   const now = "2026-10-21T10:00:00.000Z";
   const asset = (symbol, quantity) => ({ id: symbol, symbol, name: symbol, quantity,

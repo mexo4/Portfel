@@ -89,7 +89,7 @@ function runGuardCase(t, mutate = () => {}, mutateRoot = () => {}) {
   };
 }
 
-test("Oracle deployment manifest guard narrows only the audited helper exception", async (t) => {
+test("Oracle deployment guard permits isolated dependency releases but pins runtime package behavior", async (t) => {
   await t.test("change only to audit:gpw-dividends is allowed", (t) => {
     const result = runGuardCase(t, ({ newManifest }) => {
       newManifest.scripts["audit:gpw-dividends"] = "node audit-new.mjs";
@@ -98,21 +98,21 @@ test("Oracle deployment manifest guard narrows only the audited helper exception
     assert.equal(result.rootChanged, false);
   });
 
-  await t.test("dependency changes are blocked", (t) => {
+  await t.test("production dependency changes are allowed in isolated release trees", (t) => {
     const result = runGuardCase(t, ({ newManifest }) => {
       newManifest.dependencies.next = "16.5.0";
     });
-    assert.equal(result.appAccepted, false);
+    assert.equal(result.appAccepted, true, result.output);
   });
 
-  await t.test("devDependency changes are blocked", (t) => {
+  await t.test("dev dependency changes are allowed in isolated build trees", (t) => {
     const result = runGuardCase(t, ({ newManifest }) => {
       newManifest.devDependencies.eslint = "10.0.0";
     });
-    assert.equal(result.appAccepted, false);
+    assert.equal(result.appAccepted, true, result.output);
   });
 
-  await t.test("root package-lock changes are blocked", (t) => {
+  await t.test("root lockfile changes are allowed because npm ci runs in the isolated release", (t) => {
     const result = runGuardCase(t, () => {}, ({ newLock }) => {
       newLock.packages["node_modules/next"] = { version: "16.5.0" };
     });
@@ -120,12 +120,19 @@ test("Oracle deployment manifest guard narrows only the audited helper exception
     assert.equal(result.appAccepted, true);
   });
 
-  await t.test("root package.json changes are blocked", (t) => {
+  await t.test("root workspace configuration changes remain blocked", (t) => {
     const result = runGuardCase(t, () => {}, ({ newRoot }) => {
       newRoot.engines = { node: "24.x" };
     });
     assert.equal(result.rootChanged, true);
-    assert.equal(result.appAccepted, true);
+    assert.equal(result.appAccepted, false);
+  });
+
+  await t.test("application install lifecycle changes remain blocked", (t) => {
+    const result = runGuardCase(t, ({ newManifest }) => {
+      newManifest.scripts.postinstall = "node install-hook.mjs";
+    });
+    assert.equal(result.appAccepted, false);
   });
 
   await t.test("production start command changes are blocked", (t) => {
@@ -149,10 +156,10 @@ test("Oracle deployment manifest guard narrows only the audited helper exception
     assert.equal(result.appAccepted, false);
   });
 
-  await t.test("npm install lifecycle script changes are blocked", (t) => {
-    const result = runGuardCase(t, ({ newManifest }) => {
-      newManifest.scripts.postinstall = "node install-hook.mjs";
-    });
-    assert.equal(result.appAccepted, false);
+  await t.test("workflow stages locked dependencies in the release source tree", () => {
+    assert.match(workflow, /git -C "\$REPO" archive "\$BUILD_REVISION" \| tar -x -C "\$RELEASE_SOURCE"/);
+    assert.match(workflow, /cd "\$RELEASE_SOURCE"\s+npm ci --no-audit --no-fund/);
+    assert.doesNotMatch(workflow, /npm ci.*REPO\/node_modules/);
+    assert.match(workflow, /ACTIVE_NEXT_TARGET="\$RELEASE_TARGET\/source\/portfel-inwestora\/\.next"/);
   });
 });

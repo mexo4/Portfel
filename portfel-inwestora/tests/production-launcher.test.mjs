@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { resolveBuildRuntimeOverrides } from "../scripts/start-production.mjs";
+import { resolveBuildRuntimeOverrides, resolveRuntimeAppDirectory } from "../scripts/start-production.mjs";
 
 test("production launcher selects the exact managed release path and revision", () => {
   const appDir = mkdtempSync(path.join(os.tmpdir(), "mexo-launcher-"));
@@ -18,6 +18,26 @@ test("production launcher selects the exact managed release path and revision", 
       MEXO_BUILD_DIST_DIR: target,
       MEXO_BUILD_REVISION: revision,
     });
+  } finally {
+    rmSync(appDir, { recursive: true, force: true });
+  }
+});
+
+test("production launcher starts an isolated release with its own source and dependency tree", () => {
+  const appDir = mkdtempSync(path.join(os.tmpdir(), "mexo-launcher-isolated-"));
+  const revision = "b".repeat(40);
+  const target = `.mexo-releases/${revision}-20261023T120000Z-7/source/portfel-inwestora/.next`;
+  const buildDir = path.join(appDir, target);
+  const releaseAppDir = path.dirname(buildDir);
+  mkdirSync(buildDir, { recursive: true });
+  writeFileSync(path.join(buildDir, "BUILD_ID"), "isolated-build");
+
+  try {
+    assert.deepEqual(resolveBuildRuntimeOverrides(appDir, target), {
+      MEXO_BUILD_DIST_DIR: ".next",
+      MEXO_BUILD_REVISION: revision,
+    });
+    assert.equal(resolveRuntimeAppDirectory(appDir, target), releaseAppDir);
   } finally {
     rmSync(appDir, { recursive: true, force: true });
   }

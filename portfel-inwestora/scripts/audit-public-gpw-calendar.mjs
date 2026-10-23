@@ -1,12 +1,14 @@
 import { readFileSync } from "node:fs";
 import { Pool } from "pg";
 import nextEnv from "@next/env";
-import { parseCorporateEventDocument } from "../src/lib/corporate-events.ts";
+import { getCandidateSegments, getDividendAmendmentEvidence, isNonBindingDividendDraftNotice, parseCorporateEventDocument } from "../src/lib/corporate-events.ts";
+import { planDividendFinalResolution, planDividendRejectedAmendment, planDividendSourceReprojection } from "../src/lib/dividend-reprojection.ts";
 
 // This diagnostic never initializes application schema, fetches a source or writes data.
 nextEnv.loadEnvConfig(process.env.MEXO_LOCAL_ENV_DIR || process.cwd());
 const month = process.argv.find((arg) => /^--month=20\d{2}-(?:0[1-9]|1[0-2])$/.test(arg))?.slice(8);
 const inspect = process.argv.find((arg) => arg.startsWith("--inspect="))?.slice(10).split(",").map((value) => value.trim()).filter(Boolean) ?? [];
+const sourceIds = process.argv.find((arg) => arg.startsWith("--source-ids="))?.slice(13).split(",").map((value) => value.trim()).filter(Boolean) ?? [];
 if (!month) throw new Error("Użycie: node scripts/audit-public-gpw-calendar.mjs --month=2026-12");
 const from = `${month}-01`;
 const to = new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5)), 1)).toISOString().slice(0, 10);
@@ -22,7 +24,7 @@ try {
   await client.query("BEGIN READ ONLY");
   const events = await client.query(`
     SELECT event.event_type, event.status, event.active, issuer.ticker,
-      event.event_date, event.payment_date,
+      event.event_date, event.record_date, event.payment_date,
       EXISTS (SELECT 1 FROM corporate_event_sources AS source
               WHERE source.corporate_event_id = event.id AND source.source_url LIKE 'https://%') AS has_https_source,
       (SELECT COUNT(*) FROM corporate_event_sources AS source
@@ -84,6 +86,79 @@ try {
         WHERE issuer_name ILIKE '%' || term || '%'
           OR source_title ILIKE '%' || term || '%')
     ORDER BY published_at DESC LIMIT 120`, [inspect]) : { rows: [] };
+  const selectedSourceReports = sourceIds.length ? await client.query(`
+    SELECT id, source_id, issuer_id, issuer_name, source_title, title, body_text, published_at,
+      source_url, report_schedule_projection_status, dividend_projection_status
+    FROM espi_reports
+    WHERE source = 'PAP_ESPI' AND source_id = ANY($1::text[])
+    ORDER BY published_at DESC LIMIT 50`, [sourceIds]) : { rows: [] };
+  const selectedSourceAttachments = selectedSourceReports.rows.length ? await client.query(`
+    SELECT report.source_id, attachment.name, attachment.media_type, attachment.source_url
+    FROM espi_report_attachments AS attachment
+    JOIN espi_reports AS report ON report.id = attachment.espi_report_id
+    WHERE attachment.espi_report_id = ANY($1::text[])
+    ORDER BY report.source_id, attachment.name LIMIT 150`,
+  [selectedSourceReports.rows.map((report) => report.id)]) : { rows: [] };
+  const selectedSourcePlans = [];
+  for (const report of selectedSourceReports.rows) {
+    if (!report.issuer_id) continue;
+    const reportText = `${report.source_title}\n${report.title}\n${report.body_text}`;
+    const parsed = parseCorporateEventDocument(reportText).filter((event) => event.eventType === "UPCOMING_DIVIDEND");
+    const recordDates = parsed.map((event) => event.recordDate).filter(Boolean);
+    const old = (await client.query(`
+      SELECT event.id, event.event_identity, event.event_date, event.record_date,
+        event.payment_date, event.dividend_installment, event.dividend_per_share,
+        event.status, event.source_published_at,
+        ARRAY_AGG(DISTINCT provenance.source_url) AS source_urls
+      FROM corporate_events AS event
+      JOIN corporate_event_sources AS provenance ON provenance.corporate_event_id = event.id
+      WHERE event.instrument_id = $1 AND event.event_type = 'UPCOMING_DIVIDEND' AND event.active = TRUE
+        AND (event.id IN (SELECT corporate_event_id FROM corporate_event_sources WHERE source_url = $2)
+          OR event.record_date = ANY($3::text[]))
+      GROUP BY event.id ORDER BY event.event_date DESC, event.id LIMIT 100`,
+      [report.issuer_id, report.source_url, recordDates])).rows;
+    const nonBinding = isNonBindingDividendDraftNotice(reportText);
+    const later = nonBinding ? (await client.query(`
+      SELECT source_id, source_title, title, body_text FROM espi_reports
+      WHERE source = 'PAP_ESPI' AND issuer_id = $1 AND source_url <> $2
+        AND published_at > $3 AND published_at < $4
+        AND (source_title ILIKE '%dywidend%' OR title ILIKE '%dywidend%')
+      ORDER BY published_at ASC LIMIT 25`,
+    [report.issuer_id, report.source_url, report.published_at,
+      new Date(Date.parse(report.published_at) + 180 * 24 * 60 * 60 * 1_000).toISOString()])).rows : [];
+    const corroboratingEvents = later.flatMap((item) => parseCorporateEventDocument(
+      `${item.source_title}\n${item.title}\n${item.body_text}`));
+    selectedSourcePlans.push({ sourceId: report.source_id, nonBinding,
+      corroboratingSources: later.map((item) => item.source_id),
+      oldProjections: old.map(({ id, event_identity, event_date, record_date, payment_date,
+        dividend_installment, dividend_per_share, status, source_urls }) => ({
+        id, event_identity, event_date, record_date, payment_date, dividend_installment,
+        dividend_per_share, status, source_urls,
+      })),
+      parsed: parsed.map((event) => ({
+      identity: event.eventIdentity, date: event.eventDate, recordDate: event.recordDate,
+      paymentDate: event.paymentDate, amount: event.dividendPerShare, status: event.dividendStatus,
+    })), sourcePlan: planDividendSourceReprojection(old.filter((event) => event.source_urls.includes(report.source_url)),
+      parsed, report.source_url, true, nonBinding),
+      finalPlan: planDividendFinalResolution(old, parsed, report.published_at),
+      amendmentPlan: planDividendRejectedAmendment(old, getDividendAmendmentEvidence(reportText),
+        report.source_url, corroboratingEvents) });
+  }
+  const targetScheduleReports = inspect.length ? await client.query(`
+    SELECT report.source_id, report.issuer_name, report.source_title, report.published_at,
+      report.report_schedule_projection_status, report.report_schedule_projection_version,
+      COUNT(DISTINCT event.id)::int AS linked_events
+    FROM espi_reports AS report
+    LEFT JOIN corporate_event_sources AS evidence ON evidence.source_url = report.source_url
+    LEFT JOIN corporate_events AS event ON event.id = evidence.corporate_event_id
+      AND event.event_type IN ('QUARTERLY_REPORT', 'HALF_YEAR_REPORT', 'ANNUAL_REPORT')
+    WHERE report.source = 'PAP_ESPI' AND report.market IS DISTINCT FROM 'NEWCONNECT'
+      AND EXISTS (SELECT 1 FROM unnest($1::text[]) AS term
+        WHERE report.issuer_name ILIKE '%' || term || '%')
+      AND (report.source_title ILIKE '%termin%raport%' OR report.source_title ILIKE '%harmonogram%raport%'
+        OR report.title ILIKE '%termin%raport%' OR report.title ILIKE '%harmonogram%raport%')
+    GROUP BY report.id
+    ORDER BY report.published_at DESC LIMIT 250`, [inspect]) : { rows: [] };
   const inspectedEvents = inspect.length ? await client.query(`
     SELECT issuer.ticker, issuer.company_name, issuer.market, event.event_type,
       event.event_date, event.event_time, event.record_date, event.payment_date,
@@ -127,8 +202,34 @@ try {
     return counts;
   }, { reports: 0, meetings: 0, dividends: 0 });
   const excluded = events.rows.filter((event) => !event.active || event.status === "CANCELLED" || !event.has_https_source);
+  const visible = events.rows.filter((event) => event.active && event.status !== "CANCELLED" && event.has_https_source);
+  const visibleDividendDates = visible.flatMap((event) => {
+    if (event.event_type !== "UPCOMING_DIVIDEND") return [];
+    const entries = [];
+    if (event.event_date >= from && event.event_date < to) {
+      entries.push({ ticker: event.ticker, date: event.event_date,
+        kind: event.record_date === event.event_date ? "RECORD" :
+          event.payment_date === event.event_date ? "PAYMENT" : "AMBIGUOUS" });
+    }
+    if (event.payment_date && event.payment_date !== event.event_date && event.payment_date >= from && event.payment_date < to) {
+      entries.push({ ticker: event.ticker, date: event.payment_date, kind: "PAYMENT" });
+    }
+    return entries;
+  });
+  const duplicateGroups = Object.entries(Object.groupBy(visibleDividendDates,
+    (event) => `${event.ticker}:${event.kind}:${event.date}`))
+    .filter(([, group]) => group.length > 1)
+    .map(([key, group]) => ({ key, count: group.length }));
   console.log(JSON.stringify({ mode: "read-only", month, storedEvents: events.rows.length,
     categories, publicEligibleRows: events.rows.length - excluded.length,
+    displayCounts: {
+      reports: visible.filter((event) => event.event_type.endsWith("REPORT")).length,
+      meetings: visible.filter((event) => event.event_type === "GENERAL_MEETING").length,
+      recordDates: visibleDividendDates.filter((event) => event.kind === "RECORD").length,
+      paymentDates: visibleDividendDates.filter((event) => event.kind === "PAYMENT").length,
+      ambiguousDividends: visibleDividendDates.filter((event) => event.kind === "AMBIGUOUS").length,
+    },
+    duplicateGroups,
     excluded: excluded.map(({ ticker, event_type, event_date, status, active, has_https_source, source_count }) =>
       ({ ticker, event_type, event_date, status, active, has_https_source, source_count })),
     events: events.rows.map(({ ticker, event_type, event_date, payment_date, status, has_https_source }) =>
@@ -137,6 +238,17 @@ try {
     publishedReports: publishedReports.rows[0],
     eventQuality: eventQuality.rows[0],
     inspectedReports: inspectedReports.rows,
+    selectedSourceReports: selectedSourceReports.rows,
+    selectedSourceAttachments: selectedSourceAttachments.rows,
+    selectedSourcePlans,
+    targetScheduleReports: targetScheduleReports.rows,
+    selectedSourceParsed: selectedSourceReports.rows.map((report) => ({
+      sourceId: report.source_id,
+      changeNotice: /\bzmian(?:a|y|ie|ę)\s+(?:harmonogramu\s+)?terminu\b|\bnowy termin(?: publikacji)?\b/iu.test(`${report.source_title}\n${report.title}\n${report.body_text}`),
+      candidateSegments: getCandidateSegments(report.body_text).filter((segment) =>
+        /(?:raport|kwartał|półrocz|roczn)/iu.test(segment.text) && /20\d{2}/u.test(segment.text)),
+      events: parseCorporateEventDocument(`${report.source_title}\n${report.title}\n${report.body_text}`),
+    })),
     catalogMatches,
     parsedInspectedReports: inspectedReports.rows.map((report) => ({ sourceId: report.source_id,
       events: parseCorporateEventDocument(`${report.source_title}\n${report.title}\n${report.body_excerpt}`) })),

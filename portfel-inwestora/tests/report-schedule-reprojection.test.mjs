@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { planReportScheduleReprojection } from "../src/lib/report-schedule-reprojection.ts";
+import { getReportScheduleProjectionStatus, planReportScheduleReprojection } from "../src/lib/report-schedule-reprojection.ts";
 
 const sourceUrl = "https://pap-mediaroom.pl/official-schedule";
 const row = (id, identity, urls = [sourceUrl]) => ({
@@ -39,4 +39,12 @@ test("parser/PDF failure, empty output and another confirming source cannot with
   const plan = planReportScheduleReprojection(existing, [event("Q3")], sourceUrl, true);
   assert.deepEqual(plan.deactivateIds, ["only"]);
   assert.deepEqual(plan.ambiguousIds, ["shared"]);
+});
+
+test("incomplete attachments remain retryable without withdrawing valid body projections", () => {
+  assert.equal(getReportScheduleProjectionStatus(0, false), "PARSE_ERROR");
+  assert.equal(getReportScheduleProjectionStatus(2, false), "PARSE_ERROR");
+  assert.equal(getReportScheduleProjectionStatus(0, true), "NO_EVENT");
+  assert.equal(getReportScheduleProjectionStatus(2, true), "SUCCESS");
+  assert.deepEqual(planReportScheduleReprojection([row("existing", "QUARTERLY_REPORT:Q1:2026")], [event("Q3")], sourceUrl, false).deactivateIds, []);
 });

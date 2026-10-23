@@ -4,6 +4,29 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const appDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const managedReleasePattern = /^\.mexo-releases\/([a-f0-9]{40})-([0-9]{8}T[0-9]{6}Z-[0-9]+)$/;
+const isolatedReleasePattern = /^\.mexo-releases\/([a-f0-9]{40})-([0-9]{8}T[0-9]{6}Z-[0-9]+)\/source\/portfel-inwestora\/\.next$/;
+
+function resolveManagedBuild(appDir, target) {
+  const normalizedTarget = target?.replaceAll("\\", "/");
+  const isolated = normalizedTarget ? isolatedReleasePattern.exec(normalizedTarget) : null;
+  const legacy = normalizedTarget ? managedReleasePattern.exec(normalizedTarget) : null;
+  if (!isolated && !legacy) {
+    throw new Error("Refusing to start: .next points outside a managed Mexo release.");
+  }
+
+  const appRoot = realpathSync(appDir);
+  const buildPath = path.resolve(appRoot, normalizedTarget);
+  if (!buildPath.startsWith(`${appRoot}${path.sep}`)) {
+    throw new Error("Refusing to start: managed release path escapes the application directory.");
+  }
+  lstatSync(buildPath);
+  lstatSync(path.join(buildPath, "BUILD_ID"));
+  if (!realpathSync(buildPath).startsWith(`${appRoot}${path.sep}`)) {
+    throw new Error("Refusing to start: managed release resolves outside the application directory.");
+  }
+  return { buildPath, isolated, revision: (isolated ?? legacy)[1] };
+}
 
 /**
  * Resolve runtime settings from the active .next symlink. Next.js embeds its
@@ -12,48 +35,32 @@ const appDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 
  */
 export function resolveBuildRuntimeOverrides(appDir, currentNextTarget) {
   if (currentNextTarget === null) return {};
-
-  const normalizedTarget = currentNextTarget.replaceAll("\\", "/");
-  const match = /^\.mexo-releases\/([a-f0-9]{40})-[A-Za-z0-9._-]+$/.exec(normalizedTarget);
-  if (!match) {
-    throw new Error("Refusing to start: .next points outside a managed Mexo release.");
-  }
-
-  const appRoot = realpathSync(appDir);
-  const releasePath = path.resolve(appRoot, normalizedTarget);
-  if (!releasePath.startsWith(`${appRoot}${path.sep}`)) {
-    throw new Error("Refusing to start: managed release path escapes the application directory.");
-  }
-
-  lstatSync(releasePath);
-  lstatSync(path.join(releasePath, "BUILD_ID"));
-  if (!realpathSync(releasePath).startsWith(`${appRoot}${path.sep}`)) {
-    throw new Error("Refusing to start: managed release resolves outside the application directory.");
-  }
+  const { isolated, revision } = resolveManagedBuild(appDir, currentNextTarget);
   return {
-    MEXO_BUILD_DIST_DIR: normalizedTarget,
-    MEXO_BUILD_REVISION: match[1],
+    MEXO_BUILD_DIST_DIR: isolated ? ".next" : currentNextTarget.replaceAll("\\", "/"),
+    MEXO_BUILD_REVISION: revision,
   };
 }
 
-function getRuntimeOverrides() {
-  const activeBuild = path.join(appDirectory, ".next");
-  const metadata = lstatSync(activeBuild);
-  return resolveBuildRuntimeOverrides(
-    appDirectory,
-    metadata.isSymbolicLink() ? readlinkSync(activeBuild) : null
-  );
+export function resolveRuntimeAppDirectory(appDir, currentNextTarget) {
+  if (currentNextTarget === null) return path.resolve(appDir);
+  const { buildPath, isolated } = resolveManagedBuild(appDir, currentNextTarget);
+  return isolated ? path.dirname(buildPath) : path.resolve(appDir);
 }
 
 function start() {
   const env = { ...process.env };
   delete env.MEXO_BUILD_DIST_DIR;
   delete env.MEXO_BUILD_REVISION;
-  Object.assign(env, getRuntimeOverrides());
+  const activeBuild = path.join(appDirectory, ".next");
+  const metadata = lstatSync(activeBuild);
+  const currentNextTarget = metadata.isSymbolicLink() ? readlinkSync(activeBuild) : null;
+  const runtimeAppDirectory = resolveRuntimeAppDirectory(appDirectory, currentNextTarget);
+  Object.assign(env, resolveBuildRuntimeOverrides(appDirectory, currentNextTarget));
 
-  const nextCli = path.resolve(appDirectory, "../node_modules/next/dist/bin/next");
+  const nextCli = path.resolve(runtimeAppDirectory, "../node_modules/next/dist/bin/next");
   const child = spawn(process.execPath, ["--use-system-ca", nextCli, "start", "--hostname", "127.0.0.1"], {
-    cwd: appDirectory,
+    cwd: runtimeAppDirectory,
     env,
     stdio: "inherit",
   });

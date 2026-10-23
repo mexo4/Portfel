@@ -115,6 +115,34 @@ test("a newer formal PAP report schedule supersedes an old generic IR page", () 
   }), true);
 });
 
+test("same-source report reprojection applies an in-place corrected date despite a later syndicated timestamp", () => {
+  const parsed = {
+    eventType: "QUARTERLY_REPORT",
+    eventDate: "2026-05-06",
+    fiscalPeriod: "Q1",
+    fiscalYear: 2026,
+    isScheduleChange: false,
+  };
+  const existing = {
+    event_date: "2026-10-27",
+    status: "CONFIRMED",
+    source_type: "PAP_ESPI",
+    source_priority: 100,
+    source_published_at: "2026-01-22T12:04:00.000Z",
+  };
+  const sameOfficialSchedule = {
+    sourceType: "ISSUER_CURRENT_REPORT",
+    sourceUrl: "https://www.gpw.pl/komunikat?geru_id=480610",
+    sourcePublishedAt: "2026-01-22T11:04:00.000Z",
+  };
+
+  assert.equal(shouldApplyEvent(existing, sameOfficialSchedule, parsed, true), true);
+  // Once corrected, the same older source must not cause repeated writes.
+  assert.equal(shouldApplyEvent({ ...existing, event_date: parsed.eventDate }, sameOfficialSchedule, parsed, true), false);
+  // Merely seeing another source with an older timestamp is not enough.
+  assert.equal(shouldApplyEvent(existing, sameOfficialSchedule, parsed, false), false);
+});
+
 test("supports Polish word dates, dotted dates and dashed dates", () => {
   assert.deepEqual(extractPolishDates("20 sierpnia 2026, 20.08.2026, 20-08-2026"), ["2026-08-20"]);
 });

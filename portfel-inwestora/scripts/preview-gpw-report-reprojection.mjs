@@ -1,6 +1,7 @@
 /** Read-only, bounded preview. Never imports application DB initialization. */
 import { readFileSync } from "node:fs";
 import pg from "pg";
+import nextEnv from "@next/env";
 import { parseCorporateEventDocument } from "../src/lib/corporate-events.ts";
 import { planReportScheduleReprojection } from "../src/lib/report-schedule-reprojection.ts";
 import { readOfficialMeetingPdf } from "../src/lib/server/general-meeting-pdf.ts";
@@ -8,11 +9,17 @@ import { readOfficialMeetingPdf } from "../src/lib/server/general-meeting-pdf.ts
 if (!process.argv.includes("--dry-run")) {
   throw new Error("Only --dry-run is supported. This command never changes the database.");
 }
+nextEnv.loadEnvConfig(process.env.MEXO_LOCAL_ENV_DIR || process.cwd());
 const rawLimit = Number(process.argv.find((arg) => arg.startsWith("--limit="))?.slice(8) ?? 50);
 if (!Number.isInteger(rawLimit) || rawLimit < 1 || rawLimit > 100) {
   throw new Error("--limit must be an integer from 1 to 100.");
 }
 const cursor = process.argv.find((arg) => arg.startsWith("--cursor="))?.slice(9);
+const sourceIds = process.argv.find((arg) => arg.startsWith("--source-ids="))?.slice(13)
+  .split(",").map((id) => id.trim()).filter(Boolean) ?? [];
+if (sourceIds.length > 30 || sourceIds.some((id) => !/^gpw:\d+$/.test(id))) {
+  throw new Error("--source-ids accepts at most 30 comma-separated GPW source IDs.");
+}
 const [cursorPublishedAt, cursorSourceId] = cursor ? JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) : [null, null];
 const url = process.env.DATABASE_URL;
 if (!url) throw new Error("DATABASE_URL is required (its value is never logged).");
@@ -52,8 +59,9 @@ try {
         OR report.source_title ILIKE '%dat%przekazywan%raport%' OR report.title ILIKE '%dat%przekazywan%raport%'
         OR report.source_title ILIKE '%termin%przekazywan%raport%' OR report.title ILIKE '%termin%przekazywan%raport%')
       AND ($1::text IS NULL OR (report.published_at, report.source_id) < ($1::text, $2::text))
+      AND ($4::text[] IS NULL OR report.source_id = ANY($4::text[]))
     ORDER BY report.published_at DESC, report.source_id DESC LIMIT $3
-  `, [cursorPublishedAt, cursorSourceId, rawLimit])).rows;
+  `, [cursorPublishedAt, cursorSourceId, rawLimit, sourceIds.length ? sourceIds : null])).rows;
   const ids = reports.map((row) => row.id);
   const urls = reports.map((row) => row.source_url);
   const attachments = ids.length ? (await client.query(`

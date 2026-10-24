@@ -73,7 +73,7 @@ The isolated PostgreSQL cluster was stopped after the test and its random fixtur
 - Full data-quality release criteria: **NO-GO**. The required independently annotated corpus (150 source documents / at least 100 verified / 25–30 untouched holdout cases), mutation score, complete source/cursor audit, and cross-view production reprojection evidence are not available. Do not present this branch as statistically validated or production-ready.
 - Production reprojection: **NO-GO / not executed**. The public feed still contains the Alior H1-vs-Q3 inconsistency and omits the two Allegro meetings.
 - Timer activation: **NO-GO / not executed**.
-- This branch should be pushed as a Draft PR for review only; it must not be merged or deployed until the corpus and production data gates are met and the user explicitly approves.
+- Branch `fix/gpw-quality-audit-20261024` was pushed for review. Draft PR creation returned GitHub API 403 (`Resource not accessible by integration`); the PR form is available at <https://github.com/mexo4/Portfel/pull/new/fix/gpw-quality-audit-20261024>. It must not be merged or deployed until the corpus and production data gates are met and the user explicitly approves.
 
 ## Safe later production procedure — not executed
 

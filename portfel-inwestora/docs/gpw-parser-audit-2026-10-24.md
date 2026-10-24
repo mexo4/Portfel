@@ -85,3 +85,41 @@ The isolated PostgreSQL cluster was stopped after the test and its random fixtur
 6. Verify the same event IDs, sources, local dates/times, statuses, and cancellation state through the API, authenticated calendar, public `/kalendarz-gpw`, and ICS. Re-fetch ICS after cache expiry. Confirm the source backfill cursor and all projection pending counts are complete before declaring the calendar caught up.
 7. Monitor source errors, pending counts, and event-history changes. If a batch is suspect, stop the sync first; preserve the backup and audit output. Restore the prior application release for code issues. For data issues, use the verified backup or a reviewed event-history-based correction plan—do not assume code rollback reverses database projections.
 8. Activate any future timer only after the user approves the GO decision, a successful staged run, verified backup/restore, complete source and projection cursors, and a tested rollback. This timer was not installed or enabled by this audit.
+
+## Follow-up validation before PR (2026-10-24)
+
+### Parser repairs found by adversarial source checks
+
+The official [Herkules report 49/2026](https://pap-mediaroom.pl/biznes-i-finanse/herkules-sa-w-restrukturyzacji-492026-zmiana-terminu-publikacji-raportu-okresowego) exposed a wrapped correction pattern not covered by the earlier short-form unit case. The source puts the previously scheduled date after a multi-clause phrase (“miał być przekazany do publicznej wiadomości w dniu 19 listopada”), then gives the new date in a following physical line. Candidate segmentation emitted three fragments; in addition, the prior-date grammatical context was capped at 40 characters. The parser now joins only a bounded correction row, stops at a new report/section, and evaluates the explicit prior-schedule cue in a separate bounded 220-character window. It emits Q3 2026 on 26 November with 19 November as the previous date. The full PAP source was added as a source-linked fixture; expected values were transcribed from the publication.
+
+False-positive review also found that a shareholder-eligibility list in a follow-up notice could be mistaken for a newly convened meeting. Such lists are now excluded as WZA convening evidence, while explicit convening notices remain eligible.
+
+The parser recognizes additional report-correction grammar for a “new term” replacing a prior appointment, a date described as displaced, and old-vs-new date wording where the old schedule sentence spans a line wrap. These rules require grammatical anchors on both sides of a date pair; no issuer/ticker exception was added. Regression coverage includes Herkules, Eko Export, ORLEN, Urteste, DGA, MCR, NPL Nova and ZPC Otmuchów cases already in the source fixtures.
+
+### Source-linked sample evaluation (descriptive only)
+
+The checked-in corpus now contains **57 source-linked documents and 70 annotated expected events**: A development 9, B validation 7, C-labelled holdout 10, D prospective 11, E validation 10, F prospective 10. Five documents are explicitly marked ambiguous. The evaluator performs one-to-one event matching and reports type, date, period/year, and correction-field accuracy rather than deriving recall from row counts alone.
+
+On this known sample, all 57 documents matched their annotations (70/70 event rows; 0 unmatched extras and 0 omissions). Descriptive category metrics were:
+
+| Category | Expected / parsed | Precision / recall | Type | Date | Period | Year | Correction fields |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Reports | 27 / 27 | 1.00 / 1.00 | 27/27 | 27/27 | 27/27 | 26/26 | 12/12 |
+| General meetings | 19 / 19 | 1.00 / 1.00 | 19/19 | 19/19 | n/a | n/a | n/a |
+| Dividends | 24 / 24 | 1.00 / 1.00 | 24/24 | 24/24 | n/a | n/a | n/a |
+
+These are **not independent-quality estimates**. The dataset is much smaller than the requested 150 documents / 100 verified documents, its groups have already influenced parser development, and the C label is not an untouched holdout. D/E/F were used to find/fix failures; they are known regression data now. Therefore no statistically credible release precision/recall or final holdout score is claimed. A genuine untouched set of 25–30 individually annotated source documents is still required.
+
+The deterministic formatting/property matrix covers 1,200 variants (fixed seed `20261024`) of report-row ordering, spacing, separators and date formats. A new seeded-output mutation-sensitivity test applies 10 representative faults to the annotation oracle (Q1/Q3 swap, fiscal-year shift, wrong date, omitted event, duplicate projection, removed correction, stale date overwrite, merged WZA pair, merged dividend installments, and an unsupported event); all 10 are rejected. This is **oracle sensitivity coverage**, not a source-code mutation score and not proof that every implementation mutant is killed.
+
+### Synchronization health and local persistence test
+
+The sync-health model now distinguishes per-batch outcome, source availability, freshness, bounded historical-backfill progress/cursor, overlap repair, projection queue status, unmatched/review counts, and explicit coverage evidence. Coverage remains `UNASSESSED` unless a complete independent source inventory for a date window is supplied; an empty queue or successful batch cannot assert full calendar completeness. The scheduled runner logs those dimensions separately and treats bounded backfill continuation separately from failure. This code was not run against production and no timer was installed.
+
+A fresh native PostgreSQL 18.6 cluster was created under a random `%TEMP%` directory, bound only to `127.0.0.1`, with a dedicated `mexo_gpw_test` database and eight connections. The integration test passed: 3 source reports fetched, 2 first-pass projection inserts, repeated synchronization inserted 0 new projections, duplicate counters advanced, the corrected Q3 date generated history, and an existing reviewed anomaly remained active. The cluster was stopped after the test. The standard `npm test` run did not implicitly use any ambient database URL; its opt-in PostgreSQL test was skipped there and then run explicitly against this isolated cluster. No Aiven URL was read or used.
+
+### Current validation and gate status
+
+Final validation after all follow-up changes: `npm test` completed with **636 passed, 0 failed, 1 opt-in PostgreSQL test skipped** because the regular suite was run without a database URL. The PostgreSQL integration test was then run explicitly against a fresh, isolated native PostgreSQL 18.6 instance and passed **1/1**. `npx tsc --noEmit` and `npm run build` passed. ESLint on every changed implementation, script, fixture, and test file passed. Full `npm run lint` failed on **25 pre-existing errors and 1 warning** in unrelated UI files; no unrelated files or lint rules were changed. The build prints the existing Recharts `width(-1)/height(-1)` warning, outside this GPW task. `git diff --check` passed.
+
+**Decision remains NO-GO** for declaring the whole GPW dataset complete, production reprojection, production backfill, timer activation, PR creation, or deploy. The fixes are targeted and all available known fixtures pass, but the release gates still lack a 100-document independently adjudicated corpus, a true untouched holdout, full source cursor/data-quality access from production, and a complete native-PostgreSQL crash/resume/reprojection comparison. No PR, merge, deploy, Aiven write, production backfill, timer change, or DNS change was performed.

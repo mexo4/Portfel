@@ -1,0 +1,136 @@
+/**
+ * Additional PAP source excerpts checked independently after the earlier
+ * parser work. This set was used to find defects and is now a known
+ * regression/validation set, not a blind holdout. Input excerpts preserve the
+ * source wording; annotations are transcribed from the linked publications.
+ */
+const event = (fields) => fields;
+
+export const gpwProspectiveHoldoutE = [
+  {
+    id: "EFEKT-12-2026",
+    group: "E-validation",
+    issuer: "Korporacja Gospodarcza efekt S.A.",
+    sourceUrl: "https://pap-mediaroom.pl/biznes-i-finanse/efekt-sa-122026-zmiana-terminu-publikacji-raportu-okresowego",
+    publishedAt: "2026-09-03T09:41:00+02:00",
+    sourceKind: "PAP_ESPI",
+    parserInput: `Zarząd Korporacji Gospodarczej "efekt" S.A. z siedzibą w Krakowie, (dalej: "Emitent" "Spółka "), w nawiązaniu do raportu bieżącego nr 1/2026 z dnia 29 stycznia 2026 r., informuje o zmianie terminu przekazania do publicznej wiadomości raportu rokresowego zawierającego: Skonsolidowany raport za I półrocze 2026 roku zawierający skrócone jednostkowe informacje finansowe.
+    Data publikacji wskazanego raportu zgodnie z treścią raporu bieżącego nr 1/2026 została ustalona na dzień 31 sierpnia 2026 roku.
+    Nowy termin publikacji Skonsolidowanego raportu za I półrocze 2026 roku zawierającego skrócone jednostkowe informacje finansowe - został wyznaczony na dzień 7 września 2026 roku.`,
+    expectedEvents: [event({ eventType: "HALF_YEAR_REPORT", eventDate: "2026-09-07", previousEventDate: "2026-08-31", fiscalPeriod: "H1", fiscalYear: 2026, isScheduleChange: true })],
+    ambiguous: false,
+    annotation: "PAP text states the old date (31 August) and the new H1 publication date (7 September).",
+  },
+  {
+    id: "COMP-28-2026",
+    group: "E-validation",
+    issuer: "Comp S.A.",
+    sourceUrl: "https://pap-mediaroom.pl/biznes-i-finanse/comp-sa-282026-zmiana-terminu-publikacji-skonsolidowanego-raportu-za-i-polrocze",
+    publishedAt: "2026-08-27T08:00:00+02:00",
+    sourceKind: "PAP_ESPI",
+    parserInput: `Zarząd Comp S.A. informuje o zmianie terminu publikacji skonsolidowanego raportu za I półrocze 2026 roku z dnia 31 sierpnia 2026 r. na dzień 28 września 2026 r.`,
+    expectedEvents: [event({ eventType: "HALF_YEAR_REPORT", eventDate: "2026-09-28", previousEventDate: "2026-08-31", fiscalPeriod: "H1", fiscalYear: 2026, isScheduleChange: true })],
+    ambiguous: false,
+    annotation: "PAP text directly pairs the previous and corrected H1 publication dates.",
+  },
+  {
+    id: "INTER-CARS-25-2026",
+    group: "E-validation",
+    issuer: "Inter Cars S.A.",
+    sourceUrl: "https://pap-mediaroom.pl/biznes-i-finanse/inter-cars-sa-252026-zmiana-terminu-publikacji-raportu-okresowego-za-i-polrocze",
+    publishedAt: "2026-09-04T13:36:00+02:00",
+    sourceKind: "PAP_ESPI",
+    parserInput: `Zarząd Inter Cars S.A. z siedzibą w Swobodni ("Spółka"), informuje o zmianie terminu przekazania do publicznej wiadomości raportu okresowego za I półrocze 2026 roku ("Raport"), wyznaczonego zgodnie z raportem bieżącym nr 2/2026 z dnia 26 stycznia 2026 roku, na dzień 10 września 2026 roku. Nowy termin publikacji Raportu ustala się na dzień 8 września 2026 roku.`,
+    expectedEvents: [event({ eventType: "HALF_YEAR_REPORT", eventDate: "2026-09-08", previousEventDate: "2026-09-10", fiscalPeriod: "H1", fiscalYear: 2026, isScheduleChange: true })],
+    ambiguous: false,
+    annotation: "PAP text identifies the prior appointment as 10 September and the new term as 8 September.",
+  },
+  {
+    id: "GPW-8-2026",
+    group: "E-validation",
+    issuer: "Giełda Papierów Wartościowych w Warszawie S.A.",
+    sourceUrl: "https://pap-mediaroom.pl/biznes-i-finanse/gpw-sa-82026-zmiana-terminu-publikacji-skonsolidowanego-raportu-za-i-polrocze-2026",
+    publishedAt: "2026-06-18T15:06:00+02:00",
+    sourceKind: "PAP_ESPI",
+    parserInput: `W nawiązaniu do raportu bieżącego nr 1/2026 z 22 stycznia 2026 r., Zarząd Giełdy Papierów Wartościowych w Warszawie S.A. ("GPW", "Spółka") informuje, iż podjął decyzję o zmianie terminu publikacji skonsolidowanego raportu półrocznego Grupy GPW za I półrocze 2026 roku, z 14 września 2026 roku na 3 września 2026 roku.`,
+    expectedEvents: [event({ eventType: "HALF_YEAR_REPORT", eventDate: "2026-09-03", previousEventDate: "2026-09-14", fiscalPeriod: "H1", fiscalYear: 2026, isScheduleChange: true })],
+    ambiguous: false,
+    annotation: "PAP text expresses the correction using the compact ‘z [date] na [date]’ form.",
+  },
+  {
+    id: "PKP-CARGO-78-2026",
+    group: "E-validation",
+    issuer: "PKP Cargo S.A. w restrukturyzacji",
+    sourceUrl: "https://pap-mediaroom.pl/biznes-i-finanse/pkp-cargo-sa-w-restrukturyzacji-782026-zmiana-terminu-przekazania-do-publicznej",
+    publishedAt: "2026-09-25T17:00:00+02:00",
+    sourceKind: "PAP_ESPI",
+    parserInput: `W nawiązaniu do raportu bieżącego nr 1/2026 z dnia 12 stycznia 2026 roku Zarządca masy sanacyjnej PKP CARGO S.A. w restrukturyzacji ("Spółka") informuje, iż podjął decyzję o zmianie terminu publikacji skonsolidowanego raportu Spółki za I półrocze 2026 roku z dnia 28 września 2026 roku na 30 września 2026 roku.`,
+    expectedEvents: [event({ eventType: "HALF_YEAR_REPORT", eventDate: "2026-09-30", previousEventDate: "2026-09-28", fiscalPeriod: "H1", fiscalYear: 2026, isScheduleChange: true })],
+    ambiguous: false,
+    annotation: "PAP text gives both dates; the new date omits ‘dzień’ after ‘na’.",
+  },
+  {
+    id: "KGHM-34-2026",
+    group: "E-validation",
+    issuer: "KGHM Polska Miedź S.A.",
+    sourceUrl: "https://pap-mediaroom.pl/biznes-i-finanse/kghm-polska-miedz-sa-342026-ogloszenie-o-zwolaniu-nadzwyczajnego-walnego",
+    publishedAt: "2026-09-30T13:44:00+02:00",
+    sourceKind: "PAP_ESPI",
+    parserInput: `Zarząd KGHM Polska Miedź S.A. przekazuje w załączeniu ogłoszenie o zwołaniu Nadzwyczajnego Walnego Zgromadzenia KGHM Polska Miedź S.A. na dzień 28 października 2026 r.`,
+    expectedEvents: [event({ eventType: "GENERAL_MEETING", eventDate: "2026-10-28", generalMeetingType: "NWZ" })],
+    ambiguous: false,
+    annotation: "The PAP notice and attached meeting documents establish an NWZ on 28 October; the excerpt has no time.",
+  },
+  {
+    id: "LPP-16-2026",
+    group: "E-validation",
+    issuer: "LPP S.A.",
+    sourceUrl: "https://pap-mediaroom.pl/biznes-i-finanse/lpp-sa-162026",
+    publishedAt: "2026-07-10T12:53:00+02:00",
+    sourceKind: "PAP_ESPI",
+    parserInput: `Zarząd LPP SA informuje, iż Zwyczajne Walne Zgromadzenie Spółki w dniu dzisiejszym podjęło uchwałę w sprawie wypłaty akcjonariuszom dywidendy za rok obrotowy od 1 lutego 2025 do 31 stycznia 2026 wg następujących założeń:
+    - kwota dywidendy na akcję: 900 PLN;
+    - dzień dywidendy (dzień na który zostanie ustalona liczba uprawnionych akcjonariuszy) - 9 października 2026 r.;
+    - termin wypłaty dywidendy - 30 października 2026 r.
+    Faktycznie wypłacona dywidenda na akcję będzie pomniejszona o kwotę uprzednio wypłaconej zaliczki na poczet dywidendy za rok obrotowy zakończony 31 stycznia 2026 r., która wyniosła 743 483 200 PLN, tj. 400 PLN na akcję. Zaliczka została wypłacona na 1 858 708 akcji serii A, B, C, D, E, F, G, H, I, J, K, L, M oraz N, dniem ustalenia uprawnionych do udziału w zaliczce był 23 kwietnia 2026 r.`,
+    expectedEvents: [event({ eventType: "UPCOMING_DIVIDEND", eventDate: "2026-10-09", recordDate: "2026-10-09", paymentDate: "2026-10-30", dividendPerShare: 500, dividendTotalPerShare: 900, dividendAdvancePerShare: 400, dividendCurrency: "PLN", dividendStatus: "CONFIRMED" })],
+    ambiguous: false,
+    annotation: "The approved total is 900 PLN/share and the source says an advance of 400 PLN/share was already paid; the future remainder is 500 PLN/share.",
+  },
+  {
+    id: "SANOK-RC-28-2026",
+    group: "E-validation",
+    issuer: "Sanok Rubber Company S.A.",
+    sourceUrl: "https://pap-mediaroom.pl/biznes-i-finanse/sanok-rubber-company-sa-282026-uchwaly-walnego-zgromadzenia-akcjonariuszy-sanok-rc",
+    publishedAt: "2026-06-29T20:29:00+02:00",
+    sourceKind: "PAP_ESPI",
+    parserInput: `Walne Zgromadzenie Akcjonariuszy Sanok RC S.A. postanowiło przeznaczyć do podziału między akcjonariuszy w formie dywidendy kwotę 27 393 588,00 zł, przy czym: kwota dywidendy na jedną akcję: 1,20 zł, dzień dywidendy: 10 września 2026 r., termin wypłaty dywidendy: 24 września 2026 r.`,
+    expectedEvents: [event({ eventType: "UPCOMING_DIVIDEND", eventDate: "2026-09-10", recordDate: "2026-09-10", paymentDate: "2026-09-24", dividendPerShare: 1.2, dividendCurrency: "PLN", dividendStatus: "CONFIRMED" })],
+    ambiguous: false,
+    annotation: "PAP reports a shareholder resolution with the per-share amount, record date, and payment date.",
+  },
+  {
+    id: "SEKO-5-2026",
+    group: "E-validation",
+    issuer: "SEKO S.A.",
+    sourceUrl: "https://pap-mediaroom.pl/biznes-i-finanse/seko-sa-52026-uchwala-zwyczajnego-walnego-zgromadzenia-seko-sa-w-sprawie-wyplaty",
+    publishedAt: "2026-06-17T13:30:00+02:00",
+    sourceKind: "PAP_ESPI",
+    parserInput: `Zarząd SEKO S.A. informuje, iż w dniu 17 czerwca 2026 roku Zwyczajne Walne Zgromadzenie Spółki podjęło uchwałę nr 7 w sprawie podziału zysku netto za rok obrotowy 2025 i przeznaczyło na wypłatę dywidendy kwotę 4.921.000,00 zł, tj. 0,74 zł na jedną akcję. Walne Zgromadzenie ustaliło dzień dywidendy /dzień nabycia praw do dywidendy/ na 23 czerwca 2026 r. oraz termin wypłaty dywidendy na 25 czerwca 2026 r.`,
+    expectedEvents: [event({ eventType: "UPCOMING_DIVIDEND", eventDate: "2026-06-23", recordDate: "2026-06-23", paymentDate: "2026-06-25", dividendPerShare: 0.74, dividendCurrency: "PLN", dividendStatus: "CONFIRMED" })],
+    ambiguous: false,
+    annotation: "PAP states the adopted distribution, 0.74 PLN/share, the record date, and the payout date.",
+  },
+  {
+    id: "BOS-6-2026",
+    group: "E-validation",
+    issuer: "Bank Ochrony Środowiska S.A.",
+    sourceUrl: "https://pap-mediaroom.pl/biznes-i-finanse/bos-sa-62026-ogloszenie-o-zwolaniu-nadzwyczajnego-walnego-zgromadzenia-bos-sa-na",
+    publishedAt: "2026-04-16T15:23:00+02:00",
+    sourceKind: "PAP_ESPI",
+    parserInput: `Zarząd Banku Ochrony Środowiska S.A. z siedzibą w Warszawie ("Bank") informuje, że działając na podstawie art. 399 § 1, art. 402(1) i art. 402(2) Kodeksu spółek handlowych oraz w związku z § 9 ust. 1 Statutu Banku zwołuje Nadzwyczajne Walne Zgromadzenie na dzień 15 maja 2026 r., na godzinę 11:00, które odbędzie się w siedzibie Spółki.`,
+    expectedEvents: [event({ eventType: "GENERAL_MEETING", eventDate: "2026-05-15", generalMeetingType: "NWZ", eventTime: "11:00" })],
+    ambiguous: false,
+    annotation: "PAP notice explicitly announces an NWZ for 15 May at 11:00.",
+  },
+];

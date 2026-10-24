@@ -75,6 +75,11 @@ export type EspiSyncMeta = {
   lastSuccessAt?: string;
   isStale: boolean;
   isRefreshing?: boolean;
+  /** Whether the source's rolling-overlap repair window is overdue. */
+  overlapIsStale?: boolean;
+  lastOverlapAt?: string;
+  nextBackfillPage?: number;
+  backfillComplete?: boolean;
 };
 
 export type EspiFeedResponse = {

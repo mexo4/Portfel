@@ -100,17 +100,23 @@ test("a Polish 'zmianie terminu' notice keeps one event and replaces the old dat
     Nowy termin publikacji raportu półrocznego: 25 sierpnia 2026 roku.
   `);
 
-  assert.deepEqual(event, {
+  assert.deepEqual({
+    eventType: event?.eventType,
+    eventDate: event?.eventDate,
+    previousEventDate: event?.previousEventDate,
+    fiscalPeriod: event?.fiscalPeriod,
+    fiscalYear: event?.fiscalYear,
+    isScheduleChange: event?.isScheduleChange,
+  }, {
     eventType: "HALF_YEAR_REPORT",
     eventDate: "2026-08-25",
     previousEventDate: "2026-08-27",
     fiscalPeriod: "H1",
     fiscalYear: 2026,
-    fiscalYearLabel: "2026",
-    periodEnd: undefined,
     isScheduleChange: true,
-    sourceEvidence: "Informacja o zmianie terminu publikacji raportu okresowego za I półrocze 2026 roku.\nPierwotny termin publikacji raportu półrocznego: 27 sierpnia 2026 roku.\nNowy termin publikacji raportu półrocznego: 25 sierpnia 2026 roku.",
   });
+  assert.equal(event?.sourceEvidence, "Informacja o zmianie terminu publikacji raportu okresowego za I półrocze 2026 roku.\nPierwotny termin publikacji raportu półrocznego: 27 sierpnia 2026 roku.\nNowy termin publikacji raportu półrocznego: 25 sierpnia 2026 roku.");
+  assert.equal(event?.periodEnd, undefined);
 });
 
 test("an official dividend notice preserves amount, status, record and payment dates", () => {

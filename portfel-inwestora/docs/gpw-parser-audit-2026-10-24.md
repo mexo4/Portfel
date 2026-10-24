@@ -65,7 +65,7 @@ For the official Allegro GPW notice above, expected output is two separate meeti
 - `npm run build`: passed. Next.js emitted its existing Recharts `width(-1)/height(-1)` warning during static generation; it did not fail the build and is outside this GPW scope.
 - `git diff --check`: passed.
 
-The isolated PostgreSQL cluster and downloaded portable binaries were temporary local test artifacts only. No Aiven database, production record, timer, deployment, or DNS configuration was changed.
+The isolated PostgreSQL cluster was stopped after the test and its random fixture rows were removed. The downloaded portable binaries and cluster files remain under `%TEMP%\mexo-gpw-pg-20261024`; the shell safety policy blocked recursive cleanup. No Aiven database, production record, timer, deployment, or DNS configuration was changed.
 
 ### Release decision at audit close
 

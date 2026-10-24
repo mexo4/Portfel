@@ -4,7 +4,7 @@ The timer invokes the existing central ESPI/WZA/dividend/report projections ever
 
 Before enabling it on any server, review the read-only calendar audit for representative months and run `scripts/preview-gpw-report-reprojection.mjs --dry-run` page by page against a safe database copy. Resolve ambiguous projections manually. A parser update increments the report projection version, so subsequent timer runs revisit previously successful stored source documents in bounded batches. No annual URL or date needs to be added to the issuer registry for the official GPW/ESPI discovery lane.
 
-The service expects `DATABASE_URL` and any required `POSTGRES_CA_CERT_BASE64` or `POSTGRES_CA_CERT_PATH` in `/etc/mexo/gpw-calendar-sync.env`, owned by the deployment administrator and unreadable by other users. The file is not part of this repository. Confirm the server's Node path, service user and application directory before installing the unit files. No timer is enabled by this change.
+The service expects `DATABASE_URL` and any required `POSTGRES_CA_CERT_BASE64` or `POSTGRES_CA_CERT_PATH` in `/etc/mexo/gpw-calendar-sync.env`, owned by the deployment administrator and unreadable by other users. The file is not part of this repository. The systemd unit calls the stable `scripts/run-gpw-calendar-sync-release.mjs` launcher; it fails closed unless `.next` points to a managed isolated release and then executes that release's sync script and production alias loader. It does not depend on `tests/` or stable-checkout dependencies. Confirm the server's Node path, service user and application directory before installing the unit files. No timer is enabled by this change.
 
 Public calendar and authenticated GPW views read the shared `corporate_events` catalog. The public page now reports incomplete historical source backfills; it does not imply every GPW issuer has announced a schedule.
 
@@ -15,7 +15,7 @@ Keep this timer disabled until a reviewed release is installed. Use the read-onl
 ```sh
 node scripts/audit-public-gpw-calendar.mjs --month=2026-11
 node scripts/audit-public-gpw-calendar.mjs --month=2026-12
-node --experimental-strip-types --import ./tests/register-alias-loader.mjs scripts/preview-gpw-report-reprojection.mjs --dry-run --limit=50
+node --experimental-strip-types --import ./scripts/register-alias-loader.mjs scripts/preview-gpw-report-reprojection.mjs --dry-run --limit=50
 ```
 
 The source audit also supports `--source-ids=gpw:...` and reports parsed events and dividend reprojection decisions. It does not apply those decisions. Compare report dates and dividend entitlements/payments with the linked official issuer notices. Review `duplicateGroups`, `excluded`, ambiguous rows, projection errors, and the bounded backlog. A zero-error build alone is not evidence that the calendar data are complete.
@@ -29,7 +29,7 @@ Restore a disposable database copy that has no live credentials or production wr
 
 ## Later production setup (separate approval required)
 
-1. Confirm the actual Node executable supports `--experimental-strip-types` and the alias loader, and that `ubuntu` can read the checked-out release in `/opt/mexo/repo/portfel-inwestora`. Keep a rollback release and database backup before any projection update.
+1. Confirm the actual Node executable supports `--experimental-strip-types` and the production alias loader, and that `ubuntu` can read the checked-out release in `/opt/mexo/repo/portfel-inwestora`. Keep a rollback release and database backup before any projection update.
 2. Have the infrastructure owner create `/etc/mexo/gpw-calendar-sync.env` outside Git, owned by root, group-readable only by the service group (`0640` or stricter). Put only the required `DATABASE_URL` and one of `POSTGRES_CA_CERT_BASE64` or `POSTGRES_CA_CERT_PATH` there. Do not print their values or place them in systemd command arguments. Restrict the CA file's permissions similarly.
 3. Install the reviewed service/timer units, run `systemd-analyze verify` on both, then perform one supervised `systemctl start mexo-gpw-calendar-sync.service` and inspect redacted journal counters. The session advisory lock and persisted per-source locks prevent overlap; the script limits work to three projection batches per lane and one PAP backfill page per run.
 4. Only after the supervised run passes the read-only audits, enable the two-hour timer. `Persistent=true` means one missed run starts after boot, not a burst of every missed interval. Monitor `systemctl status`, `journalctl -u mexo-gpw-calendar-sync.service`, source-state cursors, error counts, active event duplicates and database connections. Allow the 370-day bounded repair cursor to finish before claiming historical completeness.

@@ -106,6 +106,8 @@ test("a Polish 'zmianie terminu' notice keeps one event and replaces the old dat
     previousEventDate: "2026-08-27",
     fiscalPeriod: "H1",
     fiscalYear: 2026,
+    fiscalYearLabel: "2026",
+    periodEnd: undefined,
     isScheduleChange: true,
   });
 });

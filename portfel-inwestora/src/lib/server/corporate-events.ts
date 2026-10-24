@@ -10,7 +10,6 @@ import {
   getCorporateEventIdentityKey,
   resolveCorporateEventStatus,
   getDividendAmendmentEvidence,
-  getStatutoryMeetingRegistrationDate,
   isNonBindingDividendDraftNotice,
   isCorporateEventSourceUnavailable,
   parseCorporateEventDocument,
@@ -37,6 +36,7 @@ import { fetchWithSystemTrust } from "@/lib/server/system-trust-fetch";
 import { readOfficialMeetingPdf } from "@/lib/server/general-meeting-pdf";
 import { normalizeText, uniqueBy } from "@/lib/utils";
 import { getReportScheduleProjectionStatus, planReportScheduleReprojection, type StoredReportProjection } from "@/lib/report-schedule-reprojection";
+import { invalidatePublicGpwEventsCache } from "@/lib/server/public-gpw-cache";
 import {
   isDividendReportSuperseded,
   planDividendFinalResolution,
@@ -888,7 +888,11 @@ export const shouldApplyEvent = (
     // override a newer reconvening/change.
     return incomingTimestamp === 0 || existingTimestamp === 0 || incomingTimestamp >= existingTimestamp;
   }
-  if (existing.status === "CONFIRMED" && parsed.requiresReview) return false;
+  const sameSourceReviewedProjection = sameSourceReprojection &&
+    (parsed.eventType === "GENERAL_MEETING" || parsed.eventType === "QUARTERLY_REPORT" ||
+      parsed.eventType === "HALF_YEAR_REPORT" || parsed.eventType === "ANNUAL_REPORT") &&
+    incomingTimestamp > 0 && incomingTimestamp >= existingTimestamp;
+  if (existing.status === "CONFIRMED" && parsed.requiresReview && !sameSourceReviewedProjection) return false;
   if (existing.status === "CANCELLED") {
     // A later formal notice may legitimately convene the meeting again, but a
     // stale schedule discovered during backfill must never resurrect it.
@@ -961,11 +965,12 @@ const upsertParsedEvents = async (
   instrument: CanonicalInstrument,
   batch: ProviderEventBatch
 ) => {
-  if (batch.events.length === 0) return { created: 0, duplicates: 0, saved: 0 };
+  if (batch.events.length === 0) return { created: 0, duplicates: 0, saved: 0, changed: 0 };
 
   let created = 0;
   let duplicates = 0;
   let saved = 0;
+  let changed = 0;
 
   for (const parsed of batch.events) {
     const eventIdentity = getCorporateEventIdentityKey(parsed);
@@ -986,7 +991,33 @@ const upsertParsedEvents = async (
         [instrument.id, parsed.eventType, eventIdentity]
       )
     )[0];
-    if (!existing && (parsed.eventType === "QUARTERLY_REPORT" || parsed.eventType === "HALF_YEAR_REPORT" || parsed.eventType === "ANNUAL_REPORT") &&
+    const isReportSchedule = parsed.eventType === "QUARTERLY_REPORT" ||
+      parsed.eventType === "HALF_YEAR_REPORT" || parsed.eventType === "ANNUAL_REPORT";
+    if (!existing && isReportSchedule && parsed.previousEventDate) {
+      // A formal correction may change both the appointment date and the
+      // period identity. Reuse the old projection (and stable ICS UID) only
+      // when its prior date is explicit and this URL is its sole provenance.
+      const corrected = await transaction.query<ExistingEventRow>(
+        `SELECT event.id, event.event_date, event.record_date, event.status, event.source_published_at,
+                event.source_priority, event.source_type, event.updated_at,
+                event.active, event.general_meeting_type, event.event_identity
+         FROM corporate_events AS event
+         WHERE event.instrument_id = $1 AND event.event_type = $2
+           AND event.event_date = $3 AND event.active = TRUE
+           AND EXISTS (
+             SELECT 1 FROM corporate_event_sources AS source
+             WHERE source.corporate_event_id = event.id AND source.source_url = $4
+           )
+           AND NOT EXISTS (
+             SELECT 1 FROM corporate_event_sources AS other_source
+             WHERE other_source.corporate_event_id = event.id AND other_source.source_url <> $4
+           )
+         ORDER BY event.updated_at DESC LIMIT 2 FOR UPDATE OF event`,
+        [instrument.id, parsed.eventType, parsed.previousEventDate, batch.source.sourceUrl]
+      );
+      if (corrected.length === 1) existing = corrected[0];
+    }
+    if (!existing && isReportSchedule &&
       parsed.fiscalYearLabel?.includes("/") && parsed.fiscalYear) {
       // Older projections used only the last numeric year. Reuse their row ID
       // (and therefore ICS UID) only when this very source owned the legacy row.
@@ -1073,10 +1104,7 @@ const upsertParsedEvents = async (
       !parsed.recordDate && existing?.record_date ? existing.record_date : parsed.eventDate;
     const now = new Date().toISOString();
     const eventId = existing?.id ?? randomUUID();
-    const isReportSchedule = parsed.eventType === "QUARTERLY_REPORT" ||
-      parsed.eventType === "HALF_YEAR_REPORT" ||
-      parsed.eventType === "ANNUAL_REPORT";
-    const sameSourceReprojection = Boolean(existing && isReportSchedule && (
+    const sameSourceReprojection = Boolean(existing && (
       await transaction.query<{ source_url: string }>(
         `SELECT source_url FROM corporate_event_sources
          WHERE corporate_event_id = $1 AND source_url = $2 LIMIT 1`,
@@ -1088,6 +1116,7 @@ const upsertParsedEvents = async (
 
     if (!existing) {
       created += 1;
+      changed += 1;
       await transaction.execute(
         `
           INSERT INTO corporate_events (
@@ -1129,6 +1158,7 @@ const upsertParsedEvents = async (
       );
     } else if (apply) {
       duplicates += 1;
+      changed += 1;
       await transaction.execute(
         `
           UPDATE corporate_events
@@ -1172,7 +1202,9 @@ const upsertParsedEvents = async (
           parsed.eventTime ?? null,
           parsed.fiscalPeriod ?? null,
           parsed.fiscalYear ?? null,
-          parsed.fiscalYearLabel?.includes("/") ? eventIdentity : existing.event_identity || eventIdentity,
+          parsed.fiscalPeriod && (parsed.fiscalYearLabel || parsed.fiscalYear)
+            ? eventIdentity
+            : existing.event_identity || eventIdentity,
           parsed.generalMeetingType ?? null,
           parsed.registrationDate ?? null,
           parsed.dividendPerShare ?? null,
@@ -1282,7 +1314,7 @@ const upsertParsedEvents = async (
       [new Date().toISOString(), instrument.id, fiscalYear, `dividend:${fiscalYear}:single`]
     );
   }
-  return { created, duplicates, saved };
+  return { created, duplicates, saved, changed };
 };
 
 const recordSourceCheck = async (
@@ -1335,6 +1367,7 @@ const refreshCanonicalInstrument = async (
         results.find((result) => result.status === "PARSE_ERROR")?.status ??
         "NOT_FOUND";
     const now = new Date().toISOString();
+    let projectionChanged = false;
 
     await withTransaction(async (transaction) => {
       await transaction.query<{ locked: number }>(
@@ -1349,7 +1382,8 @@ const refreshCanonicalInstrument = async (
             : []
         );
         for (const batch of batches) {
-          await upsertParsedEvents(transaction, instrument, batch);
+          const result = await upsertParsedEvents(transaction, instrument, batch);
+          projectionChanged ||= result.changed > 0;
         }
       }
 
@@ -1366,6 +1400,8 @@ const refreshCanonicalInstrument = async (
         [now, latestStatus, instrument.id]
       );
     });
+
+    if (projectionChanged) await invalidatePublicGpwEventsCache();
 
     diagnose({
       instrumentId: instrument.id,
@@ -1411,21 +1447,17 @@ const toCorporateEvent = (row: EventRow): CorporateEvent => ({
   periodStart: row.period_start ?? undefined,
   periodEnd: row.period_end ?? undefined,
   generalMeetingType: row.general_meeting_type ?? undefined,
-  registrationDate: row.event_type === "GENERAL_MEETING"
-    ? row.registration_date_source === "OFFICIAL" && row.registration_date
-      ? row.registration_date
-      : getStatutoryMeetingRegistrationDate(row.event_date)
-    : undefined,
+  registrationDate: row.event_type === "GENERAL_MEETING" &&
+    row.registration_date_source === "OFFICIAL" ? row.registration_date ?? undefined : undefined,
   registrationDateSource: row.event_type === "GENERAL_MEETING"
     ? row.registration_date_source === "OFFICIAL" && row.registration_date
       ? "OFFICIAL"
-      : getStatutoryMeetingRegistrationDate(row.event_date)
-        ? "STATUTORY_CALCULATION"
-        : "UNKNOWN"
+      : "UNKNOWN"
     : undefined,
-  registrationDateConflict: row.event_type === "GENERAL_MEETING" && row.registration_date_source === "OFFICIAL" && !!row.registration_date
-    ? row.registration_date !== getStatutoryMeetingRegistrationDate(row.event_date)
-    : undefined,
+  // Without verified issuer jurisdiction, a Polish statutory comparison can
+  // falsely flag official foreign record dates. Keep the announced date and
+  // source; do not infer a jurisdiction-specific conflict here.
+  registrationDateConflict: undefined,
   dividendPerShare: row.dividend_per_share ?? undefined,
   dividendTotalPerShare: row.dividend_total_per_share ?? undefined,
   dividendAdvancePerShare: row.dividend_advance_per_share ?? undefined,
@@ -1575,9 +1607,9 @@ export type GlobalGeneralMeetingSyncResult = {
   sourceSync?: GpwGeneralMeetingSourceSyncResult;
 };
 
-// Re-evaluate previously successful documents after the live 365-day audit
-// found persisted period labels that differ from their official schedules.
-const REPORT_SCHEDULE_PROJECTION_VERSION = 9;
+// Re-evaluate previously successful documents after adding explicit correction
+// reconciliation and preserving row-level fiscal-year labels.
+const REPORT_SCHEDULE_PROJECTION_VERSION = 10;
 const REPORT_SCHEDULE_BATCH_SIZE = 100;
 const REPORT_SCHEDULE_UNMATCHED_RETRY_MS = 7 * 24 * 60 * 60 * 1_000;
 const REPORT_SCHEDULE_PARSE_RETRY_MS = 24 * 60 * 60 * 1_000;
@@ -1669,6 +1701,7 @@ export const synchronizeGlobalReportSchedules = ({ force = false, refreshSource 
     let unmatched = 0;
     let errors = 0;
     let reviewed = 0;
+    let publicCacheChanged = false;
     for (const report of reports) {
       try {
         const instrument = await getProjectionInstrument(report);
@@ -1717,14 +1750,14 @@ export const synchronizeGlobalReportSchedules = ({ force = false, refreshSource 
             [`corporate-events:${instrument.canonical_key}`]
           );
           const oldProjections = await transaction.query<StoredReportProjection>(
-            `SELECT event.id, event.event_identity, event.event_date,
+            `SELECT event.id, event.event_type, event.event_identity, event.event_date,
                     ARRAY_AGG(DISTINCT provenance.source_url) AS source_urls
              FROM corporate_events AS event
              JOIN corporate_event_sources AS target ON target.corporate_event_id = event.id AND target.source_url = $2
              JOIN corporate_event_sources AS provenance ON provenance.corporate_event_id = event.id
              WHERE event.instrument_id = $1 AND event.active = TRUE
                AND event.event_type IN ('QUARTERLY_REPORT', 'HALF_YEAR_REPORT', 'ANNUAL_REPORT')
-             GROUP BY event.id, event.event_identity, event.event_date`,
+             GROUP BY event.id, event.event_type, event.event_identity, event.event_date`,
             [instrument.id, report.source_url]
           );
           const projectionPlan = planReportScheduleReprojection(
@@ -1751,11 +1784,12 @@ export const synchronizeGlobalReportSchedules = ({ force = false, refreshSource 
             [new Date().toISOString(), REPORT_SCHEDULE_PROJECTION_VERSION, report.id,
               getReportScheduleProjectionStatus(events.size, parseComplete)]
           );
-          return upsert;
+          return { upsert, changed: upsert.changed > 0 || projectionPlan.deactivateIds.length > 0 };
         });
-        created += result.created;
-        duplicates += result.duplicates;
-        saved += result.saved;
+        created += result.upsert.created;
+        duplicates += result.upsert.duplicates;
+        saved += result.upsert.saved;
+        publicCacheChanged ||= result.changed;
         if (!parseComplete) errors += 1;
       } catch (error) {
         errors += 1;
@@ -1765,6 +1799,7 @@ export const synchronizeGlobalReportSchedules = ({ force = false, refreshSource 
           status: "PARSE_ERROR", error: error instanceof Error ? error.name : "unknown" });
       }
     }
+    if (publicCacheChanged) await invalidatePublicGpwEventsCache();
     const count = await queryOne<{ count: number | string }>(
       `SELECT COUNT(*) AS count FROM espi_reports AS report
        LEFT JOIN corporate_event_instruments AS instrument ON instrument.id = report.issuer_id
@@ -1905,6 +1940,7 @@ export const synchronizeGlobalGeneralMeetings = ({
     let unmatched = 0;
     let errors = 0;
     let reviewed = 0;
+    let publicCacheChanged = false;
 
     for (const report of reports) {
       try {
@@ -1974,6 +2010,7 @@ export const synchronizeGlobalGeneralMeetings = ({
         created += result.created;
         duplicates += result.duplicates;
         saved += result.saved;
+        publicCacheChanged ||= result.changed > 0;
       } catch (error) {
         errors += 1;
         try {
@@ -1997,6 +2034,7 @@ export const synchronizeGlobalGeneralMeetings = ({
       }
     }
 
+    if (publicCacheChanged) await invalidatePublicGpwEventsCache();
     const pendingResult = await queryOne<{ count: number | string }>(
       `
         SELECT COUNT(*) AS count
@@ -2137,7 +2175,8 @@ const deactivateEventProjection = async (
   reason: string,
   sourceUrl: string
 ) => {
-  for (const id of ids.slice(0, DIVIDEND_REPROJECTION_MAX_EVENTS)) {
+  const targets = ids.slice(0, DIVIDEND_REPROJECTION_MAX_EVENTS);
+  for (const id of targets) {
     const changedAt = new Date().toISOString();
     await transaction.execute(
       `INSERT INTO corporate_event_projection_changes
@@ -2152,6 +2191,7 @@ const deactivateEventProjection = async (
       [id, changedAt]
     );
   }
+  return targets.length;
 };
 
 /**
@@ -2224,6 +2264,7 @@ export const synchronizeGlobalDividends = ({
     let unmatched = 0;
     let errors = 0;
     let reviewed = 0;
+    let publicCacheChanged = false;
 
     for (const report of reports) {
       try {
@@ -2265,7 +2306,7 @@ export const synchronizeGlobalDividends = ({
           // If its PDF is unavailable, only independent later official proof
           // can justify retiring exclusively attributed stale projections.
           if (nonBindingDraft) {
-            await withTransaction(async (transaction) => {
+            const deactivated = await withTransaction(async (transaction) => {
               await transaction.query<{ locked: number }>(
                 "SELECT pg_advisory_xact_lock(hashtext($1)) AS locked",
                 [`corporate-events:${instrument.canonical_key}`]
@@ -2287,11 +2328,13 @@ export const synchronizeGlobalDividends = ({
                 parseCorporateEventDocument(`${item.source_title}\n${item.title}\n${item.body_text}`));
               const plan = planDividendRejectedAmendment(old, getDividendAmendmentEvidence(reportText),
                 report.source_url, corroboratingEvents);
-              await deactivateEventProjection(transaction, plan.deactivateIds,
+              const deactivated = await deactivateEventProjection(transaction, plan.deactivateIds,
                 "CORROBORATED_NON_BINDING_AMENDMENT", report.source_url);
               if (plan.ambiguousIds.length) diagnose({ provider: "global-espi-dividends", sourceId: report.source_id,
                 phase: "reprojection-review", ambiguous: plan.ambiguousIds.length });
+              return deactivated;
             });
+            publicCacheChanged ||= deactivated > 0;
           }
           if (!parseComplete) {
             await updateDividendProjectionStatus(report.id, "PARSE_ERROR");
@@ -2314,7 +2357,7 @@ export const synchronizeGlobalDividends = ({
           const sourcePlan = planDividendSourceReprojection(sourced, events, report.source_url, parseComplete, nonBindingDraft);
           const superseded = isDividendReportSuperseded(old, events, report.published_at);
           const finalPlan = planDividendFinalResolution(old, events, report.published_at);
-          const upsert = superseded ? { created: 0, duplicates: events.length, saved: 0 } : await upsertParsedEvents(transaction, instrument, {
+          const upsert = superseded ? { created: 0, duplicates: events.length, saved: 0, changed: 0 } : await upsertParsedEvents(transaction, instrument, {
             events,
             source: {
               sourceType: report.source_url.includes("gpw.pl/komunikat")
@@ -2325,9 +2368,9 @@ export const synchronizeGlobalDividends = ({
               sourceTitle: report.source_title || report.title,
             },
           });
-          await deactivateEventProjection(transaction, sourcePlan.deactivateIds,
+          const sourceDeactivated = await deactivateEventProjection(transaction, sourcePlan.deactivateIds,
             "SAME_SOURCE_REPARSE", report.source_url);
-          await deactivateEventProjection(transaction, finalPlan.deactivateIds.filter((id) =>
+          const finalDeactivated = await deactivateEventProjection(transaction, finalPlan.deactivateIds.filter((id) =>
             !sourcePlan.deactivateIds.includes(id)), "FINAL_DIVIDEND_RESOLUTION", report.source_url);
           if (sourcePlan.ambiguousIds.length) diagnose({ provider: "global-espi-dividends", sourceId: report.source_id,
             phase: "reprojection-review", ambiguous: sourcePlan.ambiguousIds.length });
@@ -2341,11 +2384,12 @@ export const synchronizeGlobalDividends = ({
             `,
             [new Date().toISOString(), DIVIDEND_PROJECTION_VERSION, report.id]
           );
-          return upsert;
+          return { upsert, changed: upsert.changed > 0 || sourceDeactivated + finalDeactivated > 0 };
         });
-        created += result.created;
-        duplicates += result.duplicates;
-        saved += result.saved;
+        created += result.upsert.created;
+        duplicates += result.upsert.duplicates;
+        saved += result.upsert.saved;
+        publicCacheChanged ||= result.changed;
       } catch (error) {
         errors += 1;
         try {
@@ -2369,6 +2413,7 @@ export const synchronizeGlobalDividends = ({
       }
     }
 
+    if (publicCacheChanged) await invalidatePublicGpwEventsCache();
     const pendingResult = await queryOne<{ count: number | string }>(
       `
         SELECT COUNT(*) AS count

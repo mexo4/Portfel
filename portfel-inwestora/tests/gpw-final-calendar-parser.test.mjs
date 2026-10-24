@@ -80,6 +80,16 @@ test("real GPW correction wording and wrapped Eko Export rows retain the correct
   ]);
 });
 
+test("official EQUNICO correction preserves Q3 identity and exposes previous and current dates", () => {
+  // Official issuer report 69/2026 changes the scheduled publication from
+  // 27 November to 16 November 2026; the period itself remains Q3 2026.
+  const [event] = reportEvents(`Raport bie\u017c\u0105cy nr 69/2026: Zmiana terminu publikacji raportu okresowego za III kwarta\u0142 2026 roku.
+Zgodnie z kalendarzem opublikowanym w raporcie bie\u017c\u0105cym nr 3/2026 publikacja mia\u0142a nast\u0105pi\u0107 27 listopada 2026 roku.
+Skonsolidowany raport okresowy za III kwarta\u0142 2026 roku zostanie przekazany do publicznej wiadomo\u015bci w dniu 16 listopada 2026 roku.`);
+  assert.deepEqual([event?.fiscalPeriod, event?.fiscalYear, event?.eventDate, event?.previousEventDate],
+    ["Q3", 2026, "2026-11-16", "2026-11-27"]);
+});
+
 test("one Eko Export correction notice parses every explicit rescheduled report independently", () => {
   const source = [
     "Raport bieżący: zmiana terminu przekazania raportów okresowych.",
@@ -186,8 +196,8 @@ test("official GPW Allegro notice plural 'odbędą się w dniu' creates both ann
     .map(({ generalMeetingType, eventDate, eventTime, eventIdentity }) =>
       [generalMeetingType, eventDate, eventTime, eventIdentity]);
   assert.deepEqual(actual, [
-    ["ZWZ", "2026-11-18", "13:00", "general-meeting:ZWZ:2026-11-18"],
-    ["NWZ", "2026-11-18", "13:30", "general-meeting:NWZ:2026-11-18"],
+    ["ZWZ", "2026-11-18", "14:00 CEST (strefa źródłowa niejednoznaczna)", "general-meeting:ZWZ:2026-11-18"],
+    ["NWZ", "2026-11-18", "14:30 CEST (strefa źródłowa niejednoznaczna)", "general-meeting:NWZ:2026-11-18"],
   ], source);
 });
 
@@ -196,7 +206,7 @@ test("same-source schedule correction keeps the existing event row identity for 
     "Zmiana terminu publikacji raportu kwartalnego za III kwartał 2026 r. z 19 listopada 2026 r. na 5 listopada 2026 r."
   );
   const plan = planReportScheduleReprojection([
-    { id: "existing-event", event_identity: "QUARTERLY_REPORT:Q3:2026", event_date: "2026-11-19", source_urls: ["https://gpw.pl/old-schedule"] },
+    { id: "existing-event", event_type: "QUARTERLY_REPORT", event_identity: "QUARTERLY_REPORT:Q3:2026", event_date: "2026-11-19", source_urls: ["https://gpw.pl/old-schedule"] },
   ], [event], "https://gpw.pl/changed-schedule", true);
 
   assert.equal(getCorporateEventIdentityKey(event), "QUARTERLY_REPORT:Q3:2026");
@@ -378,6 +388,46 @@ test("official AB 2026/2027 schedule keeps Q1, Q3, H1 and FY publication dates o
   ]);
 });
 
+test("Atlanta and HELIO preserve an explicitly prior annual fiscal year from the report row", () => {
+  const atlanta = parseCorporateEventDocument(`ATLANTA POLAND SA (4/2026). Spółka informuje o terminach raportów okresowych w bieżącym roku obrotowym 2026/2027, trwającym od 01.07.2026 r. do 30.06.2027 r.:
+- raport roczny za rok obrotowy 2025/2026 - 28.10.2026 r.,
+- raport kwartalny za I kwartał roku obrotowego 2026/2027 - 30.11.2026 r.,
+- raport półroczny za I półrocze roku obrotowego 2026/2027 - 31.03.2027 r.,
+- raport kwartalny za III kwartał roku obrotowego 2026/2027 - 31.05.2027 r.`);
+  assert.deepEqual(atlanta.map(({ fiscalPeriod, fiscalYearLabel, eventDate }) => [fiscalPeriod, fiscalYearLabel, eventDate]), [
+    ["FY", "2025/2026", "2026-10-28"],
+    ["Q1", "2026/2027", "2026-11-30"],
+    ["H1", "2026/2027", "2027-03-31"],
+    ["Q3", "2026/2027", "2027-05-31"],
+  ]);
+
+  const helio = parseCorporateEventDocument(`HELIO S.A. przekazuje terminy publikacji raportów w roku obrotowym 2026/2027, trwającym od 01.07.2026 r. do 30.06.2027 r.:
+- raport roczny za rok obrotowy 2025/2026 – 30.10.2026 r.,
+- raport kwartalny za I kwartał roku obrotowego 2026/2027 – 27.11.2026 r.,
+- raport półroczny za półrocze roku obrotowego 2026/2027 – 31.03.2027 r.,
+- raport kwartalny za III kwartał roku obrotowego 2026/2027 – 28.05.2027 r.`);
+  assert.deepEqual(helio.map(({ fiscalPeriod, fiscalYearLabel, eventDate }) => [fiscalPeriod, fiscalYearLabel, eventDate]), [
+    ["FY", "2025/2026", "2026-10-30"],
+    ["Q1", "2026/2027", "2026-11-27"],
+    ["H1", "2026/2027", "2027-03-31"],
+    ["Q3", "2026/2027", "2027-05-28"],
+  ]);
+});
+
+test("LPP financial-period boundaries are not mistaken for publication appointments", () => {
+  const events = parseCorporateEventDocument(`LPP SA informuje o terminach publikacji raportów okresowych w 2026 roku:
+Jednostkowy i skonsolidowany raport za 2025: 26 marca 2026 roku.
+Skonsolidowany raport za I półrocze 2026: 17 września 2026 roku.
+Skonsolidowane raporty kwartalne:
+- Rozszerzony skonsolidowany raport za I kwartał 2026: 11 czerwca 2026 roku;
+- Rozszerzony skonsolidowany raport za III kwartał 2026: 03 grudnia 2026 roku.
+Spółka nie będzie publikować skonsolidowanego raportu kwartalnego za IV kwartał 2025 i II kwartał 2026.
+Rok finansowy trwa od 1 lutego 2026 roku do 31 stycznia 2027 roku.
+IV kwartał 2026 - od 1 listopada 2026 do 31 stycznia 2027.`);
+  assert.equal(events.some((event) => event.eventDate === "2027-01-31"), false);
+  assert.ok(events.some((event) => event.fiscalPeriod === "Q3" && event.eventDate === "2026-12-03"));
+});
+
 test("single paragraph with distinct report mentions keeps each appointment in its own clause", () => {
   const text = "Raport półroczny za I półrocze 2026 r. opublikowano 30 lipca 2026 r., a raport kwartalny za III kwartał 2026 r. zostanie opublikowany 26 października 2026 r.";
   assert.deepEqual(reportEvents(text).map(({ fiscalPeriod, fiscalYear, eventDate }) =>
@@ -415,6 +465,10 @@ test("calendar-year periods with contradictory or overdue publication years requ
     const [event] = reportEvents(source);
     assert.equal(event?.requiresReview, true, source);
     assert.ok(event?.reviewReasons?.includes(reason), source);
+    if (reason === "PUBLICATION_YEAR_CONFLICTS_WITH_PERIOD") {
+      assert.equal(event?.fiscalYearLabel, "2029", "retain the source's literal anomalous year");
+      assert.equal(event?.fiscalYear, 2029);
+    }
   }
   const [normal] = reportEvents("Raport kwartalny za III kwartał 2026 r. zostanie opublikowany 29 października 2026 r.");
   assert.equal(normal?.requiresReview, undefined);
@@ -432,11 +486,11 @@ test("Allegro official combined OGM/EGM notice produces two independently identi
   const source = "https://about.allegro.eu/investors/general-meetings/";
   const text = `The Board of Directors of Allegro.eu (the “Company”) hereby informs its shareholders that the Ordinary General Meeting (the “OGM”) and the Extraordinary General Meeting (the “EGM”) will be held on 18 November 2026. The OGM at 2:00 pm CEST; the EGM (held before a Luxembourg notary public) at 2:30 pm CEST. The right to participate is determined on the basis of share ownership on 4 November 2026 at midnight (23:59:59) CEST (“Record Date”).`;
   const actual = parseCorporateEventDocument(text).filter((event) => event.eventType === "GENERAL_MEETING")
-    .map(({ generalMeetingType, eventDate, eventTime, registrationDate, eventIdentity }) =>
-    [generalMeetingType, eventDate, eventTime, registrationDate, eventIdentity]);
+    .map(({ generalMeetingType, eventDate, eventTime, registrationDate, eventIdentity, status, requiresReview, reviewReasons }) =>
+    [generalMeetingType, eventDate, eventTime, registrationDate, eventIdentity, status, requiresReview, reviewReasons]);
   assert.deepEqual(actual, [
-    ["ZWZ", "2026-11-18", "13:00", "2026-11-04", "general-meeting:ZWZ:2026-11-18"],
-    ["NWZ", "2026-11-18", "13:30", "2026-11-04", "general-meeting:NWZ:2026-11-18"],
+    ["ZWZ", "2026-11-18", "14:00 CEST (strefa źródłowa niejednoznaczna)", "2026-11-04", "general-meeting:ZWZ:2026-11-18", undefined, true, ["MEETING_TIME_ZONE_CONFLICT"]],
+    ["NWZ", "2026-11-18", "14:30 CEST (strefa źródłowa niejednoznaczna)", "2026-11-04", "general-meeting:NWZ:2026-11-18", undefined, true, ["MEETING_TIME_ZONE_CONFLICT"]],
   ], source);
 });
 

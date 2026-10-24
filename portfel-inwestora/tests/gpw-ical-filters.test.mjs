@@ -67,7 +67,7 @@ test("new route validates ticker input and filters before database LIMIT", async
   assert.match(route, /!categories \|\| tickers === null/);
   assert.match(reader, /UPPER\(issuer.ticker\) = ANY\(\$5::text\[\]\)/);
   assert.match(reader, /tickerKey/);
-  assert.match(reader, /mexo-public-gpw-ical-v2/);
+  assert.match(reader, /mexo-public-gpw-ical-v3/);
   assert.doesNotMatch(reader, /\bJOIN\s+(?:users|portfolio_assets|watchlist)\b/i);
 });
 

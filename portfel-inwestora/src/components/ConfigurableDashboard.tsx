@@ -258,6 +258,7 @@ const formatPercent = (value: number | null | undefined) =>
   value === null || value === undefined || !Number.isFinite(value) ? "Brak danych" : `${value >= 0 ? "+" : ""}${value.toFixed(2)}%`;
 
 const formatEventTime = (eventTime: string) => {
+  if (!/^\d{1,2}:\d{2}$/.test(eventTime.trim())) return eventTime.trim();
   const match = eventTime.match(/^(\d{1,2}):(\d{2})/);
   return match ? `${match[1].padStart(2, "0")}:${match[2]}` : eventTime;
 };

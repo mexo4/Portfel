@@ -9,6 +9,7 @@ import {
   getUpcomingDividendRelevantDate,
   isCorporateEventSourceUnavailable,
   parseCorporateEventDocument,
+  resolveCorporateEventStatus,
 } from "../src/lib/corporate-events.ts";
 import {
   classifyCorporateEventHttpStatus,
@@ -190,6 +191,25 @@ test("semantically suspicious report periods remain visible for review without o
     sourceUrl: "https://pap-mediaroom.pl/report",
     sourcePublishedAt: "2026-10-23T07:00:00.000Z",
   }, suspicious), false);
+});
+
+test("same-source report reprojection can downgrade a newly detected period anomaly for review", () => {
+  const existing = {
+    id: "erg-q3", event_date: "2026-11-19", record_date: null, status: "CONFIRMED",
+    source_published_at: "2026-01-15T09:00:00.000Z", source_priority: 300,
+    source_type: "ISSUER_CURRENT_REPORT", updated_at: "2026-01-15T09:00:00.000Z",
+    active: true, general_meeting_type: null, event_identity: "QUARTERLY_REPORT:Q3:2029",
+  };
+  const suspicious = {
+    eventType: "QUARTERLY_REPORT", eventDate: "2026-11-19", fiscalPeriod: "Q3",
+    fiscalYear: 2029, requiresReview: true,
+    reviewReasons: ["PUBLICATION_YEAR_CONFLICTS_WITH_PERIOD"], isScheduleChange: false,
+  };
+  const source = { sourceType: "ISSUER_CURRENT_REPORT", sourceUrl: "https://issuer.example/schedule",
+    sourcePublishedAt: "2026-01-15T09:00:00.000Z" };
+  assert.equal(shouldApplyEvent(existing, source, suspicious, false), false);
+  assert.equal(shouldApplyEvent(existing, source, suspicious, true), true);
+  assert.equal(resolveCorporateEventStatus(existing.status, suspicious), "UNKNOWN");
 });
 
 test("supports Polish word dates, dotted dates and dashed dates", () => {
@@ -738,7 +758,7 @@ test("corporate-event refresh preserves stored data and delegates posting to the
   const routeSource = await readFile(new URL("../src/app/api/corporate-events/route.ts", import.meta.url), "utf8");
   const automaticSource = await readFile(new URL("../src/lib/automatic-gpw-dividends.ts", import.meta.url), "utf8");
 
-  assert.match(providerSource, /for \(const result of successful\)[\s\S]*for \(const batch of batches\) \{\s*await upsertParsedEvents/);
+  assert.match(providerSource, /for \(const result of successful\)[\s\S]*for \(const batch of batches\) \{\s*(?:const result = )?await upsertParsedEvents/);
   assert.doesNotMatch(providerSource, /buildDividendOperation|operationType:\s*["']DIVIDEND|calculateCashBalances/);
   assert.match(routeSource, /applyAutomaticGpwDividends/);
   assert.match(automaticSource, /event\.status !== "CONFIRMED"/);

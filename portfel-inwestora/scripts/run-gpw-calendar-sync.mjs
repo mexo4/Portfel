@@ -35,32 +35,107 @@ try {
     console.info("[GPW SCHEDULED SYNC] another run is active");
   } else {
     const { synchronizePapEspi } = await import("../src/lib/server/espi.ts");
+    const { assessGpwSync } = await import("../src/lib/gpw-sync-health.ts");
     const {
       synchronizeGlobalReportSchedules,
+      getGlobalReportScheduleSourceState,
       synchronizeGlobalGeneralMeetings,
+      getGlobalGeneralMeetingSourceState,
       synchronizeGlobalDividends,
+      getGlobalDividendSourceState,
     } = await import("../src/lib/server/corporate-events.ts");
+    const { getEspiSyncState } = await import("../src/lib/server/espi.ts");
     const source = await synchronizePapEspi({ backfillPages: 1 });
-    console.info("[GPW SCHEDULED SYNC] source", {
-      status: source.status, parsed: source.parsed, saved: source.insertedOrUpdated,
-      pages: source.pagesRead, errors: source.errors ?? 0,
+    const sourceState = await getEspiSyncState();
+    const sourceAssessment = assessGpwSync({
+      batch: { errors: source.errors ?? 0, pending: Number(source.locked || source.overlapComplete === false) },
+      source: {
+        status: source.status,
+        lastCheckedAt: sourceState.lastCheckedAt,
+        lastSuccessAt: sourceState.lastSuccessAt,
+        locked: source.locked,
+        errors: source.errors,
+        backfillComplete: source.backfillComplete,
+        nextBackfillCursor: source.nextBackfillPage,
+        overlapDue: source.overlapComplete !== undefined,
+        overlapComplete: source.overlapComplete,
+      },
     });
-    failed ||= source.status !== "SUCCESS" || (source.errors ?? 0) > 0;
-    for (const [name, synchronize] of [
-      ["reports", synchronizeGlobalReportSchedules],
-      ["meetings", synchronizeGlobalGeneralMeetings],
-      ["dividends", synchronizeGlobalDividends],
+    console.info("[GPW SCHEDULED SYNC] source", {
+      batchStatus: sourceAssessment.batchStatus,
+      availability: sourceAssessment.source.availability,
+      freshness: sourceAssessment.source.freshness,
+      sourceStatus: source.status,
+      parsed: source.parsed,
+      saved: source.insertedOrUpdated,
+      pages: source.pagesRead,
+      errors: source.errors ?? 0,
+      historicalBackfill: sourceAssessment.historicalBackfill,
+      overlapRepair: sourceAssessment.overlapRepair,
+      calendarCoverage: sourceAssessment.coverage.status,
+    });
+    // A bounded historical backfill intentionally advances its durable cursor
+    // over multiple scheduled runs. Keep that run visibly INCOMPLETE without
+    // treating the expected continuation as an infrastructure failure.
+    failed ||= sourceAssessment.batchStatus !== "BATCH_COMPLETE" || source.status !== "SUCCESS" || source.locked;
+    for (const [name, synchronize, getSourceState] of [
+      ["reports", synchronizeGlobalReportSchedules, getGlobalReportScheduleSourceState],
+      ["meetings", synchronizeGlobalGeneralMeetings, getGlobalGeneralMeetingSourceState],
+      ["dividends", synchronizeGlobalDividends, getGlobalDividendSourceState],
     ]) {
       try {
         let result = await synchronize({ refreshSource: true });
+        const sourceSync = result.sourceSync;
         let batches = 1;
         while (result.pending > 0 && batches < 3) {
           result = await synchronize({ refreshSource: false });
           batches += 1;
         }
-        console.info("[GPW SCHEDULED SYNC] projection", { name, batches, pending: result.pending,
-          fetched: result.fetched, created: result.created, errors: result.errors });
-        failed ||= result.errors > 0;
+        const laneState = await getSourceState();
+        const overlapDue = sourceSync?.overlapDue ?? Boolean(laneState.overlapIsStale);
+        const assessment = assessGpwSync({
+          batch: { errors: result.errors, pending: result.pending },
+          source: {
+            status: sourceSync?.status ?? laneState.status,
+            lastCheckedAt: laneState.lastCheckedAt,
+            lastSuccessAt: laneState.lastSuccessAt,
+            errors: sourceSync?.errors,
+            isStale: laneState.isStale,
+            locked: sourceSync?.locked ?? laneState.isRefreshing,
+            backfillComplete: sourceSync?.backfillComplete ?? (name === "meetings" ? undefined : laneState.backfillComplete),
+            nextBackfillCursor: sourceSync?.nextBackfillPage ?? (name === "meetings" ? undefined : laneState.nextBackfillPage),
+            overlapDue,
+            overlapComplete: sourceSync?.overlapDue ? sourceSync.overlapComplete : overlapDue ? false : undefined,
+          },
+          projections: { pending: result.pending, errors: result.errors,
+            unmatched: result.unmatched, reviewed: result.reviewed },
+        });
+        console.info("[GPW SCHEDULED SYNC] projection", {
+          name, batches, fetched: result.fetched, created: result.created,
+          batchStatus: assessment.batchStatus,
+          source: assessment.source,
+          historicalBackfill: assessment.historicalBackfill,
+          overlapRepair: assessment.overlapRepair,
+          projections: assessment.projections,
+          calendarCoverage: assessment.coverage.status,
+          sourceSync: sourceSync ? {
+            status: sourceSync.status,
+            pages: sourceSync.pagesRead,
+            candidates: sourceSync.candidates,
+            fetched: sourceSync.fetched,
+            parsed: sourceSync.parsed,
+            saved: sourceSync.saved,
+            duplicates: sourceSync.duplicates,
+            errors: sourceSync.errors,
+            overlapDue: sourceSync.overlapDue,
+            overlapComplete: sourceSync.overlapComplete,
+            backfillComplete: sourceSync.backfillComplete,
+            nextBackfillPage: sourceSync.nextBackfillPage,
+          } : undefined,
+        });
+        failed ||= assessment.batchStatus !== "BATCH_COMPLETE" ||
+          Boolean(sourceSync && (sourceSync.status !== "SUCCESS" || sourceSync.errors > 0 || sourceSync.locked ||
+            (sourceSync.overlapDue && !sourceSync.overlapComplete)));
       } catch (error) {
         failed = true;
         console.error("[GPW SCHEDULED SYNC] projection failed", {

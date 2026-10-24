@@ -8,6 +8,7 @@ import {
   type CorporateEventType,
   type CorporateEventsResponse,
   getCorporateEventIdentityKey,
+  resolveCorporateEventStatus,
   getDividendAmendmentEvidence,
   getStatutoryMeetingRegistrationDate,
   isNonBindingDividendDraftNotice,
@@ -861,16 +862,8 @@ const getGeneralMeetingBootstrapInstrumentIds = async (instrumentIds: string[]) 
 const toSourcePriority = (source: CorporateEventSourceReference, parsed: ParsedCorporateEvent) =>
   sourcePriority(source.sourceType, parsed.isScheduleChange, parsed.isCancellation);
 
-const getParsedEventStatus = (parsed: ParsedCorporateEvent): CorporateEventStatus =>
-  parsed.isCancellation
-    ? "CANCELLED"
-    : parsed.requiresReview
-      ? "UNKNOWN"
-    : parsed.eventType === "UPCOMING_DIVIDEND"
-    ? parsed.dividendStatus ?? "UNKNOWN"
-    : parsed.isScheduleChange
-      ? "CHANGED"
-      : "CONFIRMED";
+const getParsedEventStatus = (parsed: ParsedCorporateEvent, existingStatus?: CorporateEventStatus) =>
+  resolveCorporateEventStatus(existingStatus, parsed);
 
 const isParsedEventActive = (parsed: ParsedCorporateEvent) => !parsed.isCancellation;
 
@@ -1190,7 +1183,7 @@ const upsertParsedEvents = async (
           parsed.recordDate ?? null,
           parsed.paymentDate ?? null,
           parsed.dividendInstallment ?? null,
-          getParsedEventStatus(parsed),
+          getParsedEventStatus(parsed, existing.status as CorporateEventStatus),
           isParsedEventActive(parsed),
           batch.source.sourcePublishedAt ?? null,
           batch.source.sourceType,
@@ -1577,10 +1570,14 @@ export type GlobalGeneralMeetingSyncResult = {
   unmatched: number;
   errors: number;
   pending: number;
+  reviewed?: number;
+  /** Source ingestion status is kept separate from projection completion. */
+  sourceSync?: GpwGeneralMeetingSourceSyncResult;
 };
 
-// Re-evaluate previously successful documents after fixing wrapped PDF rows.
-const REPORT_SCHEDULE_PROJECTION_VERSION = 8;
+// Re-evaluate previously successful documents after the live 365-day audit
+// found persisted period labels that differ from their official schedules.
+const REPORT_SCHEDULE_PROJECTION_VERSION = 9;
 const REPORT_SCHEDULE_BATCH_SIZE = 100;
 const REPORT_SCHEDULE_UNMATCHED_RETRY_MS = 7 * 24 * 60 * 60 * 1_000;
 const REPORT_SCHEDULE_PARSE_RETRY_MS = 24 * 60 * 60 * 1_000;
@@ -1615,7 +1612,7 @@ export const synchronizeGlobalReportSchedules = ({ force = false, refreshSource 
 } = {}): Promise<GlobalGeneralMeetingSyncResult> => {
   if (globalReportScheduleSyncInFlight) return globalReportScheduleSyncInFlight;
   globalReportScheduleSyncInFlight = (async () => {
-    if (refreshSource) await synchronizeGpwReportScheduleReports();
+    const sourceSync = refreshSource ? await synchronizeGpwReportScheduleReports() : undefined;
     const publishedAfter = new Date(Date.now() - 730 * 24 * 60 * 60 * 1_000).toISOString();
     const unmatchedRetryBefore = new Date(Date.now() - REPORT_SCHEDULE_UNMATCHED_RETRY_MS).toISOString();
     const parseRetryBefore = new Date(Date.now() - REPORT_SCHEDULE_PARSE_RETRY_MS).toISOString();
@@ -1776,7 +1773,7 @@ export const synchronizeGlobalReportSchedules = ({ force = false, refreshSource 
     );
     const pending = Number(count?.count ?? 0);
     console.info(`[REPORT SCHEDULE SYNC] fetched=${reports.length} new=${created} duplicates=${duplicates} saved=${saved} reviewed=${reviewed} unmatched=${unmatched} pending=${pending} errors=${errors}`);
-    return { fetched: reports.length, created, duplicates, saved, reviewed, unmatched, errors, pending };
+    return { fetched: reports.length, created, duplicates, saved, reviewed, unmatched, errors, pending, sourceSync };
   })().finally(() => { globalReportScheduleSyncInFlight = null; });
   return globalReportScheduleSyncInFlight;
 };
@@ -1808,7 +1805,7 @@ export const getGlobalReportSchedules = async ({
 };
 
 // Re-evaluate old publications after correcting false cancellations and time parsing.
-const GENERAL_MEETING_PROJECTION_VERSION = 7;
+const GENERAL_MEETING_PROJECTION_VERSION = 8;
 // A batch is deliberately small enough to keep the authenticated calendar API
 // responsive; the versioned queue continues on the next poll until empty.
 const GENERAL_MEETING_PROJECTION_BATCH_SIZE = 100;
@@ -1845,7 +1842,7 @@ export const synchronizeGlobalGeneralMeetings = ({
   if (globalGeneralMeetingSyncInFlight) return globalGeneralMeetingSyncInFlight;
 
   globalGeneralMeetingSyncInFlight = (async () => {
-    if (refreshSource) await synchronizeGpwGeneralMeetingReports();
+    const sourceSync = refreshSource ? await synchronizeGpwGeneralMeetingReports() : undefined;
     const publishedAfter = new Date(Date.now() - 730 * 24 * 60 * 60 * 1_000).toISOString();
     const unmatchedRetryBefore = new Date(Date.now() - GENERAL_MEETING_UNMATCHED_RETRY_MS).toISOString();
     const reports = await query<GlobalGeneralMeetingReportRow>(
@@ -1907,6 +1904,7 @@ export const synchronizeGlobalGeneralMeetings = ({
     let saved = 0;
     let unmatched = 0;
     let errors = 0;
+    let reviewed = 0;
 
     for (const report of reports) {
       try {
@@ -1946,6 +1944,7 @@ export const synchronizeGlobalGeneralMeetings = ({
           await updateGeneralMeetingProjectionStatus(report.id, "NO_EVENT");
           continue;
         }
+        reviewed += events.filter((event) => event.requiresReview).length;
 
         const result = await withTransaction(async (transaction) => {
           await transaction.query<{ locked: number }>(
@@ -2027,8 +2026,8 @@ export const synchronizeGlobalGeneralMeetings = ({
       [publishedAfter, GENERAL_MEETING_PROJECTION_VERSION, unmatchedRetryBefore]
     );
     const pending = Number(pendingResult?.count ?? 0);
-    console.info(`[WZA SYNC] fetched=${reports.length} new=${created} duplicates=${duplicates} saved=${saved} unmatched=${unmatched} pending=${pending} errors=${errors}`);
-    return { fetched: reports.length, created, duplicates, saved, unmatched, errors, pending };
+    console.info(`[WZA SYNC] fetched=${reports.length} new=${created} duplicates=${duplicates} saved=${saved} reviewed=${reviewed} unmatched=${unmatched} pending=${pending} errors=${errors}`);
+    return { fetched: reports.length, created, duplicates, saved, unmatched, errors, pending, reviewed, sourceSync };
   })().finally(() => {
     globalGeneralMeetingSyncInFlight = null;
   });
@@ -2170,7 +2169,7 @@ export const synchronizeGlobalDividends = ({
   if (globalDividendSyncInFlight) return globalDividendSyncInFlight;
 
   globalDividendSyncInFlight = (async () => {
-    if (refreshSource) await synchronizeGpwDividendReports();
+    const sourceSync = refreshSource ? await synchronizeGpwDividendReports() : undefined;
     const publishedAfter = new Date(Date.now() - 730 * 24 * 60 * 60 * 1_000).toISOString();
     const unmatchedRetryBefore = new Date(Date.now() - DIVIDEND_UNMATCHED_RETRY_MS).toISOString();
     const reports = await query<GlobalGeneralMeetingReportRow>(
@@ -2224,6 +2223,7 @@ export const synchronizeGlobalDividends = ({
     let saved = 0;
     let unmatched = 0;
     let errors = 0;
+    let reviewed = 0;
 
     for (const report of reports) {
       try {
@@ -2301,6 +2301,7 @@ export const synchronizeGlobalDividends = ({
           await updateDividendProjectionStatus(report.id, "NO_EVENT");
           continue;
         }
+        reviewed += events.filter((event) => event.requiresReview).length;
 
         const result = await withTransaction(async (transaction) => {
           await transaction.query<{ locked: number }>(
@@ -2391,8 +2392,8 @@ export const synchronizeGlobalDividends = ({
       [publishedAfter, DIVIDEND_PROJECTION_VERSION, unmatchedRetryBefore]
     );
     const pending = Number(pendingResult?.count ?? 0);
-    console.info(`[DIVIDEND SYNC] fetched=${reports.length} new=${created} duplicates=${duplicates} saved=${saved} unmatched=${unmatched} pending=${pending} errors=${errors}`);
-    return { fetched: reports.length, created, duplicates, saved, unmatched, errors, pending };
+    console.info(`[DIVIDEND SYNC] fetched=${reports.length} new=${created} duplicates=${duplicates} saved=${saved} reviewed=${reviewed} unmatched=${unmatched} pending=${pending} errors=${errors}`);
+    return { fetched: reports.length, created, duplicates, saved, unmatched, errors, pending, reviewed, sourceSync };
   })().finally(() => {
     globalDividendSyncInFlight = null;
   });

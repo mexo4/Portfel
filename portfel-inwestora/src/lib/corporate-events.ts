@@ -232,6 +232,32 @@ export const getCorporateEventIdentityKey = (event: Pick<
   "eventType" | "fiscalPeriod" | "fiscalYear" | "fiscalYearLabel" | "eventIdentity"
 >) => event.eventIdentity ?? [event.eventType, event.fiscalPeriod ?? "", event.fiscalYearLabel ?? event.fiscalYear ?? ""].join(":");
 
+/** Preserve a previously source-confirmed dividend when a later linked notice
+ * updates its amount or tranche dates but does not restate the approval. The
+ * new notice remains UNKNOWN on its own; confirmation is inherited only while
+ * updating the same already-confirmed canonical event. */
+export const resolveCorporateEventStatus = (
+  existingStatus: CorporateEventStatus | string | undefined,
+  parsed: ParsedCorporateEvent
+): CorporateEventStatus => {
+  const incomingStatus: CorporateEventStatus = parsed.isCancellation
+    ? "CANCELLED"
+    : parsed.requiresReview
+      ? "UNKNOWN"
+      : parsed.eventType === "UPCOMING_DIVIDEND"
+        ? parsed.dividendStatus ?? "UNKNOWN"
+        : parsed.isScheduleChange
+          ? "CHANGED"
+          : "CONFIRMED";
+  if (
+    parsed.eventType === "UPCOMING_DIVIDEND" &&
+    !parsed.isCancellation &&
+    existingStatus === "CONFIRMED" &&
+    incomingStatus === "UNKNOWN"
+  ) return "CONFIRMED";
+  return incomingStatus;
+};
+
 const POLISH_MONTHS: Record<string, string> = {
   stycznia: "01",
   luty: "02",
@@ -465,6 +491,30 @@ export const getCandidateSegments = (text: string) => {
   let sectionType: CorporateEventType | null = null;
   for (let index = 0; index < lines.length; index += 1) {
     let line = lines[index];
+    // ESPI correction notices are sometimes extracted as wrapped prose rather
+    // than a single paragraph. Keep the old appointment and its replacement
+    // together when they belong to the same report, but stop before another
+    // report row/section so nearby dates cannot leak across events.
+    if (/^(?:zmiana|korekta)\s+terminu\b/iu.test(line) &&
+      isReportType(getEventType(line)) && extractPolishDates(line).length < 2) {
+      for (let continuation = 0; continuation < 3; continuation += 1) {
+        const next = lines[index + 1];
+        if (!next || isIndependentReportScheduleLine(next) ||
+          /^(?:raporty?\s+(?:roczne|kwartalne|p[oó]łroczne)|\d+[.)]\s+(?:raport|skonsolidowan|jednostkow))/iu.test(next)) break;
+        const normalizedNext = normalizeGeneralMeetingText(next);
+        const replacementStartsNext = /^(?:now(?:y|ego|ym|a)\s+termin|termin\s+publikacji\s+zostan)/iu.test(normalizedNext);
+        const hasOneDateAndReplacementCue = extractPolishDates(line).length === 1 && replacementStartsNext;
+        const isContinuationOfIncompleteSentence = extractPolishDates(line).length === 0 &&
+          /(?:mial|miala|mialo)\s+(?:byc\s+)?(?:opublikowan\w*|przekazan\w*|podan\w*)\s*$/iu.test(
+            normalizeGeneralMeetingText(line)
+          );
+        if (!hasOneDateAndReplacementCue && !isContinuationOfIncompleteSentence &&
+          !(extractPolishDates(line).length === 1 && /^(?:do|w\s+dniu|dnia)\b/iu.test(normalizedNext))) break;
+        line += ` ${next}`;
+        index += 1;
+        if (extractPolishDates(line).length >= 2) break;
+      }
+    }
     // A numbered section heading is not a report row. Treat it as context
     // before the continuation logic can swallow several following bullets.
     if (/^\d+[.)]\s+(?:(?:rozszerzone|skonsolidowane)\s+)*raporty\s+(?:roczne|kwartalne|półroczne)(?:\s+[^:]{0,50})?:\s*$/iu.test(line)) {
@@ -582,7 +632,7 @@ const getReportPublicationDate = (clause: string) => {
 
 const getExplicitReportPeriod = (clause: string) => {
   const context = clause.match(/\([^)]*(?:od\s+\d{1,2}|\d{1,2}[.\-/]\d{1,2}[.\-/]20\d{2}\s*[-–—])[^)]*\)/u)?.[0] ??
-    clause.match(/\bza\s+okres\s+od\s+[^.;]{0,100}\bdo\s+[^.;]{0,50}/iu)?.[0];
+    clause.match(/\b(?:(?:obejmuj\p{L}*|za|w)\s+)?okres(?:\s+od)?\s+[^;\n]{0,100}\bdo\s+[^;\n]{0,50}/iu)?.[0];
   const dates = context ? extractPolishDates(context) : [];
   if (dates.length >= 2) return { periodStart: dates[0], periodEnd: dates[1] };
   const calendarQuarters = Array.from(clause.matchAll(
@@ -728,8 +778,11 @@ const parseReportScheduleEvents = (text: string) => {
         const clauseYearLabel = getFiscalYearLabel(clause);
         const scheduleYears = scheduleYearLabel?.match(/20\d{2}/g)?.map(Number) ?? [];
         const clauseYears = clauseYearLabel?.match(/20\d{2}/g)?.map(Number) ?? [];
+        // Require the entire explicit fiscal-year pair to belong to the
+        // document-wide schedule range. Overlap on only the first year
+        // (e.g. 2026/2027 vs 2025/2026) must not relabel later report rows.
         const belongsToScheduleRange = scheduleYears.length === 2 &&
-          (!clauseYears.length || clauseYears.some((year) => scheduleYears.includes(year)));
+          (!clauseYears.length || clauseYears.every((year) => scheduleYears.includes(year)));
         return belongsToScheduleRange ? scheduleYearLabel : clauseYearLabel ?? scheduleYearLabel;
       })();
     const fiscalYear = fiscalYearLabel ? Number(fiscalYearLabel.slice(-4)) : undefined;
@@ -806,10 +859,10 @@ const GENERAL_MEETING_REFERENCE =
   /waln(?:e|ego|emu|ym|ych)?\s+zgromadzeni(?:e|a|u|em)?(?:\s+akcjonariuszy)?|\b(?:wza|zwz|zwza|nwz|agm|egm)\b|\b(?:annual|extraordinary|ordinary)\s+general\s+meeting\b|\bgeneral\s+meeting\b/iu;
 
 const GENERAL_MEETING_FALSE_NOTICE =
-  /opinia\s+(?:rady\s+nadzorczej|zarzadu)[\s\S]{0,240}?(?:waln\w*\s+zgromadzeni\w*|\b(?:wza|zwz|nwz)\b)|stanowisko\s+rady\s+nadzorczej[\s\S]{0,240}?(?:waln\w*\s+zgromadzeni\w*|\b(?:wza|zwz|nwz)\b)|projekt(?:y|u|em)?\s+uchwal|zgloszeni(?:e|a)\s+projektu\s+uchwal|(?:uzupelnieni|zmian)[eaęy]?\s+porzadku\s+obrad|zadani(?:e|a)\s+akcjonariusz|zgloszeni(?:e|a)\s+kandydat|wykaz\s+akcjonariusz|lista\s+akcjonariusz[^\n.]{0,100}(?:glos|procent|%)|tresc\s+uchwal\s+podjetych|uchwal(?:y|a)\s+podjet|wynik(?:i|ow)?\s+glosowa|po\s+(?:odbyciu|zakonczeniu)\s+(?:walnego|wza|zwz|nwz)|informacj[ae]\s+po\s+(?:walnym|wza|zwz|nwz)|(?:minutes|results?\s+of\s+voting|resolutions?\s+adopted|draft\s+resolutions?|candidates?\s+for\s+the\s+board|agenda\s+amendment)[^\n.]{0,100}(?:general\s+meeting|\b(?:agm|egm)\b)/iu;
+  /opinia\s+(?:rady\s+nadzorczej|zarzadu)[\s\S]{0,240}?(?:waln\w*\s+zgromadzeni\w*|\b(?:wza|zwz|nwz)\b)|stanowisko\s+rady\s+nadzorczej[\s\S]{0,240}?(?:waln\w*\s+zgromadzeni\w*|\b(?:wza|zwz|nwz)\b)|projekt(?:y|u|em)?\s+uchwal|zgloszeni(?:e|a)\s+projektu\s+uchwal|(?:uzupelnieni|zmian)[eaęy]?\s+porzadku\s+obrad|zadani(?:e|a)\s+akcjonariusz|zgloszeni(?:e|a)\s+kandydat|wykaz\s+akcjonariusz|lista\s+akcjonariusz[^\n.]{0,100}(?:glos|procent|%)|lista\s+akcjonariusz[^\n.]{0,120}uprawnion\w*[\s\S]{0,50}do\s+(?:udzialu|uczestnictwa)|tresc\s+uchwal\s+podjetych|uchwal(?:y|a)\s+podjet|wynik(?:i|ow)?\s+glosowa|po\s+(?:odbyciu|zakonczeniu)\s+(?:walnego|wza|zwz|nwz)|informacj[ae]\s+po\s+(?:walnym|wza|zwz|nwz)|(?:minutes|results?\s+of\s+voting|resolutions?\s+adopted|draft\s+resolutions?|candidates?\s+for\s+the\s+board|agenda\s+amendment)[^\n.]{0,100}(?:general\s+meeting|\b(?:agm|egm)\b)/iu;
 
 const GENERAL_MEETING_FORMAL_NOTICE =
-  /(?:ogloszeni[ae]\s+o\s+)?zwolani[eu]\s+(?:(?:zwyczajnego|nadzwyczajnego)\s+)?walnego\s+zgromadzenia|\bzwol(?:uje|a|al|ano|anie|aniu|ane|anego|anym)(?![\p{L}\p{N}_])[\s\S]{0,260}?(?:waln\w*\s+zgromadzeni\w*|\b(?:zwz|nwz|wza)\b)|(?:waln\w*\s+zgromadzeni\w*|\b(?:zwz|nwz)\b)[\s\S]{0,180}?(?:zostanie\s+zwolan\w*|zwolan\w*\s+na)|(?:zarzad|spolka|emitent)[\s\S]{0,160}?informuje[\s\S]{0,220}?(?:waln\w*\s+zgromadzeni\w*|\b(?:zwz|nwz)\b)[\s\S]{0,100}?odbedzie\s+sie|(?:informacj\w*\s+o\s+terminie|notice\s+(?:of|on)\s+(?:the\s+)?date)[\s\S]{0,180}?(?:waln\w*\s+zgromadzeni\w*|\b(?:zwz|nwz|wza|agm|egm)\b)|(?:notice\s+(?:of|convening)\s+(?:the\s+)?(?:annual|extraordinary|ordinary\s+)?general\s+meeting|(?:annual|extraordinary|ordinary)\s+general\s+meeting[\s\S]{0,180}?(?:will\s+be\s+held|is\s+convened|shall\s+be\s+held)|(?:board|company|issuer)[\s\S]{0,120}?(?:convenes|hereby\s+convenes)[\s\S]{0,150}?general\s+meeting)/iu;
+  /(?:ogloszeni[ae]\s+o\s+)?zwolani[eu]\s+(?:(?:zwyczajnego|nadzwyczajnego)\s+)?walnego\s+zgromadzenia|\bzwol(?:uje|a|al|ano|anie|aniu|ane|anego|anym)(?![\p{L}\p{N}_])[\s\S]{0,260}?(?:waln\w*\s+zgromadzeni\w*|\b(?:zwz|nwz|wza)\b)|(?:waln\w*\s+zgromadzeni\w*|\b(?:zwz|nwz)\b)[\s\S]{0,180}?(?:zostanie\s+zwolan\w*|zwolan\w*\s+na)|(?:zarzad|spolka|emitent)[\s\S]{0,160}?informuje[\s\S]{0,220}?(?:waln\w*\s+zgromadzeni\w*|\b(?:zwz|nwz)\b)[\s\S]{0,100}?odbed(?:zie|a)\s+sie|(?:informacj\w*\s+o\s+terminie|notice\s+(?:of|on)\s+(?:the\s+)?date)[\s\S]{0,180}?(?:waln\w*\s+zgromadzeni\w*|\b(?:zwz|nwz|wza|agm|egm)\b)|(?:notice\s+(?:of|convening)\s+(?:the\s+)?(?:annual|extraordinary|ordinary\s+)?general\s+meeting|(?:annual|extraordinary|ordinary)\s+general\s+meeting[\s\S]{0,180}?(?:will\s+be\s+held|is\s+convened|shall\s+be\s+held)|(?:board|company|issuer)[\s\S]{0,120}?(?:convenes|hereby\s+convenes)[\s\S]{0,150}?general\s+meeting)/iu;
 
 const GENERAL_MEETING_RESCHEDULE_NOTICE =
   /zmian(?:a|y|ie|e)\s+terminu[\s\S]{0,180}?(?:waln\w*\s+zgromadzeni\w*|\b(?:wza|zwz|nwz)\b)|(?:waln\w*\s+zgromadzeni\w*|\b(?:wza|zwz|nwz)\b)[\s\S]{0,180}?zmian(?:a|y|ie|e)\s+terminu|(?:przeloz|przenies|zmienia\s+termin)[\s\S]{0,180}?(?:waln\w*\s+zgromadzeni\w*|\b(?:wza|zwz|nwz)\b)|(?:waln\w*\s+zgromadzeni\w*|\b(?:wza|zwz|nwz)\b)[\s\S]{0,180}?(?:przeloz|przenies|zmienia\s+termin)|(?:change|reschedul|postpon)[^\n.]{0,160}(?:general\s+meeting|\b(?:agm|egm)\b)|(?:general\s+meeting|\b(?:agm|egm)\b)[^\n.]{0,160}(?:change|reschedul|postpon)/iu;
@@ -838,9 +891,11 @@ const getGeneralMeetingIdentity = (
 
 const getSemanticMeetingDate = (text: string) => {
   const keywordPatterns = [
-    /\b(?:odbedzie\s+sie|jest\s+zwolan\w*)\s+w\s+(?:poniedzialek|wtorek|srode|czwartek|piatek|sobote|niedziele)\s*/iu,
+    /\b(?:odbed(?:zie|a)\s+sie|jest\s+zwolan\w*)\s+w\s+(?:poniedzialek|wtorek|srode|czwartek|piatek|sobote|niedziele)\s*/iu,
     /\bzwol(?:uje|al|ano|ane|anego|anym|anie|aniu)(?![\p{L}\p{N}_])[\s\S]{0,180}?\b(?:na\s+dzien|w\s+dniu|dnia)(?![\p{L}\p{N}_])/iu,
-    /(?:waln\w*\s+zgromadzeni\w*|\b(?:wza|zwz|nwz)\b)[\s\S]{0,160}?\b(?:odbedzie\s+sie|zwolan\w*)\b[\s\S]{0,80}?\b(?:w\s+dniu|dnia|na\s+dzien)(?![\p{L}\p{N}_])/iu,
+    // Issuer notices often shorten "na dzień 14 października" to "na 14 października".
+    /\bzwol(?:uje|al|ano|ane|anego|anym|anie|aniu)(?![\p{L}\p{N}_])[\s\S]{0,180}?\bna\s+(?:dzien\s+)?/iu,
+    /(?:waln\w*\s+zgromadzeni\w*|\b(?:wza|zwz|nwz)\b)[\s\S]{0,160}?\b(?:odbed(?:zie|a)\s+sie|zwolan\w*)\b[\s\S]{0,80}?\b(?:w\s+dniu|dnia|na\s+dzien)(?![\p{L}\p{N}_])/iu,
     /(?:waln\w*\s+zgromadzeni\w*|\b(?:wza|zwz|nwz)\b)[\s\S]{0,100}?\bw\s+dniu\b/iu,
     /(?:general\s+meeting|\b(?:agm|egm)\b)[\s\S]{0,180}?\b(?:will\s+be\s+held|is\s+scheduled\s+to\s+take\s+place|shall\s+be\s+held|takes\s+place)\s+(?:on\s+)?/iu,
     /\b(?:will\s+be\s+held|is\s+scheduled\s+to\s+take\s+place|shall\s+be\s+held)\s+on\s+/iu,
@@ -855,6 +910,19 @@ const getSemanticMeetingDate = (text: string) => {
 };
 
 const getOfficialGeneralMeetingRegistrationDate = (text: string) => {
+  // Notices may state the legal eligibility rule rather than label a date as
+  // "registration date": "prawo uczestniczenia mają ... tj. na dzień X".
+  // Bind the date only when the explicit cross-reference (tj.) follows the
+  // shareholder-eligibility phrase, so the meeting date itself is not reused.
+  const normalizedText = normalizeGeneralMeetingText(text);
+  for (const reference of normalizedText.matchAll(
+    /\bprawo\s+(?:uczestniczenia|uczestnictwa)\b[\s\S]{0,260}?\btj\.?\s+na\s+(?:dzien\s+)?/giu
+  )) {
+    const start = (reference.index ?? 0) + reference[0].length;
+    const date = extractPolishDates(normalizedText.slice(start, start + 100))[0];
+    if (date) return date;
+  }
+
   // English-language issuer notices often use an explicit label-first form
   // such as "Record date: September 15, 2026".
   for (const reference of text.matchAll(/(?:record|registration)\s+date\s*:?\s*/giu)) {
@@ -1222,6 +1290,13 @@ const getDividendStatus = (text: string): Extract<
     return "CONFIRMED";
   }
 
+  // A board may itself adopt a resolution changing its recommendation. That
+  // is still only a proposal when the same notice explicitly reserves the
+  // final dividend decision to a future shareholders' meeting.
+  if (/ostateczn\w*\s+decyzj\w*[\s\S]{0,240}?(?:podejmie[\s\S]{0,100}?waln\w*\s+zgromadzen|zostanie\s+podj\w*[\s\S]{0,100}?waln\w*\s+zgromadzen)/u.test(folded)) {
+    return "PROPOSED";
+  }
+
   // A board can adopt its own recommendation, but the report may explicitly
   // say the dividend still requires a future shareholder decision. Such a
   // board resolution is not an approved dividend distribution.
@@ -1237,7 +1312,9 @@ const getDividendStatus = (text: string): Extract<
   const approvedByMeeting = /waln\w*\s+zgromadzeni\w*[\s\S]{0,180}?podj\w*[\s\S]{0,80}?uchwa\w*[\s\S]{0,100}?dywidend/u.test(normalized);
   const adoptedProfitResolution = /waln\w*\s+zgromadzeni\w*[\s\S]{0,180}?podj\w*[\s\S]{0,180}?uchwa\w*[\s\S]{0,120}?(?:podzia\w*\s+zysku|dywidend)/u.test(normalized);
   if (conditionalAdvance && !finalApproval && !approvedByMeeting) return "PROPOSED";
-  if (finalApproval || approvedByMeeting || adoptedProfitResolution) return "CONFIRMED";
+  const adoptedMeetingDistribution =
+    /waln\w*\s+zgromadzeni\w*[\s\S]{0,260}?uchwa\w*[\s\S]{0,260}?(?:ustal\w*|przeznacz\w*|postanowi\w*)[\s\S]{0,180}?(?:wyp\w*\s+dywidend\w*|dywidend\w*)/u.test(normalized);
+  if (finalApproval || adoptedMeetingDistribution || approvedByMeeting || adoptedProfitResolution) return "CONFIRMED";
 
   // A proposal often says that the final decision will be taken by the AGM.
   // A bare mention of the meeting must never promote it to a confirmed cash
@@ -1280,14 +1357,16 @@ const getDividendCurrency = (text: string, amountIndex: number) => {
 };
 
 const getDividendAmounts = (text: string): ParsedDividendAmount[] => {
+  const sectionDeclaresInstallments =
+    /\b(?:w\s+(?:\d+\s+)?(?:r[oó]wn\p{L}*\s+)?rat\p{L}*|\d+\s+(?:r[oó]wn\p{L}*\s+)?rat\p{L}*|(?:pierwsz\p{L}*|drug\p{L}*|kolejn\p{L}*)\s+transz\p{L}*|transz\p{L}*)\b/iu.test(text);
   const perSharePattern =
     /(?:^|[^\d])(\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{1,4})?)\s*(?:zł(?:ot(?:y|a|ych|e))?|zl(?:otych)?|pln|eur|usd|gbp)\s*(?:\([^)]{0,80}\)\s*)?(?:brutto\s*)?(?:na|\/)\s*(?:(?:jedn[aą]|1)\s*)?akcj/gi;
   const amountAfterPerSharePattern =
     /(?:na|dla)\s*(?:(?:jedn[aą]|1)\s*)?akcj[ęe]\s*(?:(?:przeznacza\s+się|przypada|wynosi|w\s+wysokości)\s*)?(\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{1,4})?)\s*(?:zł(?:ot(?:y|a|ych|e))?|zl(?:otych)?|pln|eur|usd|gbp)/gi;
   const unicodePerSharePattern =
-    /(?:^|[^\d])(\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{1,4})?)\s*(?:z\u0142(?:ot(?:y|a|ych|e))?|zl(?:otych)?|pln|eur|usd|gbp)\s*(?:\([^)]{0,80}\)\s*)?(?:brutto\s*)?(?:na|za|\/)\s*(?:(?:jedn(?:a|\u0105)|ka\u017cd(?:a|\u0105)|1)\s*)?akcj/giu;
+    /(?:^|[^\d])(\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{1,4})?)\s*(?:z\u0142(?:ot(?:y|a|ych|e))?|zl(?:otych)?|pln|eur|usd|gbp)\s*(?:\([^)]{0,80}\)\s*)?(?:brutto\s*)?(?:na|za|\/)\s*(?:(?:jedn(?:a|\u0105)|ka\u017cd(?:a|\u0105)|1)\s*)?(?:uprawnion\p{L}*\s+)?akcj/giu;
   const unicodeAmountAfterPerSharePattern =
-    /(?:na|dla)\s*(?:(?:jedn(?:a|\u0105)|1)\s*)?akcj(?:\u0119|e)\s*(?:(?:przeznacza\s+si\u0119|przypada|wynosi|w\s+wysoko\u015Bci)\s*)?(\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{1,4})?)\s*(?:z\u0142(?:ot(?:y|a|ych|e))?|zl(?:otych)?|pln|eur|usd|gbp)/giu;
+    /(?:na|dla)\s*(?:(?:jedn(?:a|\u0105)|1)\s*)?(?:uprawnion\p{L}*\s+)?akcj(?:\u0119|e)\s*(?:(?:przeznacza\s+si\u0119|przypada|wynosi|w\s+wysoko\u015Bci)\s*)?(\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{1,4})?)\s*(?:z\u0142(?:ot(?:y|a|ych|e))?|zl(?:otych)?|pln|eur|usd|gbp)/giu;
   const eachShareAmountPattern =
     /(?:na|dla)\s+ka\u017cd(?:a|\u0105)\s+akcj(?:\u0119|e)\s+(?:przypada|wynosi|wyp\u0142ac\w*)\s+(\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{1,4})?)\s*(?:z\u0142|zl|pln|eur|usd|gbp)/giu;
   const labeledAmountAfterPerSharePattern =
@@ -1328,17 +1407,24 @@ const getDividendAmounts = (text: string): ParsedDividendAmount[] => {
       amounts.push({
         amount,
         index,
-        installment: /rat[ayęei]/i.test(nearby),
+        // The opening sentence may declare the number of installments while
+        // later rows list amounts far beyond the local text window.
+        installment: sectionDeclaresInstallments || /rat[ayęei]/i.test(nearby),
         currency: getDividendCurrency(text, index),
       });
     }
   }
 
-  const uniqueAmounts = amounts.filter(
-    (candidate, index) =>
-      !amounts.slice(0, index).some(
-        (other) => other.amount === candidate.amount && Math.abs(other.index - candidate.index) < 64
-      )
+  const uniqueAmounts = amounts.filter((candidate, index) =>
+    !amounts.slice(0, index).some((other) => {
+      if (other.amount !== candidate.amount || Math.abs(other.index - candidate.index) >= 64) return false;
+      const previousPaymentDate = getPaymentDateBeforeAmount(text, other.index);
+      const currentPaymentDate = getPaymentDateBeforeAmount(text, candidate.index);
+      // Repeated tranche amounts are meaningful when each occurrence is
+      // attached to a different issuer-announced payment date. Only collapse
+      // nearby regex matches for the same mention/payment, not separate rows.
+      return !previousPaymentDate || !currentPaymentDate || previousPaymentDate === currentPaymentDate;
+    })
   );
 
   const installmentsWithoutTotal = uniqueAmounts.filter((candidate) => {
@@ -1355,6 +1441,45 @@ const getDividendAmounts = (text: string): ParsedDividendAmount[] => {
   return installments.length > 0 ? installments : installmentsWithoutTotal;
 };
 
+const getDatedDividendInstallments = (
+  text: string,
+  amounts: ParsedDividendAmount[],
+  recordDate: string | undefined,
+  fiscalYear: number | undefined,
+  dividendStatus: ParsedCorporateEvent["dividendStatus"],
+  scheduleChange: boolean,
+  totalOverride?: number
+): ParsedCorporateEvent[] => {
+  const unique = new Map<string, { amount: ParsedDividendAmount; paymentDate: string }>();
+  for (const amount of amounts) {
+    const paymentDate = getPaymentDateBeforeAmount(text, amount.index);
+    if (!paymentDate) continue;
+    unique.set(`${paymentDate}:${amount.amount}`, { amount, paymentDate });
+  }
+  const installments = [...unique.values()].sort((left, right) =>
+    left.paymentDate.localeCompare(right.paymentDate)
+  );
+  if (installments.length < 2) return [];
+
+  const total = totalOverride ?? Math.round(
+    installments.reduce((sum, installment) => sum + installment.amount.amount, 0) * 10_000
+  ) / 10_000;
+  return installments.map(({ amount, paymentDate }, index) => ({
+    eventType: "UPCOMING_DIVIDEND",
+    eventDate: recordDate ?? paymentDate,
+    fiscalYear,
+    isScheduleChange: scheduleChange,
+    eventIdentity: ["dividend", fiscalYear ?? (recordDate ?? paymentDate).slice(0, 4), index + 1].join(":"),
+    dividendPerShare: amount.amount,
+    dividendTotalPerShare: total,
+    dividendCurrency: amount.currency,
+    recordDate,
+    paymentDate,
+    dividendInstallment: index + 1,
+    dividendStatus,
+  }));
+};
+
 const getAdvanceAdjustedDividend = (
   text: string,
   amounts: ParsedDividendAmount[]
@@ -1362,9 +1487,15 @@ const getAdvanceAdjustedDividend = (
   const normalized = text.toLocaleLowerCase("pl-PL");
   if (!/zaliczk/u.test(normalized) || !/(?:pomniejsz|wcześniej wypłac|uprzednio wypłac|wypłacon.{0,40}zaliczk)/u.test(normalized)) return null;
 
-  const advanceAmounts = amounts.filter((entry) =>
-    /zaliczk/u.test(normalized.slice(Math.max(0, entry.index - 140), entry.index + 180))
-  );
+  const advanceAmounts = amounts.filter((entry) => {
+    // Bind the amount to evidence before the number itself. Looking forward
+    // let a later clause saying "the dividend is reduced by an advance" mark
+    // the already-declared full dividend as the advance too (e.g. LPP's 900
+    // PLN total followed by its previously paid 400 PLN advance).
+    const precedingMention = normalized.slice(Math.max(0, entry.index - 300), entry.index);
+    return /zaliczk/u.test(precedingMention) &&
+      /(?:wyp(?:ł|l)acon|zaliczk\w*\s+(?:wynios|wypłac)|advance\s+(?:paid|distributed))/u.test(precedingMention);
+  });
   const totalAmounts = amounts.filter((entry) => !advanceAmounts.includes(entry));
   if (!advanceAmounts.length || !totalAmounts.length) return null;
 
@@ -1376,6 +1507,32 @@ const getAdvanceAdjustedDividend = (
   return { amount: { ...sourceAmount, amount: remaining, installment: false }, total, advance };
 };
 
+const getExplicitRemainingPerShareDividend = (text: string) => {
+  // Issuers sometimes report both the full annual dividend per share and the
+  // smaller amount still payable after advances. In that wording, the annual
+  // total is not a second future payment. Only accept this adjustment when the
+  // remaining per-share amount and the original per-share total are each
+  // explicitly labelled in the source text.
+  const remainingMatch = text.match(
+    /pozostaj\p{L}*\s+do\s+wyp(?:\u0142|l)at\p{L}*[\s\S]{0,300}?(?:to\s+jest|tj\.?|czyli)\s*(?:w\s+kwocie\s*)?(\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{1,4})?)\s*(?:z\u0142|zl|pln)\s*(?:na|\/)\s*(?:(?:jedn[a\u0105]|1)\s*)?akcj/iu
+  );
+  const totalMatch = text.match(
+    /(?:warto\u015B\u0107|wysoko\u015B\u0107)\s+dywidend\p{L}*[\s\S]{0,100}?\bna\s+(?:jedn[a\u0105]|1)\s+akcj\p{L}*[\s\S]{0,50}?(?:wynies\p{L}*|wynos\p{L}*)\s*(\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{1,4})?)\s*(?:z\u0142|zl|pln)/iu
+  );
+  if (!remainingMatch || !totalMatch) return null;
+
+  const remaining = toAmount(remainingMatch[1] ?? "");
+  const total = toAmount(totalMatch[1] ?? "");
+  if (!remaining || !total || remaining > total) return null;
+
+  const index = remainingMatch.index ?? 0;
+  return {
+    amount: { amount: remaining, index, installment: false, currency: "PLN" },
+    total,
+    advance: Math.round((total - remaining) * 10_000) / 10_000,
+  };
+};
+
 const getDividendRecordDate = (text: string) => {
   // In resolutions the date often precedes its label. Looking only after
   // "dzień dywidendy" can incorrectly borrow the later payment date.
@@ -1385,6 +1542,8 @@ const getDividendRecordDate = (text: string) => {
     const index = match.index ?? 0;
     const before = text.slice(Math.max(0, index - 120), index);
     const after = text.slice(index + match[0].length, index + match[0].length + 110);
+    if (/\b(?:na|jako|ustalaj[aą]c|wyznaczaj[aą]c)\s+dzień\s*$/iu.test(before) &&
+      /^\s*\(?\s*(?:r\.?\s*)?(?:[_,;–-]\s*)?(?:jako\s+)?dzień\s+(?:nabycia\s+praw|ustalenia\s+praw|dywidendy)/iu.test(after)) return date;
     if (/\b(?:na|jako|ustalaj[aą]c|wyznaczaj[aą]c)\s+dzie[nń]\s*$/iu.test(before) &&
       /^\s*(?:r\.?\s*)?(?:[_,;–-]\s*)?(?:jako\s+)?dzie[nń]\s+(?:nabycia\s+praw|ustalenia\s+praw|dywidendy)/iu.test(after)) return date;
   }
@@ -1459,11 +1618,26 @@ const getDividendRecordDate = (text: string) => {
 const getPaymentDateBeforeAmount = (text: string, amountIndex: number) => {
   const contextStart = Math.max(0, amountIndex - 280);
   const context = text.slice(contextStart, amountIndex);
+  const amountAndSuffix = text.slice(amountIndex, amountIndex + 100);
   const dates = Array.from(context.matchAll(UNICODE_DATE_PATTERN)).flatMap((match) => {
     const date = getIsoDateFromMatch(match);
     if (!date) return [];
-    const afterDate = context.slice((match.index ?? 0) + match[0].length);
-    if (!/^\s*(?:r\.?\s*)?[-–—:;,]?\s*(?:wypłat|rat|transz)/iu.test(afterDate)) return [];
+    const localIndex = match.index ?? 0;
+    const afterDate = context.slice(localIndex + match[0].length);
+    const nextDate = afterDate.search(UNICODE_DATE_PATTERN);
+    // Only the nearest prior date can belong to this amount. Appending the
+    // amount suffix allows a date-first row ("18 Aug - 0.72 PLN/share") to
+    // be checked, while the nearest-date rule prevents borrowing an earlier
+    // record date across a later payment date.
+    if (nextDate >= 0) return [];
+    const paymentRow = `${afterDate}${amountAndSuffix}`;
+    const beforeDate = context.slice(Math.max(0, localIndex - 240), localIndex);
+    const perShareAmount = /\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{1,4})?\s*(?:zÅ‚|zł|zl|PLN|EUR|USD|GBP)(?:[^\n;]{0,50})?(?:na|\/)\s*(?:(?:jedn[aą]|1)\s*)?akcj/iu.test(paymentRow) ||
+      (/^\s*\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{1,4})?\s*(?:zÅ‚|zł|zl|PLN|EUR|USD|GBP)\b/iu.test(amountAndSuffix) &&
+        /(?:na|dla)\s*(?:(?:jedn[aą]|1)\s*)?akcj/iu.test(beforeDate));
+    const scheduledBefore = /(?:w\s+(?:\d+\s+)?(?:r[oó]wn\p{L}*\s+)?ratach|w\s+dniach|termin\p{L}*\s+wyp.{0,3}at|w\s+ramach\s+wyp.{0,3}at|w\s+terminie|transz\p{L}*)/iu.test(beforeDate);
+    const explicitPaymentRow = /^\s*(?:r\.?\s*)?[-–—:;,]?\s*wyp.{0,3}at\p{L}*/iu.test(paymentRow);
+    if (!perShareAmount || (!scheduledBefore && !explicitPaymentRow)) return [];
     return [{ date, index: match.index ?? 0 }];
   });
   return dates.at(-1)?.date;
@@ -1538,7 +1712,8 @@ const getUpcomingDividendEvents = (text: string): ParsedCorporateEvent[] => {
   const candidates = sections.flatMap<ParsedCorporateEvent>(({ section, statusContext }) => {
     const parsedAmounts = getDividendAmounts(section);
     if (parsedAmounts.length === 0 && !cancellation) return [];
-    const advanceAdjustment = getAdvanceAdjustedDividend(section, parsedAmounts);
+    const advanceAdjustment = getExplicitRemainingPerShareDividend(section) ??
+      getAdvanceAdjustedDividend(section, parsedAmounts);
     const amounts = advanceAdjustment ? [advanceAdjustment.amount] : parsedAmounts;
     const fiscalYear = getDividendFiscalYear(section);
 
@@ -1549,12 +1724,26 @@ const getUpcomingDividendEvents = (text: string): ParsedCorporateEvent[] => {
     );
     const paymentDate = getDividendPaymentDateBeforeLabel(section) ?? getDateAfterKeyword(
       section,
-      /(?:termin|dzie[ńn]|dniem)\s+wyp.{0,3}at(?:y|a)|wyp.{0,3}at(?:a|y)\s+(?:(?:dywidendy|środków)\s+)?(?:nastąpi|zostanie|ustalon|w\s+terminie)|payment\s*date/iu,
+      /(?:termin(?:u)?|dzie[ńn]|dniem)\s+wyp.{0,3}at\p{L}*|wyp.{0,3}at\p{L}*\s+(?:(?:dywidendy|środków)\s+)?(?:nastąpi|zostanie|ustalon|w\s+terminie)|payment\s*date/iu,
       300
     );
     const sectionStatus = getDividendStatus(section);
     const contextStatus = sectionStatus === "UNKNOWN" ? getDividendStatus(statusContext) : sectionStatus;
     const dividendStatus = contextStatus === "UNKNOWN" ? documentStatus : contextStatus;
+
+    // Resolve installment amounts from the actual payment-date/amount rows
+    // before the broad single-dividend fallback can borrow the record date or
+    // the informational annual total as a payment date.
+    const explicitDatedInstallments = getDatedDividendInstallments(
+      section,
+      amounts,
+      recordDate,
+      fiscalYear,
+      dividendStatus,
+      DIVIDEND_SCHEDULE_CHANGE.test(section),
+      advanceAdjustment?.total
+    );
+    if (explicitDatedInstallments.length >= 2) return explicitDatedInstallments;
 
     // Some resolutions state the total per share once, then list payment
     // tranches as "date (amount)". Only split when at least two dated amounts
@@ -1591,12 +1780,19 @@ const getUpcomingDividendEvents = (text: string): ParsedCorporateEvent[] => {
     const eventAmounts = amounts.length > 0
       ? amounts
       : [{ amount: undefined, index: 0, installment: false, currency: "PLN" }];
+    // Some correction notices only restate the individual tranche amounts,
+    // not the revised aggregate. When every parsed amount is explicitly tied
+    // to an installment, their sum is a safe derived total (unlike summing
+    // arbitrary per-share mentions in an ordinary dividend notice).
+    const installmentTotal = amounts.length > 1 && amounts.every((entry) => entry.installment)
+      ? Math.round(amounts.reduce((sum, entry) => sum + entry.amount, 0) * 10_000) / 10_000
+      : undefined;
     return eventAmounts.flatMap((entry, index) => {
       const localContextAfter = section.slice(entry.index, entry.index + 260);
       const localContextBefore = section.slice(Math.max(0, entry.index - 240), entry.index);
       const localPaymentDateAfter = getDateAfterKeyword(
         localContextAfter,
-        /(?:termin|dzie[ńn]|dniem)\s+wyp.{0,3}at(?:y|a)|zostanie\s+wyp.{0,3}acon\w*|payment\s*date/iu,
+        /(?:termin(?:u)?|dzie[ńn]|dniem)\s+wyp.{0,3}at\p{L}*|zostanie\s+wyp.{0,3}acon\w*|payment\s*date/iu,
         250,
         "first"
       );
@@ -1609,7 +1805,7 @@ const getUpcomingDividendEvents = (text: string): ParsedCorporateEvent[] => {
       );
       const localPaymentDateBefore = getDateAfterKeyword(
         localContextBefore,
-        /w\s+terminie|(?:termin|dzie.)\s+wyp.{0,3}at(?:y|a)/iu,
+        /w\s+terminie|(?:termin(?:u)?|dzie.)\s+wyp.{0,3}at\p{L}*/iu,
         240,
         "last"
       );
@@ -1624,7 +1820,7 @@ const getUpcomingDividendEvents = (text: string): ParsedCorporateEvent[] => {
         getPaymentDateBeforeAmount(section, entry.index) ??
         getDateAfterKeyword(
           localContextAfter,
-          /(?:termin|dzie[ńn]|dniem)\s+wyp.{0,3}at(?:y|a)|payment\s*date/iu,
+          /(?:termin(?:u)?|dzie[ńn]|dniem)\s+wyp.{0,3}at\p{L}*|payment\s*date/iu,
           250,
           "first"
         ) ??
@@ -1657,7 +1853,7 @@ const getUpcomingDividendEvents = (text: string): ParsedCorporateEvent[] => {
           installment ?? "single",
         ].join(":"),
         dividendPerShare: entry.amount,
-        dividendTotalPerShare: advanceAdjustment?.total,
+        dividendTotalPerShare: advanceAdjustment?.total ?? installmentTotal,
         dividendAdvancePerShare: advanceAdjustment?.advance,
         dividendCurrency: entry.currency,
         exDividendDate,
@@ -1749,8 +1945,54 @@ const parseReportScheduleCorrectionEvents = (text: string): ParsedCorporateEvent
 
       const between = context.slice(firstDate.end, secondDate.start);
       const beforeFirst = context.slice(Math.max(0, firstDate.start - 40), firstDate.start);
-      const isOldToNew = (/\bna\s*$/iu.test(between) && /\bz\s+(?:dnia\s*)?$/iu.test(beforeFirst)) ||
-        /\b(?:now\p{L}*\s+termin\p{L}*|zmienion\p{L}*\s+termin\p{L}*|przesuni\p{L}*\s+na|zostaj\p{L}*[\s\S]{0,70}\bprzesuni\p{L}*|zostal\p{L}*[\s\S]{0,70}\bprzesuni\p{L}*|ulega\p{L}*[\s\S]{0,70}\bprzesuni\p{L}*)\b/iu.test(between);
+      const priorDateContext = context.slice(Math.max(0, firstDate.start - 220), firstDate.start);
+      const normalizedBeforeFirst = normalizeGeneralMeetingText(beforeFirst);
+      const normalizedPriorDateContext = normalizeGeneralMeetingText(priorDateContext);
+      const isReportCitationDate =
+        /\braport\w*[\s\S]{0,55}\b(?:nr\s*)?\d{1,4}\/20\d{2}\s+z\s+dnia\s*$/iu.test(normalizedBeforeFirst) ||
+        /\breport\w*[\s\S]{0,55}\b(?:no\.?\s*)?\d{1,4}\/20\d{2}\s+(?:dated|of)\s*$/iu.test(normalizedBeforeFirst);
+      const oldDateIsExplicitlyAnchored =
+        (!isReportCitationDate && /\bz\s+(?:(?:dnia|daty|terminu)\s*)?$/iu.test(beforeFirst)) ||
+        /\b(?:pierwotn\p{L}*|dotychczas\p{L}*|poprzedni\p{L}*|originally|previously)\b/iu.test(beforeFirst);
+      const newDateIsExplicitlyAnchored = /\b(?:na|do)\s+(?:(?:dzień|datę|termin)\s*)?$/iu.test(between);
+      // Some ESPI corrections first restate the date that had been set in a
+      // prior report ("... wyznaczonego ... na dzień 10 ... . Nowy termin ...
+      // na dzień 8 ..."). The prior date is anchored by the "nowy termin"
+      // replacement structure even though the source does not say "z dnia".
+      const previousAppointmentReplacedByNewTerm =
+        /\bna\s+(?:(?:dzień|datę|termin)\s*)?$/iu.test(beforeFirst) &&
+        /\bnow(?:y|ego|ym)\s+termin\p{L}*[\s\S]{0,120}?\b(?:na|do)\s+(?:(?:dzień|datę|termin)\s*)?$/iu.test(between);
+      const previousAppointmentReplacedByDisplacement =
+        /\bna\s+(?:(?:dzień|datę|termin)\s*)?$/iu.test(beforeFirst) &&
+        /\b(?:zostaj\p{L}*|zosta\p{L}*|uleg\p{L}*)\s+[\s\S]{0,120}?\bprzesuni\p{L}*[\s\S]{0,80}?\bna\s+(?:(?:dzień|datę|termin)\s*)?$/iu.test(between);
+      // In full ESPI sentences, the grammatical cue can precede the old date
+      // by a subject/verb phrase. Keep it bounded to this date pair, while
+      // retaining the independent old/new date anchors above to prevent theft.
+      const datePairContext = context.slice(Math.max(0, firstDate.start - 320), secondDate.end);
+      const correctionVerbBindsThePair =
+        /\b(?:zmian\p{L}*|zmien\p{L}*|przesuni\p{L}*|zostaj\p{L}*|ulega\p{L}*|ustal\p{L}*|change[sd]?|reschedul\p{L}*)\b/iu.test(datePairContext);
+      // Some issuer corrections describe the old date as the date that
+      // "was to take place" and then state that the report "will be delivered
+      // ... on [date]", without using the usual z dnia / na dzień pair.
+      // Require both grammatical anchors around adjacent dates and a nearby
+      // correction verb; this avoids treating fiscal-period dates as changes.
+      const normalizedBetween = normalizeGeneralMeetingText(between);
+      const priorScheduleCue =
+        /\b(?:mial|miala|mialo)\s+(?:nastapic|przypasc)\s*$/iu.test(normalizedPriorDateContext) ||
+        /\b(?:mial|miala|mialo)\s+(?:byc\s+)?(?:opublikowan\w*|przekazan\w*|podan\w*)\s*$/iu.test(normalizedPriorDateContext) ||
+        /\b(?:mial|miala|mialo)\s+(?:byc\s+)?(?:opublikowan\w*|przekazan\w*|podan\w*)[\s\S]{0,140}\b(?:w\s+dniu|na\s+dzien)\s*$/iu.test(normalizedPriorDateContext) ||
+        /\b(?:was|had\s+been)\s+(?:scheduled|set|due)\s+(?:to\s+)?(?:take\s+place|be\s+published)\s*$/iu.test(normalizedPriorDateContext);
+      const replacementPublicationCue =
+        /\b(?:zostanie|bedzie)\s+(?:opublikowan\w*|przekazan\w*|podan\w*)[\s\S]{0,160}\b(?:w\s+dniu|dnia|na\s+dzien)\s*$/iu.test(normalizedBetween) ||
+        /\bnow(?:y|ego|ym)\s+termin\p{L}*[\s\S]{0,140}\b(?:jest|bedzie)\s*$/iu.test(normalizedBetween) ||
+        /\b(?:will\s+be\s+(?:published|delivered|announced)|is\s+scheduled\s+for)\b[\s\S]{0,120}\b(?:on|in)\s*$/iu.test(normalizedBetween);
+      // Both the old date and the new date must be locally anchored. A broad
+      // “rescheduled” word anywhere between two dates used to bind a fiscal
+      // period end to an old publication date (e.g. 30 June → 21 August) and
+      // silently choose the wrong previous date.
+      const isOldToNew = (oldDateIsExplicitlyAnchored || previousAppointmentReplacedByNewTerm ||
+        previousAppointmentReplacedByDisplacement || priorScheduleCue) &&
+        (newDateIsExplicitlyAnchored || replacementPublicationCue) && correctionVerbBindsThePair;
       const isNewInsteadOfOld = /\bzamiast\b/iu.test(between);
       if (!isOldToNew && !isNewInsteadOfOld) continue;
 
@@ -1854,6 +2096,23 @@ export const parseCorporateEventDocument = (document: string): ParsedCorporateEv
           isScheduleChange: true,
         };
         events.set(getCorporateEventIdentityKey(event), event);
+      }
+    }
+    if (events.size === 0) {
+      // Some correction notices publish a replacement schedule as a new list
+      // rather than repeating every old/new date pair (“koryguje informacje…
+      // kolejne raporty … w następujących terminach”). Once explicitly inside
+      // that replacement section, parse its rows as the authoritative schedule;
+      // never mix in the superseded rows preceding it.
+      const replacementSchedule = text.match(
+        /\b(?:koryguj\p{L}*\s+(?:informacj\p{L}*|harmonogram\p{L}*|termin\p{L}*)|aktualizuj\p{L}*\s+(?:harmonogram\p{L}*|termin\p{L}*)|(?:nowe|aktualne|skorygowane)\s+terminy\s+(?:publikacji\s+)?raport\p{L}*)/iu
+      );
+      if (replacementSchedule?.index !== undefined) {
+        const replacementEvents = parseReportScheduleEvents(text.slice(replacementSchedule.index));
+        for (const event of replacementEvents) {
+          const corrected = { ...event, isScheduleChange: true };
+          events.set(getCorporateEventIdentityKey(corrected), corrected);
+        }
       }
     }
   } else {

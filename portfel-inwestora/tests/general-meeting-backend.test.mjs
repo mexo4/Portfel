@@ -113,9 +113,10 @@ test("a newly added WZA provider bootstraps even when the aggregate instrument c
 });
 
 test("WZA persistence keeps identity/history, meeting fields and cancelled inactive state", async () => {
-  const [provider, db] = await Promise.all([
+  const [provider, db, parser] = await Promise.all([
     readFile(new URL("../src/lib/server/corporate-events.ts", import.meta.url), "utf8"),
     readFile(new URL("../src/lib/server/db.ts", import.meta.url), "utf8"),
+    readFile(new URL("../src/lib/corporate-events.ts", import.meta.url), "utf8"),
   ]);
 
   assert.match(provider, /event_date = ANY\(\$2::text\[\]\)/);
@@ -127,7 +128,8 @@ test("WZA persistence keeps identity/history, meeting fields and cancelled inact
   assert.match(provider, /active = \$17/);
   assert.match(provider, /INSERT INTO corporate_event_history/);
   assert.match(provider, /if \(isCancellation\) return 500/);
-  assert.match(provider, /parsed\.isCancellation\s*\? "CANCELLED"/);
+  assert.match(provider, /resolveCorporateEventStatus\(existingStatus, parsed\)/);
+  assert.match(parser, /parsed\.isCancellation\s*\?\s*"CANCELLED"/);
   assert.match(provider, /isParsedEventActive\(parsed\)/);
   assert.match(db, /general_meeting_type TEXT/);
   assert.match(db, /registration_date TEXT/);
@@ -159,7 +161,7 @@ test("global WZA projection is independent from portfolio membership and logs sy
   assert.match(provider, /synchronizeGlobalGeneralMeetings/);
   assert.match(provider, /corporate_events_projection_status/);
   assert.match(provider, /GENERAL_MEETING_PROJECTION_BATCH_SIZE = 100/);
-  assert.match(provider, /GENERAL_MEETING_PROJECTION_VERSION = 7/);
+  assert.match(provider, /GENERAL_MEETING_PROJECTION_VERSION = 8/);
   assert.match(provider, /report\.source_id NOT LIKE 'newconnect:%'/);
   assert.match(provider, /report\.published_at >= \$1/);
   assert.match(provider, /report\.category = 'GENERAL_MEETING'/);
@@ -183,7 +185,7 @@ test("global WZA projection is independent from portfolio membership and logs sy
   assert.match(api, /globalMeetingProjectionPending = projection\.pending > 0/);
   assert.match(api, /isRefreshing: initialState\.isRefreshing \|\| shouldRefreshSource \|\| globalMeetingProjectionInFlight/);
   assert.match(provider, /getGlobalGeneralMeetingSourceState = getGpwGeneralMeetingSyncState/);
-  assert.match(provider, /if \(refreshSource\) await synchronizeGpwGeneralMeetingReports\(\)/);
+  assert.match(provider, /const sourceSync = refreshSource \? await synchronizeGpwGeneralMeetingReports\(\) : undefined/);
   assert.match(espi, /eligibleRows < 50/);
   assert.match(espi, /createHash\("sha256"\)/);
   assert.match(espi, /body_text IS DISTINCT FROM \$12/);

@@ -8,5 +8,5 @@ Type=oneshot
 User=ubuntu
 WorkingDirectory=/opt/mexo/repo/portfel-inwestora
 EnvironmentFile=/etc/mexo/gpw-calendar-sync.env
-ExecStart=/usr/bin/node --experimental-strip-types --import ./tests/register-alias-loader.mjs ./scripts/run-gpw-calendar-sync.mjs --run
+ExecStart=/usr/bin/node /opt/mexo/repo/portfel-inwestora/scripts/run-gpw-calendar-sync-release.mjs
 TimeoutStartSec=30min

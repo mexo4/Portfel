@@ -1569,7 +1569,7 @@ export type GlobalGeneralMeetingSyncResult = {
 };
 
 // Re-evaluate previously successful documents after fixing wrapped PDF rows.
-const REPORT_SCHEDULE_PROJECTION_VERSION = 6;
+const REPORT_SCHEDULE_PROJECTION_VERSION = 7;
 const REPORT_SCHEDULE_BATCH_SIZE = 100;
 const REPORT_SCHEDULE_UNMATCHED_RETRY_MS = 7 * 24 * 60 * 60 * 1_000;
 const REPORT_SCHEDULE_PARSE_RETRY_MS = 24 * 60 * 60 * 1_000;
@@ -1788,7 +1788,7 @@ export const getGlobalReportSchedules = async ({
 };
 
 // Re-evaluate old publications after correcting false cancellations and time parsing.
-const GENERAL_MEETING_PROJECTION_VERSION = 5;
+const GENERAL_MEETING_PROJECTION_VERSION = 6;
 // A batch is deliberately small enough to keep the authenticated calendar API
 // responsive; the versioned queue continues on the next poll until empty.
 const GENERAL_MEETING_PROJECTION_BATCH_SIZE = 100;

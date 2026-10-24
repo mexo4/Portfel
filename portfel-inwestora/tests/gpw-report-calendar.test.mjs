@@ -33,6 +33,7 @@ test("report route selects only official GPW report event types at the read laye
 
 test("report schedule pending count uses contiguous PostgreSQL parameter indexes", () => {
   const service = read("../src/lib/server/corporate-events.ts");
+  assert.match(service, /REPORT_SCHEDULE_PROJECTION_VERSION = 7/);
   const start = service.indexOf("export const synchronizeGlobalReportSchedules");
   const end = service.indexOf("export const getGlobalReportScheduleSourceState", start);
   const sync = service.slice(start, end);

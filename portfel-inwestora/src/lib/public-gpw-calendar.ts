@@ -1,5 +1,4 @@
 /** Pure, server/client-neutral helpers for the public GPW events calendar. */
-import { getStatutoryMeetingRegistrationDate } from "@/lib/corporate-events";
 export const GPW_CALENDAR_CATEGORIES = ["all", "reports", "meetings", "dividends"] as const;
 export type GpwCalendarCategory = (typeof GPW_CALENDAR_CATEGORIES)[number];
 
@@ -207,9 +206,9 @@ export const expandGpwStoredCalendarEvent = (
     fiscalPeriod: row.fiscal_period ?? undefined,
     fiscalYear: row.fiscal_year ?? undefined,
     fiscalYearLabel: row.fiscal_year_label ?? undefined,
-    registrationDate: row.event_type === "GENERAL_MEETING"
-      ? row.registration_date ?? getStatutoryMeetingRegistrationDate(row.event_date)
-      : undefined,
+    // Do not apply the Polish 16-day default to foreign issuers. A date is
+    // displayed only when an official source explicitly provides it.
+    registrationDate: row.event_type === "GENERAL_MEETING" ? row.registration_date ?? undefined : undefined,
     dividendPerShare,
     dividendCurrency: row.dividend_currency ?? undefined,
     recordDate: row.record_date ?? undefined,

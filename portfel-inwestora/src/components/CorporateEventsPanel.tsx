@@ -55,6 +55,9 @@ const getRegistrationCountdown = (registrationDate?: string) => {
 };
 
 const formatEventTime = (eventTime: string) => {
+  // Preserve source-zone context and review annotations instead of silently
+  // reducing e.g. "14:00 CEST (ambiguous)" to a misleading local time.
+  if (!/^\d{1,2}:\d{2}$/.test(eventTime.trim())) return eventTime.trim();
   const match = eventTime.match(/^(\d{1,2}):(\d{2})/);
   return match ? `${match[1].padStart(2, "0")}:${match[2]}` : eventTime;
 };
@@ -389,9 +392,13 @@ export default function CorporateEventsPanel({ portfolioId, portfolioIds, varian
                     {event.eventTime ? (
                       <>
                         <span aria-hidden="true">·</span>
-                        <time dateTime={`${event.eventDate}T${event.eventTime}`}>
-                          godz. {formatEventTime(event.eventTime)}
-                        </time>
+                        {/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(event.eventTime) ? (
+                          <time dateTime={`${event.eventDate}T${event.eventTime}`}>
+                            godz. {formatEventTime(event.eventTime)}
+                          </time>
+                        ) : (
+                          <span>godz. {formatEventTime(event.eventTime)}</span>
+                        )}
                       </>
                     ) : null}
                     <span aria-hidden="true">·</span>

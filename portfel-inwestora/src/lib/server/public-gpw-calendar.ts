@@ -1,5 +1,6 @@
 import { unstable_cache } from "next/cache";
 import { query } from "@/lib/server/db";
+import { PUBLIC_GPW_EVENTS_CACHE_TAG } from "@/lib/server/public-gpw-cache";
 import type { CorporateEventType } from "@/lib/corporate-events";
 import {
   expandGpwStoredCalendarEvent,
@@ -77,7 +78,7 @@ const readCalendarMonth = unstable_cache(
     return { events, truncated, latestRecordUpdatedAt: updatedDates.at(-1) };
   },
   ["mexo-public-gpw-calendar-v2"],
-  { revalidate: 2 * 60 }
+  { revalidate: 2 * 60, tags: [PUBLIC_GPW_EVENTS_CACHE_TAG] }
 );
 
 export const getPublicGpwCalendarMonth = async (

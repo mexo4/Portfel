@@ -43,7 +43,7 @@ export async function GET(request: Request) {
       headers: {
         "Content-Type": "text/calendar; charset=utf-8",
         "Content-Disposition": 'inline; filename="mexo-gpw.ics"',
-        "Cache-Control": "public, max-age=300, s-maxage=300, stale-while-revalidate=600",
+        "Cache-Control": "public, max-age=60, s-maxage=60, stale-while-revalidate=120",
         "X-Content-Type-Options": "nosniff",
       },
     });

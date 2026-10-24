@@ -46,6 +46,10 @@ test("quarterly report produces a correct all-day event and exclusive DTEND", ()
   assert.match(ics, /DTEND;VALUE=DATE:20261106\r\n/);
   assert.match(ics, /TRANSP:TRANSPARENT\r\n/);
 });
+test("cross-year fiscal-year labels survive the ICS presentation", () => {
+  const ics = makeIcal({ event_type: "ANNUAL_REPORT", fiscal_period: "FY", fiscal_year: 2026, fiscal_year_label: "2025/2026" });
+  assert.match(ics, /SUMMARY:Dino Polska \(DNP\).*Raport roczny FY 2025\/2026/);
+});
 test("year rollover and leap date produce valid next-day ranges", () => {
   assert.match(makeIcal({ event_date: "2026-12-31" }), /DTEND;VALUE=DATE:20270101/);
   const ics = serializeIcal(toIcalMilestones(row({event_date:"2028-02-29"}), "2028-01-01", "2028-12-31"), ["reports"]);
@@ -134,7 +138,8 @@ test("public endpoint is bounded, cacheable, and avoids user/portfolio data", as
   assert.doesNotMatch(source,/\bJOIN\s+(?:users|watchlist|portfolio_assets)\b/i);
   assert.match(route,/text\/calendar/);
   assert.match(route,/503/);
-  assert.match(route,/s-maxage=300/);
+  assert.match(route,/s-maxage=60/);
+  assert.match(source,/PUBLIC_GPW_EVENTS_CACHE_TAG/);
 });
 test("subscriber UI includes all categories and supports Apple, Google and Outlook", async () => {
   const source=await readFile(new URL("../src/components/PublicCalendarSubscription.tsx",import.meta.url),"utf8");

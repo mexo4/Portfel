@@ -105,6 +105,15 @@ test("meeting subtype labels, categories and proposed status are accurate", () =
   assert.equal(getGpwEventStatusLabel("PROPOSED"), "Propozycja");
 });
 
+test("foreign or unverified meetings do not receive a guessed Polish registration date", () => {
+  const meeting = expandGpwStoredCalendarEvent({
+    ...dividend, id: "foreign-meeting", event_type: "GENERAL_MEETING",
+    event_date: "2026-11-18", general_meeting_type: "ZWZ",
+    registration_date: null, payment_date: null, record_date: null,
+  }, "2026-11-01", "2026-11-30")[0];
+  assert.equal(meeting.registrationDate, undefined);
+});
+
 test("unverified or cancelled sources cannot create public calendar entries", () => {
   for (const source_url of ["javascript:alert(1)", "http://example.org", "https://localhost/test", "https://127.0.0.1/x", "https://10.0.0.2/path", "https://u:p@example.com/path", "garbage"]) {
     assert.equal(expandGpwStoredCalendarEvent({ ...dividend, source_url }, "2026-10-01", "2026-10-31").length, 0);

@@ -13,6 +13,7 @@ export type IcalSourceRow = {
   event_time: string | null;
   fiscal_period: string | null;
   fiscal_year: number | null;
+  fiscal_year_label?: string | null;
   general_meeting_type: "ZWZ" | "NWZ" | null;
   dividend_per_share: number | string | null;
   dividend_currency: string | null;
@@ -186,7 +187,8 @@ export const toIcalMilestones = (row: IcalSourceRow, from: string, to: string): 
     const typeLabel = row.event_type === "ANNUAL_REPORT" ? "Raport roczny" :
       row.event_type === "HALF_YEAR_REPORT" ? "Raport półroczny" : "Raport kwartalny";
     const period = row.fiscal_period?.trim() || "";
-    const year = row.fiscal_year && !period.includes(String(row.fiscal_year)) ? ` ${row.fiscal_year}` : "";
+    const fiscalYearLabel = row.fiscal_year_label?.trim() || (row.fiscal_year ? String(row.fiscal_year) : "");
+    const year = fiscalYearLabel && !period.includes(fiscalYearLabel) ? ` ${fiscalYearLabel}` : "";
     add("report", row.event_date, `${issuer} — ${typeLabel}${period ? ` ${period}` : ""}${year}`, common);
   }
   return events;

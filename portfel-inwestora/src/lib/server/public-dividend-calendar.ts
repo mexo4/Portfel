@@ -1,5 +1,6 @@
 import { unstable_cache } from "next/cache";
 import { query } from "@/lib/server/db";
+import { PUBLIC_GPW_EVENTS_CACHE_TAG } from "@/lib/server/public-gpw-cache";
 import {
   toPublicDividend,
   type DividendView,
@@ -81,7 +82,7 @@ const readPublicDividendWindow = unstable_cache(
     return { dividends, truncated, latestRecordUpdatedAt: changed.at(-1) };
   },
   ["mexo-public-dividend-calendar-v1"],
-  { revalidate: 15 * 60 }
+  { revalidate: 15 * 60, tags: [PUBLIC_GPW_EVENTS_CACHE_TAG] }
 );
 
 export const getPublicDividendCalendar = (

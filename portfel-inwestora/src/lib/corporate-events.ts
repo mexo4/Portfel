@@ -781,6 +781,12 @@ const parseReportScheduleEvents = (text: string) => {
         // Require the entire explicit fiscal-year pair to belong to the
         // document-wide schedule range. Overlap on only the first year
         // (e.g. 2026/2027 vs 2025/2026) must not relabel later report rows.
+        // A report row may explicitly refer to the *previous* fiscal year
+        // (most commonly the annual report published early in the next FY).
+        // Preserve that row-level pair even when it falls outside the current
+        // document-wide schedule range. The schedule heading is only a
+        // fallback for rows without an explicit fiscal-year label.
+        if (clauseYearLabel?.includes("/")) return clauseYearLabel;
         const belongsToScheduleRange = scheduleYears.length === 2 &&
           (!clauseYears.length || clauseYears.every((year) => scheduleYears.includes(year)));
         return belongsToScheduleRange ? scheduleYearLabel : clauseYearLabel ?? scheduleYearLabel;
@@ -1062,6 +1068,43 @@ const getWarsawDateTime = (meetingDate: string, value?: ParsedMeetingTime) => {
   };
 };
 
+const getWarsawOffsetMinutes = (date: string) => {
+  const instant = new Date(`${date}T12:00:00.000Z`);
+  if (!Number.isFinite(instant.getTime())) return undefined;
+  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Europe/Warsaw", year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+  }).formatToParts(instant).map(({ type, value }) => [type, value]));
+  const wallAsUtc = Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day), Number(parts.hour), Number(parts.minute));
+  return (wallAsUtc - instant.getTime()) / 60_000;
+};
+
+type ResolvedMeetingDateTime = NonNullable<ReturnType<typeof getWarsawDateTime>> & {
+  requiresReview?: boolean;
+  reviewReasons?: string[];
+};
+
+const resolveMeetingDateTime = (meetingDate: string, value?: ParsedMeetingTime): ResolvedMeetingDateTime | undefined => {
+  const sourceOffset = value?.timeZone ? MEETING_TIME_ZONE_OFFSETS[value.timeZone] : undefined;
+  const warsawOffset = getWarsawOffsetMinutes(meetingDate);
+  const seasonalAbbreviationConflict = (value?.timeZone === "CEST" || value?.timeZone === "CET") &&
+    sourceOffset !== undefined && warsawOffset !== undefined && sourceOffset !== warsawOffset;
+
+  if (seasonalAbbreviationConflict && value) {
+    // CEST in November (or CET in the Warsaw summer) can mean either a
+    // mistaken zone label or a literal fixed UTC offset. Keep exactly what
+    // the issuer published and do not manufacture a Warsaw wall time.
+    return {
+      eventDate: meetingDate,
+      eventTime: `${value.time} ${value.timeZone} (strefa źródłowa niejednoznaczna)`,
+      requiresReview: true,
+      reviewReasons: ["MEETING_TIME_ZONE_CONFLICT"],
+    };
+  }
+
+  return getWarsawDateTime(meetingDate, value);
+};
+
 const getGeneralMeetingTime = (text: string, meetingDate: string): ParsedMeetingTime | undefined => {
   const dateOccurrences = Array.from(text.matchAll(UNICODE_DATE_PATTERN))
     .map((match) => ({ date: getIsoDateFromMatch(match), index: match.index ?? 0 }))
@@ -1207,7 +1250,7 @@ const getGeneralMeetingEvents = (text: string): ParsedCorporateEvent[] => {
   if (reschedule) {
     const { previousEventDate, eventDate } = getGeneralMeetingRescheduleDates(meetingText);
     if (!previousEventDate || !eventDate || previousEventDate === eventDate) return [];
-    const resolvedDateTime = getWarsawDateTime(eventDate, getGeneralMeetingTime(meetingText, eventDate));
+    const resolvedDateTime = resolveMeetingDateTime(eventDate, getGeneralMeetingTime(meetingText, eventDate));
 
     return [{
       eventType: "GENERAL_MEETING",
@@ -1221,6 +1264,10 @@ const getGeneralMeetingEvents = (text: string): ParsedCorporateEvent[] => {
       registrationDate: getOfficialGeneralMeetingRegistrationDate(meetingText),
       isCancellation: false,
       eventIdentity: getGeneralMeetingIdentity(meetingType, previousEventDate),
+      ...(resolvedDateTime?.requiresReview ? {
+        requiresReview: true,
+        reviewReasons: resolvedDateTime.reviewReasons,
+      } : {}),
     }];
   }
 
@@ -1235,7 +1282,7 @@ const getGeneralMeetingEvents = (text: string): ParsedCorporateEvent[] => {
 
   const eventDate = getSemanticMeetingDate(meetingText);
   if (!eventDate) return [];
-  const resolvedDateTime = getWarsawDateTime(eventDate, getGeneralMeetingTime(meetingText, eventDate));
+  const resolvedDateTime = resolveMeetingDateTime(eventDate, getGeneralMeetingTime(meetingText, eventDate));
   const normalizedEventDate = resolvedDateTime?.eventDate ?? eventDate;
 
   // Some formal notices convene an ordinary/annual and an extraordinary
@@ -1247,7 +1294,7 @@ const getGeneralMeetingEvents = (text: string): ParsedCorporateEvent[] => {
   if (formalMatch && hasOrdinaryMeeting && hasExtraordinaryMeeting) {
     const registrationDate = getOfficialGeneralMeetingRegistrationDate(meetingText);
     return (["ZWZ", "NWZ"] as const).map((type) => {
-      const typeDateTime = getWarsawDateTime(eventDate, getGeneralMeetingTimeForType(meetingText, type, eventDate));
+      const typeDateTime = resolveMeetingDateTime(eventDate, getGeneralMeetingTimeForType(meetingText, type, eventDate));
       const resolvedEventDate = typeDateTime?.eventDate ?? eventDate;
       return {
         eventType: "GENERAL_MEETING" as const,
@@ -1260,6 +1307,10 @@ const getGeneralMeetingEvents = (text: string): ParsedCorporateEvent[] => {
         registrationDate,
         isCancellation: false,
         eventIdentity: getGeneralMeetingIdentity(type, eventDate),
+        ...(typeDateTime?.requiresReview ? {
+          requiresReview: true,
+          reviewReasons: typeDateTime.reviewReasons,
+        } : {}),
       };
     });
   }
@@ -1275,6 +1326,10 @@ const getGeneralMeetingEvents = (text: string): ParsedCorporateEvent[] => {
     registrationDate: getOfficialGeneralMeetingRegistrationDate(meetingText),
     isCancellation: cancellation,
     eventIdentity: getGeneralMeetingIdentity(meetingType, eventDate),
+    ...(resolvedDateTime?.requiresReview ? {
+      requiresReview: true,
+      reviewReasons: resolvedDateTime.reviewReasons,
+    } : {}),
   }];
 };
 

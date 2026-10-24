@@ -2,6 +2,7 @@ import { getCorporateEventIdentityKey, type ParsedCorporateEvent } from "@/lib/c
 
 export type StoredReportProjection = {
   id: string;
+  event_type: ParsedCorporateEvent["eventType"];
   event_identity: string;
   event_date: string;
   source_urls: string[];
@@ -35,12 +36,34 @@ export const planReportScheduleReprojection = (
   const identities = new Set(reportEvents.map(getCorporateEventIdentityKey));
   const publishedDates = new Set(reportEvents.map((event) => event.eventDate));
   const oldIdentities = new Set(existing.map((event) => event.event_identity));
+  const explicitCorrections = new Map<string, ParsedCorporateEvent[]>();
+  for (const event of reportEvents) {
+    if (!event.previousEventDate) continue;
+    const key = `${event.eventType}:${event.previousEventDate}`;
+    explicitCorrections.set(key, [...(explicitCorrections.get(key) ?? []), event]);
+  }
+  const correctedProjectionIds = new Set<string>();
+  const correctedIdentities = new Set<string>();
+  for (const projection of existing) {
+    const key = `${projection.event_type}:${projection.event_date}`;
+    const corrections = explicitCorrections.get(key) ?? [];
+    const candidates = existing.filter((candidate) =>
+      candidate.event_type === projection.event_type && candidate.event_date === projection.event_date
+    );
+    if (corrections.length === 1 && candidates.length === 1 &&
+      projection.source_urls.length === 1 && projection.source_urls[0] === sourceUrl) {
+      correctedProjectionIds.add(projection.id);
+      correctedIdentities.add(getCorporateEventIdentityKey(corrections[0]!));
+    }
+  }
   const plan: ReportReprojectionPlan = {
     deactivateIds: [], retainedIds: [], ambiguousIds: [],
-    missingIdentities: [...identities].filter((identity) => !oldIdentities.has(identity)),
+    missingIdentities: [...identities].filter((identity) =>
+      !oldIdentities.has(identity) && !correctedIdentities.has(identity)
+    ),
   };
   for (const event of existing) {
-    if (identities.has(event.event_identity) || !parseComplete || reportEvents.length === 0) {
+    if (identities.has(event.event_identity) || correctedProjectionIds.has(event.id) || !parseComplete || reportEvents.length === 0) {
       plan.retainedIds.push(event.id);
       continue;
     }

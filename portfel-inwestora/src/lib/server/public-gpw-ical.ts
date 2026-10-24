@@ -1,5 +1,6 @@
 import { unstable_cache } from "next/cache";
 import { query } from "@/lib/server/db";
+import { PUBLIC_GPW_EVENTS_CACHE_TAG } from "@/lib/server/public-gpw-cache";
 import {
   ICAL_CATEGORIES,
   toIcalMilestones,
@@ -26,7 +27,7 @@ const loadIcalWindow = unstable_cache(
       `
         SELECT event.id, issuer.ticker, issuer.company_name,
                event.event_type, event.event_date, event.event_time,
-               event.fiscal_period, event.fiscal_year, event.general_meeting_type,
+               event.fiscal_period, event.fiscal_year, event.fiscal_year_label, event.general_meeting_type,
                event.dividend_per_share, event.dividend_currency,
                event.record_date, event.payment_date, event.status,
                event.active, event.updated_at,
@@ -63,8 +64,8 @@ const loadIcalWindow = unstable_cache(
     if (rows.length > ROW_LIMIT) throw new Error("GPW_ICAL_RESULT_LIMIT");
     return rows.flatMap((row) => toIcalMilestones(row, from, to));
   },
-  ["mexo-public-gpw-ical-v2"],
-  { revalidate: 5 * 60 },
+  ["mexo-public-gpw-ical-v3"],
+  { revalidate: 5 * 60, tags: [PUBLIC_GPW_EVENTS_CACHE_TAG] },
 );
 
 export const readPublicIcalEvents = (

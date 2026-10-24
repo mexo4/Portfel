@@ -542,7 +542,7 @@ export const getCandidateSegments = (text: string) => {
     }
     if (isReportType(getEventType(line)) && extractPolishDates(line).length === 0) {
       const next = lines[index + 1];
-      if (next && /^(?:[-–—:]?\s*\d{1,2}(?:[.\-/]|\s+\p{L})|w\s+dniu\b|dnia\b|termin\s+publikacji\b)/iu.test(next)) {
+      if (next && /^(?:[-–—:]?\s*)?(?:\d{1,2}(?:[.\-/]|\s+\p{L})|w\s+dniu\b|dnia\b|termin\s+publikacji\b)/iu.test(next)) {
         segments.push({ text: `${line} ${next}`, sectionType });
         index += 1;
         continue;
@@ -585,6 +585,17 @@ const getExplicitReportPeriod = (clause: string) => {
     clause.match(/\bza\s+okres\s+od\s+[^.;]{0,100}\bdo\s+[^.;]{0,50}/iu)?.[0];
   const dates = context ? extractPolishDates(context) : [];
   if (dates.length >= 2) return { periodStart: dates[0], periodEnd: dates[1] };
+  const calendarQuarters = Array.from(clause.matchAll(
+    /\b(i{1,3}|iv|[1-4])\.?\s+kwartał(?:u)?\s+roku\s+kalendarzow\w*\s+(20\d{2})/giu
+  ));
+  const calendarQuarter = calendarQuarters.at(-1);
+  if (calendarQuarter) {
+    const quarter = ({ i: 1, ii: 2, iii: 3, iv: 4, "1": 1, "2": 2, "3": 3, "4": 4 } as const)[
+      calendarQuarter[1]!.toLowerCase() as "i" | "ii" | "iii" | "iv" | "1" | "2" | "3" | "4"
+    ];
+    const endMonthDay: Record<number, string> = { 1: "03-31", 2: "06-30", 3: "09-30", 4: "12-31" };
+    return { periodEnd: `${calendarQuarter[2]}-${endMonthDay[quarter]}` };
+  }
   const asOfDate = clause.match(/\btj\.?\s+na\s+dzień\s+[^.;]{0,45}/iu)?.[0];
   if (asOfDate) return { periodEnd: extractPolishDates(asOfDate)[0] };
   const endContext = clause.match(/\b(?:kończąc\w*\s+się|zakończon\w*)\s+(?:w\s+dniu\s+)?[^)]{0,45}/iu)?.[0];
@@ -613,7 +624,38 @@ const splitIndependentReportMentions = (text: string) => {
   return anchors.map((anchor, index) => text.slice(anchor.start, anchors[index + 1]?.start ?? text.length).trim()).filter(Boolean);
 };
 
-const getReportScheduleReviewReasons = (event: ParsedCorporateEvent) => {
+const getExplicitNonCalendarFiscalYears = (text: string) => {
+  const dateToken = String.raw`(?:\d{1,2}\s+[\p{L}]+\s+20\d{2}(?:\s*(?:r\.?|roku))?|\d{1,2}[.\-/]\d{1,2}[.\-/]20\d{2})`;
+  const fiscalYearRanges = text.matchAll(
+    new RegExp(
+      String.raw`\broku\s+(?:obrotow\p{L}*|finansow\p{L}*)[^;\n]{0,220}?\b(?:trwaj\p{L}*\s+)?od\s+(${dateToken})\s+do\s+(${dateToken})`,
+      "giu"
+    )
+  );
+  const years = new Set<number>();
+  for (const match of fiscalYearRanges) {
+    const start = extractPolishDates(match[1] ?? "")[0];
+    const end = extractPolishDates(match[2] ?? "")[0];
+    if (!start || !end) continue;
+    const startMonthDay = start.slice(5);
+    const endMonthDay = end.slice(5);
+    if (startMonthDay !== "01-01" || endMonthDay !== "12-31") {
+      years.add(Number(start.slice(0, 4)));
+      years.add(Number(end.slice(0, 4)));
+    }
+  }
+  return years;
+};
+
+const isNonCalendarFiscalYearEvent = (event: ParsedCorporateEvent, fiscalYears: ReadonlySet<number>) => {
+  const eventYears = (event.fiscalYearLabel ?? String(event.fiscalYear ?? "")).match(/20\d{2}/g)?.map(Number) ?? [];
+  return eventYears.some((year) => fiscalYears.has(year));
+};
+
+const getReportScheduleReviewReasons = (
+  event: ParsedCorporateEvent,
+  nonCalendarFiscalYears: ReadonlySet<number> = new Set()
+) => {
   const reasons: string[] = [];
   if (!event.fiscalPeriod) reasons.push("PERIOD_NOT_EXPLICIT");
   if (!event.fiscalYearLabel && !event.fiscalYear) reasons.push("FISCAL_YEAR_NOT_EXPLICIT");
@@ -625,7 +667,7 @@ const getReportScheduleReviewReasons = (event: ParsedCorporateEvent) => {
     if (eventYear < earliest - 1 || eventYear > latest + 1) reasons.push("PUBLICATION_YEAR_CONFLICTS_WITH_PERIOD");
     // Calendar-year periods can be checked conservatively. For non-calendar
     // years we use only source-provided periodEnd and never infer a year end.
-    if (years.length === 1 && event.fiscalPeriod) {
+    if (years.length === 1 && event.fiscalPeriod && !isNonCalendarFiscalYearEvent(event, nonCalendarFiscalYears)) {
       const endMonthDay: Record<string, string> = { Q1: "03-31", Q2: "06-30", H1: "06-30", Q3: "09-30", Q4: "12-31", FY: "12-31" };
       const periodEnd = event.periodEnd ?? (endMonthDay[event.fiscalPeriod] ? `${years[0]}-${endMonthDay[event.fiscalPeriod]}` : undefined);
       if (periodEnd && event.eventDate > periodEnd) {
@@ -637,13 +679,17 @@ const getReportScheduleReviewReasons = (event: ParsedCorporateEvent) => {
   return reasons;
 };
 
-const assessReportScheduleEvent = (event: ParsedCorporateEvent): ParsedCorporateEvent => {
-  const reviewReasons = getReportScheduleReviewReasons(event);
+const assessReportScheduleEvent = (
+  event: ParsedCorporateEvent,
+  nonCalendarFiscalYears: ReadonlySet<number> = new Set()
+): ParsedCorporateEvent => {
+  const reviewReasons = getReportScheduleReviewReasons(event, nonCalendarFiscalYears);
   return reviewReasons.length ? { ...event, requiresReview: true, reviewReasons } : event;
 };
 
 const parseReportScheduleEvents = (text: string) => {
   const events = new Map<string, ParsedCorporateEvent>();
+  const nonCalendarFiscalYears = getExplicitNonCalendarFiscalYears(text);
   const explicitFiscalScheduleRange = text.match(
     /\broku?\s+(?:obrotow\p{L}*|finansow\p{L}*)[^.\n]{0,120}?\b(20\d{2})\s*\/\s*(20\d{2})\b/iu
   );
@@ -696,7 +742,7 @@ const parseReportScheduleEvents = (text: string) => {
       isScheduleChange: false,
       sourceEvidence: clause.slice(0, 500),
     };
-    const assessedEvent = assessReportScheduleEvent(event);
+    const assessedEvent = assessReportScheduleEvent(event, nonCalendarFiscalYears);
     const key = `${getCorporateEventIdentityKey(assessedEvent)}:${eventDate}`;
     const previous = events.get(key);
     if (previous && previous.reportScope && assessedEvent.reportScope && previous.reportScope !== assessedEvent.reportScope) {
@@ -1729,9 +1775,13 @@ export const parseCorporateEventDocument = (document: string): ParsedCorporateEv
     events.set(getCorporateEventIdentityKey(dividend), dividend);
   }
 
+  const nonCalendarFiscalYears = getExplicitNonCalendarFiscalYears(text);
   return Array.from(events.values())
     .map((event) => isReportType(event.eventType)
-      ? assessReportScheduleEvent({ ...event, sourceEvidence: event.sourceEvidence ?? text.slice(0, 500) })
+      ? assessReportScheduleEvent(
+        { ...event, sourceEvidence: event.sourceEvidence ?? text.slice(0, 500) },
+        nonCalendarFiscalYears
+      )
       : event)
     .sort((left, right) =>
     left.eventDate.localeCompare(right.eventDate)

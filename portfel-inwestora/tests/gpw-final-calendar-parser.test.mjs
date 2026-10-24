@@ -243,6 +243,22 @@ test("Orange, Alior and Pekao official schedules bind Q3 dates to Q3, not H1", (
   }
 });
 
+test("a dashed standalone publication-date continuation is joined to the annual report row", () => {
+  // Source: Orange Polska ESPI report 2/2026; the annual-report publication
+  // appointment is a separate indented line beginning with "- w dniu".
+  const source = [
+    "Raport roczny za 2026 r.",
+    "- w dniu 05.03.2027 r.",
+    "Skonsolidowany raport roczny za 2026 r.",
+    "- w dniu 05.03.2027 r.",
+  ].join("\n");
+  const reports = reportEvents(source);
+  assert.equal(reports.length, 1, "same-period standalone and consolidated rows on one date merge to one calendar event");
+  assert.deepEqual([reports[0]?.eventType, reports[0]?.fiscalPeriod, reports[0]?.fiscalYear, reports[0]?.eventDate],
+    ["ANNUAL_REPORT", "FY", 2026, "2027-03-05"]);
+  assert.equal(reports[0]?.reportScope, "CONSOLIDATED");
+});
+
 test("GreenX PAP official non-calendar fiscal schedule preserves report quarter, year-end and publication date", () => {
   // Compact transcription of PAP MediaRoom report 22/2026, cross-checked
   // against the issuer's attached periodic-information notice. The financial
@@ -267,6 +283,78 @@ test("GreenX PAP official non-calendar fiscal schedule preserves report quarter,
     ["QUARTERLY_REPORT", "Q3", "2026/2027", "2027-04-30"],
     ["QUARTERLY_REPORT", "Q4", "2026/2027", "2027-07-30"],
     ["ANNUAL_REPORT", "FY", "2026/2027", "2027-09-30"],
+  ]);
+});
+
+test("official Syn2Bio October--September year is not evaluated using calendar-quarter end dates", () => {
+  // Source: GPW ESPI report 19/2026, 2026-10-15, public issuer report.
+  // The issuer calls this financial year 2026 and explicitly says it runs
+  // from 1 October 2026 to 30 September 2027. Calendar-quarter labels in
+  // parentheses explain the covered months; they do not redefine its fiscal
+  // periods or make the future publication dates overdue.
+  const source = [
+    "Terminy publikacji raportów okresowych w roku obrotowym 2026, trwającym od 1 października 2026 r. do 30 września 2027 r.:",
+    "Raport roczny za rok finansowy 2025 - 3 grudnia 2026 r.",
+    "Raport kwartalny za I kwartał roku finansowego 2026 (a IV kwartał roku kalendarzowego 2026) - 17 lutego 2027 r.",
+    "Raport półroczny za I półrocze roku finansowego 2026 (okres: IV kwartał roku kalendarzowego 2026 i I kwartał roku kalendarzowego 2027) - 30 czerwca 2027 r.",
+    "Raport kwartalny za III kwartał roku finansowego 2026 (a II kwartał roku kalendarzowego 2027) - 11 sierpnia 2027 r.",
+  ].join("\n");
+  const parsed = reportEvents(source).map(({ eventType, fiscalPeriod, fiscalYearLabel, eventDate, requiresReview, reviewReasons }) =>
+    ({ eventType, fiscalPeriod, fiscalYearLabel, eventDate, requiresReview, reviewReasons }));
+
+  assert.deepEqual(parsed.map(({ eventType, fiscalPeriod, fiscalYearLabel, eventDate }) =>
+    [eventType, fiscalPeriod, fiscalYearLabel, eventDate]), [
+    ["ANNUAL_REPORT", "FY", "2025", "2026-12-03"],
+    ["QUARTERLY_REPORT", "Q1", "2026", "2027-02-17"],
+    ["HALF_YEAR_REPORT", "H1", "2026", "2027-06-30"],
+    ["QUARTERLY_REPORT", "Q3", "2026", "2027-08-11"],
+  ]);
+  assert.equal(parsed[0]?.requiresReview, true, "the explicitly older FY2025 publication remains reviewable as overdue");
+  assert.equal(parsed[1]?.requiresReview, undefined);
+  assert.equal(parsed[2]?.requiresReview, undefined);
+  assert.equal(parsed[3]?.requiresReview, undefined);
+});
+
+test("an explicit calendar-quarter equivalence supplies a safe report-period end for fiscal Q4", () => {
+  // Source: GPW ESPI report 48/2026 by Synektik S.A., 2026-10-15.
+  // The previous fiscal Q4 is explicitly equated with calendar Q3 2026;
+  // its Nov 18 publication date is therefore not a year-late report.
+  const source = [
+    "Terminy publikacji raportów okresowych Spółki w roku obrotowym 2026, trwającym od 1 października 2026 r. do 30 września 2027 r.:",
+    "skonsolidowany raport kwartalny za IV kwartał roku finansowego 2025 (a III kwartał roku kalendarzowego 2026) - 18 listopada 2026 r.",
+    "jednostkowy raport roczny za rok finansowy 2025 - 22 grudnia 2026 r.",
+    "skonsolidowany raport kwartalny za I kwartał roku finansowego 2026 (a IV kwartał roku kalendarzowego 2026) - 24 lutego 2027 r.",
+    "skonsolidowany raport półroczny za I półrocze roku finansowego 2026 (okres: IV kwartał roku kalendarzowego 2026 i I kwartał roku kalendarzowego 2027) - 23 czerwca 2027 r.",
+  ].join("\n");
+  const parsed = reportEvents(source);
+  const q4 = parsed.find((event) => event.fiscalPeriod === "Q4");
+  const q1 = parsed.find((event) => event.fiscalPeriod === "Q1");
+  const h1 = parsed.find((event) => event.fiscalPeriod === "H1");
+  const annual = parsed.find((event) => event.eventType === "ANNUAL_REPORT");
+  assert.deepEqual([q4?.fiscalYearLabel, q4?.eventDate, q4?.periodEnd, q4?.requiresReview],
+    ["2025", "2026-11-18", "2026-09-30", undefined]);
+  assert.deepEqual([q1?.eventDate, q1?.periodEnd, q1?.requiresReview],
+    ["2027-02-24", "2026-12-31", undefined]);
+  assert.deepEqual([h1?.eventDate, h1?.periodEnd, h1?.requiresReview],
+    ["2027-06-23", "2027-03-31", undefined]);
+  assert.equal(annual?.requiresReview, true, "the calendar-year FY2025 still stays flagged as potentially overdue");
+});
+
+test("official AB 2026/2027 schedule keeps Q1, Q3, H1 and FY publication dates on their own clauses", () => {
+  // Source: GPW ESPI report 25/2026 by AB S.A., 2026-10-21.
+  const source = [
+    "Terminy przekazywania przez Spółkę raportów okresowych w roku obrotowym 2026/2027.",
+    "Raport za I kwartał (01-10-2026 - 31-12-2026) roku obrotowego 2026/2027 zostanie opublikowany w dniu 22-02-2027 r.",
+    "Raport za III kwartał (01-04-2027 - 30-06-2027) roku obrotowego 2026/2027 zostanie opublikowany w dniu 23-08-2027 r.",
+    "Raport za I półrocze (01-10-2026 - 31-03-2027) roku obrotowego 2026/2027 zostanie opublikowany w dniu 08-06-2027 r.",
+    "Raport roczny za rok obrotowy 2026/2027 (01-10-2026 - 30-09-2027) zostanie opublikowany w dniu 07-01-2028 r.",
+  ].join("\n");
+  assert.deepEqual(reportEvents(source).map(({ eventType, fiscalPeriod, fiscalYearLabel, eventDate, requiresReview }) =>
+    [eventType, fiscalPeriod, fiscalYearLabel, eventDate, Boolean(requiresReview)]), [
+    ["QUARTERLY_REPORT", "Q1", "2026/2027", "2027-02-22", false],
+    ["HALF_YEAR_REPORT", "H1", "2026/2027", "2027-06-08", false],
+    ["QUARTERLY_REPORT", "Q3", "2026/2027", "2027-08-23", false],
+    ["ANNUAL_REPORT", "FY", "2026/2027", "2028-01-07", false],
   ]);
 });
 

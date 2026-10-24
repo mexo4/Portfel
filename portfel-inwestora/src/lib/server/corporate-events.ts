@@ -864,6 +864,8 @@ const toSourcePriority = (source: CorporateEventSourceReference, parsed: ParsedC
 const getParsedEventStatus = (parsed: ParsedCorporateEvent): CorporateEventStatus =>
   parsed.isCancellation
     ? "CANCELLED"
+    : parsed.requiresReview
+      ? "UNKNOWN"
     : parsed.eventType === "UPCOMING_DIVIDEND"
     ? parsed.dividendStatus ?? "UNKNOWN"
     : parsed.isScheduleChange
@@ -893,6 +895,7 @@ export const shouldApplyEvent = (
     // override a newer reconvening/change.
     return incomingTimestamp === 0 || existingTimestamp === 0 || incomingTimestamp >= existingTimestamp;
   }
+  if (existing.status === "CONFIRMED" && parsed.requiresReview) return false;
   if (existing.status === "CANCELLED") {
     // A later formal notice may legitimately convene the meeting again, but a
     // stale schedule discovered during backfill must never resurrect it.
@@ -914,7 +917,15 @@ export const shouldApplyEvent = (
     // schedule even though both refer to the exact same report. Trust a
     // changed parse only when this exact source already owns the event, and
     // only when the date actually changed; this keeps retries idempotent.
-    return true;
+    // A source-specific reparse may repair an older syndicated projection,
+    // but it must not let a stale sibling source roll back a newer correction.
+    // Equal timestamps still permit an in-place refresh of the exact source;
+    // a strictly higher-priority source may supersede a newer lower-priority
+    // copy when its official schedule is the authoritative record.
+    return incomingTimestamp > 0 && (
+      incomingTimestamp >= existingTimestamp ||
+      toSourcePriority(source, parsed) > existing.source_priority
+    );
   }
   if (existing.status === "CONFIRMED" && getParsedEventStatus(parsed) === "PROPOSED") {
     return false;
@@ -1569,7 +1580,7 @@ export type GlobalGeneralMeetingSyncResult = {
 };
 
 // Re-evaluate previously successful documents after fixing wrapped PDF rows.
-const REPORT_SCHEDULE_PROJECTION_VERSION = 7;
+const REPORT_SCHEDULE_PROJECTION_VERSION = 8;
 const REPORT_SCHEDULE_BATCH_SIZE = 100;
 const REPORT_SCHEDULE_UNMATCHED_RETRY_MS = 7 * 24 * 60 * 60 * 1_000;
 const REPORT_SCHEDULE_PARSE_RETRY_MS = 24 * 60 * 60 * 1_000;
@@ -1660,6 +1671,7 @@ export const synchronizeGlobalReportSchedules = ({ force = false, refreshSource 
     let saved = 0;
     let unmatched = 0;
     let errors = 0;
+    let reviewed = 0;
     for (const report of reports) {
       try {
         const instrument = await getProjectionInstrument(report);
@@ -1690,6 +1702,13 @@ export const synchronizeGlobalReportSchedules = ({ force = false, refreshSource 
               phase: "attachment", error: error instanceof Error ? error.name : "unknown" });
           }
         }
+        const reviewEvents = [...events.values()].filter((event) => event.requiresReview);
+        reviewed += reviewEvents.length;
+        if (reviewEvents.length) {
+          diagnose({ provider: "global-espi-report-schedule", sourceId: report.source_id,
+            phase: "semantic-validation", reviewed: reviewEvents.length,
+            reasons: [...new Set(reviewEvents.flatMap((event) => event.reviewReasons ?? []))] });
+        }
         if (events.size === 0) {
           await updateReportScheduleProjectionStatus(report.id, getReportScheduleProjectionStatus(0, parseComplete));
           if (!parseComplete) errors += 1;
@@ -1712,7 +1731,8 @@ export const synchronizeGlobalReportSchedules = ({ force = false, refreshSource 
             [instrument.id, report.source_url]
           );
           const projectionPlan = planReportScheduleReprojection(
-            oldProjections, [...events.values()], report.source_url, parseComplete
+            oldProjections, [...events.values()], report.source_url,
+            parseComplete && reviewEvents.length === 0
           );
           const upsert = await upsertParsedEvents(transaction, instrument, {
             events: [...events.values()],
@@ -1723,10 +1743,10 @@ export const synchronizeGlobalReportSchedules = ({ force = false, refreshSource 
             await deactivateEventProjection(transaction, projectionPlan.deactivateIds,
               "REPORT_SCHEDULE_REPROJECTION", report.source_url);
           }
-          if (projectionPlan.ambiguousIds.length > 0 || !parseComplete) {
+          if (projectionPlan.ambiguousIds.length > 0 || !parseComplete || reviewEvents.length > 0) {
             diagnose({ provider: "global-espi-report-schedule", sourceId: report.source_id,
               phase: "reprojection-review", ambiguous: projectionPlan.ambiguousIds.length,
-              parseComplete });
+              parseComplete, reviewed: reviewEvents.length });
           }
           await transaction.execute(
             `UPDATE espi_reports SET report_schedule_projection_status = $4,
@@ -1755,8 +1775,8 @@ export const synchronizeGlobalReportSchedules = ({ force = false, refreshSource 
       [publishedAfter, REPORT_SCHEDULE_PROJECTION_VERSION, unmatchedRetryBefore, parseRetryBefore]
     );
     const pending = Number(count?.count ?? 0);
-    console.info(`[REPORT SCHEDULE SYNC] fetched=${reports.length} new=${created} duplicates=${duplicates} saved=${saved} unmatched=${unmatched} pending=${pending} errors=${errors}`);
-    return { fetched: reports.length, created, duplicates, saved, unmatched, errors, pending };
+    console.info(`[REPORT SCHEDULE SYNC] fetched=${reports.length} new=${created} duplicates=${duplicates} saved=${saved} reviewed=${reviewed} unmatched=${unmatched} pending=${pending} errors=${errors}`);
+    return { fetched: reports.length, created, duplicates, saved, reviewed, unmatched, errors, pending };
   })().finally(() => { globalReportScheduleSyncInFlight = null; });
   return globalReportScheduleSyncInFlight;
 };
@@ -1788,7 +1808,7 @@ export const getGlobalReportSchedules = async ({
 };
 
 // Re-evaluate old publications after correcting false cancellations and time parsing.
-const GENERAL_MEETING_PROJECTION_VERSION = 6;
+const GENERAL_MEETING_PROJECTION_VERSION = 7;
 // A batch is deliberately small enough to keep the authenticated calendar API
 // responsive; the versioned queue continues on the next poll until empty.
 const GENERAL_MEETING_PROJECTION_BATCH_SIZE = 100;

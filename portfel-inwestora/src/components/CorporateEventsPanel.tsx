@@ -62,6 +62,7 @@ const formatEventTime = (eventTime: string) => {
 const getEventStatusLabel = (event: CorporateEvent) => {
   if (event.status === "CHANGED") return "Termin zmieniony";
   if (event.status === "CONFIRMED") return "Termin potwierdzony";
+  if (event.status === "UNKNOWN" && event.eventType !== "UPCOMING_DIVIDEND") return "Wymaga weryfikacji";
   return null;
 };
 

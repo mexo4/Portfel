@@ -921,20 +921,97 @@ const getOfficialGeneralMeetingRegistrationDate = (text: string) => {
   return undefined;
 };
 
-const getGeneralMeetingTime = (text: string, meetingDate: string) => {
+type ParsedMeetingTime = { time: string; timeZone?: string };
+
+const MEETING_TIME_ZONE_OFFSETS: Record<string, number> = {
+  UTC: 0,
+  GMT: 0,
+  CET: 60,
+  CEST: 120,
+  WET: 0,
+  WEST: 60,
+  BST: 60,
+  EET: 120,
+  EEST: 180,
+  AWST: 480,
+};
+
+const getMeetingTimeZone = (text: string, matchEnd: number) => {
+  const suffix = text.slice(matchEnd, matchEnd + 48).match(/^\s*(?:\(\s*)?(?:czas(?:u)?\s+|time\s+)?([A-Z]{2,5}|[A-Za-z_+-]+\/[A-Za-z_+-]+)\b/u)?.[1];
+  if (!suffix) return undefined;
+  const upper = suffix.toUpperCase();
+  if (Object.hasOwn(MEETING_TIME_ZONE_OFFSETS, upper)) return upper;
+  // Accept explicit IANA identifiers only when the runtime recognizes them.
+  if (suffix.includes("/")) {
+    try {
+      new Intl.DateTimeFormat("en", { timeZone: suffix });
+      return suffix;
+    } catch {
+      return "UNKNOWN";
+    }
+  }
+  return "UNKNOWN";
+};
+
+const getWarsawDateTime = (meetingDate: string, value?: ParsedMeetingTime) => {
+  if (!value || value.timeZone === "UNKNOWN") return undefined;
+  if (!value.timeZone) return { eventDate: meetingDate, eventTime: value.time };
+
+  const [year, month, day] = meetingDate.split("-").map(Number);
+  const [hour, minute] = value.time.split(":").map(Number);
+  const localAsUtc = Date.UTC(year!, month! - 1, day!, hour!, minute!);
+  let utcTimestamp: number;
+  const fixedOffset = MEETING_TIME_ZONE_OFFSETS[value.timeZone];
+  if (fixedOffset !== undefined) {
+    utcTimestamp = localAsUtc - fixedOffset * 60_000;
+  } else {
+    // Convert an IANA-zone wall time to UTC. Iteration handles DST offsets
+    // without assuming that the issuer and Warsaw share a calendar date.
+    const sourceFormatter = new Intl.DateTimeFormat("en-GB", {
+      timeZone: value.timeZone,
+      year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+    });
+    utcTimestamp = localAsUtc;
+    for (let iteration = 0; iteration < 4; iteration += 1) {
+      const parts = Object.fromEntries(sourceFormatter.formatToParts(new Date(utcTimestamp)).map(({ type, value: part }) => [type, part]));
+      const sourceWallAsUtc = Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day), Number(parts.hour), Number(parts.minute));
+      const offset = sourceWallAsUtc - utcTimestamp;
+      const next = localAsUtc - offset;
+      if (next === utcTimestamp) break;
+      utcTimestamp = next;
+    }
+  }
+
+  const warsawParts = Object.fromEntries(new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Europe/Warsaw",
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+  }).formatToParts(new Date(utcTimestamp)).map(({ type, value: part }) => [type, part]));
+  return {
+    eventDate: `${warsawParts.year}-${warsawParts.month}-${warsawParts.day}`,
+    eventTime: `${warsawParts.hour}:${warsawParts.minute}`,
+  };
+};
+
+const getGeneralMeetingTime = (text: string, meetingDate: string): ParsedMeetingTime | undefined => {
   const dateOccurrences = Array.from(text.matchAll(UNICODE_DATE_PATTERN))
     .map((match) => ({ date: getIsoDateFromMatch(match), index: match.index ?? 0 }))
     .filter((entry) => entry.date === meetingDate);
   if (dateOccurrences.length === 0) return undefined;
 
   const polishTimes = Array.from(
-    text.matchAll(/\b(?:o\s+godzin(?:ie|e)|na\s+godzine|na\s+g\.|godz(?:ina|ine)?\.?)\s*(\d{1,2})(?:[:.]([0-5]\d))?\b/giu)
+    text.matchAll(/\b(?:o\s+godzin(?:ie|e)|na\s+godzine|na\s+g\.|godz(?:ina|ine)?\.?)\s*(\d{1,2})(?:[:.]([0-5]\d))?(?:\s*(a\.m\.|p\.m\.|am|pm))?\b/giu)
   ).flatMap((match) => {
-    const hour = Number(match[1]);
+    let hour = Number(match[1]);
     if (!Number.isInteger(hour) || hour < 0 || hour > 23) return [];
+    if (match[3] && hour > 12) return [];
+    if (/p\.?m\.?/iu.test(match[3] ?? "") && hour < 12) hour += 12;
+    if (/a\.?m\.?/iu.test(match[3] ?? "") && hour === 12) hour = 0;
     return [{
       time: `${String(hour).padStart(2, "0")}:${match[2] ?? "00"}`,
       index: match.index ?? 0,
+      timeZone: getMeetingTimeZone(text, (match.index ?? 0) + match[0].length),
     }];
   });
   const englishTimes = Array.from(text.matchAll(/\b(?:at\s+)?(\d{1,2}):([0-5]\d)(?:\s*(a\.m\.|p\.m\.|am|pm))?(?=$|\s|[.,;])/giu)
@@ -943,7 +1020,11 @@ const getGeneralMeetingTime = (text: string, meetingDate: string) => {
     if (!Number.isInteger(hour) || hour < 0 || hour > 23 || (match[3] && hour > 12)) return [];
     if (/p\.?m\.?/iu.test(match[3] ?? "") && hour < 12) hour += 12;
     if (/a\.?m\.?/iu.test(match[3] ?? "") && hour === 12) hour = 0;
-    return [{ time: `${String(hour).padStart(2, "0")}:${match[2]}`, index: match.index ?? 0 }];
+    return [{
+      time: `${String(hour).padStart(2, "0")}:${match[2]}`,
+      index: match.index ?? 0,
+      timeZone: getMeetingTimeZone(text, (match.index ?? 0) + match[0].length),
+    }];
   });
   const timeMatches = [...polishTimes, ...englishTimes];
 
@@ -953,10 +1034,11 @@ const getGeneralMeetingTime = (text: string, meetingDate: string) => {
       .filter((time) => time.distance <= 180)
   ).sort((left, right) => left.distance - right.distance);
 
-  return candidates[0]?.time;
+  const { time, timeZone } = candidates[0] ?? {};
+  return time ? { time, timeZone } : undefined;
 };
 
-const getGeneralMeetingTimeForType = (text: string, meetingType: GeneralMeetingType, fallbackDate: string) => {
+const getGeneralMeetingTimeForType = (text: string, meetingType: GeneralMeetingType, fallbackDate: string): ParsedMeetingTime | undefined => {
   const normalized = normalizeGeneralMeetingText(text);
   const typePattern = meetingType === "ZWZ"
     ? /\b(?:ogm|agm|zwz|zwza)\b|\b(?:ordinary|annual)\s+general\s+meeting\b|\bzwyczajn\w*\s+waln\w*\s+zgromadzeni\w*/giu
@@ -975,9 +1057,15 @@ const getGeneralMeetingTimeForType = (text: string, meetingType: GeneralMeetingT
     if (!Number.isInteger(hour) || hour < 0 || hour > 23 || (time[3] && hour > 12)) return [];
     if (/p\.?m\.?/iu.test(time[3] ?? "") && hour < 12) hour += 12;
     if (/a\.?m\.?/iu.test(time[3] ?? "") && hour === 12) hour = 0;
-    return [{ time: `${String(hour).padStart(2, "0")}:${minute}`, distance: time.index ?? 0 }];
+    const matchEnd = start + (time.index ?? 0) + time[0].length;
+    return [{
+      time: `${String(hour).padStart(2, "0")}:${minute}`,
+      timeZone: getMeetingTimeZone(normalized, matchEnd),
+      distance: time.index ?? 0,
+    }];
   }).sort((left, right) => left.distance - right.distance);
-  return candidates[0]?.time ?? getGeneralMeetingTime(text, fallbackDate);
+  const { time, timeZone } = candidates[0] ?? {};
+  return time ? { time, timeZone } : getGeneralMeetingTime(text, fallbackDate);
 };
 
 const getGeneralMeetingRescheduleDates = (text: string) => {
@@ -1051,11 +1139,12 @@ const getGeneralMeetingEvents = (text: string): ParsedCorporateEvent[] => {
   if (reschedule) {
     const { previousEventDate, eventDate } = getGeneralMeetingRescheduleDates(meetingText);
     if (!previousEventDate || !eventDate || previousEventDate === eventDate) return [];
+    const resolvedDateTime = getWarsawDateTime(eventDate, getGeneralMeetingTime(meetingText, eventDate));
 
     return [{
       eventType: "GENERAL_MEETING",
-      eventDate,
-      eventTime: getGeneralMeetingTime(meetingText, eventDate),
+      eventDate: resolvedDateTime?.eventDate ?? eventDate,
+      eventTime: resolvedDateTime?.eventTime,
       previousEventDate,
       fiscalYear: Number(eventDate.slice(0, 4)),
       isScheduleChange: true,
@@ -1078,6 +1167,8 @@ const getGeneralMeetingEvents = (text: string): ParsedCorporateEvent[] => {
 
   const eventDate = getSemanticMeetingDate(meetingText);
   if (!eventDate) return [];
+  const resolvedDateTime = getWarsawDateTime(eventDate, getGeneralMeetingTime(meetingText, eventDate));
+  const normalizedEventDate = resolvedDateTime?.eventDate ?? eventDate;
 
   // Some formal notices convene an ordinary/annual and an extraordinary
   // meeting together on the same day. Keep each meeting's type, identity and
@@ -1087,24 +1178,28 @@ const getGeneralMeetingEvents = (text: string): ParsedCorporateEvent[] => {
   const hasExtraordinaryMeeting = /\b(?:egm|nwz)\b|\bextraordinary\s+general\s+meeting\b|\bnadzwyczajn\w*\s+waln\w*\s+zgromadzeni\w*/iu.test(meetingText);
   if (formalMatch && hasOrdinaryMeeting && hasExtraordinaryMeeting) {
     const registrationDate = getOfficialGeneralMeetingRegistrationDate(meetingText);
-    return (["ZWZ", "NWZ"] as const).map((type) => ({
-      eventType: "GENERAL_MEETING" as const,
-      eventDate,
-      eventTime: getGeneralMeetingTimeForType(meetingText, type, eventDate),
-      fiscalYear: Number(eventDate.slice(0, 4)),
-      isScheduleChange: false,
-      generalMeetingType: type,
-      generalMeetingAction: "CONVENING" as const,
-      registrationDate,
-      isCancellation: false,
-      eventIdentity: getGeneralMeetingIdentity(type, eventDate),
-    }));
+    return (["ZWZ", "NWZ"] as const).map((type) => {
+      const typeDateTime = getWarsawDateTime(eventDate, getGeneralMeetingTimeForType(meetingText, type, eventDate));
+      const resolvedEventDate = typeDateTime?.eventDate ?? eventDate;
+      return {
+        eventType: "GENERAL_MEETING" as const,
+        eventDate: resolvedEventDate,
+        eventTime: typeDateTime?.eventTime,
+        fiscalYear: Number(eventDate.slice(0, 4)),
+        isScheduleChange: false,
+        generalMeetingType: type,
+        generalMeetingAction: "CONVENING" as const,
+        registrationDate,
+        isCancellation: false,
+        eventIdentity: getGeneralMeetingIdentity(type, eventDate),
+      };
+    });
   }
 
   return [{
     eventType: "GENERAL_MEETING",
-    eventDate,
-    eventTime: getGeneralMeetingTime(meetingText, eventDate),
+    eventDate: normalizedEventDate,
+    eventTime: resolvedDateTime?.eventTime,
     fiscalYear: Number(eventDate.slice(0, 4)),
     isScheduleChange: false,
     generalMeetingType: meetingType,

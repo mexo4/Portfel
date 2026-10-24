@@ -415,15 +415,33 @@ test("Allegro official combined OGM/EGM notice produces two independently identi
     .map(({ generalMeetingType, eventDate, eventTime, registrationDate, eventIdentity }) =>
     [generalMeetingType, eventDate, eventTime, registrationDate, eventIdentity]);
   assert.deepEqual(actual, [
-    ["ZWZ", "2026-11-18", "14:00", "2026-11-04", "general-meeting:ZWZ:2026-11-18"],
-    ["NWZ", "2026-11-18", "14:30", "2026-11-04", "general-meeting:NWZ:2026-11-18"],
+    ["ZWZ", "2026-11-18", "13:00", "2026-11-04", "general-meeting:ZWZ:2026-11-18"],
+    ["NWZ", "2026-11-18", "13:30", "2026-11-04", "general-meeting:NWZ:2026-11-18"],
   ], source);
 });
 
-test("GreenX official report keeps the actual extraordinary meeting date and AWST time context", () => {
+test("GreenX official report converts its explicit AWST meeting time to Warsaw time", () => {
   const source = "https://pap-mediaroom.pl/biznes-i-finanse/greenx-metals-ltd-232026-zawiadomienie-o-zwolaniu-zwyczajnego-walnego-zgromadzenia";
   const [event] = parseCorporateEventDocument("GREENX METALS LTD. (23/2026) Zawiadomienie o zwołaniu Zwyczajnego Walnego Zgromadzenia Akcjonariuszy. GreenX Metals Limited informuje, że jej Zwyczajne Walne Zgromadzenie Akcjonariuszy odbędzie się w środę 11 listopada 2026 r. o godzinie 10:00 czasu AWST.").filter((candidate) => candidate.eventType === "GENERAL_MEETING");
-  assert.deepEqual([event?.generalMeetingType, event?.eventDate, event?.eventTime], ["ZWZ", "2026-11-11", "10:00"], source);
+  assert.deepEqual([event?.generalMeetingType, event?.eventDate, event?.eventTime], ["ZWZ", "2026-11-11", "03:00"], source);
+});
+
+test("explicit UTC meeting times convert across a Warsaw calendar-day boundary", () => {
+  const [event] = parseCorporateEventDocument("The Ordinary General Meeting will be held on 18 November 2026 at 23:30 UTC.")
+    .filter((candidate) => candidate.eventType === "GENERAL_MEETING");
+  assert.deepEqual([event?.eventDate, event?.eventTime], ["2026-11-19", "00:30"]);
+});
+
+test("recognized IANA time zones use their date-specific offset", () => {
+  const [event] = parseCorporateEventDocument("The Ordinary General Meeting will be held on 18 November 2026 at 00:30 Pacific/Kiritimati.")
+    .filter((candidate) => candidate.eventType === "GENERAL_MEETING");
+  assert.deepEqual([event?.eventDate, event?.eventTime], ["2026-11-17", "11:30"]);
+});
+
+test("unknown explicit meeting time zones are not mislabeled as Warsaw local time", () => {
+  const [event] = parseCorporateEventDocument("The Ordinary General Meeting will be held on 18 November 2026 at 14:00 XYZ.")
+    .filter((candidate) => candidate.eventType === "GENERAL_MEETING");
+  assert.deepEqual([event?.eventDate, event?.eventTime], ["2026-11-18", undefined]);
 });
 
 test("deterministic property matrix preserves report identity through harmless formatting variants (seed 20261024)", () => {

@@ -151,6 +151,9 @@ export type EspiSynchronizationResult = {
   pagesRead: number;
   locked: boolean;
   errors?: number;
+  nextBackfillPage?: number;
+  backfillComplete?: boolean;
+  overlapComplete?: boolean;
 };
 
 export type StoredEspiCorporateEventReport = {
@@ -1043,12 +1046,12 @@ export const synchronizePapEspi = async ({
   const state = await getEspiSyncState();
   if (!force && !state.isStale) {
     console.info("[ESPI SYNC] fetched=0 new=0 duplicates=0 saved=0 errors=0");
-    return { status: state.status === "NOT_SYNCED" ? "NOT_FOUND" : state.status, insertedOrUpdated: 0, skippedExisting: 0, parsed: 0, pagesRead: 0, locked: false, errors: 0 };
+    return { status: state.status === "NOT_SYNCED" ? "NOT_FOUND" : state.status, insertedOrUpdated: 0, skippedExisting: 0, parsed: 0, pagesRead: 0, locked: false, errors: 0, nextBackfillPage: state.nextBackfillPage, backfillComplete: state.backfillComplete };
   }
   const token = await acquireSyncLock();
   if (!token) {
     console.info("[ESPI SYNC] fetched=0 new=0 duplicates=0 saved=0 errors=0");
-    return { status: state.status === "NOT_SYNCED" ? "NOT_FOUND" : state.status, insertedOrUpdated: 0, skippedExisting: 0, parsed: 0, pagesRead: 0, locked: true, errors: 0 };
+    return { status: state.status === "NOT_SYNCED" ? "NOT_FOUND" : state.status, insertedOrUpdated: 0, skippedExisting: 0, parsed: 0, pagesRead: 0, locked: true, errors: 0, nextBackfillPage: state.nextBackfillPage, backfillComplete: state.backfillComplete };
   }
 
   let status: EspiSourceStatus = "SUCCESS";
@@ -1375,6 +1378,9 @@ export const synchronizePapEspi = async ({
       pagesRead,
       locked: false,
       errors,
+      nextBackfillPage,
+      backfillComplete,
+      overlapComplete: overlapDue ? Boolean(lastOverlapAt) : undefined,
     };
   } catch (error) {
     await releaseSyncLock({
@@ -1392,7 +1398,7 @@ export const synchronizePapEspi = async ({
       durationMs: Date.now() - startedAt,
     });
     console.info(`[ESPI SYNC] fetched=0 new=0 duplicates=${skippedExisting} saved=0 errors=${Math.max(errors, 1)}`);
-    return { status, insertedOrUpdated: 0, skippedExisting, parsed: 0, pagesRead, locked: false, errors: Math.max(errors, 1) };
+    return { status, insertedOrUpdated: 0, skippedExisting, parsed: 0, pagesRead, locked: false, errors: Math.max(errors, 1), nextBackfillPage, backfillComplete };
   }
 };
 

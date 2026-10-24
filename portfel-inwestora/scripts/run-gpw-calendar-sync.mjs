@@ -35,17 +35,32 @@ try {
     console.info("[GPW SCHEDULED SYNC] another run is active");
   } else {
     const { synchronizePapEspi } = await import("../src/lib/server/espi.ts");
+    const { getGpwSyncHealth } = await import("../src/lib/gpw-sync-health.ts");
     const {
       synchronizeGlobalReportSchedules,
       synchronizeGlobalGeneralMeetings,
       synchronizeGlobalDividends,
     } = await import("../src/lib/server/corporate-events.ts");
     const source = await synchronizePapEspi({ backfillPages: 1 });
-    console.info("[GPW SCHEDULED SYNC] source", {
-      status: source.status, parsed: source.parsed, saved: source.insertedOrUpdated,
-      pages: source.pagesRead, errors: source.errors ?? 0,
+    const sourceHealth = getGpwSyncHealth({
+      errors: (source.errors ?? 0) + (source.status === "SUCCESS" ? 0 : 1),
+      pending: Number(!source.backfillComplete) + Number(source.overlapComplete === false),
     });
-    failed ||= source.status !== "SUCCESS" || (source.errors ?? 0) > 0;
+    console.info("[GPW SCHEDULED SYNC] source", {
+      status: sourceHealth,
+      sourceStatus: source.status,
+      parsed: source.parsed,
+      saved: source.insertedOrUpdated,
+      pages: source.pagesRead,
+      errors: source.errors ?? 0,
+      backfill: source.backfillComplete ? "COMPLETE" : "CONTINUING",
+      nextBackfillPage: source.nextBackfillPage,
+      overlap: source.overlapComplete === undefined ? "NOT_DUE" : source.overlapComplete ? "COMPLETE" : "INCOMPLETE",
+    });
+    // A bounded historical backfill intentionally advances its durable cursor
+    // over multiple scheduled runs. Keep that run visibly INCOMPLETE without
+    // treating the expected continuation as an infrastructure failure.
+    failed ||= sourceHealth === "FAILED" || source.overlapComplete === false;
     for (const [name, synchronize] of [
       ["reports", synchronizeGlobalReportSchedules],
       ["meetings", synchronizeGlobalGeneralMeetings],
@@ -59,8 +74,9 @@ try {
           batches += 1;
         }
         console.info("[GPW SCHEDULED SYNC] projection", { name, batches, pending: result.pending,
-          fetched: result.fetched, created: result.created, errors: result.errors });
-        failed ||= result.errors > 0;
+          fetched: result.fetched, created: result.created, errors: result.errors,
+          outcome: getGpwSyncHealth({ errors: result.errors, pending: result.pending }) });
+        failed ||= getGpwSyncHealth({ errors: result.errors, pending: result.pending }) !== "COMPLETE";
       } catch (error) {
         failed = true;
         console.error("[GPW SCHEDULED SYNC] projection failed", {

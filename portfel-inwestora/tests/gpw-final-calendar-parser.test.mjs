@@ -171,6 +171,26 @@ test("GreenX annual general meeting date may follow a weekday rather than an exp
   assert.equal(meeting?.registrationDate, undefined);
 });
 
+test("official GPW Allegro notice plural 'odbędą się w dniu' creates both announced meetings", () => {
+  const source = "https://www.gpw.pl/komunikat?geru_id=498094";
+  const notice = [
+    "Ogłoszenie o zwołaniu OGM i EGM Allegro.eu.",
+    "Rada Dyrektorów informuje akcjonariuszy, że Zwyczajne Walne Zgromadzenie (OGM)",
+    "oraz Nadzwyczajne Walne Zgromadzenie (EGM) odbędą się w dniu 18 listopada 2026 roku.",
+    "OGM o godzinie 14:00 CEST; EGM o godzinie 14:30 CEST.",
+    "Dzień ustalenia prawa do uczestnictwa przypada 4 listopada 2026 roku.",
+  ].join(" ");
+
+  const actual = parseCorporateEventDocument(notice)
+    .filter((event) => event.eventType === "GENERAL_MEETING")
+    .map(({ generalMeetingType, eventDate, eventTime, eventIdentity }) =>
+      [generalMeetingType, eventDate, eventTime, eventIdentity]);
+  assert.deepEqual(actual, [
+    ["ZWZ", "2026-11-18", "13:00", "general-meeting:ZWZ:2026-11-18"],
+    ["NWZ", "2026-11-18", "13:30", "general-meeting:NWZ:2026-11-18"],
+  ], source);
+});
+
 test("same-source schedule correction keeps the existing event row identity for in-place date update", () => {
   const [event] = reportEvents(
     "Zmiana terminu publikacji raportu kwartalnego za III kwartał 2026 r. z 19 listopada 2026 r. na 5 listopada 2026 r."

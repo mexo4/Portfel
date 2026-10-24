@@ -143,6 +143,55 @@ test("same-source report reprojection applies an in-place corrected date despite
   assert.equal(shouldApplyEvent(existing, sameOfficialSchedule, parsed, false), false);
 });
 
+test("an older syndicated schedule cannot roll back a newer date during source reprojection", () => {
+  const existing = {
+    event_date: "2026-10-27",
+    status: "CONFIRMED",
+    source_type: "ISSUER_CURRENT_REPORT",
+    source_priority: 300,
+    source_published_at: "2026-10-24T12:01:00.000Z",
+  };
+  const staleDuplicate = {
+    sourceType: "ISSUER_CURRENT_REPORT",
+    sourceUrl: "https://issuer.example/stale-schedule-copy",
+    sourcePublishedAt: "2026-10-24T12:00:00.000Z",
+  };
+  const staleDate = {
+    eventType: "QUARTERLY_REPORT",
+    eventDate: "2026-10-26",
+    fiscalPeriod: "Q3",
+    fiscalYear: 2026,
+    isScheduleChange: false,
+  };
+
+  assert.equal(shouldApplyEvent(existing, staleDuplicate, staleDate, true), false);
+});
+
+test("semantically suspicious report periods remain visible for review without overwriting confirmed schedules", () => {
+  const existing = {
+    event_date: "2026-11-18",
+    status: "CONFIRMED",
+    source_type: "ISSUER_CURRENT_REPORT",
+    source_priority: 300,
+    source_published_at: "2026-10-20T07:00:00.000Z",
+  };
+  const suspicious = {
+    eventType: "QUARTERLY_REPORT",
+    eventDate: "2026-11-18",
+    fiscalPeriod: "Q3",
+    fiscalYear: 2025,
+    isScheduleChange: false,
+    requiresReview: true,
+    reviewReasons: ["REPORT_PERIOD_MAY_BE_OVERDUE"],
+  };
+
+  assert.equal(shouldApplyEvent(existing, {
+    sourceType: "PAP_ESPI",
+    sourceUrl: "https://pap-mediaroom.pl/report",
+    sourcePublishedAt: "2026-10-23T07:00:00.000Z",
+  }, suspicious), false);
+});
+
 test("supports Polish word dates, dotted dates and dashed dates", () => {
   assert.deepEqual(extractPolishDates("20 sierpnia 2026, 20.08.2026, 20-08-2026"), ["2026-08-20"]);
 });

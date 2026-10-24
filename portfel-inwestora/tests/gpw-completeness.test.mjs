@@ -109,6 +109,7 @@ test("a Polish 'zmianie terminu' notice keeps one event and replaces the old dat
     fiscalYearLabel: "2026",
     periodEnd: undefined,
     isScheduleChange: true,
+    sourceEvidence: "Informacja o zmianie terminu publikacji raportu okresowego za I półrocze 2026 roku.\nPierwotny termin publikacji raportu półrocznego: 27 sierpnia 2026 roku.\nNowy termin publikacji raportu półrocznego: 25 sierpnia 2026 roku.",
   });
 });
 

@@ -74,6 +74,11 @@ export type ParsedCorporateEvent = {
   /** Portfolio-context quantity projected by the API response. */
   heldQuantity?: number;
   dividendStatus?: Extract<CorporateEventStatus, "PROPOSED" | "CONFIRMED" | "UNKNOWN">;
+  /** Heuristics never turn a questionable report period into a confirmed event. */
+  requiresReview?: boolean;
+  reviewReasons?: string[];
+  /** Bounded fragment of normalized source used to derive this event. */
+  sourceEvidence?: string;
 };
 
 export type CorporateEventSourceReference = {
@@ -267,6 +272,9 @@ const normalizeDocumentText = (value: string) =>
   value
     .replace(/<script[\s\S]*?<\/script>/gi, " ")
     .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    // Preserve table-cell boundaries so separate report rows cannot collapse
+    // into one clause and lend their dates to neighboring report labels.
+    .replace(/<\/(?:td|th)\s*>/gi, " | ")
     .replace(/<\/?(?:p|div|li|tr|h[1-6]|br|section|article)[^>]*>/gi, "\n")
     .replace(/<[^>]+>/g, " ")
     .replace(/&nbsp;/gi, " ")
@@ -297,8 +305,20 @@ const toIsoDate = (day: string, month: string, year: string) => {
   if (!monthNumber || !Number.isInteger(parsedDay) || parsedDay < 1 || parsedDay > 31) {
     return null;
   }
+  return makeIsoDate(year, monthNumber, parsedDay);
+};
 
-  return `${year}-${monthNumber}-${String(parsedDay).padStart(2, "0")}`;
+const makeIsoDate = (year: string, month: string, day: number) => {
+  const yearNumber = Number(year);
+  const monthNumber = Number(month);
+  if (!Number.isInteger(yearNumber) || monthNumber < 1 || monthNumber > 12) return null;
+  const candidate = new Date(Date.UTC(yearNumber, monthNumber - 1, day));
+  if (
+    candidate.getUTCFullYear() !== yearNumber ||
+    candidate.getUTCMonth() !== monthNumber - 1 ||
+    candidate.getUTCDate() !== day
+  ) return null;
+  return `${yearNumber}-${String(monthNumber).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 };
 
 const getIsoDateFromMatch = (match: RegExpExecArray) => {
@@ -306,7 +326,7 @@ const getIsoDateFromMatch = (match: RegExpExecArray) => {
     ? toIsoDate(match[1], match[2], match[3])
     : null;
   const numericDate = match[4] && match[5] && match[6]
-    ? `${match[6]}-${match[5].padStart(2, "0")}-${match[4].padStart(2, "0")}`
+    ? makeIsoDate(match[6], match[5], Number(match[4]))
     : null;
   const englishMonthFirstDate = match[7] && match[8] && match[9]
     ? toIsoDate(match[8], match[7], match[9])
@@ -434,6 +454,9 @@ const isReportType = (type: CorporateEventType | null): type is
   "QUARTERLY_REPORT" | "HALF_YEAR_REPORT" | "ANNUAL_REPORT" =>
   type === "QUARTERLY_REPORT" || type === "HALF_YEAR_REPORT" || type === "ANNUAL_REPORT";
 
+const isIndependentReportScheduleLine = (line: string) =>
+  /^(?:(?:(?:rozszerzon\p{L}*|skonsolidowan\p{L}*|jednostkow\p{L}*)\s+){0,3})raport\p{L}*\s+(?:roczn\p{L}*|kwartaln\p{L}*|półroczn\p{L}*)\b/iu.test(line);
+
 /** Preserve row boundaries: a date may belong to the preceding report label,
  * but a whole neighbouring report row must never be borrowed as context. */
 export const getCandidateSegments = (text: string) => {
@@ -466,7 +489,8 @@ export const getCandidateSegments = (text: string) => {
       for (let continuation = 0; continuation < 4; continuation += 1) {
         const next = lines[index + 1];
         if (!next || /^\d+[.)]\s+(?:roczn|kwartaln|półroczn|skonsolidowan|jednostkow|raport)/iu.test(next) ||
-          /^[-–—•]\s+za\s+/iu.test(next) || /^Raporty?\s+(?:roczne|kwartalne|półroczne)\s*:/iu.test(next)) break;
+          /^[-–—•]\s+za\s+/iu.test(next) || /^Raporty?\s+(?:roczne|kwartalne|półroczne)\s*:/iu.test(next) ||
+          isIndependentReportScheduleLine(next)) break;
         line += ` ${next}`;
         index += 1;
         if (/(?:termin\s+publikacji|zostanie\s+opublikowan)[\s\S]{0,80}?\d{1,2}\s+\p{L}+\s+20\d{2}/iu.test(line) ||
@@ -484,7 +508,7 @@ export const getCandidateSegments = (text: string) => {
       for (let continuation = 0; continuation < 4; continuation += 1) {
         const next = lines[index + 1];
         if (!next || /^(?:[-–—•]\s*)?(?:raport\s+(?:za|jednostkowy|skonsolidowany)|skonsolidowan\w*\s+raport|jednostkow\w*\s+raport)/iu.test(next) ||
-          /^Raporty\s+(?:roczne|kwartalne|półroczne)\s*:/iu.test(next)) break;
+          /^Raporty\s+(?:roczne|kwartalne|półroczne)\s*:/iu.test(next) || isIndependentReportScheduleLine(next)) break;
         line += ` ${next}`;
         index += 1;
         if (/\b(?:zostanie|będzie)\s+(?:opublikowan|przekazan)[\s\S]{0,90}?\b\d{1,2}[.\/-]\d{1,2}[.\/-]20\d{2}/iu.test(line)) break;
@@ -497,7 +521,7 @@ export const getCandidateSegments = (text: string) => {
       for (let continuation = 0; continuation < 4; continuation += 1) {
         const next = lines[index + 1];
         if (!next || /^[-–—•]\s*(?:skonsolidowan\w*|jednostkow\w*|rozszerzon\w*|raport\w*)/iu.test(next)
-          || /^Zarząd\b/iu.test(next)) break;
+          || /^Zarząd\b/iu.test(next) || isIndependentReportScheduleLine(next)) break;
         line += ` ${next}`;
         index += 1;
         if (extractPolishDates(line).length > 0) break;
@@ -567,10 +591,66 @@ const getExplicitReportPeriod = (clause: string) => {
   return { periodEnd: endContext ? extractPolishDates(endContext)[0] : undefined };
 };
 
+/**
+ * Split only when a paragraph explicitly names multiple, different report
+ * identities. This prevents sentence-level type precedence (e.g. H1 winning
+ * before Q3) from borrowing a neighboring report's publication date.
+ */
+const splitIndependentReportMentions = (text: string) => {
+  const mentions = Array.from(text.matchAll(/\b(?:raport\p{L}*|sprawozdani\p{L}*\s+finansow\p{L}*)\b/giu));
+  const anchors = mentions.flatMap((match, index) => {
+    const start = match.index ?? 0;
+    const nextStart = mentions[index + 1]?.index ?? text.length;
+    const immediate = text.slice(start, Math.min(nextStart, start + 84));
+    const eventType = getEventType(immediate);
+    if (!isReportType(eventType)) return [];
+    const clause = text.slice(start, nextStart).trim();
+    const period = getFiscalPeriod(clause, eventType);
+    const year = getFiscalYearLabel(clause);
+    return [{ start, fingerprint: [eventType, period ?? "", year ?? ""].join(":" ) }];
+  });
+  if (anchors.length < 2 || new Set(anchors.map((anchor) => anchor.fingerprint)).size < 2) return [text];
+  return anchors.map((anchor, index) => text.slice(anchor.start, anchors[index + 1]?.start ?? text.length).trim()).filter(Boolean);
+};
+
+const getReportScheduleReviewReasons = (event: ParsedCorporateEvent) => {
+  const reasons: string[] = [];
+  if (!event.fiscalPeriod) reasons.push("PERIOD_NOT_EXPLICIT");
+  if (!event.fiscalYearLabel && !event.fiscalYear) reasons.push("FISCAL_YEAR_NOT_EXPLICIT");
+  if (event.fiscalYearLabel || event.fiscalYear) {
+    const years = (event.fiscalYearLabel ?? String(event.fiscalYear)).match(/20\d{2}/g)?.map(Number) ?? [];
+    const eventYear = Number(event.eventDate.slice(0, 4));
+    const earliest = years[0] ?? event.fiscalYear!;
+    const latest = years.at(-1) ?? event.fiscalYear!;
+    if (eventYear < earliest - 1 || eventYear > latest + 1) reasons.push("PUBLICATION_YEAR_CONFLICTS_WITH_PERIOD");
+    // Calendar-year periods can be checked conservatively. For non-calendar
+    // years we use only source-provided periodEnd and never infer a year end.
+    if (years.length === 1 && event.fiscalPeriod) {
+      const endMonthDay: Record<string, string> = { Q1: "03-31", Q2: "06-30", H1: "06-30", Q3: "09-30", Q4: "12-31", FY: "12-31" };
+      const periodEnd = event.periodEnd ?? (endMonthDay[event.fiscalPeriod] ? `${years[0]}-${endMonthDay[event.fiscalPeriod]}` : undefined);
+      if (periodEnd && event.eventDate > periodEnd) {
+        const lagDays = (Date.parse(`${event.eventDate}T00:00:00Z`) - Date.parse(`${periodEnd}T00:00:00Z`)) / 86_400_000;
+        if (lagDays > 210) reasons.push("REPORT_PERIOD_MAY_BE_OVERDUE");
+      }
+    }
+  }
+  return reasons;
+};
+
+const assessReportScheduleEvent = (event: ParsedCorporateEvent): ParsedCorporateEvent => {
+  const reviewReasons = getReportScheduleReviewReasons(event);
+  return reviewReasons.length ? { ...event, requiresReview: true, reviewReasons } : event;
+};
+
 const parseReportScheduleEvents = (text: string) => {
   const events = new Map<string, ParsedCorporateEvent>();
+  const explicitFiscalScheduleRange = text.match(
+    /\broku?\s+(?:obrotow\p{L}*|finansow\p{L}*)[^.\n]{0,120}?\b(20\d{2})\s*\/\s*(20\d{2})\b/iu
+  );
   const scheduleYearMatch = text.match(/\broku?\s+obrotow\w*\s+(20\d{2})(?:\s*\/\s*(20\d{2}))?/iu);
-  const scheduleYearLabel = scheduleYearMatch?.[1]
+  const scheduleYearLabel = explicitFiscalScheduleRange
+    ? `${explicitFiscalScheduleRange[1]}/${explicitFiscalScheduleRange[2]}`
+    : scheduleYearMatch?.[1]
     ? [scheduleYearMatch[1], scheduleYearMatch[2]].filter(Boolean).join("/")
     : text.match(/\brok\s+obrotowy\s+kończąc\w*\s+się\s+w\s+(20\d{2})/iu)?.[1];
   // An issuer may announce selected preliminary data from a future report
@@ -582,7 +662,7 @@ const parseReportScheduleEvents = (text: string) => {
     " "
   );
   for (const segment of getCandidateSegments(scheduleText)) {
-    const clause = segment.text;
+    for (const clause of splitIndependentReportMentions(segment.text)) {
     if (/\brozporządzen|\bwybrane\s+(?:niezaudytowane\s+)?dane\s+finansowe|\bdane\s+finansowe\s+ze\s+skonsolidowanego\s+raportu/iu.test(clause)) continue;
     if (/\b(?:nie\s+będzie|nie\s+przekaże|nie\s+publikuje)\b/iu.test(clause)) continue;
     if (/\b(?:okresy\s+sprawozdawcze|trwa\s+od)\b/iu.test(clause)) continue;
@@ -598,7 +678,14 @@ const parseReportScheduleEvents = (text: string) => {
     const fiscalYearLabel = endingYear && periodBounds.periodEnd &&
       Number(periodBounds.periodEnd.slice(0, 4)) === Number(endingYear) - 1
       ? `${Number(endingYear) - 1}/${endingYear}`
-      : getFiscalYearLabel(clause) ?? scheduleYearLabel;
+      : (() => {
+        const clauseYearLabel = getFiscalYearLabel(clause);
+        const scheduleYears = scheduleYearLabel?.match(/20\d{2}/g)?.map(Number) ?? [];
+        const clauseYears = clauseYearLabel?.match(/20\d{2}/g)?.map(Number) ?? [];
+        const belongsToScheduleRange = scheduleYears.length === 2 &&
+          (!clauseYears.length || clauseYears.some((year) => scheduleYears.includes(year)));
+        return belongsToScheduleRange ? scheduleYearLabel : clauseYearLabel ?? scheduleYearLabel;
+      })();
     const fiscalYear = fiscalYearLabel ? Number(fiscalYearLabel.slice(-4)) : undefined;
     const event: ParsedCorporateEvent = {
       eventType: type, eventDate, fiscalPeriod, fiscalYear, fiscalYearLabel,
@@ -607,13 +694,16 @@ const parseReportScheduleEvents = (text: string) => {
         : /jednostkow/iu.test(clause) ? "UNIT"
           : /skonsolidowan/iu.test(clause) ? "CONSOLIDATED" : undefined,
       isScheduleChange: false,
+      sourceEvidence: clause.slice(0, 500),
     };
-    const key = `${getCorporateEventIdentityKey(event)}:${eventDate}`;
+    const assessedEvent = assessReportScheduleEvent(event);
+    const key = `${getCorporateEventIdentityKey(assessedEvent)}:${eventDate}`;
     const previous = events.get(key);
-    if (previous && previous.reportScope && event.reportScope && previous.reportScope !== event.reportScope) {
-      events.set(key, { ...event, reportScope: "COMBINED" });
+    if (previous && previous.reportScope && assessedEvent.reportScope && previous.reportScope !== assessedEvent.reportScope) {
+      events.set(key, { ...assessedEvent, reportScope: "COMBINED" });
     } else {
-      events.set(key, event);
+      events.set(key, assessedEvent);
+    }
     }
   }
   const result = [...events.values()];
@@ -727,6 +817,29 @@ const getOfficialGeneralMeetingRegistrationDate = (text: string) => {
     if (date) return date;
   }
 
+  // Some issuer notices define the date first and name it later, e.g.
+  // "share ownership on 4 November 2026 ... (Record Date)". Bind only the
+  // nearest explicit date to that label and require the surrounding wording
+  // to describe share ownership/participation; otherwise a meeting date in
+  // the same paragraph could be mistaken for the record date.
+  const englishRecordLabels = Array.from(text.matchAll(/\b(?:record|registration)\s+date\b/giu));
+  const parsedDates = Array.from(text.matchAll(UNICODE_DATE_PATTERN))
+    .map((match) => ({ date: getIsoDateFromMatch(match), start: match.index ?? 0, end: (match.index ?? 0) + match[0].length }))
+    .filter((entry): entry is { date: string; start: number; end: number } => Boolean(entry.date));
+  for (const label of englishRecordLabels) {
+    const labelStart = label.index ?? 0;
+    const nearest = parsedDates.filter((entry) => entry.end <= labelStart && labelStart - entry.end <= 180).at(-1);
+    if (!nearest) continue;
+    const beforeDate = text.slice(Math.max(0, nearest.start - 100), nearest.start);
+    const betweenDateAndLabel = text.slice(nearest.end, labelStart);
+    if (
+      /(?:share\s+ownership|shareholder\s+eligibility|shares\s+held|right\s+to\s+participate)[\s\S]{0,90}\bon\s*$/iu.test(beforeDate) &&
+      !/[.!?]/u.test(betweenDateAndLabel)
+    ) {
+      return nearest.date;
+    }
+  }
+
   // PAP/ESPI notices also use the inverse wording: "Dzień 8 września ...
   // jest dniem rejestracji uczestnictwa". Resolve that explicit issuer date
   // before looking for the more common label-first form.
@@ -795,6 +908,30 @@ const getGeneralMeetingTime = (text: string, meetingDate: string) => {
   ).sort((left, right) => left.distance - right.distance);
 
   return candidates[0]?.time;
+};
+
+const getGeneralMeetingTimeForType = (text: string, meetingType: GeneralMeetingType, fallbackDate: string) => {
+  const normalized = normalizeGeneralMeetingText(text);
+  const typePattern = meetingType === "ZWZ"
+    ? /\b(?:ogm|agm|zwz|zwza)\b|\b(?:ordinary|annual)\s+general\s+meeting\b|\bzwyczajn\w*\s+waln\w*\s+zgromadzeni\w*/giu
+    : /\b(?:egm|nwz)\b|\bextraordinary\s+general\s+meeting\b|\bnadzwyczajn\w*\s+waln\w*\s+zgromadzeni\w*/giu;
+  const otherTypePattern = meetingType === "ZWZ"
+    ? /\b(?:egm|nwz)\b|\bextraordinary\s+general\s+meeting\b|\bnadzwyczajn\w*\s+waln\w*\s+zgromadzeni\w*/iu
+    : /\b(?:ogm|agm|zwz|zwza)\b|\b(?:ordinary|annual)\s+general\s+meeting\b|\bzwyczajn\w*\s+waln\w*\s+zgromadzeni\w*/iu;
+  const timePattern = /\b(?:at\s+|o\s+godzin(?:ie|e)\s*|godz(?:ina|ine)?\.?\s*)?(\d{1,2}):([0-5]\d)(?:\s*(a\.m\.|p\.m\.|am|pm))?\b/iu;
+  const candidates = Array.from(normalized.matchAll(typePattern)).flatMap((match) => {
+    const start = (match.index ?? 0) + match[0].length;
+    const context = normalized.slice(start, start + 180);
+    const time = context.match(timePattern);
+    if (!time || (otherTypePattern.test(context.slice(0, time.index)) && (time.index ?? 0) > 0)) return [];
+    let hour = Number(time[1]);
+    const minute = time[2]!;
+    if (!Number.isInteger(hour) || hour < 0 || hour > 23 || (time[3] && hour > 12)) return [];
+    if (/p\.?m\.?/iu.test(time[3] ?? "") && hour < 12) hour += 12;
+    if (/a\.?m\.?/iu.test(time[3] ?? "") && hour === 12) hour = 0;
+    return [{ time: `${String(hour).padStart(2, "0")}:${minute}`, distance: time.index ?? 0 }];
+  }).sort((left, right) => left.distance - right.distance);
+  return candidates[0]?.time ?? getGeneralMeetingTime(text, fallbackDate);
 };
 
 const getGeneralMeetingRescheduleDates = (text: string) => {
@@ -895,6 +1032,28 @@ const getGeneralMeetingEvents = (text: string): ParsedCorporateEvent[] => {
 
   const eventDate = getSemanticMeetingDate(meetingText);
   if (!eventDate) return [];
+
+  // Some formal notices convene an ordinary/annual and an extraordinary
+  // meeting together on the same day. Keep each meeting's type, identity and
+  // (where explicitly announced) time instead of letting the last acronym in
+  // the document win for the entire notice.
+  const hasOrdinaryMeeting = /\b(?:ogm|agm|zwz|zwza)\b|\b(?:ordinary|annual)\s+general\s+meeting\b|\bzwyczajn\w*\s+waln\w*\s+zgromadzeni\w*/iu.test(meetingText);
+  const hasExtraordinaryMeeting = /\b(?:egm|nwz)\b|\bextraordinary\s+general\s+meeting\b|\bnadzwyczajn\w*\s+waln\w*\s+zgromadzeni\w*/iu.test(meetingText);
+  if (formalMatch && hasOrdinaryMeeting && hasExtraordinaryMeeting) {
+    const registrationDate = getOfficialGeneralMeetingRegistrationDate(meetingText);
+    return (["ZWZ", "NWZ"] as const).map((type) => ({
+      eventType: "GENERAL_MEETING" as const,
+      eventDate,
+      eventTime: getGeneralMeetingTimeForType(meetingText, type, eventDate),
+      fiscalYear: Number(eventDate.slice(0, 4)),
+      isScheduleChange: false,
+      generalMeetingType: type,
+      generalMeetingAction: "CONVENING" as const,
+      registrationDate,
+      isCancellation: false,
+      eventIdentity: getGeneralMeetingIdentity(type, eventDate),
+    }));
+  }
 
   return [{
     eventType: "GENERAL_MEETING",
@@ -1570,9 +1729,13 @@ export const parseCorporateEventDocument = (document: string): ParsedCorporateEv
     events.set(getCorporateEventIdentityKey(dividend), dividend);
   }
 
-  return Array.from(events.values()).sort((left, right) =>
+  return Array.from(events.values())
+    .map((event) => isReportType(event.eventType)
+      ? assessReportScheduleEvent({ ...event, sourceEvidence: event.sourceEvidence ?? text.slice(0, 500) })
+      : event)
+    .sort((left, right) =>
     left.eventDate.localeCompare(right.eventDate)
-  );
+    );
 };
 
 export const getCorporateEventLabel = (event: Pick<

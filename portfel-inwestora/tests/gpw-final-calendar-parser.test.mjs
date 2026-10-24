@@ -247,6 +247,7 @@ test("GreenX PAP official non-calendar fiscal schedule preserves report quarter,
   // Compact transcription of PAP MediaRoom report 22/2026, cross-checked
   // against the issuer's attached periodic-information notice. The financial
   // year runs from 1 July 2026 through 30 June 2027.
+  // Source: https://pap-mediaroom.pl/biznes-i-finanse/greenx-metals-ltd-222026-harmonogram-publikacji-raportow-okresowych-greenx-za-rok
   const source = [
     "GREENX METALS LTD. (22/2026) Harmonogram publikacji raportów okresowych GreenX za rok obrotowy 2027 (2026/2027)",
     "Harmonogram za rok obrotowy kończący się w 2027 r. (od 1 lipca 2026 do 30 czerwca 2027 r.).",

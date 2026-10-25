@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "updatedAt": "2026-10-24",
+  "policy": "Issuer-specific metadata may seed source discovery only. It must not branch parser, period, date, status, identity or projection behavior.",
+  "exceptions": [
+    {
+      "file": "src/lib/server/corporate-events.ts",
+      "symbol": "GPW_ISSUER_SOURCE_REGISTRY",
+      "kind": "OFFICIAL_SOURCE_SEED_METADATA",
+      "owner": "market-data-maintainers",
+      "reason": "Known HTTPS issuer-source URLs supplement generic PAP/ESPI discovery; parser behavior remains document-driven.",
+      "expiresOn": "2027-01-31",
+      "regressionTest": "tests/gpw-completeness.test.mjs"
+    }
+  ]
+}

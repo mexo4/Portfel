@@ -64,6 +64,14 @@ export const summarizeGpwCorpus = (documents = gpwKnownAnnotatedCorpus, independ
   independentlyExpectedEvents: independentDocuments.reduce((total, document) => total + (document.expectedEvents?.length ?? 0), 0),
 });
 
+/** Full evaluation needs a broad reference corpus plus a genuinely untouched
+ * holdout. Holdout evidence cannot make up for an undersized reference corpus. */
+export const meetsIndependentAuditThreshold = ({
+  referenceDocuments,
+  independentDocuments,
+  invalidHoldoutDocuments,
+}) => referenceDocuments >= 100 && independentDocuments >= 30 && invalidHoldoutDocuments === 0;
+
 export const sourceQueueSummary = (queue) => ({
   discoveredDocuments: queue.documents?.length ?? 0,
   statusCounts: Object.fromEntries(Object.entries((queue.documents ?? []).reduce((counts, document) => {

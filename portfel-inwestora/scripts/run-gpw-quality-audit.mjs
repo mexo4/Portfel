@@ -8,6 +8,7 @@ import {
   gpwIndependentHoldout,
   gpwKnownAnnotatedCorpus,
   loadGpwSourceReviewQueue,
+  meetsIndependentAuditThreshold,
   sourceQueueSummary,
   summarizeGpwCorpus,
   validateIndependentHoldout,
@@ -75,10 +76,11 @@ const projectionComparison = {
     : "No source/projection snapshots were supplied. Fixture-level API/ICS contracts still run in gpw:e2e.",
 };
 const parserRegressionFree = report.totals.falsePositives === 0 && report.totals.falseNegatives === 0;
-const fullIndependentAuditReady =
-  corpus.documents + corpus.independentlyAnnotatedDocuments >= 100 &&
-  corpus.independentlyAnnotatedDocuments >= 30 &&
-  independentHoldout.invalid.length === 0;
+const fullIndependentAuditReady = meetsIndependentAuditThreshold({
+  referenceDocuments: corpus.documents,
+  independentDocuments: corpus.independentlyAnnotatedDocuments,
+  invalidHoldoutDocuments: independentHoldout.invalid.length,
+});
 const status = policy.status === "FAIL" || !parserRegressionFree ? "FAIL" : "PASS_WITH_LIMITATIONS";
 
 const output = {
@@ -107,7 +109,7 @@ const output = {
     fullIndependentAuditReady,
     reason: fullIndependentAuditReady
       ? "The configured independent-corpus threshold is met."
-      : "The deterministic fixture gate passed, but the repository does not yet contain 100 independently source-annotated documents and a 30-document untouched holdout.",
+      : "The fixture gate passed, but a full audit requires at least 100 source-annotated reference documents plus 30 independently annotated holdout documents, with no invalid holdout records.",
   },
 };
 output.scope.limitations = [

@@ -30,11 +30,11 @@ const compare = (expectedEvents, actualEvents) => {
 };
 
 try {
-  const module = await import(`${pathToFileURL(modulePath).href}?mutation=${encodeURIComponent(modulePath)}`);
-  if (typeof module.parseCorporateEventDocument !== "function") throw new Error("Mutant does not export parseCorporateEventDocument.");
+  const parserModule = await import(`${pathToFileURL(modulePath).href}?mutation=${encodeURIComponent(modulePath)}`);
+  if (typeof parserModule.parseCorporateEventDocument !== "function") throw new Error("Mutant does not export parseCorporateEventDocument.");
   const failures = gpwKnownAnnotatedCorpus.flatMap((document) => compare(
     document.expectedEvents ?? [],
-    module.parseCorporateEventDocument(document.parserInput ?? ""),
+    parserModule.parseCorporateEventDocument(document.parserInput ?? ""),
   ).map((failure) => ({ documentId: document.id, ...failure })));
   process.stdout.write(`${JSON.stringify({ status: failures.length ? "KILLED" : "SURVIVED", failures })}\n`);
 } catch (error) {

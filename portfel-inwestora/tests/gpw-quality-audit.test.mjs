@@ -8,7 +8,7 @@ import {
 } from "../src/lib/gpw-quality-audit.ts";
 import { parseCorporateEventDocument } from "../src/lib/corporate-events.ts";
 import { gpwReferenceCorpus } from "./fixtures/gpw-reference-corpus-2026-10-24.mjs";
-import { validateIndependentHoldout } from "../scripts/gpw-quality-corpus.mjs";
+import { meetsIndependentAuditThreshold, validateIndependentHoldout } from "../scripts/gpw-quality-corpus.mjs";
 
 test("GPW quality audit measures the source-annotated corpus without treating it as market coverage", () => {
   const report = auditGpwDocuments(gpwReferenceCorpus, parseCorporateEventDocument);
@@ -100,4 +100,11 @@ test("independent holdout rejects parser-derived or single-review evidence", () 
   assert.deepEqual(result.invalid[0]?.reasons.sort(), [
     "evidence", "parserFrozenAt", "reviewStatus", "sourceHash", "twoIndependentReviewers",
   ]);
+});
+
+test("full-audit gate requires 100 reference documents and a separate 30-document holdout", () => {
+  assert.equal(meetsIndependentAuditThreshold({ referenceDocuments: 99, independentDocuments: 100, invalidHoldoutDocuments: 0 }), false);
+  assert.equal(meetsIndependentAuditThreshold({ referenceDocuments: 100, independentDocuments: 29, invalidHoldoutDocuments: 0 }), false);
+  assert.equal(meetsIndependentAuditThreshold({ referenceDocuments: 100, independentDocuments: 30, invalidHoldoutDocuments: 1 }), false);
+  assert.equal(meetsIndependentAuditThreshold({ referenceDocuments: 100, independentDocuments: 30, invalidHoldoutDocuments: 0 }), true);
 });

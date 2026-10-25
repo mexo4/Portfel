@@ -2106,13 +2106,84 @@ const parseReportScheduleCorrectionEvents = (text: string): ParsedCorporateEvent
   return result;
 };
 
+/**
+ * A bounded fallback for ordinary prose corrections that do not use the
+ * table/"nowy termin" patterns above. The two dates have to be connected by
+ * an explicit change verb, so a financial period end cannot be borrowed as a
+ * previous publication date merely because it appears in the same report.
+ */
+const parseDirectReportScheduleCorrectionEvents = (text: string): ParsedCorporateEvent[] => {
+  const datePattern = new RegExp(UNICODE_DATE_PATTERN.source, UNICODE_DATE_PATTERN.flags);
+  const events = new Map<string, ParsedCorporateEvent>();
+  const reportMentions = Array.from(text.matchAll(/\b(?:raport\p{L}*|sprawozdani\p{L}*\s+finansow\p{L}*)\b/giu))
+    .map((match) => match.index ?? 0);
+  const changePattern = /\b(?:zostaje|ulega)\s+(?:zmienion\p{L}*|zmianie|przesunię\p{L}*)\s+(?:na|do)\s+(?:(?:dzień|datę|termin)\s*)?/giu;
+
+  for (const change of text.matchAll(changePattern)) {
+    const changeStart = change.index ?? 0;
+    // A negated clause must never become a correction merely because it has a
+    // similar inflection. The required "na/do" phrase already excludes most
+    // ordinary prose; this explicit guard handles malformed OCR text too.
+    if (/\bnie\s*$/iu.test(text.slice(Math.max(0, changeStart - 12), changeStart))) continue;
+
+    const reportStart = reportMentions.filter((index) => index <= changeStart && changeStart - index <= 520).at(-1);
+    if (reportStart === undefined) continue;
+    const nextReportStart = reportMentions.find((index) => index > changeStart);
+    const contextEnd = nextReportStart ?? Math.min(text.length, changeStart + 420);
+    const context = text.slice(reportStart, contextEnd);
+    const type = getEventType(context);
+    if (!isReportType(type)) continue;
+    const contextOffset = reportStart;
+    const localChangeStart = changeStart - contextOffset;
+    const localChangeEnd = localChangeStart + change[0].length;
+    const dates = Array.from(context.matchAll(datePattern)).flatMap((match) => {
+      const date = getIsoDateFromMatch(match);
+      return date && match.index !== undefined
+        ? [{ date, start: match.index, end: match.index + match[0].length }]
+        : [];
+    });
+    const previous = dates.filter((date) => date.end <= localChangeStart).at(-1);
+    const replacement = dates.find((date) => date.start >= localChangeEnd);
+    if (!previous || !replacement || previous.date === replacement.date) continue;
+    const oldContext = context.slice(Math.max(0, previous.start - 100), previous.start);
+    const changeContext = context.slice(previous.end, replacement.start);
+    const oldAnchor = /\b(?:na|w)\s+(?:(?:dzień|datę|termin)\s*)?$/iu.test(oldContext);
+    const explicitChange = /\b(?:zostaje|ulega)\s+(?:zmienion\p{L}*|zmianie|przesunię\p{L}*)\s+(?:na|do)\s+(?:(?:dzień|datę|termin)\s*)?$/iu.test(changeContext);
+    if (!oldAnchor || !explicitChange) continue;
+    const fiscalYearLabel = getFiscalYearLabel(context);
+    const fiscalYear = fiscalYearLabel ? Number(fiscalYearLabel.slice(-4)) : undefined;
+    const event: ParsedCorporateEvent = {
+      eventType: type,
+      eventDate: replacement.date,
+      previousEventDate: previous.date,
+      fiscalPeriod: getFiscalPeriod(context, type),
+      ...(fiscalYear ? { fiscalYear } : {}),
+      ...(fiscalYearLabel ? { fiscalYearLabel } : {}),
+      ...getExplicitReportPeriod(context),
+      isScheduleChange: true,
+      sourceEvidence: context.slice(Math.max(0, previous.start - 180), Math.min(context.length, replacement.end + 180)),
+    };
+    events.set(`${getCorporateEventIdentityKey(event)}:${event.eventDate}`, event);
+  }
+  return [...events.values()];
+};
+
 export const parseCorporateEventDocument = (document: string): ParsedCorporateEvent[] => {
   const text = normalizeDocumentText(document);
   if (!text) return [];
   const events = new Map<string, ParsedCorporateEvent>();
-  const changeNotice = /\bzmian(?:a|y|ie|ę)\s+(?:harmonogramu\s+)?terminu\b|\bnowy termin(?: publikacji)?\b/iu.test(text);
+  const directCorrections = parseDirectReportScheduleCorrectionEvents(text);
+  const changeNotice = /\bzmian(?:a|y|ie|ę)\s+(?:harmonogramu\s+)?terminu\b|\bnowy termin(?: publikacji)?\b/iu.test(text) || directCorrections.length > 0;
   if (changeNotice) {
     for (const event of parseReportScheduleCorrectionEvents(text)) {
+      events.set(getCorporateEventIdentityKey(event), event);
+    }
+    // Do not make correction lanes mutually exclusive: one ESPI notice may
+    // contain a table-shaped correction and an ordinary prose correction for
+    // different reporting periods. Direct corrections are locally anchored to
+    // their report mention and therefore safely replace only the same logical
+    // identity when both lanes describe it.
+    for (const event of directCorrections) {
       events.set(getCorporateEventIdentityKey(event), event);
     }
     const reportClause = getCandidateSegments(text).find((segment) =>

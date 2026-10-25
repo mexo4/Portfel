@@ -9,7 +9,12 @@
     "dev": "npm --workspace portfel-inwestora run dev --",
     "build": "npm --workspace portfel-inwestora run build",
     "start": "npm --workspace portfel-inwestora run start",
-    "lint": "npm --workspace portfel-inwestora run lint"
+    "lint": "npm --workspace portfel-inwestora run lint",
+    "gpw:audit": "npm --workspace portfel-inwestora run gpw:audit",
+    "gpw:benchmark": "npm --workspace portfel-inwestora run gpw:benchmark",
+    "gpw:anomalies": "npm --workspace portfel-inwestora run gpw:anomalies",
+    "gpw:e2e": "npm --workspace portfel-inwestora run gpw:e2e",
+    "gpw:mutation": "npm --workspace portfel-inwestora run gpw:mutation"
   },
   "engines": {
     "node": "24.x"

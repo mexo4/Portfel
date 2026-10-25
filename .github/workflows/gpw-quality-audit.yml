@@ -1,0 +1,97 @@
+name: GPW quality audit
+
+on:
+  pull_request:
+    paths:
+      - "portfel-inwestora/src/lib/corporate-events.ts"
+      - "portfel-inwestora/src/lib/server/corporate-events.ts"
+      - "portfel-inwestora/src/lib/**/gpw*"
+      - "portfel-inwestora/src/app/api/calendar/**"
+      - "portfel-inwestora/tests/**gpw*.test.mjs"
+      - "portfel-inwestora/tests/**corporate*.test.mjs"
+      - "portfel-inwestora/tests/fixtures/gpw-*.mjs"
+      - "portfel-inwestora/scripts/gpw-*.mjs"
+      - "portfel-inwestora/docs/gpw-*.json"
+      - "package.json"
+      - "package-lock.json"
+      - "portfel-inwestora/package.json"
+      - ".github/workflows/gpw-quality-audit.yml"
+  push:
+    branches:
+      - "najlepsza-wersja"
+      - "fix/gpw-quality-audit-20261024"
+    paths:
+      - "portfel-inwestora/src/lib/corporate-events.ts"
+      - "portfel-inwestora/src/lib/server/corporate-events.ts"
+      - "portfel-inwestora/src/lib/**/gpw*"
+      - "portfel-inwestora/src/app/api/calendar/**"
+      - "portfel-inwestora/tests/**gpw*.test.mjs"
+      - "portfel-inwestora/tests/**corporate*.test.mjs"
+      - "portfel-inwestora/tests/fixtures/gpw-*.mjs"
+      - "portfel-inwestora/scripts/gpw-*.mjs"
+      - "portfel-inwestora/docs/gpw-*.json"
+      - "package.json"
+      - "package-lock.json"
+      - "portfel-inwestora/package.json"
+      - ".github/workflows/gpw-quality-audit.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deterministic-quality-gate:
+    name: Parser, corpus and API/ICS contracts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Check parser, corpus and anti-ticker policy
+        run: npm run gpw:audit
+
+      - name: Detect fixture anomalies
+        run: npm run gpw:anomalies
+
+      - name: Benchmark deterministic parser corpus
+        run: npm run gpw:benchmark
+
+      - name: Execute real source-code mutation tests
+        run: npm run gpw:mutation
+
+      - name: Test parser to API/ICS contracts
+        run: npm run gpw:e2e
+
+      - name: Publish audit summary
+        if: always()
+        run: |
+          if [ -f portfel-inwestora/artifacts/gpw-quality/audit.md ]; then
+            cat portfel-inwestora/artifacts/gpw-quality/audit.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No GPW audit report was generated." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload GPW quality artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gpw-quality-audit-${{ github.run_id }}
+          path: portfel-inwestora/artifacts/gpw-quality/
+          if-no-files-found: warn
+          retention-days: 30
+
+  isolated-postgres-contracts:
+    name: Native PostgreSQL contract instructions
+    runs-on: ubuntu-24.04
+    if: ${{ false }}
+    steps:
+      - run: echo "Disabled intentionally. Run npm run gpw:e2e:postgres only with a loopback-only native mexo_gpw_test database; this workflow never receives production credentials."

@@ -142,7 +142,25 @@ type ProviderResult = {
   durationMs?: number;
   /** Retry transient partial reads soon while retaining any valid batches. */
   retrySoon?: boolean;
+  /** A bounded scan retained valid results but did not reach the end of source pagination. */
+  incomplete?: boolean;
 };
+
+/** Truncation is not a completed scan, but it should retain the normal daily
+ * refresh cadence rather than trigger the short transient-error retry loop. */
+export const getCorporateEventAggregateSourceStatus = (
+  results: readonly Pick<ProviderResult, "status" | "retrySoon" | "incomplete">[]
+): CorporateEventSourceStatus =>
+  results.some((result) => result.retrySoon)
+    ? "TEMPORARILY_UNAVAILABLE"
+    : results.some((result) => result.incomplete)
+      ? "INCOMPLETE"
+      : results.some((result) => result.status === "SUCCESS")
+        ? "SUCCESS"
+        : results.find((result) => result.status === "ACCESS_DENIED")?.status ??
+          results.find((result) => result.status === "TEMPORARILY_UNAVAILABLE")?.status ??
+          results.find((result) => result.status === "PARSE_ERROR")?.status ??
+          "NOT_FOUND";
 
 export type CorporateEventProvider = {
   id: string;
@@ -479,7 +497,7 @@ const discoverPapCandidates = async (instrument: CanonicalInstrument): Promise<P
         sourceStatus: discovered.status, retainedCandidates: candidates.length });
     }
     return {
-      status: candidates.length > 0 ? "SUCCESS" as const : "NOT_FOUND" as const,
+      status: candidates.length > 0 ? "SUCCESS" as const : discovered.incomplete ? "INCOMPLETE" as const : "NOT_FOUND" as const,
       candidates,
       incomplete: discovered.incomplete,
       pagesRead: discovered.pagesRead,
@@ -571,7 +589,8 @@ export class PapEspiDiscoveryCorporateEventProvider implements CorporateEventPro
     const startedAt = Date.now();
     const discovery = await discoverPapCandidates(instrument);
     if (discovery.status !== "SUCCESS") {
-      return { status: discovery.status, events: [], durationMs: Date.now() - startedAt };
+      return { status: discovery.status, events: [], incomplete: discovery.incomplete,
+        retrySoon: discovery.retrySoon, durationMs: Date.now() - startedAt };
     }
 
     const candidates = discovery.candidates.filter((candidate) =>
@@ -583,7 +602,8 @@ export class PapEspiDiscoveryCorporateEventProvider implements CorporateEventPro
         status: "INCOMPLETE_CANDIDATE_COVERAGE", pagesRead: discovery.pagesRead,
         discovered: candidates.length, documentsRead: result.documentsRead });
     }
-    return { ...result, retrySoon: discovery.retrySoon || result.retrySoon,
+    return { ...result, incomplete: discovery.incomplete || result.incomplete,
+      retrySoon: discovery.retrySoon || result.retrySoon,
       durationMs: Date.now() - startedAt };
   }
 }
@@ -1428,14 +1448,7 @@ const refreshCanonicalInstrument = async (
     const startedAt = Date.now();
     const results = await Promise.all(providers.map((provider) => provider.fetchEvents(instrument)));
     const successful = results.filter((result) => result.status === "SUCCESS");
-    const latestStatus = results.some((result) => result.retrySoon)
-      ? "TEMPORARILY_UNAVAILABLE"
-      : successful.length > 0
-      ? "SUCCESS"
-      : results.find((result) => result.status === "ACCESS_DENIED")?.status ??
-        results.find((result) => result.status === "TEMPORARILY_UNAVAILABLE")?.status ??
-        results.find((result) => result.status === "PARSE_ERROR")?.status ??
-        "NOT_FOUND";
+    const latestStatus = getCorporateEventAggregateSourceStatus(results);
     const now = new Date().toISOString();
     let projectionChanged = false;
 

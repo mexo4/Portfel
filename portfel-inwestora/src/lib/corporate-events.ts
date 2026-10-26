@@ -39,6 +39,7 @@ export type CorporateEventSourceType =
 
 export type CorporateEventSourceStatus =
   | "SUCCESS"
+  | "INCOMPLETE"
   | "NOT_FOUND"
   | "TEMPORARILY_UNAVAILABLE"
   | "ACCESS_DENIED"
@@ -491,6 +492,26 @@ export const getCandidateSegments = (text: string) => {
   let sectionType: CorporateEventType | null = null;
   for (let index = 0; index < lines.length; index += 1) {
     let line = lines[index];
+    // Prose can wrap the publication verb between physical lines ("który
+    // zostanie" / "opublikowany w dniu ..."). Keep that one appointment
+    // together without borrowing a neighboring report row or an unrelated
+    // processing date earlier in the document.
+    if (isReportType(getEventType(line)) && /\b(?:zostanie|będzie)\s*$/iu.test(line) &&
+      /^(?:opublikowan|przekazan)\p{L}*\b/iu.test(lines[index + 1] ?? "")) {
+      line += ` ${lines[++index]}`;
+    }
+    // A formal schedule heading gives its type to following short rows such
+    // as "- za I kwartał ...". A loose mention of a quarter elsewhere in
+    // prose must not confer the same authority.
+    if (/[:：]\s*$/u.test(line) && extractPolishDates(line).length === 0 &&
+      !/^[-–—•]/u.test(line) && !/\bza\b/iu.test(line) &&
+      (/^(?:(?:harmonogram|terminy|daty)\s+(?:publikacji|przekazania)\b.{0,100}|(?:(?:rozszerzon\p{L}*|skonsolidowan\p{L}*|jednostkow\p{L}*)\s+){0,3}raporty\s+(?:roczne|kwartalne|półroczne)\b.{0,60}|(?:\d+[_.)]\s*)?(?:(?:rozszerzon\p{L}*|skonsolidowan\p{L}*|jednostkow\p{L}*)\s+){1,3}raport\s+(?:roczn\p{L}*|kwartaln\p{L}*|półroczn\p{L}*)\b.{0,100})[:：]\s*$/iu.test(line) ||
+        (/^raport\s+(?:roczn\p{L}*|kwartaln\p{L}*|półroczn\p{L}*)[:：]\s*$/iu.test(line) &&
+          /(?:opublikowan|publikacj|przekazan|termin)/iu.test(lines[index + 1] ?? ""))) &&
+      isReportType(getEventType(line))) {
+      sectionType = getEventType(line);
+      continue;
+    }
     // ESPI correction notices are sometimes extracted as wrapped prose rather
     // than a single paragraph. Keep the old appointment and its replacement
     // together when they belong to the same report, but stop before another
@@ -770,6 +791,12 @@ const parseReportScheduleEvents = (text: string) => {
     if (/\b(?:okresy\s+sprawozdawcze|trwa\s+od)\b/iu.test(clause)) continue;
     const type = getEventType(clause) ?? segment.sectionType;
     if (!isReportType(type)) continue;
+    // A preliminary-results article can mention "three quarters" and the
+    // date on which results were processed. It is not a formal quarterly
+    // report appointment unless this clause names a report (or belongs to an
+    // explicit report-schedule section).
+    if (!/\b(?:rapor\p{L}*|sprawozdani\p{L}*)\b/iu.test(clause) &&
+      !isReportType(segment.sectionType)) continue;
     // A date in a legal citation below a section heading is not a report.
     if (!getEventType(clause) && !/(?:zostanie|będzie)\s+(?:opublikowan|przekazan)|termin\s+(?:publikacji|przekazania)/iu.test(clause)) continue;
     const eventDate = getReportPublicationDate(clause);

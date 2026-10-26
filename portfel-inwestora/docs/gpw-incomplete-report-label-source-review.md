@@ -61,3 +61,7 @@ Automatyczny audyt oficjalnych publikacji z 19–23.10.2026 wskazał te trzy tyt
 | [Getin Holding 499304](https://www.gpw.pl/komunikat?geru_id=499304) | Formalny termin raportu za Q3 2026 zmieniono z 30.11.2026 na 28.10.2026. | Po poprawce pełna oficjalna treść daje `QUARTERLY_REPORT` z datą 28.10 i `previousEventDate` 30.11; produkcyjnej projekcji nie zmieniano. |
 
 Ta weryfikacja dowodzi, że sama liczba `PARSER_MISSED_EVENT` nie jest liczbą rzeczywistych FN: sygnał wymaga źródłowego rozstrzygnięcia. Trzy pełne oficjalne strony GPW zostały ponownie pobrane i przepuszczone przez parser po poprawce; wynik: IMS — jedna warunkowa zaliczka, Stalexport — zero dywidend emitenta, Getin — jedna korekta daty. Nie wykonano aktualizacji istniejących rekordów Aiven ani publikacji zmian w interfejsie.
+
+## Dodatkowy przypadek rozstrzygnięty w audycie
+
+[Instal Kraków 499122](https://www.gpw.pl/komunikat?geru_id=499122) opisuje wstępne wyniki po trzech kwartałach. Data 20.10.2026 oznacza zakończenie ich opracowania, **nie** publikację formalnego raportu kwartalnego. Oficjalna treść zapowiada publikację raportu na 20.11.2026. Poprzedni parser tworzył fałszywe wydarzenie na 20.10; po korekcie pełny dokument wskazuje 20.11 i pozostawia rekord do przeglądu ze względu na niepełny kontekst okresu. Nie zmieniono produkcyjnej projekcji.

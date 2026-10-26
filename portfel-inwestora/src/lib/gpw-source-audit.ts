@@ -11,7 +11,8 @@ export type GpwSourceAuditAdapters = {
   fetchDocument: (url: string) => Promise<FetchResult>;
   parseDetail: (document: string, candidate: PapEspiListCandidate) => ParsedPapEspiReport | null;
   parseEvents: (document: string) => ParsedCorporateEvent[];
-  readAttachment?: (url: string) => Promise<string | { text: string; pagesRead: number; totalPages: number; truncated: boolean } | undefined>;
+  readAttachment?: (url: string) => Promise<string | { text: string; pagesRead: number; totalPages: number; truncated: boolean } |
+    { status: "UNREADABLE"; reason: string; httpStatus?: number } | undefined>;
 };
 
 export type GpwSourceAuditOptions = {
@@ -127,8 +128,10 @@ export const runGpwSourceAudit = async (adapters: GpwSourceAuditAdapters, option
     publishedAt?: string; fetchStatus: "FETCHED" | "UNAVAILABLE" | "REJECTED" | "PARTIAL";
     parseStatus: "PARSED" | "NOT_ATTEMPTED" | "REJECTED"; eventCount: number;
     attachmentCount: number; attachmentsRead: number; attachmentsTruncated?: number;
+    attachmentIssues?: Array<{ sourceUrl: string; code: string; httpStatus?: number }>;
     bodyHash?: string; evidence?: string; error?: string;
   }> = [];
+  const attachmentIssueCounts: Record<string, number> = {};
   const sourceEvents: Array<{
     id: string; documentId: string; issuer: string; identity: string; eventDate: string;
     eventType: string; fiscalPeriod?: string; fiscalYear?: number; fiscalYearLabel?: string;
@@ -168,20 +171,40 @@ export const runGpwSourceAudit = async (adapters: GpwSourceAuditAdapters, option
       const attachmentCount = report.attachments.length;
       let attachmentsRead = 0;
       let attachmentsTruncated = 0;
+      const attachmentIssues: Array<{ sourceUrl: string; code: string; httpStatus?: number }> = [];
+      const noteAttachmentIssue = (sourceUrl: string, code: string, httpStatus?: number) => {
+        attachmentIssues.push({ sourceUrl, code, ...(httpStatus === undefined ? {} : { httpStatus }) });
+        attachmentIssueCounts[code] = (attachmentIssueCounts[code] ?? 0) + 1;
+      };
       for (const attachment of report.attachments.slice(0, 8)) {
-        if (!adapters.readAttachment) break;
+        if (!adapters.readAttachment) {
+          noteAttachmentIssue(attachment.sourceUrl, "READER_UNAVAILABLE");
+          continue;
+        }
         try {
           const result = await adapters.readAttachment(attachment.sourceUrl);
+          if (typeof result === "object" && result && "status" in result) {
+            noteAttachmentIssue(attachment.sourceUrl, result.reason, result.httpStatus);
+            continue;
+          }
           const text = typeof result === "string" ? result : result?.text;
-          if (!text) continue;
+          if (!text?.trim()) {
+            noteAttachmentIssue(attachment.sourceUrl, result === undefined ? "UNAVAILABLE" : "EMPTY_TEXT");
+            continue;
+          }
           attachmentsRead += 1;
-          if (typeof result !== "string" && result?.truncated) attachmentsTruncated += 1;
+          if (typeof result !== "string" && result?.truncated) {
+            attachmentsTruncated += 1;
+            noteAttachmentIssue(attachment.sourceUrl, "PAGE_LIMIT");
+          }
           collectEvents(text);
-        } catch { /* record partial source coverage below */ }
+        } catch { noteAttachmentIssue(attachment.sourceUrl, "EXTRACTION_ERROR"); }
       }
+      for (const attachment of report.attachments.slice(8)) noteAttachmentIssue(attachment.sourceUrl, "ATTACHMENT_LIMIT");
       const events = [...eventMap.values()];
       const fetchStatus = attachmentsRead < attachmentCount || attachmentsTruncated > 0 ? "PARTIAL" as const : "FETCHED" as const;
       documents.push({ ...base, fetchStatus, parseStatus: "PARSED", eventCount: events.length, attachmentCount, attachmentsRead, attachmentsTruncated,
+        ...(attachmentIssues.length ? { attachmentIssues } : {}),
         bodyHash: createHash("sha256").update(report.body).digest("hex"),
         evidence: report.body.slice(0, 320) });
       for (const [index, event] of events.entries()) sourceEvents.push({
@@ -201,7 +224,11 @@ export const runGpwSourceAudit = async (adapters: GpwSourceAuditAdapters, option
       }
       if (attachmentsRead < attachmentCount || attachmentsTruncated > 0) findings.push({ code: "INCOMPLETE_DOCUMENT", confidence: "REVIEW",
         sourceId: candidate.sourceId, sourceUrl: candidate.sourceUrl,
-        reason: `${attachmentsRead}/${attachmentCount} attachments were extracted; ${attachmentsTruncated} PDF(s) exceeded the page cap.` });
+        reason: `${attachmentsRead}/${attachmentCount} attachments were extracted; ${attachmentsTruncated} PDF(s) exceeded the page cap; ` +
+          `issues: ${Object.entries(attachmentIssues.reduce<Record<string, number>>((counts, issue) => {
+            counts[issue.code] = (counts[issue.code] ?? 0) + 1;
+            return counts;
+          }, {})).map(([code, count]) => `${code}=${count}`).join(", ") || "none"}.` });
     } catch (error) {
       documents.push({ ...base, fetchStatus: "UNAVAILABLE", parseStatus: "NOT_ATTEMPTED", eventCount: 0,
         attachmentCount: 0, attachmentsRead: 0, error: error instanceof Error ? error.name : "UNKNOWN" });
@@ -221,13 +248,13 @@ export const runGpwSourceAudit = async (adapters: GpwSourceAuditAdapters, option
     scope: { dates: [...options.dates], maxPagesPerDate: options.maxPagesPerDate,
       maxDocuments: options.maxDocuments, marketComplete: false,
       limitations: ["Only the declared publication-date window was crawled.",
-        "Official PDFs are fetched with the existing bounded extractor; unsupported, unavailable, or >8 attachments mark a document partial. Issuer pages are not covered.",
+        "Official attachments use a bounded PDF text extractor; access challenges, non-PDF files, oversized files, and >8 attachments remain partial. Issuer pages are not covered.",
         "Unannotated source events are parser hypotheses, not independently verified ground truth."] },
     counts: { discovered: candidates.length, fetched: documents.filter((item) => item.fetchStatus === "FETCHED" || item.fetchStatus === "PARTIAL").length,
       parsed: documents.filter((item) => item.parseStatus === "PARSED").length,
       partial: documents.filter((item) => item.fetchStatus === "PARTIAL").length,
       rejected: documents.filter((item) => item.fetchStatus === "REJECTED").length,
       pending, sourceEvents: sourceEvents.length, errors: findings.length },
-    coverage, documents, sourceEvents, findings,
+    coverage, documents, sourceEvents, attachmentIssueCounts, findings,
   };
 };

@@ -2,6 +2,9 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import pg from "pg";
 import { auditGpwProjectionSnapshots } from "../src/lib/gpw-quality-audit.ts";
+import { expandGpwStoredCalendarEvent } from "../src/lib/public-gpw-calendar.ts";
+import { ICAL_CATEGORIES, serializeIcal, toIcalMilestones } from "../src/lib/gpw-ical.ts";
+import { assessGpwPresentationSnapshot } from "./gpw-quality-gate.mjs";
 import { getAuditOutputDirectory, getOption, printArtifactSummary, renderGenericMarkdown, writeGpwQualityArtifacts } from "./gpw-quality-io.mjs";
 
 const outputDir = getAuditOutputDirectory();
@@ -18,6 +21,7 @@ let ingestion = [];
 let findings = [];
 let calendarAnomalies = [];
 let calendarEventsRead = 0;
+let presentationSnapshot = { status: "NOT_RUN", scope: { limitation: "No read-only GPW event snapshot was available." }, findings: [] };
 
 if (databaseUrl) {
   const caBase64 = process.env.POSTGRES_CA_CERT_BASE64;
@@ -58,6 +62,8 @@ if (databaseUrl) {
           corporate_events_projection_status AS "meetingStatus",
           dividend_projection_status AS "dividendStatus"
         FROM espi_reports WHERE source_id = ANY($1::text[])`, [sourceIds]);
+    const calendarFrom = sources.scope.dates[0];
+    const calendarTo = new Date(Date.parse(`${sources.scope.dates.at(-1)}T12:00:00Z`) + 365 * 86_400_000).toISOString().slice(0, 10);
     const calendarRows = await client.query(`SELECT event.id, event.event_type AS "eventType", event.event_date::text AS "eventDate",
           event.event_identity AS identity, event.fiscal_period AS "fiscalPeriod",
           event.fiscal_year AS "fiscalYear", event.fiscal_year_label AS "fiscalYearLabel",
@@ -70,11 +76,63 @@ if (databaseUrl) {
           AND event.event_type IN ('QUARTERLY_REPORT', 'HALF_YEAR_REPORT', 'ANNUAL_REPORT')
           AND event.event_date >= $1 AND event.event_date <= $2
         ORDER BY event.event_date, instrument.ticker, event.id`,
-        [sources.scope.dates[0], new Date(Date.parse(`${sources.scope.dates.at(-1)}T12:00:00Z`) + 365 * 86_400_000).toISOString().slice(0, 10)]);
+        [calendarFrom, calendarTo]);
+    // Use the same pure event converters as the public calendar and ICS feed
+    // against a repeatable read-only snapshot. This does not call either live
+    // route and cannot establish deployed endpoint/cache freshness.
+    const presentationRows = await client.query(`SELECT event.id, issuer.ticker, issuer.company_name,
+          event.event_type, event.event_date::text, event.event_time,
+          event.fiscal_period, event.fiscal_year, event.fiscal_year_label,
+          event.general_meeting_type, event.registration_date::text,
+          event.dividend_per_share, event.dividend_currency,
+          event.record_date::text, event.payment_date::text,
+          event.status, event.active, event.updated_at,
+          source.source_url, source.source_published_at
+        FROM corporate_events AS event
+        JOIN corporate_event_instruments AS issuer ON issuer.id = event.instrument_id
+        LEFT JOIN LATERAL (
+          SELECT evidence.source_url, evidence.source_published_at
+          FROM corporate_event_sources AS evidence
+          WHERE evidence.corporate_event_id = event.id
+            AND evidence.source_url LIKE 'https://%'
+          ORDER BY CASE WHEN event.event_type IN ('QUARTERLY_REPORT', 'HALF_YEAR_REPORT', 'ANNUAL_REPORT')
+                        THEN evidence.source_published_at END DESC NULLS LAST,
+                   (evidence.confirms_amount::int + evidence.confirms_record_date::int +
+                    evidence.confirms_payment_date::int + evidence.confirms_status::int) DESC,
+                   evidence.source_priority DESC, evidence.source_published_at DESC NULLS LAST,
+                   evidence.discovered_at DESC
+          LIMIT 1
+        ) AS source ON TRUE
+        WHERE issuer.market = 'GPW' AND event.active = TRUE AND event.status <> 'CANCELLED'
+          AND event.event_type IN ('QUARTERLY_REPORT', 'HALF_YEAR_REPORT', 'ANNUAL_REPORT',
+                                   'GENERAL_MEETING', 'UPCOMING_DIVIDEND')
+          AND (event.event_date BETWEEN $1 AND $2 OR
+               (event.event_type = 'UPCOMING_DIVIDEND' AND
+                (event.record_date BETWEEN $1 AND $2 OR event.payment_date BETWEEN $1 AND $2)))
+        ORDER BY event.event_date, event.id LIMIT 4001`, [calendarFrom, calendarTo]);
+    const presentationTruncated = presentationRows.rows.length > 4000;
+    const presentationSourceRows = presentationRows.rows.slice(0, 4000);
+    const publicEvents = presentationSourceRows.flatMap((row) =>
+      expandGpwStoredCalendarEvent(row, calendarFrom, calendarTo));
+    const milestones = presentationSourceRows.flatMap((row) =>
+      toIcalMilestones(row, calendarFrom, calendarTo));
+    const icalText = serializeIcal(milestones, ICAL_CATEGORIES);
+    presentationSnapshot = assessGpwPresentationSnapshot({ rows: presentationSourceRows,
+      publicEvents, milestones, icalText, from: calendarFrom, to: calendarTo,
+      truncated: presentationTruncated });
     // One event may cite several official documents. Collapse JOIN rows by the
     // stable event ID before semantic comparison; provenance multiplicity is
     // not a duplicate calendar event.
-    projections = [...new Map(projectionRows.rows.map((row) => [row.id, row])).values()];
+    const projectionsById = new Map();
+    for (const row of projectionRows.rows) {
+      const existing = projectionsById.get(row.id);
+      if (existing) {
+        if (row.sourceUrl && !existing.sourceUrls.includes(row.sourceUrl)) existing.sourceUrls.push(row.sourceUrl);
+      } else {
+        projectionsById.set(row.id, { ...row, sourceUrls: row.sourceUrl ? [row.sourceUrl] : [] });
+      }
+    }
+    projections = [...projectionsById.values()];
     ingestion = ingestionRows.rows;
     const byEventId = new Map();
     for (const row of calendarRows.rows) {
@@ -143,17 +201,19 @@ const report = {
     sourceEvents: sources.sourceEvents.length, projectionRows: projections.length,
     ingestedReports: ingestion.length, publicApi: "NOT_RUN", ics: "NOT_RUN",
     calendarEventsRead, calendarAnomalies: calendarAnomalies.length,
-    limitation: "Public production calendar/API GETs can enqueue writes. This command deliberately does not call them; API/ICS contract tests must run against an isolated PostgreSQL instance." },
-  findings, projections, ingestion, calendarAnomalies,
+    limitation: "Public production calendar/API GETs can enqueue writes. This command deliberately does not call them; the presentation snapshot only exercises pure model/serialization contracts, not live API, ICS or cache." },
+  findings, projections, ingestion, calendarAnomalies, presentationSnapshot,
 };
 const artifacts = await writeGpwQualityArtifacts({ outputDir, basename: "projections", report,
   markdown: renderGenericMarkdown("GPW source → projection comparison (read-only)", [
     { heading: "Status", body: `- ${status}\n- Database: ${databaseState}\n- Source events: ${report.scope.sourceEvents}; projection rows: ${projections.length}; ingested reports: ${ingestion.length}` },
     { heading: "Findings", body: findings.length ? findings.map((item) => `- ${item.code} ${item.documentId ?? ""} ${item.sourceUrl ?? ""} — ${item.reason}`).join("\n") : "- None in the supplied bounded source window." },
     { heading: "Calendar-wide labels/collisions", body: `- ${calendarEventsRead} active report events read; ${calendarAnomalies.length} review items.\n- Same-day records are never auto-deleted; source links and identities are in projections.json.` },
+    { heading: "Read-only presentation snapshot", body: `- Status: ${presentationSnapshot.status}; rows=${presentationSnapshot.scope.rowsRead ?? 0}; public model events=${presentationSnapshot.scope.publicEvents ?? 0}; ICS model milestones=${presentationSnapshot.scope.icalMilestones ?? 0}; findings=${presentationSnapshot.findings.length}.\n- ${presentationSnapshot.scope.limitation}` },
     { heading: "Safety / limits", body: `- ${report.scope.limitation}\n- No application DB helper, migration, synchronization function, or write query is called. Every query runs inside BEGIN READ ONLY.\n- Unannotated parser outputs remain REVIEW evidence, not CONFIRMED source truth.` },
   ]),
 });
 printArtifactSummary({ name: "gpw:audit:projections", status, artifacts,
   summary: { databaseState, sourceEvents: report.scope.sourceEvents, projectionRows: projections.length,
-    findings: findings.length, calendarAnomalies: calendarAnomalies.length } });
+    findings: findings.length, calendarAnomalies: calendarAnomalies.length,
+    presentationSnapshot: presentationSnapshot.status } });

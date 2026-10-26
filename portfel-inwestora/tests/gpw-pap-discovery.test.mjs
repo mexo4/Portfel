@@ -4,7 +4,9 @@ import test from "node:test";
 import {
   collectPapCategoryEventBatches,
   collectPapIssuerCandidatePages,
+  getCorporateEventAggregateSourceStatus,
 } from "../src/lib/server/corporate-events.ts";
+import { isCorporateEventSourceUnavailable } from "../src/lib/corporate-events.ts";
 
 const issuer = {
   id: "issuer:test",
@@ -60,6 +62,24 @@ test("PAP issuer discovery reports a repeated page or request cap as incomplete"
     async (url) => ({ status: "SUCCESS", document: listing(`/${new URL(url).search || "zero"}`, "Harmonogram raportów okresowych") }), 2);
   assert.equal(capped.incomplete, true);
   assert.equal(capped.pagesRead, 2);
+});
+
+test("bounded PAP coverage cannot be reported as a successful complete sync", () => {
+  assert.equal(getCorporateEventAggregateSourceStatus([
+    { status: "SUCCESS", incomplete: true },
+    { status: "SUCCESS" },
+  ]), "INCOMPLETE");
+  assert.equal(getCorporateEventAggregateSourceStatus([
+    { status: "NOT_FOUND", incomplete: true },
+  ]), "INCOMPLETE");
+  assert.equal(getCorporateEventAggregateSourceStatus([
+    { status: "SUCCESS", incomplete: true, retrySoon: true },
+  ]), "TEMPORARILY_UNAVAILABLE");
+  assert.equal(getCorporateEventAggregateSourceStatus([
+    { status: "SUCCESS" },
+  ]), "SUCCESS");
+  assert.equal(isCorporateEventSourceUnavailable("INCOMPLETE"), false,
+    "a fixed source cap should retain the daily TTL instead of retrying hourly");
 });
 
 test("PAP issuer discovery does not mistake a non-ESPI article page for the end", async () => {

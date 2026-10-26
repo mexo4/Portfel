@@ -54,3 +54,23 @@ test("a prose correction replaces the former report date, not its source citatio
     isScheduleChange: true,
   }]);
 });
+
+test("preliminary result processing date is not the formal quarterly publication date", () => {
+  const events = parseCorporateEventDocument(`Temat: Wstępne wyniki finansowe po 3 kwartałach 2026 roku
+    Zarząd informuje, że w związku z
+    zakończeniem w dniu 20.10.2026 roku procesu rozliczania wyniku finansowego po 3 kwartałach
+    2026 roku, powziął informację o wstępnych wynikach finansowych.
+    Zaprezentowane wyniki nie są ostateczne i mogą ulec zmianie.
+    Ostateczne wyniki zostaną przedstawione w raporcie kwartalnym Spółki, który zostanie
+    opublikowany w dniu 20.11.2026 roku.`);
+
+  assert.deepEqual(events.filter((event) => event.eventType === "QUARTERLY_REPORT")
+    .map((event) => event.eventDate), ["2026-11-20"]);
+});
+
+test("an informational report heading does not turn a processing date into a publication", () => {
+  const events = parseCorporateEventDocument(`Informacje o raporcie kwartalnym:
+    Dane za III kwartał 2026: 20.10.2026 roku proces zamknięto.`);
+
+  assert.equal(events.some((event) => event.eventType === "QUARTERLY_REPORT"), false);
+});

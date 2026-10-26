@@ -118,7 +118,33 @@ test("source audit extracts the official PDF attachment and distinguishes missin
   assert.equal(report.documents[0].attachmentsRead, 1);
   assert.equal(report.documents[0].fetchStatus, "FETCHED");
   assert.equal(report.documents[1].fetchStatus, "PARTIAL");
+  assert.deepEqual(report.documents[1].attachmentIssues, [
+    { sourceUrl: "https://www.gpw.pl/missing.pdf", code: "UNAVAILABLE" },
+  ]);
+  assert.deepEqual(report.attachmentIssueCounts, { UNAVAILABLE: 1 });
   assert.equal(report.status, "SOURCE_AUDIT_INCOMPLETE");
+});
+
+test("source audit names attachment access challenges without treating them as extracted", async () => {
+  const entry = candidate(4);
+  const attachmentUrl = "https://espiebi.pap.pl/espi/pl/reports/view/attachment/file.pdf,20261025";
+  const report = await runGpwSourceAudit({
+    fetchPage: async () => ({ status: "SUCCESS", document: "official listing" }),
+    parseList: () => ({ candidates: [entry], eligibleRows: 1, malformedRows: 0 }),
+    fetchDocument: async () => ({ status: "SUCCESS", document: "official detail" }),
+    parseDetail: (_html, candidateEntry) => ({ ...detail(candidateEntry), attachments: [
+      { sourceUrl: attachmentUrl, name: "file.pdf" },
+    ] }),
+    readAttachment: async () => ({ status: "UNREADABLE", reason: "ACCESS_CHALLENGE" }),
+    parseEvents: () => [],
+  }, { dates: ["2026-10-25"], maxPagesPerDate: 2, maxDocuments: 1 });
+
+  assert.equal(report.documents[0].fetchStatus, "PARTIAL");
+  assert.equal(report.documents[0].attachmentsRead, 0);
+  assert.deepEqual(report.documents[0].attachmentIssues, [{ sourceUrl: attachmentUrl, code: "ACCESS_CHALLENGE" }]);
+  assert.deepEqual(report.attachmentIssueCounts, { ACCESS_CHALLENGE: 1 });
+  assert.match(report.findings.find((finding) => finding.code === "INCOMPLETE_DOCUMENT").reason,
+    /issues: ACCESS_CHALLENGE=1/);
 });
 
 test("source audit marks a page-capped official PDF as partial even when text was extracted", async () => {
@@ -135,6 +161,9 @@ test("source audit marks a page-capped official PDF as partial even when text wa
   }, { dates: ["2026-10-25"], maxPagesPerDate: 2, maxDocuments: 1 });
   assert.equal(report.documents[0].attachmentsRead, 1);
   assert.equal(report.documents[0].attachmentsTruncated, 1);
+  assert.deepEqual(report.documents[0].attachmentIssues, [
+    { sourceUrl: "https://www.gpw.pl/long.pdf", code: "PAGE_LIMIT" },
+  ]);
   assert.equal(report.documents[0].fetchStatus, "PARTIAL");
   assert.equal(report.status, "SOURCE_AUDIT_INCOMPLETE");
 });

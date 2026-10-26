@@ -187,7 +187,7 @@ export const classifyEspiHttpStatus = (status: number): EspiSourceStatus => {
 
 const wait = (delayMs: number) => new Promise((resolve) => setTimeout(resolve, delayMs));
 
-const fetchOfficialHtml = async (url: string, init: RequestInit = {}) => {
+export const fetchOfficialHtml = async (url: string, init: RequestInit = {}) => {
   let lastStatus: EspiSourceStatus = "TEMPORARILY_UNAVAILABLE";
   for (let attempt = 0; attempt < ESPI_FETCH_ATTEMPTS; attempt += 1) {
     try {
@@ -250,7 +250,7 @@ const getGpwSearchBody = ({
   return body;
 };
 
-const fetchGpwList = ({ offset = 0, date }: { offset?: number; date?: string } = {}) =>
+export const fetchGpwList = ({ offset = 0, date }: { offset?: number; date?: string } = {}) =>
   fetchOfficialHtml(GPW_ESPI_SEARCH_URL, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },

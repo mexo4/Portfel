@@ -6,7 +6,7 @@ import { getAuditOutputDirectory, printArtifactSummary, renderGenericMarkdown, w
 
 const appRoot = path.resolve(fileURLToPath(new URL("../", import.meta.url)));
 const requirePostgres = process.argv.includes("--require-postgres");
-const runPostgres = process.argv.includes("--run-postgres");
+const runPostgres = process.argv.includes("--run-postgres") || requirePostgres;
 const focusedTests = [
   "tests/corporate-events.test.mjs",
   "tests/gpw-calendar-brief-regression.test.mjs",
@@ -19,8 +19,15 @@ const focusedTests = [
   "tests/gpw-metamorphic.test.mjs",
   "tests/gpw-mutation-sensitivity.test.mjs",
   "tests/gpw-parser-policy.test.mjs",
+  "tests/gpw-pap-discovery.test.mjs",
   "tests/gpw-quality-audit.test.mjs",
+  "tests/gpw-quality-gate.test.mjs",
+  "tests/gpw-source-audit.test.mjs",
+  "tests/gpw-meeting-registration-context.test.mjs",
+  "tests/gpw-new-source-regressions.test.mjs",
   "tests/gpw-report-calendar.test.mjs",
+  "tests/gpw-report-date-role.test.mjs",
+  "tests/gpw-reprojection-action-plan.test.mjs",
   "tests/gpw-sync-health.test.mjs",
   "tests/gpw-calendar-sync-launcher.test.mjs",
   "tests/gpw-calendar-upgrade.test.mjs",
@@ -34,14 +41,11 @@ const pgUrl = process.env.MEXO_GPW_TEST_DATABASE_URL;
 let nativePostgres = {
   configured: Boolean(pgUrl),
   testFile: "tests/gpw-postgres-integration.test.mjs",
-  status: pgUrl ? "NOT_RUN_BY_DEFAULT" : "SKIPPED_NO_ISOLATED_NATIVE_DATABASE_URL",
+  status: runPostgres ? "POSTGRES_NOT_AVAILABLE" : "NOT_REQUESTED",
   reason: pgUrl
-    ? "An isolated loopback URL is configured; run `npm run gpw:e2e:postgres` explicitly to permit write integration tests."
-    : "No MEXO_GPW_TEST_DATABASE_URL was supplied. This command never falls back to an application or production database.",
+    ? "An isolated URL is configured. PostgreSQL runs only in the explicit required profile."
+    : "No MEXO_GPW_TEST_DATABASE_URL was supplied. The test never falls back to an application or production database.",
 };
-if (runPostgres && !pgUrl) {
-  nativePostgres = { ...nativePostgres, status: "FAIL_MISSING_ISOLATED_NATIVE_DATABASE_URL", reason: "MEXO_GPW_TEST_DATABASE_URL is required for the explicit native PostgreSQL run." };
-}
 if (runPostgres && pgUrl) {
   const postgres = spawnSync(process.execPath, ["--experimental-strip-types", "--import", "./tests/register-alias-loader.mjs", "--test", nativePostgres.testFile], {
     cwd: appRoot,
@@ -51,7 +55,7 @@ if (runPostgres && pgUrl) {
   });
   nativePostgres = {
     ...nativePostgres,
-    status: postgres.status === 0 ? "PASS" : "FAIL",
+    status: postgres.status === 0 ? "POSTGRES_E2E_PASS" : "POSTGRES_E2E_FAIL",
     reason: postgres.status === 0 ? "The isolated native PostgreSQL contract suite passed." : "The isolated native PostgreSQL contract suite failed.",
     exitCode: postgres.status,
     timedOut: postgres.error?.code === "ETIMEDOUT",
@@ -66,7 +70,7 @@ const report = {
     isolatedPostgres: nativePostgres,
     limitations: [
       "The deterministic E2E suite covers parser, API/ICS contracts and fixture-level projection behaviour without live external network requests.",
-      "Native PostgreSQL integration is intentionally opt-in and must use the loopback-only mexo_gpw_test database enforced by its test file.",
+      "The default profile is UNIT_ONLY. The required PostgreSQL profile fails if the isolated loopback mexo_gpw_test database is unavailable.",
     ],
   },
   unit: {
@@ -76,11 +80,9 @@ const report = {
     stderr: unit.stderr,
   },
   nativePostgres,
-  status: unit.status === 0 &&
-    (!requirePostgres || nativePostgres.status === "PASS") &&
-    (!runPostgres || nativePostgres.status === "PASS")
-    ? "PASS_WITH_POSTGRES_STATUS"
-    : "FAIL",
+  status: unit.status !== 0 ? "UNIT_FAIL"
+    : !runPostgres ? "UNIT_ONLY"
+      : nativePostgres.status,
 };
 const artifacts = await writeGpwQualityArtifacts({
   outputDir: getAuditOutputDirectory(),
@@ -99,4 +101,4 @@ printArtifactSummary({
   artifacts,
   summary: { unitExitCode: unit.status, nativePostgres: nativePostgres.status },
 });
-if (report.status !== "PASS_WITH_POSTGRES_STATUS") process.exitCode = 1;
+if (report.status !== "UNIT_ONLY" && report.status !== "POSTGRES_E2E_PASS") process.exitCode = 1;

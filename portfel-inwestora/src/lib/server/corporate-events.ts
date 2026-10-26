@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   type CorporateEvent,
   type CorporateEventSourceReference,
@@ -51,7 +51,10 @@ const UNAVAILABLE_RETRY_TTL_MS = 60 * 60 * 1_000;
 const SOURCE_TIMEOUT_MS = 12_000;
 const PAP_DISCOVERY_CACHE_TTL_MS = 14 * 24 * 60 * 60 * 1_000;
 const PAP_TAXONOMY_CACHE_TTL_MS = 90 * 24 * 60 * 60 * 1_000;
+// Bound each issuer refresh, but never treat finding one schedule as evidence
+// that later pages contain no corrections or other scheduled reports.
 const PAP_MAX_ISSUER_PAGES = 6;
+const PAP_MAX_CATEGORY_DOCUMENTS = 8;
 const PAP_BASE_URL = "https://pap-mediaroom.pl";
 
 export type GpwCorporateEventInstrumentInput = Pick<
@@ -137,6 +140,8 @@ type ProviderResult = {
   events: ParsedCorporateEvent[];
   batches?: ProviderEventBatch[];
   durationMs?: number;
+  /** Retry transient partial reads soon while retaining any valid batches. */
+  retrySoon?: boolean;
 };
 
 export type CorporateEventProvider = {
@@ -259,6 +264,9 @@ export type PapEspiSearchCandidate = {
 type PapDiscoveryResult = {
   status: CorporateEventSourceStatus;
   candidates: PapEspiSearchCandidate[];
+  incomplete?: boolean;
+  pagesRead?: number;
+  retrySoon?: boolean;
 };
 
 type PapDiscoveryCategory = "report-change" | "report-schedule" | "dividend";
@@ -321,20 +329,68 @@ const isPapCandidateForCategory = (
   return /dywidend/i.test(title);
 };
 
-const fetchPapDocument = async (url: string) => {
-  try {
-    const response = await fetchWithSystemTrust(url, {
-      headers: { Accept: "text/html,application/xhtml+xml" },
-      cache: "no-store",
-      redirect: "follow",
-      signal: AbortSignal.timeout(SOURCE_TIMEOUT_MS),
-    });
-    return response.ok
-      ? { status: "SUCCESS" as const, document: await response.text() }
-      : { status: classifyCorporateEventHttpStatus(response.status), document: "" };
-  } catch {
-    return { status: "TEMPORARILY_UNAVAILABLE" as const, document: "" };
+const papDocumentInFlight = new Map<string, Promise<{ status: CorporateEventSourceStatus; document: string }>>();
+const fetchPapDocument = (url: string) => {
+  const current = papDocumentInFlight.get(url);
+  if (current) return current;
+  const pending = (async () => {
+    try {
+      const response = await fetchWithSystemTrust(url, {
+        headers: { Accept: "text/html,application/xhtml+xml" },
+        cache: "no-store",
+        redirect: "follow",
+        signal: AbortSignal.timeout(SOURCE_TIMEOUT_MS),
+      });
+      return response.ok
+        ? { status: "SUCCESS" as const, document: await response.text() }
+        : { status: classifyCorporateEventHttpStatus(response.status), document: "" };
+    } catch {
+      return { status: "TEMPORARILY_UNAVAILABLE" as const, document: "" };
+    }
+  })().finally(() => papDocumentInFlight.delete(url));
+  papDocumentInFlight.set(url, pending);
+  return pending;
+};
+
+/** Read every available issuer page within a fixed request budget. An empty
+ * page is the only positive end-of-list signal; a repeated page or the budget
+ * is explicitly incomplete, not a successful full-market scan. */
+export const collectPapIssuerCandidatePages = async (
+  taxonomyUrl: string,
+  fetchPage: (url: string) => Promise<{ status: CorporateEventSourceStatus; document: string }>,
+  maxPages = PAP_MAX_ISSUER_PAGES
+): Promise<PapDiscoveryResult> => {
+  const candidates = new Map<string, PapEspiSearchCandidate>();
+  const pageSignatures = new Set<string>();
+  let pagesRead = 0;
+  for (let page = 0; page < maxPages; page += 1) {
+    const separator = taxonomyUrl.includes("?") ? "&" : "?";
+    const url = page === 0 ? taxonomyUrl : `${taxonomyUrl}${separator}page=${page}`;
+    const response = await fetchPage(url);
+    if (response.status !== "SUCCESS") {
+      return { status: response.status, candidates: [...candidates.values()], incomplete: true, pagesRead, retrySoon: true };
+    }
+    pagesRead += 1;
+    const pageSignature = createHash("sha256").update(response.document).digest("hex");
+    if (pageSignatures.has(pageSignature)) {
+      return { status: "SUCCESS", candidates: [...candidates.values()], incomplete: true, pagesRead, retrySoon: true };
+    }
+    pageSignatures.add(pageSignature);
+    const pageCandidates = parsePapEspiSearchCandidates(response.document);
+    // A taxonomy page may contain non-ESPI articles only. That is not the
+    // end of pagination and must not hide official ESPI on the next page.
+    if (!/<div\s+role=["']article["']/i.test(response.document)) {
+      const explicitEmpty = /(?:class=["'][^"']*view-empty[^"']*["']|brak\s+wynik[oó]w|nie\s+znaleziono\s+wynik[oó]w|no\s+results)/iu.test(response.document);
+      return { status: "SUCCESS", candidates: [...candidates.values()], incomplete: !explicitEmpty, pagesRead,
+        retrySoon: !explicitEmpty };
+    }
+    const previousCount = candidates.size;
+    for (const candidate of pageCandidates) candidates.set(candidate.url, candidate);
+    if (pageCandidates.length > 0 && candidates.size === previousCount) {
+      return { status: "SUCCESS", candidates: [...candidates.values()], incomplete: true, pagesRead, retrySoon: true };
+    }
   }
+  return { status: "SUCCESS", candidates: [...candidates.values()], incomplete: true, pagesRead };
 };
 
 const extractPapIssuerTaxonomyUrl = (document: string, instrument: CanonicalInstrument) => {
@@ -403,35 +459,11 @@ const discoverPapCandidates = async (instrument: CanonicalInstrument): Promise<P
       cacheKey,
       PAP_DISCOVERY_CACHE_TTL_MS
     );
-    const pageZero = await fetchPapDocument(taxonomy.url);
-    if (pageZero.status !== "SUCCESS") {
-      return cached?.length
-        ? { status: "SUCCESS" as const, candidates: cached }
-        : { status: pageZero.status, candidates: [] };
+    const discovered = await collectPapIssuerCandidatePages(taxonomy.url, fetchPapDocument);
+    if (discovered.status !== "SUCCESS" && discovered.candidates.length === 0 && !cached?.length) {
+      return discovered;
     }
-
-    let candidates = parsePapEspiSearchCandidates(pageZero.document);
-    const cachedSchedule = cached?.some((candidate) =>
-      isPapCandidateForCategory(candidate, "report-schedule")
-    );
-
-    if (!cachedSchedule && !candidates.some((candidate) =>
-      isPapCandidateForCategory(candidate, "report-schedule")
-    )) {
-      for (let page = 1; page < PAP_MAX_ISSUER_PAGES; page += 1) {
-        const separator = taxonomy.url.includes("?") ? "&" : "?";
-        const response = await fetchPapDocument(`${taxonomy.url}${separator}page=${page}`);
-        if (response.status !== "SUCCESS") break;
-        const pageCandidates = parsePapEspiSearchCandidates(response.document);
-        if (pageCandidates.length === 0) break;
-        candidates.push(...pageCandidates);
-        if (pageCandidates.some((candidate) =>
-          isPapCandidateForCategory(candidate, "report-schedule")
-        )) break;
-      }
-    }
-
-    candidates = uniqueBy([...candidates, ...(cached ?? [])], (candidate) => candidate.url)
+    const candidates = uniqueBy([...discovered.candidates, ...(cached ?? [])], (candidate) => candidate.url)
       .filter((candidate) =>
         (["report-change", "report-schedule", "dividend"] as const).some((category) =>
           isPapCandidateForCategory(candidate, category)
@@ -441,9 +473,17 @@ const discoverPapCandidates = async (instrument: CanonicalInstrument): Promise<P
         (right.sourcePublishedAt ?? "").localeCompare(left.sourcePublishedAt ?? "")
       );
     await setMarketCachePayload(cacheKey, candidates);
+    if (discovered.incomplete) {
+      diagnose({ provider: "pap-espi-discovery", instrumentId: instrument.id,
+        status: "INCOMPLETE_ISSUER_PAGINATION", pagesRead: discovered.pagesRead,
+        sourceStatus: discovered.status, retainedCandidates: candidates.length });
+    }
     return {
       status: candidates.length > 0 ? "SUCCESS" as const : "NOT_FOUND" as const,
       candidates,
+      incomplete: discovered.incomplete,
+      pagesRead: discovered.pagesRead,
+      retrySoon: discovered.retrySoon,
     };
   })().finally(() => papDiscoveryInFlight.delete(instrument.id));
 
@@ -460,6 +500,62 @@ const isPapDocumentForInstrument = (document: string, instrument: CanonicalInstr
   return tokens.length > 0
     ? tokens.some((token) => normalizedDocument.includes(token))
     : normalizedDocument.includes(normalizeText(instrument.ticker));
+};
+
+/** Keep each document's provenance and apply older announcements before newer
+ * corrections. A bad article does not prevent the remaining candidates from
+ * being read. The bounded tail is reported as incomplete rather than silently
+ * represented as a complete issuer scan. */
+export const collectPapCategoryEventBatches = async (
+  candidates: readonly PapEspiSearchCandidate[],
+  category: PapDiscoveryCategory,
+  instrument: CanonicalInstrument,
+  fetchDocument: (url: string) => Promise<{ status: CorporateEventSourceStatus; document: string }>,
+  maxDocuments = PAP_MAX_CATEGORY_DOCUMENTS
+): Promise<ProviderResult & { incomplete: boolean; documentsRead: number }> => {
+  const relevant = uniqueBy(candidates.filter((candidate) =>
+    isPapCandidateForCategory(candidate, category)), (candidate) => candidate.url);
+  const batches: ProviderEventBatch[] = [];
+  let lastFailure: CorporateEventSourceStatus | null = null;
+  let documentsRead = 0;
+  for (const candidate of relevant.slice(0, maxDocuments)) {
+    const response = await fetchDocument(candidate.url);
+    documentsRead += 1;
+    if (response.status !== "SUCCESS") {
+      lastFailure = response.status;
+      continue;
+    }
+    if (!isPapDocumentForInstrument(response.document, instrument)) continue;
+    try {
+      const events = parseCorporateEventDocument(response.document).filter((event) =>
+        category === "dividend"
+          ? event.eventType === "UPCOMING_DIVIDEND"
+          : event.eventType !== "UPCOMING_DIVIDEND" &&
+            (category !== "report-change" || event.isScheduleChange)
+      );
+      if (events.length) batches.push({
+        events,
+        source: {
+          sourceType: "PAP_ESPI",
+          sourceUrl: candidate.url,
+          sourcePublishedAt: candidate.sourcePublishedAt,
+        },
+      });
+    } catch {
+      lastFailure = "PARSE_ERROR";
+    }
+  }
+  batches.sort((left, right) =>
+    (left.source.sourcePublishedAt ?? "").localeCompare(right.source.sourcePublishedAt ?? "") ||
+    left.source.sourceUrl.localeCompare(right.source.sourceUrl));
+  return {
+    status: batches.length ? "SUCCESS" : lastFailure ?? "NOT_FOUND",
+    events: batches.flatMap((batch) => batch.events),
+    batches,
+    incomplete: relevant.length > maxDocuments || lastFailure !== null,
+    retrySoon: lastFailure !== null,
+    documentsRead,
+  };
 };
 
 export class PapEspiDiscoveryCorporateEventProvider implements CorporateEventProvider {
@@ -481,42 +577,14 @@ export class PapEspiDiscoveryCorporateEventProvider implements CorporateEventPro
     const candidates = discovery.candidates.filter((candidate) =>
       isPapCandidateForCategory(candidate, this.category)
     );
-    let lastFailure: ProviderResult | null = null;
-
-    for (const candidate of candidates.slice(0, 4)) {
-      const response = await fetchPapDocument(candidate.url);
-      if (response.status !== "SUCCESS") {
-        lastFailure = {
-          status: response.status,
-          events: [],
-          source: { sourceType: "PAP_ESPI", sourceUrl: candidate.url },
-          durationMs: Date.now() - startedAt,
-        };
-        continue;
-      }
-      if (!isPapDocumentForInstrument(response.document, instrument)) continue;
-
-      const events = parseCorporateEventDocument(response.document).filter((event) =>
-        this.category === "dividend"
-          ? event.eventType === "UPCOMING_DIVIDEND"
-          : event.eventType !== "UPCOMING_DIVIDEND" &&
-            (this.category !== "report-change" || event.isScheduleChange)
-      );
-      if (events.length === 0) continue;
-
-      return {
-        status: "SUCCESS",
-        events,
-        source: {
-          sourceType: "PAP_ESPI",
-          sourceUrl: candidate.url,
-          sourcePublishedAt: candidate.sourcePublishedAt,
-        },
-        durationMs: Date.now() - startedAt,
-      };
+    const result = await collectPapCategoryEventBatches(candidates, this.category, instrument, fetchPapDocument);
+    if (discovery.incomplete || result.incomplete) {
+      diagnose({ provider: this.id, instrumentId: instrument.id,
+        status: "INCOMPLETE_CANDIDATE_COVERAGE", pagesRead: discovery.pagesRead,
+        discovered: candidates.length, documentsRead: result.documentsRead });
     }
-
-    return lastFailure ?? { status: "NOT_FOUND", events: [], durationMs: Date.now() - startedAt };
+    return { ...result, retrySoon: discovery.retrySoon || result.retrySoon,
+      durationMs: Date.now() - startedAt };
   }
 }
 
@@ -1360,7 +1428,9 @@ const refreshCanonicalInstrument = async (
     const startedAt = Date.now();
     const results = await Promise.all(providers.map((provider) => provider.fetchEvents(instrument)));
     const successful = results.filter((result) => result.status === "SUCCESS");
-    const latestStatus = successful.length > 0
+    const latestStatus = results.some((result) => result.retrySoon)
+      ? "TEMPORARILY_UNAVAILABLE"
+      : successful.length > 0
       ? "SUCCESS"
       : results.find((result) => result.status === "ACCESS_DENIED")?.status ??
         results.find((result) => result.status === "TEMPORARILY_UNAVAILABLE")?.status ??
@@ -1388,7 +1458,14 @@ const refreshCanonicalInstrument = async (
       }
 
       for (const result of results) {
-        await recordSourceCheck(transaction, instrument.id, result, now);
+        if (result.batches?.length) {
+          for (const batch of result.batches) {
+            await recordSourceCheck(transaction, instrument.id,
+              { status: "SUCCESS", events: batch.events, source: batch.source, durationMs: result.durationMs }, now);
+          }
+        } else {
+          await recordSourceCheck(transaction, instrument.id, result, now);
+        }
       }
 
       await transaction.execute(
@@ -1621,6 +1698,7 @@ const REPORT_SCHEDULE_CANDIDATE_SQL = `(
   OR report.source_title ILIKE '%dat%publikacj%raport%' OR report.title ILIKE '%dat%publikacj%raport%'
   OR report.source_title ILIKE '%dat%przekazywan%raport%' OR report.title ILIKE '%dat%przekazywan%raport%'
   OR report.source_title ILIKE '%termin%przekazywan%raport%' OR report.title ILIKE '%termin%przekazywan%raport%'
+  OR report.body_text ~* '(raport|sprawozdan|financial statement).{0,180}(zostanie|będzie|bedzie|will).{0,60}(opublikowan|przekazan|publish).{0,120}[0-9]{1,2}.{0,40}20[0-9]{2}'
 )`;
 
 let globalReportScheduleSyncInFlight: Promise<GlobalGeneralMeetingSyncResult> | null = null;

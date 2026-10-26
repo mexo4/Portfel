@@ -14,7 +14,11 @@ export const isTrustedMeetingPdfUrl = (value: string) => {
   }
 };
 
-export const readOfficialMeetingPdf = async (url: string): Promise<string | undefined> => {
+export type OfficialPdfAuditRead = { text: string; pagesRead: number; totalPages: number; truncated: boolean };
+
+/** Same trusted, bounded fetch as the application reader, with completeness
+ * metadata so an audit never treats a capped PDF as fully inspected. */
+export const readOfficialMeetingPdfWithCoverage = async (url: string): Promise<OfficialPdfAuditRead | undefined> => {
   if (!isTrustedMeetingPdfUrl(url)) return undefined;
   const response = await fetchWithSystemTrust(url, {
     redirect: "manual",
@@ -58,8 +62,12 @@ export const readOfficialMeetingPdf = async (url: string): Promise<string | unde
       const content = await page.getTextContent();
       pages.push(content.items.map((item) => "str" in item ? item.str : "").join(" "));
     }
-    return pages.join("\n");
+    return { text: pages.join("\n"), pagesRead: pages.length,
+      totalPages: pdf.numPages, truncated: pdf.numPages > pages.length };
   } finally {
     await loadingTask.destroy();
   }
 };
+
+export const readOfficialMeetingPdf = async (url: string): Promise<string | undefined> =>
+  (await readOfficialMeetingPdfWithCoverage(url))?.text;

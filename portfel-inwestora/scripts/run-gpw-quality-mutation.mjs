@@ -89,6 +89,60 @@ const mutants = [
       "prefer-schedule-fiscal-year-over-row",
     ),
   },
+  {
+    name: "borrow-fiscal-year-from-adjacent-row",
+    description: "Lets a multi-report paragraph's first fiscal year override the year in the current report clause.",
+    transform: (source) => inside(
+      source,
+      "const parseReportScheduleEvents",
+      "const clauseYearLabel = getFiscalYearLabel(clause);",
+      "const clauseYearLabel = getFiscalYearLabel(segment.text) ?? getFiscalYearLabel(clause);",
+      "borrow-fiscal-year-from-adjacent-row",
+    ),
+  },
+  {
+    name: "borrow-publication-date-from-adjacent-row",
+    description: "Uses the first date in a multi-report paragraph instead of the current report clause's date.",
+    transform: (source) => inside(
+      source,
+      "const parseReportScheduleEvents",
+      "const eventDate = getReportPublicationDate(clause);",
+      "const eventDate = getReportPublicationDate(segment.text) ?? getReportPublicationDate(clause);",
+      "borrow-publication-date-from-adjacent-row",
+    ),
+  },
+  {
+    name: "swap-q1-and-q3-ordinal",
+    description: "Mislabels a first-quarter report as a third-quarter report while leaving other periods intact.",
+    transform: (source) => inside(
+      source,
+      "const getFiscalPeriod",
+      String.raw`[/\b(?:i|1|pierwsz(?:y|ego))\.?\s+kwartał/giu, "Q1"],`,
+      String.raw`[/\b(?:i|1|pierwsz(?:y|ego))\.?\s+kwartał/giu, "Q3"],`,
+      "swap-q1-and-q3-ordinal",
+    ),
+  },
+  {
+    name: "reverse-only-previous-correction-date",
+    description: "Keeps the corrected publication date but records the wrong superseded date.",
+    transform: (source) => inside(
+      source,
+      "const parseReportScheduleCorrectionEvents",
+      "const previousEventDate = isNewInsteadOfOld ? secondDate.date : firstDate.date;",
+      "const previousEventDate = isNewInsteadOfOld ? firstDate.date : secondDate.date;",
+      "reverse-only-previous-correction-date",
+    ),
+  },
+  {
+    name: "drop-second-dividend-installment",
+    description: "Keeps the first dividend installment but silently discards later installments in the same announcement.",
+    transform: (source) => replaceOnce(
+      source,
+      "for (const dividend of getUpcomingDividendEvents(text)) {",
+      "for (const dividend of getUpcomingDividendEvents(text).slice(0, 1)) {",
+      "drop-second-dividend-installment",
+    ),
+  },
 ];
 
 const source = await readFile(parserPath, "utf8");
@@ -135,12 +189,15 @@ const killed = results.filter((result) => result.status === "KILLED");
 const survived = results.filter((result) => result.status === "SURVIVED");
 const errors = results.filter((result) => result.status === "ERROR");
 const status = survived.length || errors.length ? "FAIL" : "PASS";
+const mutationScore = killed.length + survived.length
+  ? killed.length / (killed.length + survived.length)
+  : null;
 const report = {
   schemaVersion: 1,
   type: "REAL_SOURCE_CODE_MUTATION",
   sourceFile: "src/lib/corporate-events.ts",
   temporaryIsolation: "OS temporary directory; no repository parser source was changed.",
-  totals: { configured: mutants.length, killed: killed.length, survived: survived.length, errors: errors.length },
+  totals: { configured: mutants.length, killed: killed.length, survived: survived.length, errors: errors.length, mutationScore },
   results,
   status,
 };
@@ -149,8 +206,8 @@ const artifacts = await writeGpwQualityArtifacts({
   basename: "mutation",
   report,
   markdown: renderGenericMarkdown("GPW real source-code mutation report", [
-    { heading: "Method", body: "Each controlled transform was applied to a temporary copy of `src/lib/corporate-events.ts`. The oracle imported that mutated copy and compared its output with the checked-in source-annotated corpus. The repository parser file was never changed." },
-    { heading: "Result", body: `- Status: **${status}**\n- Configured: ${mutants.length}\n- Killed: ${killed.length}\n- Survived: ${survived.length}\n- Errors: ${errors.length}` },
+    { heading: "Method", body: "Each controlled transform was applied to a temporary copy of `src/lib/corporate-events.ts`. The oracle first checked the unmutated parser against the source-annotated regression corpus and separate hand-annotated synthetic semantic probes, then compared each mutant. The repository parser file was never changed. Synthetic probes are not independent market holdout evidence." },
+    { heading: "Result", body: `- Status: **${status}**\n- Configured: ${mutants.length}\n- Killed: ${killed.length}\n- Survived: ${survived.length}\n- Errors: ${errors.length}\n- Mutation score: ${mutationScore === null ? "N/A" : `${(mutationScore * 100).toFixed(1)}%`}` },
     { heading: "Mutants", body: results.map((result) => `- **${result.name}** — ${result.status}; ${result.description}${result.firstFailure ? ` First detection: ${result.firstFailure.documentId ?? "n/a"}.` : ""}${result.error ? ` Error: ${result.error}` : ""}`).join("\n") },
   ]),
 });

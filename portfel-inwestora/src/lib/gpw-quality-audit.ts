@@ -588,6 +588,7 @@ export type GpwProjectionSnapshot = {
   eventDate: string;
   status?: string;
   sourceUrl?: string;
+  sourceUrls?: readonly string[];
   sourceUpdatedAt?: string;
   projectionUpdatedAt?: string;
 };
@@ -689,14 +690,36 @@ export const auditGpwProjectionSnapshots = (
   const findings: GpwAuditFinding[] = [];
   const projectionsByIdentity = new Map<string, GpwProjectionSnapshot[]>();
   const sourcesByIdentity = new Map<string, GpwProjectionSnapshot[]>();
+  const projectionsBySource = new Map<string, GpwProjectionSnapshot[]>();
+  const sourcesBySource = new Map<string, GpwProjectionSnapshot[]>();
+  const sourceEventsByDocument = new Map<string, GpwProjectionSnapshot[]>();
   const cacheByIdentity = new Map<string, GpwProjectionSnapshot[]>();
+  const officialDocumentKey = (url: string) => {
+    try {
+      const parsed = new URL(url);
+      const gpwId = parsed.hostname === "www.gpw.pl" && parsed.pathname === "/komunikat"
+        ? parsed.searchParams.get("geru_id") : null;
+      return gpwId && /^\d+$/.test(gpwId) ? `gpw:${gpwId}` : parsed.href;
+    } catch { return url; }
+  };
+  const officialKey = (url: string, identity: string) => `${officialDocumentKey(url)}:${identity}`;
   for (const projected of projectedEvents) {
     const key = `${projected.issuer}:${projected.identity}`;
     projectionsByIdentity.set(key, [...(projectionsByIdentity.get(key) ?? []), projected]);
+    for (const url of projected.sourceUrls ?? (projected.sourceUrl ? [projected.sourceUrl] : [])) {
+      const sourceKey = officialKey(url, projected.identity);
+      projectionsBySource.set(sourceKey, [...(projectionsBySource.get(sourceKey) ?? []), projected]);
+    }
   }
   for (const source of sourceEvents) {
     const key = `${source.issuer}:${source.identity}`;
     sourcesByIdentity.set(key, [...(sourcesByIdentity.get(key) ?? []), source]);
+    if (source.sourceUrl) {
+      const sourceKey = officialKey(source.sourceUrl, source.identity);
+      sourcesBySource.set(sourceKey, [...(sourcesBySource.get(sourceKey) ?? []), source]);
+      const documentKey = officialDocumentKey(source.sourceUrl);
+      sourceEventsByDocument.set(documentKey, [...(sourceEventsByDocument.get(documentKey) ?? []), source]);
+    }
   }
   for (const cached of cachedEvents) {
     const key = `${cached.issuer}:${cached.identity}`;
@@ -704,7 +727,14 @@ export const auditGpwProjectionSnapshots = (
   }
   for (const source of sourceEvents) {
     const key = `${source.issuer}:${source.identity}`;
-    const candidates = projectionsByIdentity.get(key) ?? [];
+    // The list feed can name an issuer differently from the persisted
+    // instrument (for example its legal name versus a short company name).
+    // An exact official document URL + event identity is stronger evidence
+    // than either spelling; retain the issuer match for older URL-less rows.
+    const byOfficialSource = source.sourceUrl
+      ? projectionsBySource.get(officialKey(source.sourceUrl, source.identity)) ?? [] : [];
+    const candidates = [...new Map([...(projectionsByIdentity.get(key) ?? []), ...byOfficialSource]
+      .map((item) => [item.id, item])).values()];
     if (!candidates.length) {
       findings.push(finding({
         code: "STALE_PROJECTION", classification: "REPROJECTION_ERROR", confidence: "HIGH",
@@ -759,14 +789,26 @@ export const auditGpwProjectionSnapshots = (
         suggestedAction: "Inspect stable IDs and idempotency keys in an isolated database before any controlled reprojection.",
       }));
     }
-    if (!sourcesByIdentity.has(key)) {
+    const hasSourceByOfficialDocument = projections.some((projection) =>
+      (projection.sourceUrls ?? (projection.sourceUrl ? [projection.sourceUrl] : []))
+        .some((url) => sourcesBySource.has(officialKey(url, projection.identity))));
+    if (!sourcesByIdentity.has(key) && !hasSourceByOfficialDocument) {
       const projection = projections[0]!;
+      const linkedSourceEvents = projections.flatMap((item) =>
+        (item.sourceUrls ?? (item.sourceUrl ? [item.sourceUrl] : []))
+          .flatMap((url) => sourceEventsByDocument.get(officialDocumentKey(url)) ?? []));
+      const sourceDocumentPresent = linkedSourceEvents.length > 0;
       findings.push(finding({
-        code: "MISSING_SOURCE_DOCUMENT", classification: "SYNCHRONIZATION_ERROR", confidence: "REVIEW",
+        code: sourceDocumentPresent ? "AMBIGUOUS_EVENT_IDENTITY" : "MISSING_SOURCE_DOCUMENT",
+        classification: "SYNCHRONIZATION_ERROR", confidence: "REVIEW",
         documentId: projection.documentId ?? projection.id, sourceUrl: projection.sourceUrl, issuer: projection.issuer,
-        component: "SYNC", message: "Projection row has no matching event in the supplied source inventory scope.",
+        component: "SYNC", message: sourceDocumentPresent
+          ? "The linked official document was parsed, but it does not support this projection identity; compare event type, date, period and revision history."
+          : "Projection row has no matching event in the supplied source inventory scope.",
         eventIdentity: projection.identity,
-        suggestedAction: "Check source-inventory coverage and cursor bounds before treating the projection as stale or deleting anything.",
+        suggestedAction: sourceDocumentPresent
+          ? "Review the linked source events and projection history; do not merge or deactivate records solely from a name/date match."
+          : "Check source-inventory coverage and cursor bounds before treating the projection as stale or deleting anything.",
       }));
     }
   }

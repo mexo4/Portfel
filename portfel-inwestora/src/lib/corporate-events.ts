@@ -39,6 +39,7 @@ export type CorporateEventSourceType =
 
 export type CorporateEventSourceStatus =
   | "SUCCESS"
+  | "INCOMPLETE"
   | "NOT_FOUND"
   | "TEMPORARILY_UNAVAILABLE"
   | "ACCESS_DENIED"
@@ -459,7 +460,7 @@ const getFiscalYear = (value: string) => {
 
 const getDividendFiscalYear = (value: string) => {
   const heading = value.match(
-    /dywidenda\s+(?:za\s+)?(?:rok(?:\s+obrotowy)?\s+)?(20\d{2})(?:\s*\/\s*(20\d{2}))?/iu
+    /dywidend\p{L}*\s+(?:za\s+)?(?:rok(?:\s+obrotowy)?\s+)?(20\d{2})(?:\s*\/\s*(20\d{2}))?/iu
   );
   if (heading?.[2]) return Number(heading[2]);
   if (heading?.[1]) return Number(heading[1]);
@@ -491,6 +492,26 @@ export const getCandidateSegments = (text: string) => {
   let sectionType: CorporateEventType | null = null;
   for (let index = 0; index < lines.length; index += 1) {
     let line = lines[index];
+    // Prose can wrap the publication verb between physical lines ("który
+    // zostanie" / "opublikowany w dniu ..."). Keep that one appointment
+    // together without borrowing a neighboring report row or an unrelated
+    // processing date earlier in the document.
+    if (isReportType(getEventType(line)) && /\b(?:zostanie|będzie)\s*$/iu.test(line) &&
+      /^(?:opublikowan|przekazan)\p{L}*\b/iu.test(lines[index + 1] ?? "")) {
+      line += ` ${lines[++index]}`;
+    }
+    // A formal schedule heading gives its type to following short rows such
+    // as "- za I kwartał ...". A loose mention of a quarter elsewhere in
+    // prose must not confer the same authority.
+    if (/[:：]\s*$/u.test(line) && extractPolishDates(line).length === 0 &&
+      !/^[-–—•]/u.test(line) && !/\bza\b/iu.test(line) &&
+      (/^(?:(?:harmonogram|terminy|daty)\s+(?:publikacji|przekazania)\b.{0,100}|(?:(?:rozszerzon\p{L}*|skonsolidowan\p{L}*|jednostkow\p{L}*)\s+){0,3}raporty\s+(?:roczne|kwartalne|półroczne)\b.{0,60}|(?:\d+[_.)]\s*)?(?:(?:rozszerzon\p{L}*|skonsolidowan\p{L}*|jednostkow\p{L}*)\s+){1,3}raport\s+(?:roczn\p{L}*|kwartaln\p{L}*|półroczn\p{L}*)\b.{0,100})[:：]\s*$/iu.test(line) ||
+        (/^raport\s+(?:roczn\p{L}*|kwartaln\p{L}*|półroczn\p{L}*)[:：]\s*$/iu.test(line) &&
+          /(?:opublikowan|publikacj|przekazan|termin)/iu.test(lines[index + 1] ?? ""))) &&
+      isReportType(getEventType(line))) {
+      sectionType = getEventType(line);
+      continue;
+    }
     // ESPI correction notices are sometimes extracted as wrapped prose rather
     // than a single paragraph. Keep the old appointment and its replacement
     // together when they belong to the same report, but stop before another
@@ -614,6 +635,12 @@ const getReportPublicationDate = (clause: string) => {
   const appointment = /(?:zostanie|będzie)\s+(?:opublikowan\w*|przekazan\w*)|publikacja\s+(?:nastąpi|odbędzie)|termin\s+(?:publikacji|przekazania)/giu;
   const explicit = Array.from(withoutOldDate.matchAll(appointment)).at(-1);
   if (explicit) return dates.find((date) => date.index > (explicit.index ?? 0))?.date;
+  // A wrapped fiscal-period range can leave "do <period end>" at the start
+  // of a physical line that still mentions a report. Without a publication
+  // appointment, that boundary is not a date on which the report is issued.
+  if (/^\s*(?:od|do)\s+\d{1,2}[.\/-]\d{1,2}[.\/-]20\d{2}\b/iu.test(withoutOldDate)) {
+    return undefined;
+  }
   if (dates.length === 1 && /(?:zakończon\w*|kończąc\w*\s+się|na\s+dzień)/iu.test(withoutOldDate)) {
     return undefined;
   }
@@ -764,6 +791,12 @@ const parseReportScheduleEvents = (text: string) => {
     if (/\b(?:okresy\s+sprawozdawcze|trwa\s+od)\b/iu.test(clause)) continue;
     const type = getEventType(clause) ?? segment.sectionType;
     if (!isReportType(type)) continue;
+    // A preliminary-results article can mention "three quarters" and the
+    // date on which results were processed. It is not a formal quarterly
+    // report appointment unless this clause names a report (or belongs to an
+    // explicit report-schedule section).
+    if (!/\b(?:rapor\p{L}*|sprawozdani\p{L}*)\b/iu.test(clause) &&
+      !isReportType(segment.sectionType)) continue;
     // A date in a legal citation below a section heading is not a report.
     if (!getEventType(clause) && !/(?:zostanie|będzie)\s+(?:opublikowan|przekazan)|termin\s+(?:publikacji|przekazania)/iu.test(clause)) continue;
     const eventDate = getReportPublicationDate(clause);
@@ -915,6 +948,13 @@ const getSemanticMeetingDate = (text: string) => {
   return undefined;
 };
 
+// A report convening a WZA may also contain a proposed dividend or share issue.
+// Their "record date" is not the date of eligibility to attend the meeting.
+// Inspect the purpose between that label and its date instead of accepting the
+// first "record date" anywhere in the document.
+const isUnrelatedMeetingRecordDatePurpose = (purpose: string) =>
+  /\b(?:pre[\s-]?emptive|subscription|dividend|distribution|coupon|interest|rights?\s+(?:issue|offering)|poboru)\b/iu.test(purpose);
+
 const getOfficialGeneralMeetingRegistrationDate = (text: string) => {
   // Notices may state the legal eligibility rule rather than label a date as
   // "registration date": "prawo uczestniczenia mają ... tj. na dzień X".
@@ -933,8 +973,13 @@ const getOfficialGeneralMeetingRegistrationDate = (text: string) => {
   // such as "Record date: September 15, 2026".
   for (const reference of text.matchAll(/(?:record|registration)\s+date\s*:?\s*/giu)) {
     const start = (reference.index ?? 0) + reference[0].length;
-    const date = extractPolishDates(text.slice(start, start + 120))[0];
-    if (date) return date;
+    const tail = text.slice(start, start + 120);
+    for (const match of tail.matchAll(UNICODE_DATE_PATTERN)) {
+      const date = getIsoDateFromMatch(match);
+      if (!date) continue;
+      if (!isUnrelatedMeetingRecordDatePurpose(tail.slice(0, match.index ?? 0))) return date;
+      break;
+    }
   }
 
   // Some issuer notices define the date first and name it later, e.g.
@@ -970,7 +1015,8 @@ const getOfficialGeneralMeetingRegistrationDate = (text: string) => {
       (dateMatch.index ?? 0) + dateMatch[0].length,
       (dateMatch.index ?? 0) + dateMatch[0].length + 180
     );
-    if (/^\s*(?:(?:roku|r\.)\s*)?[,;:–—-]?\s*(?:jest\s+dniem\s+rejestracji|is\s+(?:the\s+)?record\s+date|is\s+the\s+registration\s+date)(?:\s+uczestnictwa)?\b/iu.test(afterDate)) {
+    const recordLabel = afterDate.match(/^\s*(?:(?:roku|r\.)\s*)?[,;:–—-]?\s*(?:jest\s+dniem\s+rejestracji|is\s+(?:the\s+)?record\s+date|is\s+the\s+registration\s+date)(?:\s+uczestnictwa)?\b/iu);
+    if (recordLabel && !isUnrelatedMeetingRecordDatePurpose(afterDate.slice(recordLabel[0].length, 120).split(/[.!?\n]/u, 1)[0] ?? "")) {
       return date;
     }
   }
@@ -987,6 +1033,9 @@ const getOfficialGeneralMeetingRegistrationDate = (text: string) => {
 
     const dateIndex = linkingText.search(/\b\d{1,2}\s*(?:[.\-/]\s*)?(?:[\p{L}]+\s+)?20\d{2}\b|\b[\p{L}]+\s+\d{1,2}(?:st|nd|rd|th)?[,]?\s+20\d{2}\b|\b\d{1,2}[.\-/]\d{1,2}[.\-/]20\d{2}\b/u);
     const beforeDate = dateIndex >= 0 ? linkingText.slice(0, dateIndex) : linkingText;
+    if (/(?:record|registration)\s+date/iu.test(reference[0]) && isUnrelatedMeetingRecordDatePurpose(beforeDate)) {
+      continue;
+    }
     if (/(?:jest|przypada|ustal\w*|wyznacz\w*|na\s+dzien|:|–|—|-|is|shall\s+be)/iu.test(beforeDate)) {
       return date;
     }
@@ -1362,7 +1411,8 @@ const getDividendStatus = (text: string): Extract<
   const finalApproval =
     /rada\s+nadzorcza[\s\S]{0,180}?(?:wyraziła|udzieliła|podjęła|postanowiła\s+wyrazić).{0,80}zgod|zgod[ae]\s+rady\s+nadzorczej|waln\w*\s+zgromadzeni\w*[\s\S]{0,120}?(?:podj.{0,24}uchwa|postanowi)|uchwał[ae]\s+(?:zwyczajnego|nadzwyczajnego)?\s*walnego\s+zgromadzenia/u.test(normalized);
   const conditionalAdvance =
-    /warunkiem\s+wypłat[yi][\s\S]{0,180}?zgod[ayę]\s+rady\s+nadzorczej|uchwał\w*\s+o\s+(?:przedłożeniu|skierowaniu)[\s\S]{0,140}?(?:wniosku|rekomendacji)|zamiar\w*\s+wypłat[yi]\s+zaliczk/u.test(normalized);
+    /warunkiem\s+wypłat[yi][\s\S]{0,180}?zgod[ayę]\s+rady\s+nadzorczej|uchwał\w*\s+o\s+(?:przedłożeniu|skierowaniu)[\s\S]{0,140}?(?:wniosku|rekomendacji)|zamiar\w*\s+wypłat[yi]\s+zaliczk/u.test(normalized) ||
+    /warunkiem\s+wyplaty[\s\S]{0,180}?udzielenie[\s\S]{0,80}?rad[ae]\s+nadzorcz[ae][\s\S]{0,30}?zgod[ay]/u.test(folded);
 
   const approvedByMeeting = /waln\w*\s+zgromadzeni\w*[\s\S]{0,180}?podj\w*[\s\S]{0,80}?uchwa\w*[\s\S]{0,100}?dywidend/u.test(normalized);
   const adoptedProfitResolution = /waln\w*\s+zgromadzeni\w*[\s\S]{0,180}?podj\w*[\s\S]{0,180}?uchwa\w*[\s\S]{0,120}?(?:podzia\w*\s+zysku|dywidend)/u.test(normalized);
@@ -1430,6 +1480,12 @@ const getDividendAmounts = (text: string): ParsedDividendAmount[] => {
     /(?:kwota|wysokość)\s+dywidendy[\s\S]{0,220}?(?:na|dla)\s*(?:(?:jedn(?:ą|a)|1)\s*)?akcj[ęe][\s\S]{0,220}?(\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{1,4})?)\s*(?:zł(?:ot(?:y|a|ych|e))?|zl(?:otych)?|pln|eur|usd|gbp)/giu;
   const amountWithWrittenWordsBeforePerSharePattern =
     /(?:^|[^\d])(\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{1,4})?)\s*(?:zł(?:ot(?:y|a|ych|e))?|zl(?:otych)?|pln|eur|usd|gbp)(?:\s*(?:_[^_]{0,160}_|\([^)]{0,160}\)))?\s*(?:brutto\s*)?(?:na|\/)\s*(?:(?:jedn(?:ą|a)|1)\s*)?akcj/giu;
+  // An advance resolution can state the per-share amount before a parenthetic
+  // amount in words and a description of the distribution year, followed by
+  // "na każdą z N akcji". Requiring that share-count phrase prevents a later
+  // aggregate payout amount from being treated as an amount per share.
+  const advancePerShareWithShareCountPattern =
+    /\bzaliczk\p{L}*[\s\S]{0,110}?\bw\s+wysokości\s+(\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{1,4})?)\s*(?:zł(?:ot(?:y|a|ych|e))?|zl(?:otych)?|pln|eur|usd|gbp)[\s\S]{0,200}?\bna\s+każd\p{L}*\s+z\s+\d{1,3}(?:[ .]\d{3})*\s+akcj\p{L}*/giu;
   const naturalAmountAfterPerSharePattern =
     /(?:na|dla)\s*(?:(?:jedn(?:ą|a)|1)\s*)?akcj[ęe](?:\s+(?:sp[oó]łki|emitenta))?\s*(?:będzie\s+)?(?:przypadać|przypada|wynosi|w\s+wysokości)?\s*(?:kwota\s*)?(\d{1,3}(?:[ .]\d{3})*(?:[,.]\d{1,4})?)\s*(?:zł(?:ot(?:y|a|ych|e))?|zl(?:otych)?|pln|eur|usd|gbp)/giu;
   const futureAmountAfterPerSharePattern =
@@ -1447,6 +1503,7 @@ const getDividendAmounts = (text: string): ParsedDividendAmount[] => {
     labeledAmountAfterPerSharePattern,
     descriptiveAmountAfterPerSharePattern,
     amountWithWrittenWordsBeforePerSharePattern,
+    advancePerShareWithShareCountPattern,
     naturalAmountAfterPerSharePattern,
     futureAmountAfterPerSharePattern,
     formalAmountAfterPerSharePattern,
@@ -1619,6 +1676,13 @@ const getDividendRecordDate = (text: string) => {
   const directLabelDate =
     getDateAfterKeyword(
       text,
+      /jako\s+dzie[ńn],?\s+według\s+stanu\s+na\s+któr\p{L}*\s+ustala\s+się\s+uprawnionych\s+do\s+(?:dywidendy|zaliczki)\s+wskaza\p{L}*\s+datę/iu,
+      80,
+      "first",
+      true
+    ) ??
+    getDateAfterKeyword(
+      text,
       /dzie(?:ń|n)\s+nabycia\s+prawa\s+do\s+(?:dywidendy|zaliczki)\s*:?/iu,
       80,
       "first",
@@ -1742,8 +1806,18 @@ export const getDividendAmendmentEvidence = (text: string) => {
     proposedAmount: Number.isFinite(proposedAmount) ? proposedAmount : undefined };
 };
 
+export const isSubsidiaryOnlyDividendNotice = (text: string) =>
+  /spółk\p{L}*\s+zależn\p{L}*\s+emitenta/iu.test(text) &&
+  /wypłat\p{L}*\s+akcjonariuszom[\s\S]{0,100}?\bzaliczk/iu.test(text) &&
+  !/\bemitent\p{L}*\s+(?:postanowi\p{L}*|podj\p{L}*\s+uchwał\p{L}*)[\s\S]{0,100}?\bwypłat/iu.test(text);
+
 const getUpcomingDividendEvents = (text: string): ParsedCorporateEvent[] => {
   if (!/dywidend|zaliczk/i.test(text)) return [];
+  // Public company notices also report distributions made only by a private
+  // subsidiary to that subsidiary's own shareholders. Without an explicitly
+  // issuer-level distribution, such a notice must not become the listed
+  // issuer's dividend calendar event. This is a conservative fail-closed rule.
+  if (isSubsidiaryOnlyDividendNotice(text)) return [];
   // A meeting summary can quote a shareholder's proposed amendment without
   // confirming it. The adopted resolution may arrive as a separate report or PDF.
   if (isNonBindingDividendDraftNotice(text)) return [];
@@ -2004,8 +2078,8 @@ const parseReportScheduleCorrectionEvents = (text: string): ParsedCorporateEvent
       const normalizedBeforeFirst = normalizeGeneralMeetingText(beforeFirst);
       const normalizedPriorDateContext = normalizeGeneralMeetingText(priorDateContext);
       const isReportCitationDate =
-        /\braport\w*[\s\S]{0,55}\b(?:nr\s*)?\d{1,4}\/20\d{2}\s+z\s+dnia\s*$/iu.test(normalizedBeforeFirst) ||
-        /\breport\w*[\s\S]{0,55}\b(?:no\.?\s*)?\d{1,4}\/20\d{2}\s+(?:dated|of)\s*$/iu.test(normalizedBeforeFirst);
+        /\braport\w*[\s\S]{0,85}\b(?:nr\s*)?\d{1,4}\/20\d{2}\s+z\s+dnia\s*$/iu.test(normalizedPriorDateContext) ||
+        /\breport\w*[\s\S]{0,85}\b(?:no\.?\s*)?\d{1,4}\/20\d{2}\s+(?:dated|of)\s*$/iu.test(normalizedPriorDateContext);
       const oldDateIsExplicitlyAnchored =
         (!isReportCitationDate && /\bz\s+(?:(?:dnia|daty|terminu)\s*)?$/iu.test(beforeFirst)) ||
         /\b(?:pierwotn\p{L}*|dotychczas\p{L}*|poprzedni\p{L}*|originally|previously)\b/iu.test(beforeFirst);
@@ -2032,6 +2106,11 @@ const parseReportScheduleCorrectionEvents = (text: string): ParsedCorporateEvent
       // Require both grammatical anchors around adjacent dates and a nearby
       // correction verb; this avoids treating fiscal-period dates as changes.
       const normalizedBetween = normalizeGeneralMeetingText(between);
+      const explicitDocumentScheduleChange =
+        /\b(?:zmian\p{L}*|korekt\p{L}*)\s+termin\p{L}*\s+(?:przekazani\p{L}*|publikacj\p{L}*)\s+raport\p{L}*/iu.test(context);
+      const formerPublicationAppointment =
+        !isReportCitationDate && explicitDocumentScheduleChange &&
+        /\bna\s+dzien\s*$/iu.test(normalizedBeforeFirst);
       const priorScheduleCue =
         /\b(?:mial|miala|mialo)\s+(?:nastapic|przypasc)\s*$/iu.test(normalizedPriorDateContext) ||
         /\b(?:mial|miala|mialo)\s+(?:byc\s+)?(?:opublikowan\w*|przekazan\w*|podan\w*)\s*$/iu.test(normalizedPriorDateContext) ||
@@ -2045,9 +2124,10 @@ const parseReportScheduleCorrectionEvents = (text: string): ParsedCorporateEvent
       // “rescheduled” word anywhere between two dates used to bind a fiscal
       // period end to an old publication date (e.g. 30 June → 21 August) and
       // silently choose the wrong previous date.
-      const isOldToNew = (oldDateIsExplicitlyAnchored || previousAppointmentReplacedByNewTerm ||
+      const isOldToNew = (oldDateIsExplicitlyAnchored || formerPublicationAppointment || previousAppointmentReplacedByNewTerm ||
         previousAppointmentReplacedByDisplacement || priorScheduleCue) &&
-        (newDateIsExplicitlyAnchored || replacementPublicationCue) && correctionVerbBindsThePair;
+        (newDateIsExplicitlyAnchored || replacementPublicationCue) &&
+        (correctionVerbBindsThePair || (formerPublicationAppointment && replacementPublicationCue));
       const isNewInsteadOfOld = /\bzamiast\b/iu.test(between);
       if (!isOldToNew && !isNewInsteadOfOld) continue;
 

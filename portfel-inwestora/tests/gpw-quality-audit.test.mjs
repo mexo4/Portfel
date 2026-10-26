@@ -65,6 +65,33 @@ test("GPW projection comparison reports missing and stale rows without prescribi
   assert.ok(findings.every((entry) => entry.component === "PROJECTION"));
 });
 
+test("GPW projection comparison matches an official report despite different issuer display names", () => {
+  const findings = auditGpwProjectionSnapshots([
+    { id: "source", documentId: "gpw:499171", issuer: "AB SPÓŁKA AKCYJNA",
+      identity: "HALF_YEAR_REPORT:H1:2026/2027", eventDate: "2027-06-08",
+      sourceUrl: "https://www.gpw.pl/komunikat?geru_id=499171&title=New+heading" },
+  ], [
+    { id: "projection", issuer: "AB S.A.", identity: "HALF_YEAR_REPORT:H1:2026/2027",
+      eventDate: "2027-06-08", sourceUrl: "https://www.gpw.pl/komunikat?geru_id=475396",
+      sourceUrls: ["https://www.gpw.pl/komunikat?geru_id=475396",
+        "https://www.gpw.pl/komunikat?title=Old+heading&geru_id=499171"] },
+  ]);
+  assert.deepEqual(findings, []);
+});
+
+test("GPW projection comparison reports a stale identity, not a missing document, for linked official source", () => {
+  const url = "https://www.gpw.pl/komunikat?geru_id=499171";
+  const findings = auditGpwProjectionSnapshots([
+    { id: "source", issuer: "PLAB00000019", identity: "HALF_YEAR_REPORT:H1:2026/2027",
+      eventDate: "2027-06-08", sourceUrl: `${url}&title=New` },
+  ], [
+    { id: "projection", issuer: "PLAB00000019", identity: "HALF_YEAR_REPORT:H1::UNIT",
+      eventDate: "2027-06-08", sourceUrl: `${url}&title=Old` },
+  ]);
+  assert.ok(findings.some((item) => item.code === "AMBIGUOUS_EVENT_IDENTITY"));
+  assert.ok(findings.every((item) => item.code !== "MISSING_SOURCE_DOCUMENT"));
+});
+
 test("GPW source inventory makes partial fetches and unparsed documents explicit resync candidates", () => {
   const report = auditGpwSourceInventory([
     { id: "a", issuer: "Fixture A", sourceUrl: "https://issuer.example/a", fetchStatus: "FETCHED", parseStatus: "NOT_ATTEMPTED" },

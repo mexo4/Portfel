@@ -845,6 +845,30 @@ const parseReportScheduleEvents = (text: string) => {
     }
   }
   const result = [...events.values()];
+  // In preliminary-results notices the formal publication sentence may say
+  // only "the quarterly report will be published on ...", while the document
+  // heading explicitly says which quarter/year those final results concern.
+  // Borrow that label only for a *single* appointment and a single numeric
+  // quarter/year in the leading title. Multiple appointments remain review
+  // items; dates and periods are never inferred from the publication day.
+  const leadingTitle = text.split("\n").slice(0, 2).join(" ");
+  const preliminaryQuarter = leadingTitle.match(
+    /(?:wstępn|szacunkow)\p{L}*[\s\S]{0,110}?\bpo\s+([1-3])\s+kwartałach\s+(20\d{2})\b/iu
+  );
+  if (result.length === 1 && preliminaryQuarter &&
+    result[0]?.eventType === "QUARTERLY_REPORT" &&
+    (!result[0].fiscalPeriod || !result[0].fiscalYear)) {
+    const period = `Q${preliminaryQuarter[1]}`;
+    const year = Number(preliminaryQuarter[2]);
+    if ((!result[0].fiscalPeriod || result[0].fiscalPeriod === period) &&
+      (!result[0].fiscalYear || result[0].fiscalYear === year)) {
+      result[0] = assessReportScheduleEvent({ ...result[0],
+        fiscalPeriod: period, fiscalYear: year, fiscalYearLabel: String(year),
+        requiresReview: false, reviewReasons: undefined,
+        sourceEvidence: `${leadingTitle.slice(0, 180)} | ${result[0].sourceEvidence ?? ""}`.slice(0, 500),
+      }, nonCalendarFiscalYears);
+    }
+  }
   const datesByIdentity = new Map<string, Set<string>>();
   for (const event of result) {
     const identity = getCorporateEventIdentityKey(event);

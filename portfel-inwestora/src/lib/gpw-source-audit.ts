@@ -19,11 +19,24 @@ export type GpwSourceAuditOptions = {
   dates: readonly string[];
   maxPagesPerDate: number;
   maxDocuments: number;
+  /** Future appointments are a separate horizon from source-publication dates. */
+  eventWindow?: { from: string; to: string };
 };
 
 const sourceEventTypes = new Set(["QUARTERLY_REPORT", "HALF_YEAR_REPORT", "ANNUAL_REPORT", "GENERAL_MEETING", "UPCOMING_DIVIDEND"]);
 const potentialEventTitle = /(?:termin|harmonogram|kalendarz|dat).{0,90}(?:publikacj|przekazywan).{0,70}(?:raport|sprawozdan)|(?:termin|harmonogram|kalendarz).{0,80}raport|(?:zwołan|zwolan|ogłoszen|ogloszen).{0,80}(?:walne|zgromadzen)|dywidend/iu;
+const datedSourceText = /(?:\b\d{1,2}[.\/-]\d{1,2}[.\/-]20\d{2}\b|\b\d{1,2}\s+(?:stycznia|lutego|marca|kwietnia|maja|czerwca|lipca|sierpnia|września|wrzesnia|października|pazdziernika|listopada|grudnia)\s+20\d{2}\b)/iu;
+const publicationCue = /(?:publikacj\p{L}*|przekazan\p{L}*|opublikowan\p{L}*|termin\p{L}*).{0,120}(?:raport\p{L}*|sprawozdan\p{L}*)|(?:raport\p{L}*|sprawozdan\p{L}*).{0,120}(?:publikacj\p{L}*|przekazan\p{L}*|opublikowan\p{L}*)/iu;
+const meetingCue = /(?:waln\p{L}*\s+zgromadzen\p{L}*|\b(?:NWZ|ZWZ|WZA)\b).{0,120}(?:zwołan\p{L}*|zwolan\p{L}*|odbęd\p{L}*|odbed\p{L}*|termin\p{L}*)|(?:zwołan\p{L}*|zwolan\p{L}*).{0,120}(?:waln\p{L}*\s+zgromadzen\p{L}*|\b(?:NWZ|ZWZ|WZA)\b)/iu;
+const dividendCue = /(?:dywidend\p{L}*|zaliczk\p{L}*\s+na\s+poczet\s+dywidend\p{L}*).{0,150}(?:dzień|dzien|wypłat\p{L}*|prawn\p{L}*|termin\p{L}*)|(?:dzień|dzien|wypłat\p{L}*|termin\p{L}*).{0,150}dywidend\p{L}*/iu;
 const isoDate = /^\d{4}-\d{2}-\d{2}$/;
+
+/** A lexical review lead, not a confirmed event or parser false negative. */
+export const hasIndependentDatedEventCue = (body: string) => {
+  const compact = body.replace(/\s+/gu, " ");
+  return datedSourceText.test(compact) &&
+    (publicationCue.test(compact) || meetingCue.test(compact) || dividendCue.test(compact));
+};
 
 export const getGpwAuditDates = (from: string, to: string, maxDays = 370) => {
   if (!isoDate.test(from) || !isoDate.test(to)) throw new Error("Audit dates must use YYYY-MM-DD.");
@@ -43,9 +56,11 @@ export const getGpwAuditDates = (from: string, to: string, maxDays = 370) => {
 
 export const runGpwSourceAudit = async (adapters: GpwSourceAuditAdapters, options: GpwSourceAuditOptions) => {
   if (!Number.isInteger(options.maxPagesPerDate) || options.maxPagesPerDate < 1 || options.maxPagesPerDate > 40 ||
-      !Number.isInteger(options.maxDocuments) || options.maxDocuments < 1 || options.maxDocuments > 50_000) {
+      !Number.isInteger(options.maxDocuments) || options.maxDocuments < 1 || options.maxDocuments > 50_000 ||
+      options.dates.length === 0) {
     throw new Error("Audit page/document limits are invalid.");
   }
+  if (options.eventWindow) getGpwAuditDates(options.eventWindow.from, options.eventWindow.to);
   const discovered = new Map<string, PapEspiListCandidate>();
   const coverage: Array<{
     date: string; pagesRead: number; eligibleRows: number; malformedRows: number;
@@ -127,6 +142,7 @@ export const runGpwSourceAudit = async (adapters: GpwSourceAuditAdapters, option
     id: string; issuer: string; sourceUrl: string; sourceIsin?: string; title: string;
     publishedAt?: string; fetchStatus: "FETCHED" | "UNAVAILABLE" | "REJECTED" | "PARTIAL";
     parseStatus: "PARSED" | "NOT_ATTEMPTED" | "REJECTED"; eventCount: number;
+    htmlEventCount?: number;
     attachmentCount: number; attachmentsRead: number; attachmentsTruncated?: number;
     attachmentIssues?: Array<{ sourceUrl: string; code: string; httpStatus?: number }>;
     bodyHash?: string; evidence?: string; error?: string;
@@ -168,6 +184,7 @@ export const runGpwSourceAudit = async (adapters: GpwSourceAuditAdapters, option
         }
       };
       collectEvents(`${report.title}\n${report.body}`);
+      const htmlEventCount = eventMap.size;
       const attachmentCount = report.attachments.length;
       let attachmentsRead = 0;
       let attachmentsTruncated = 0;
@@ -203,7 +220,8 @@ export const runGpwSourceAudit = async (adapters: GpwSourceAuditAdapters, option
       for (const attachment of report.attachments.slice(8)) noteAttachmentIssue(attachment.sourceUrl, "ATTACHMENT_LIMIT");
       const events = [...eventMap.values()];
       const fetchStatus = attachmentsRead < attachmentCount || attachmentsTruncated > 0 ? "PARTIAL" as const : "FETCHED" as const;
-      documents.push({ ...base, fetchStatus, parseStatus: "PARSED", eventCount: events.length, attachmentCount, attachmentsRead, attachmentsTruncated,
+      documents.push({ ...base, fetchStatus, parseStatus: "PARSED", eventCount: events.length, htmlEventCount,
+        attachmentCount, attachmentsRead, attachmentsTruncated,
         ...(attachmentIssues.length ? { attachmentIssues } : {}),
         bodyHash: createHash("sha256").update(report.body).digest("hex"),
         evidence: report.body.slice(0, 320) });
@@ -221,6 +239,11 @@ export const runGpwSourceAudit = async (adapters: GpwSourceAuditAdapters, option
         findings.push({ code: "PARSER_MISSED_EVENT", confidence: "REVIEW", sourceId: candidate.sourceId,
           sourceUrl: candidate.sourceUrl,
           reason: "Event-like official title produced no event; independent source annotation is required before calling this a false negative." });
+      } else if (!events.length && hasIndependentDatedEventCue(report.body) &&
+          !isSubsidiaryOnlyDividendNotice(report.body)) {
+        findings.push({ code: "SOURCE_REVIEW_CANDIDATE", confidence: "REVIEW", sourceId: candidate.sourceId,
+          sourceUrl: candidate.sourceUrl,
+          reason: "A dated event-like clause appears in the official body but produced no parser event; a human must establish whether it is a relevant issuer event." });
       }
       if (attachmentsRead < attachmentCount || attachmentsTruncated > 0) findings.push({ code: "INCOMPLETE_DOCUMENT", confidence: "REVIEW",
         sourceId: candidate.sourceId, sourceUrl: candidate.sourceUrl,
@@ -241,6 +264,9 @@ export const runGpwSourceAudit = async (adapters: GpwSourceAuditAdapters, option
     reason: `${pending} discovered documents remain beyond the bounded document limit.` });
   const incomplete = pending > 0 || coverage.some((item) => item.status === "INCOMPLETE") ||
     documents.some((item) => item.fetchStatus !== "FETCHED");
+  const futureEvents = options.eventWindow
+    ? sourceEvents.filter((event) => event.eventDate >= options.eventWindow!.from && event.eventDate <= options.eventWindow!.to)
+    : [];
   return {
     schemaVersion: 1,
     auditedAt: new Date().toISOString(),
@@ -250,11 +276,29 @@ export const runGpwSourceAudit = async (adapters: GpwSourceAuditAdapters, option
       limitations: ["Only the declared publication-date window was crawled.",
         "Official attachments use a bounded PDF text extractor; access challenges, non-PDF files, oversized files, and >8 attachments remain partial. Issuer pages are not covered.",
         "Unannotated source events are parser hypotheses, not independently verified ground truth."] },
+    sourcePublicationHorizon: {
+      from: options.dates[0], to: options.dates.at(-1), auditedDays: coverage.length,
+      completeDays: coverage.filter((item) => item.status === "COMPLETE").length,
+      status: coverage.every((item) => item.status === "COMPLETE") && !pending
+        ? "DECLARED_WINDOW_CURSORS_COMPLETE" : "INCOMPLETE",
+      marketComplete: false,
+    },
+    futureEventHorizon: {
+      from: options.eventWindow?.from ?? null, to: options.eventWindow?.to ?? null,
+      parserHypotheses: futureEvents.length,
+      observedEventDateMin: futureEvents.length ? futureEvents.map((event) => event.eventDate).sort()[0] : null,
+      observedEventDateMax: futureEvents.length ? futureEvents.map((event) => event.eventDate).sort().at(-1) : null,
+      status: "NOT_VERIFIED",
+      reason: "The bounded publication window does not establish that all earlier schedules and later corrections for these future dates were found.",
+    },
     counts: { discovered: candidates.length, fetched: documents.filter((item) => item.fetchStatus === "FETCHED" || item.fetchStatus === "PARTIAL").length,
       parsed: documents.filter((item) => item.parseStatus === "PARSED").length,
       partial: documents.filter((item) => item.fetchStatus === "PARTIAL").length,
       rejected: documents.filter((item) => item.fetchStatus === "REJECTED").length,
-      pending, sourceEvents: sourceEvents.length, errors: findings.length },
+      pending, sourceEvents: sourceEvents.length, errors: findings.length,
+      documentsWithoutAttachments: documents.filter((item) => item.parseStatus === "PARSED" && item.attachmentCount === 0).length,
+      partialWithHtmlEventHypotheses: documents.filter((item) => item.fetchStatus === "PARTIAL" && (item.htmlEventCount ?? 0) > 0).length,
+      partialWithoutHtmlEventHypotheses: documents.filter((item) => item.fetchStatus === "PARTIAL" && (item.htmlEventCount ?? 0) === 0).length },
     coverage, documents, sourceEvents, attachmentIssueCounts, findings,
   };
 };

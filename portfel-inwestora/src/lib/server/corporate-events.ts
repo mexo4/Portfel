@@ -132,6 +132,9 @@ type IssuerSource = {
 type ProviderEventBatch = {
   source: CorporateEventSourceReference;
   events: ParsedCorporateEvent[];
+  /** True only when the entire report-schedule document was parsed without
+   * attachment or semantic-review gaps; permits stable-ID legacy enrichment. */
+  reportSourceComplete?: boolean;
 };
 
 type ProviderResult = {
@@ -1081,6 +1084,43 @@ const upsertParsedEvents = async (
     )[0];
     const isReportSchedule = parsed.eventType === "QUARTERLY_REPORT" ||
       parsed.eventType === "HALF_YEAR_REPORT" || parsed.eventType === "ANNUAL_REPORT";
+    if (!existing && isReportSchedule && batch.reportSourceComplete &&
+      !parsed.requiresReview && parsed.fiscalPeriod &&
+      (parsed.fiscalYearLabel || parsed.fiscalYear) &&
+      batch.events.filter((event) =>
+        event.eventType === parsed.eventType && event.eventDate === parsed.eventDate
+      ).length === 1) {
+      // Early parser versions stored a date with an empty period/year identity.
+      // Only one active same-day row for this issuer/type, owned exclusively by
+      // this very source, can be enriched in place. A collision must remain a
+      // review item instead of silently changing another report's identity.
+      const sameDay = await transaction.query<ExistingEventRow & {
+        fiscal_period: string | null;
+        fiscal_year: number | null;
+        fiscal_year_label: string | null;
+        source_owned: boolean;
+      }>(
+        `SELECT event.id, event.event_date, event.record_date, event.status,
+                event.source_published_at, event.source_priority, event.source_type,
+                event.updated_at, event.active, event.general_meeting_type,
+                event.event_identity, event.fiscal_period, event.fiscal_year,
+                event.fiscal_year_label,
+                (EXISTS (SELECT 1 FROM corporate_event_sources AS source
+                  WHERE source.corporate_event_id = event.id AND source.source_url = $4)
+                 AND NOT EXISTS (SELECT 1 FROM corporate_event_sources AS other_source
+                  WHERE other_source.corporate_event_id = event.id AND other_source.source_url <> $4)) AS source_owned
+         FROM corporate_events AS event
+         WHERE event.instrument_id = $1 AND event.event_type = $2
+           AND event.event_date = $3 AND event.active = TRUE
+         ORDER BY event.updated_at DESC LIMIT 2 FOR UPDATE OF event`,
+        [instrument.id, parsed.eventType, parsed.eventDate, batch.source.sourceUrl]
+      );
+      if (sameDay.length === 1 && sameDay[0].source_owned &&
+        (!sameDay[0].fiscal_period ||
+          (!sameDay[0].fiscal_year && !sameDay[0].fiscal_year_label))) {
+        existing = sameDay[0];
+      }
+    }
     if (!existing && isReportSchedule && parsed.previousEventDate) {
       // A formal correction may change both the appointment date and the
       // period identity. Reuse the old projection (and stable ICS UID) only
@@ -1703,6 +1743,11 @@ const REPORT_SCHEDULE_PROJECTION_VERSION = 10;
 const REPORT_SCHEDULE_BATCH_SIZE = 100;
 const REPORT_SCHEDULE_UNMATCHED_RETRY_MS = 7 * 24 * 60 * 60 * 1_000;
 const REPORT_SCHEDULE_PARSE_RETRY_MS = 24 * 60 * 60 * 1_000;
+// Official ESPI body text is line-wrapped. PostgreSQL's dot in a regular
+// expression cannot be relied on to bridge those newlines, so match the
+// sentence after bounded whitespace normalization instead of broadening the
+// title filter to all preliminary-result reports.
+const REPORT_SCHEDULE_BODY_SQL = "regexp_replace(report.body_text, '[[:space:]]+', ' ', 'g')";
 const REPORT_SCHEDULE_CANDIDATE_SQL = `(
   report.source_title ILIKE '%termin%raport%' OR report.title ILIKE '%termin%raport%'
   OR report.source_title ILIKE '%raport%termin%' OR report.title ILIKE '%raport%termin%'
@@ -1711,7 +1756,8 @@ const REPORT_SCHEDULE_CANDIDATE_SQL = `(
   OR report.source_title ILIKE '%dat%publikacj%raport%' OR report.title ILIKE '%dat%publikacj%raport%'
   OR report.source_title ILIKE '%dat%przekazywan%raport%' OR report.title ILIKE '%dat%przekazywan%raport%'
   OR report.source_title ILIKE '%termin%przekazywan%raport%' OR report.title ILIKE '%termin%przekazywan%raport%'
-  OR report.body_text ~* '(raport|sprawozdan|financial statement).{0,180}(zostanie|będzie|bedzie|will).{0,60}(opublikowan|przekazan|publish).{0,120}[0-9]{1,2}.{0,40}20[0-9]{2}'
+  OR ${REPORT_SCHEDULE_BODY_SQL} ~* '(rapor(t|c)|sprawozdan|financial statement).{0,180}(zostanie|będzie|bedzie|will).{0,60}(opublikowan|przekazan|publish).{0,120}[0-9]{1,2}.{0,40}20[0-9]{2}'
+  OR ${REPORT_SCHEDULE_BODY_SQL} ~* '(planowan|przewidywan|termin).{0,80}(publikacj|przekazan).{0,80}(rapor(t|c)|sprawozdan).{0,160}(przypada|wynosi|jest|zostanie|będzie|bedzie).{0,80}[0-9]{1,2}.{0,40}20[0-9]{2}'
 )`;
 
 let globalReportScheduleSyncInFlight: Promise<GlobalGeneralMeetingSyncResult> | null = null;
@@ -1859,6 +1905,7 @@ export const synchronizeGlobalReportSchedules = ({ force = false, refreshSource 
             events: [...events.values()],
             source: { sourceType: "ISSUER_CURRENT_REPORT", sourceUrl: report.source_url,
               sourcePublishedAt: report.published_at, sourceTitle: report.source_title || report.title },
+            reportSourceComplete: parseComplete && reviewEvents.length === 0,
           });
           if (projectionPlan.deactivateIds.length > 0) {
             await deactivateEventProjection(transaction, projectionPlan.deactivateIds,

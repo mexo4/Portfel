@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { getGpwAuditDates, runGpwSourceAudit } from "../src/lib/gpw-source-audit.ts";
+import { getGpwAuditDates, hasIndependentDatedEventCue, runGpwSourceAudit } from "../src/lib/gpw-source-audit.ts";
 import { assessGpwQualityGate } from "../scripts/gpw-quality-gate.mjs";
 
 const candidate = (number, title = "Komunikat") => ({
@@ -28,13 +28,37 @@ test("read-only source audit walks all official result pages, including generic 
     fetchDocument: async () => ({ status: "SUCCESS", document: "full official detail" }),
     parseDetail: (_html, entry) => detail(entry),
     parseEvents: () => [{ eventType: "QUARTERLY_REPORT", eventDate: "2026-11-20", fiscalPeriod: "Q3", fiscalYear: 2026, isScheduleChange: false }],
-  }, { dates: ["2026-10-25"], maxPagesPerDate: 3, maxDocuments: 51 });
+  }, { dates: ["2026-10-25"], maxPagesPerDate: 3, maxDocuments: 51,
+    eventWindow: { from: "2026-10-25", to: "2027-10-25" } });
 
   assert.deepEqual(offsets, [0, 50]);
   assert.equal(report.status, "SOURCE_WINDOW_COMPLETE_NOT_MARKET_COMPLETE");
   assert.equal(report.counts.discovered, 51);
   assert.equal(report.counts.sourceEvents, 51);
   assert.equal(report.sourceEvents[50].issuer, entries[50].sourceIsin);
+  assert.equal(report.sourcePublicationHorizon.auditedDays, 1);
+  assert.equal(report.sourcePublicationHorizon.status, "DECLARED_WINDOW_CURSORS_COMPLETE");
+  assert.equal(report.futureEventHorizon.parserHypotheses, 51);
+  assert.equal(report.futureEventHorizon.observedEventDateMin, "2026-11-20");
+  assert.equal(report.futureEventHorizon.observedEventDateMax, "2026-11-20");
+  assert.equal(report.futureEventHorizon.status, "NOT_VERIFIED");
+});
+
+test("independent dated body cues create review leads, not confirmed missed events", async () => {
+  const entry = candidate(499130, "Informacja o emitencie");
+  const body = "Zarząd informuje, że termin publikacji raportu półrocznego wyznaczono na 18 marca 2027 roku.";
+  assert.equal(hasIndependentDatedEventCue(body), true);
+  assert.equal(hasIndependentDatedEventCue("Termin publikacji raportu zostanie ogłoszony później."), false);
+  const report = await runGpwSourceAudit({
+    fetchPage: async () => ({ status: "SUCCESS", document: "official listing" }),
+    parseList: () => ({ candidates: [entry], eligibleRows: 1, malformedRows: 0 }),
+    fetchDocument: async () => ({ status: "SUCCESS", document: "official detail" }),
+    parseDetail: () => ({ ...detail(entry), body }),
+    parseEvents: () => [],
+  }, { dates: ["2026-10-25"], maxPagesPerDate: 2, maxDocuments: 1 });
+  assert.equal(report.sourceEvents.length, 0);
+  assert.deepEqual(report.findings.filter((finding) => finding.code === "SOURCE_REVIEW_CANDIDATE")
+    .map((finding) => finding.confidence), ["REVIEW"]);
 });
 
 test("source audit fails open neither on pagination cap nor missing detail", async () => {
@@ -116,6 +140,7 @@ test("source audit extracts the official PDF attachment and distinguishes missin
   }, { dates: ["2026-10-25"], maxPagesPerDate: 2, maxDocuments: 2 });
   assert.equal(report.sourceEvents.length, 1);
   assert.equal(report.documents[0].attachmentsRead, 1);
+  assert.equal(report.documents[0].htmlEventCount, 0);
   assert.equal(report.documents[0].fetchStatus, "FETCHED");
   assert.equal(report.documents[1].fetchStatus, "PARTIAL");
   assert.deepEqual(report.documents[1].attachmentIssues, [
@@ -123,6 +148,7 @@ test("source audit extracts the official PDF attachment and distinguishes missin
   ]);
   assert.deepEqual(report.attachmentIssueCounts, { UNAVAILABLE: 1 });
   assert.equal(report.status, "SOURCE_AUDIT_INCOMPLETE");
+  assert.equal(report.counts.partialWithoutHtmlEventHypotheses, 1);
 });
 
 test("source audit names attachment access challenges without treating them as extracted", async () => {

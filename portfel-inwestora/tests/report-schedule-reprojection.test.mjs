@@ -67,6 +67,25 @@ test("an explicit correction does not guess when multiple same-type projections 
   assert.deepEqual(plan.missingIdentities, ["QUARTERLY_REPORT:Q3:2026"]);
 });
 
+test("one source-owned incomplete legacy label is retained for in-place identity enrichment", () => {
+  const existing = [row("stable-id", "QUARTERLY_REPORT::", [sourceUrl], "2026-11-05")];
+  const plan = planReportScheduleReprojection(existing, [event("Q3", "2026-11-05")], sourceUrl, true);
+  assert.deepEqual(plan.deactivateIds, []);
+  assert.deepEqual(plan.retainedIds, ["stable-id"]);
+  assert.deepEqual(plan.missingIdentities, []);
+});
+
+test("legacy-label enrichment fails closed for partial sources, collisions and shared provenance", () => {
+  const incomplete = row("old", "QUARTERLY_REPORT::", [sourceUrl], "2026-11-05");
+  const parsed = [event("Q3", "2026-11-05")];
+  assert.deepEqual(planReportScheduleReprojection([incomplete], parsed, sourceUrl, false).deactivateIds, []);
+  const shared = { ...incomplete, source_urls: [sourceUrl, "https://issuer.example/other"] };
+  assert.deepEqual(planReportScheduleReprojection([shared], parsed, sourceUrl, true).ambiguousIds, ["old"]);
+  const colliding = [incomplete, row("other", "QUARTERLY_REPORT:Q1:2026", [sourceUrl], "2026-11-05")];
+  const plan = planReportScheduleReprojection(colliding, parsed, sourceUrl, true);
+  assert.ok(!plan.retainedIds.includes("old"));
+});
+
 test("parser/PDF failure, empty output and another confirming source cannot withdraw an event", () => {
   const existing = [row("only", "QUARTERLY_REPORT:Q1:2026"), row("shared", "QUARTERLY_REPORT:Q1:2026", [sourceUrl, "https://issuer.example/schedule"])];
   assert.deepEqual(planReportScheduleReprojection(existing, [event("Q3")], sourceUrl, false).deactivateIds, []);

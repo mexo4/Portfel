@@ -68,6 +68,7 @@ if (databaseUrl) {
           event.event_identity AS identity, event.fiscal_period AS "fiscalPeriod",
           event.fiscal_year AS "fiscalYear", event.fiscal_year_label AS "fiscalYearLabel",
           event.status, instrument.ticker, instrument.company_name AS issuer,
+          COALESCE(instrument.isin, instrument.company_name) AS "issuerKey",
           source.source_url AS "sourceUrl"
         FROM corporate_events AS event
         JOIN corporate_event_instruments AS instrument ON instrument.id = event.instrument_id
@@ -178,7 +179,9 @@ if (databaseUrl) {
     // Source parser hypotheses are not independently annotated. Even when the
     // deterministic comparison reports a gap, this remains REVIEW until the
     // document and all attachments are independently checked.
-    findings.push(...auditGpwProjectionSnapshots(sources.sourceEvents, projections).map((item) => ({
+    findings.push(...auditGpwProjectionSnapshots(sources.sourceEvents, projections, [],
+      events.map((event) => ({ id: event.id, issuer: event.issuerKey, identity: event.identity,
+        eventDate: event.eventDate }))).map((item) => ({
       ...item, confidence: "REVIEW", reason: item.message,
       evidence: sources.sourceEvents.find((source) => source.documentId === item.documentId &&
         source.identity === item.eventIdentity)?.evidence,

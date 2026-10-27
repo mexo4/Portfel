@@ -38,6 +38,8 @@ test("PostgreSQL: schedule projection is idempotent, correction-safe, and preser
   const duplicateUrl = `https://fixture.invalid/${runId}/schedule-copy`;
   const anomalyUrl = `https://fixture.invalid/${runId}/late-report`;
   const genericTitleUrl = `https://fixture.invalid/${runId}/selected-data`;
+  const plannedDateUrl = `https://fixture.invalid/${runId}/preliminary-sales`;
+  const wrappedPublicationUrl = `https://fixture.invalid/${runId}/preliminary-results`;
   const ordinaryReportUrl = `https://fixture.invalid/${runId}/ordinary-results`;
   const scheduleBody = [
     "Harmonogram publikacji raportów okresowych za 2026 rok:",
@@ -52,6 +54,14 @@ test("PostgreSQL: schedule projection is idempotent, correction-safe, and preser
     { id: `fixture-${runId}-generic-body`, sourceId: `fixture:generic:${runId}`, sourceUrl: genericTitleUrl,
       title: "Szacunkowe wybrane dane operacyjne za III kwartał 2026 roku",
       body: "Szacunkowe wybrane dane operacyjne za III kwartał 2026 roku. Ostateczny raport kwartalny za III kwartał 2026 roku zostanie opublikowany 26 października 2026 roku.",
+      publishedAt },
+    { id: `fixture-${runId}-planned-date`, sourceId: `fixture:planned-date:${runId}`,
+      sourceUrl: plannedDateUrl, title: "Wstępne dane o sprzedaży za III kwartał 2026 roku",
+      body: "Wstępne dane za III kwartał 2026 roku. Planowany termin publikacji raportu okresowego za III kwartał 2026 przypada\nw dniu 26 października 2026 r.",
+      publishedAt },
+    { id: `fixture-${runId}-wrapped-publication`, sourceId: `fixture:wrapped-publication:${runId}`,
+      sourceUrl: wrappedPublicationUrl, title: "Wstępne wyniki po 3 kwartałach 2026 roku",
+      body: "Wyniki są szacunkowe. Ostateczne wyniki zostaną przedstawione w raporcie kwartalnym Spółki, który zostanie\nopublikowany w dniu 26.10.2026 roku.",
       publishedAt },
     { id: `fixture-${runId}-ordinary`, sourceId: `fixture:ordinary:${runId}`, sourceUrl: ordinaryReportUrl,
       title: "Wyniki finansowe za trzeci kwartał 2026 roku",
@@ -100,16 +110,27 @@ test("PostgreSQL: schedule projection is idempotent, correction-safe, and preser
     }
 
     const first = await synchronizeGlobalReportSchedules({ refreshSource: false, force: true });
-    assert.equal(first.fetched, 4, "a formal publication date in a generic-title report body must enter the projection queue");
+    const firstStatuses = await query(
+      "SELECT source_id, report_schedule_projection_status FROM espi_reports WHERE id = ANY($1::text[]) ORDER BY source_id",
+      [reportRows.map((report) => report.id)],
+    );
+    assert.equal(first.fetched, 6,
+      `formal publication dates in generic preliminary-result bodies must enter the projection queue: ${JSON.stringify(firstStatuses)}`);
     assert.equal(first.errors, 0);
     const genericProjection = await query(
       "SELECT report_schedule_projection_status FROM espi_reports WHERE id = $1",
       [reportRows[3].id],
     );
     assert.equal(genericProjection[0]?.report_schedule_projection_status, "SUCCESS");
+    const preliminaryProjections = await query(
+      "SELECT source_id, report_schedule_projection_status FROM espi_reports WHERE id = ANY($1::text[])",
+      [reportRows.slice(4, 6).map((report) => report.id)],
+    );
+    assert.deepEqual(preliminaryProjections.map((report) => report.report_schedule_projection_status),
+      ["SUCCESS", "SUCCESS"], "line-wrapped formal dates should be projected from generic-title ESPI reports");
     const ordinaryProjection = await query(
       "SELECT report_schedule_projection_status FROM espi_reports WHERE id = $1",
-      [reportRows[4].id],
+      [reportRows[6].id],
     );
     assert.equal(ordinaryProjection[0]?.report_schedule_projection_status, null,
       "an already published results report is not a future publication schedule candidate");
@@ -121,7 +142,8 @@ test("PostgreSQL: schedule projection is idempotent, correction-safe, and preser
        FROM corporate_events WHERE instrument_id = $1 ORDER BY event_identity`,
       [instrumentId],
     );
-    assert.equal(events.length, 3, "two schedule entries plus the existing reviewed period");
+    assert.equal(events.length, 3,
+      `two schedule entries plus the existing reviewed period: ${JSON.stringify(events)}`);
     assert.deepEqual(events.filter((event) => event.fiscal_year === 2026)
       .map(({ fiscal_period, event_date }) => [fiscal_period, event_date]), [
       ["H1", "2026-07-30"],
@@ -281,6 +303,55 @@ test("PostgreSQL: schedule projection is idempotent, correction-safe, and preser
     );
     assert.deepEqual(activePeriodRows.map(({ event_identity }) => event_identity),
       ["QUARTERLY_REPORT:Q2:2026"], "reprojection must remain idempotent");
+
+    const legacyId = `fixture-${runId}-legacy-label`;
+    const legacySourceUrl = `https://fixture.invalid/${runId}/legacy-label-schedule`;
+    const legacyReportId = `fixture-${runId}-legacy-label-report`;
+    await execute(
+      `INSERT INTO corporate_events
+        (id, instrument_id, event_type, event_date, event_identity, status, active,
+         source_published_at, source_type, source_priority, discovered_at, updated_at)
+       VALUES ($1, $2, 'QUARTERLY_REPORT', '2027-04-12', 'QUARTERLY_REPORT::',
+         'CONFIRMED', TRUE, $3, 'ISSUER_CURRENT_REPORT', 300, $3, $3)`,
+      [legacyId, instrumentId, publishedAt],
+    );
+    await execute(
+      `INSERT INTO corporate_event_sources
+        (id, corporate_event_id, source_type, source_url, source_published_at,
+         source_priority, discovered_at)
+       VALUES ($1, $2, 'ISSUER_CURRENT_REPORT', $3, $4, 300, $4)`,
+      [`${legacyId}-source`, legacyId, legacySourceUrl, publishedAt],
+    );
+    await execute(
+      `INSERT INTO espi_reports
+        (id, source, source_id, issuer_id, issuer_name, market, source_ticker,
+         report_type, published_at, source_title, title, body_text, category,
+         source_url, discovered_at, updated_at)
+       VALUES ($1, 'PAP_ESPI', $2, $3, $4, 'GPW', $5, 'CURRENT', $6,
+         $7, $7, $8, 'OTHER', $9, $10, $10)`,
+      [legacyReportId, `fixture:legacy-label:${runId}`, instrumentId,
+        `Fixture ${ticker}`, ticker, publishedAt,
+        "Harmonogram publikacji raportów okresowych za 2027 rok",
+        "Raport kwartalny za I kwartał 2027 roku zostanie opublikowany 12 kwietnia 2027 roku.",
+        legacySourceUrl, now.toISOString()],
+    );
+    const legacySync = await synchronizeGlobalReportSchedules({ refreshSource: false, force: true });
+    assert.equal(legacySync.errors, 0);
+    const enrichedLegacy = await query(
+      `SELECT id, event_identity, fiscal_period, fiscal_year, active
+       FROM corporate_events WHERE instrument_id = $1 AND event_date = '2027-04-12'`,
+      [instrumentId],
+    );
+    assert.deepEqual(enrichedLegacy.map(({ id, event_identity, fiscal_period, fiscal_year, active }) =>
+      [id, event_identity, fiscal_period, Number(fiscal_year), active]),
+    [[legacyId, "QUARTERLY_REPORT:Q1:2027", "Q1", 2027, true]],
+    "one complete source should enrich a legacy report label without changing its event/ICS ID");
+    await synchronizeGlobalReportSchedules({ refreshSource: false, force: true });
+    const legacyReplay = await query(
+      "SELECT COUNT(*)::int AS count FROM corporate_events WHERE instrument_id = $1 AND event_date = '2027-04-12' AND active = TRUE",
+      [instrumentId],
+    );
+    assert.equal(legacyReplay[0].count, 1, "replaying the source must not duplicate an enriched legacy event");
 
     const meetingDate = "2026-11-18";
     const meetingReportId = `fixture-${runId}-meeting`;

@@ -15,6 +15,11 @@ export type ReportReprojectionPlan = {
   missingIdentities: string[];
 };
 
+const hasIncompleteReportIdentity = (identity: string) => {
+  const [, period, fiscalYear] = identity.split(":");
+  return !period || !fiscalYear;
+};
+
 /** A failed or skipped attachment is inconclusive, even when body text yielded events. */
 export const getReportScheduleProjectionStatus = (
   eventCount: number,
@@ -54,6 +59,26 @@ export const planReportScheduleReprojection = (
       projection.source_urls.length === 1 && projection.source_urls[0] === sourceUrl) {
       correctedProjectionIds.add(projection.id);
       correctedIdentities.add(getCorporateEventIdentityKey(corrections[0]!));
+    }
+  }
+  // A legacy row may have been projected before the parser knew its period
+  // or fiscal year. If one complete event in this same official document and
+  // one source-owned row share type and date, enrich that row in place. Never
+  // infer an identity where either side is ambiguous or the source is partial.
+  if (parseComplete) {
+    for (const projection of existing) {
+      if (!hasIncompleteReportIdentity(projection.event_identity) ||
+        projection.source_urls.length !== 1 || projection.source_urls[0] !== sourceUrl) continue;
+      const candidates = reportEvents.filter((event) =>
+        event.eventType === projection.event_type && event.eventDate === projection.event_date &&
+        !event.requiresReview && !hasIncompleteReportIdentity(getCorporateEventIdentityKey(event))
+      );
+      const storedCandidates = existing.filter((event) =>
+        event.event_type === projection.event_type && event.event_date === projection.event_date
+      );
+      if (candidates.length !== 1 || storedCandidates.length !== 1) continue;
+      correctedProjectionIds.add(projection.id);
+      correctedIdentities.add(getCorporateEventIdentityKey(candidates[0]!));
     }
   }
   const plan: ReportReprojectionPlan = {

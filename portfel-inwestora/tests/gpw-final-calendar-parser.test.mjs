@@ -7,6 +7,30 @@ const reportEvents = (document) => parseCorporateEventDocument(document).filter(
   ["QUARTERLY_REPORT", "HALF_YEAR_REPORT", "ANNUAL_REPORT"].includes(event.eventType)
 );
 
+test("a unique final-report appointment inherits an explicit quarter/year from the preliminary-results title", () => {
+  const document = [
+    "Wstępne wyniki finansowe po 3 kwartałach 2026 roku",
+    "Wstępne wyniki finansowe po 3 kwartałach 2026 roku",
+    "Ostateczne wyniki zostaną przedstawione w raporcie kwartalnym Spółki, który zostanie",
+    "opublikowany w dniu 20.11.2026 roku.",
+  ].join("\n");
+  assert.deepEqual(reportEvents(document).map((event) => [
+    event.eventDate, event.fiscalPeriod, event.fiscalYear, event.requiresReview ?? false,
+  ]), [["2026-11-20", "Q3", 2026, false]]);
+});
+
+test("a preliminary-results heading never labels multiple distinct future appointments", () => {
+  const document = [
+    "Wstępne wyniki finansowe po 3 kwartałach 2026 roku",
+    "Wstępne wyniki finansowe po 3 kwartałach 2026 roku",
+    "Raport kwartalny Spółki zostanie opublikowany 20.11.2026 roku.",
+    "Raport kwartalny Spółki zostanie opublikowany 30.11.2026 roku.",
+  ].join("\n");
+  const events = reportEvents(document);
+  assert.equal(events.length, 2);
+  assert.ok(events.every((event) => event.fiscalPeriod === undefined && event.requiresReview));
+});
+
 test("official ORLEN, Herkules and Urteste correction formats update one stable Q3 identity", () => {
   const examples = [
     {

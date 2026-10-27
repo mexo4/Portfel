@@ -52,6 +52,7 @@ export type GpwAuditAnomalyCode =
   | "PARSER_FALSE_NEGATIVE"
   | "DUPLICATE_LOGICAL_EVENT"
   | "AMBIGUOUS_EVENT_IDENTITY"
+  | "UNLINKED_SOURCE_PROJECTION"
   | "TIMEZONE_CONFLICT"
   | "SOURCE_DOCUMENT_CONTRADICTION"
   | "INCOMPLETE_DOCUMENT"
@@ -686,6 +687,7 @@ export const auditGpwProjectionSnapshots = (
   sourceEvents: readonly GpwProjectionSnapshot[],
   projectedEvents: readonly GpwProjectionSnapshot[],
   cachedEvents: readonly GpwProjectionSnapshot[] = [],
+  issuerEvents: readonly GpwProjectionSnapshot[] = [],
 ): GpwAuditFinding[] => {
   const findings: GpwAuditFinding[] = [];
   const projectionsByIdentity = new Map<string, GpwProjectionSnapshot[]>();
@@ -736,6 +738,39 @@ export const auditGpwProjectionSnapshots = (
     const candidates = [...new Map([...(projectionsByIdentity.get(key) ?? []), ...byOfficialSource]
       .map((item) => [item.id, item])).values()];
     if (!candidates.length) {
+      // An unlinked document can refer to an already scheduled issuer event.
+      // Never call that event missing merely because its source parser produced
+      // a less complete identity. Equally, never equate different known periods
+      // just because issuer, type and day happen to match.
+      const [sourceType, sourcePeriod, sourceYear] = source.identity.split(":");
+      const sameIssuerDayType = issuerEvents.filter((row) => {
+        const [rowType] = row.identity.split(":");
+        return row.issuer === source.issuer && row.eventDate === source.eventDate && rowType === sourceType;
+      });
+      const compatible = sameIssuerDayType.filter((row) => {
+        const [, rowPeriod, rowYear] = row.identity.split(":");
+        return (!sourcePeriod || sourcePeriod === rowPeriod) && (!sourceYear || sourceYear === rowYear);
+      });
+      if (compatible.length === 1 && sameIssuerDayType.length === 1) {
+        findings.push(finding({
+          code: "UNLINKED_SOURCE_PROJECTION", classification: "REQUIRES_REVIEW", confidence: "REVIEW",
+          documentId: source.documentId ?? source.id, sourceUrl: source.sourceUrl, issuer: source.issuer,
+          component: "PROJECTION", eventIdentity: source.identity,
+          message: "An issuer event with the same report type/date and compatible known period already exists; source linkage or incomplete identity needs review, not a missing-event claim.",
+          suggestedAction: "Check the full official period/year and source ownership, then link the document to the stable existing event if confirmed.",
+        }));
+        continue;
+      }
+      if (compatible.length > 1 || (!sourcePeriod && sameIssuerDayType.length > 1)) {
+        findings.push(finding({
+          code: "UNLINKED_SOURCE_PROJECTION", classification: "REQUIRES_REVIEW", confidence: "REVIEW",
+          documentId: source.documentId ?? source.id, sourceUrl: source.sourceUrl, issuer: source.issuer,
+          component: "PROJECTION", eventIdentity: source.identity,
+          message: "Several same-day issuer reports could match the incomplete source identity; no existing event can be selected safely.",
+          suggestedAction: "Review official period/year and all candidate identities before linking, inserting or changing any event.",
+        }));
+        continue;
+      }
       findings.push(finding({
         code: "STALE_PROJECTION", classification: "REPROJECTION_ERROR", confidence: "HIGH",
         documentId: source.documentId ?? source.id, sourceUrl: source.sourceUrl, issuer: source.issuer,

@@ -4,6 +4,33 @@ This runbook describes read-only quality controls for the GPW calendar.  None
 of the commands below synchronizes a live source, writes a production event,
 starts a timer, or runs a reprojection.
 
+## Evidence horizons and source access
+
+Keep two independent claims separate. `sourcePublicationHorizon` describes
+the official GPW publication dates actually paginated and inspected. The
+`futureEventHorizon` is the requested calendar window; a few days of ESPI
+publications do **not** prove complete knowledge of all future events in that
+window. `sources.json` records both explicitly.
+
+For a bounded, resumable official-source pass:
+
+```powershell
+npm run gpw:audit:sources -- --from=2026-10-19 --to=2026-10-23 --max-documents=250 --resume
+node scripts/gpw-holdout-intake.mjs
+```
+
+The checkpoint and source/holdout artifacts are ignored by Git. Resuming
+reuses completed source HTML and records attachment failures; only transient
+network failures receive bounded retries. A PAP/ESPI anti-bot challenge, an
+unavailable attachment or an attachment-count limit is `PARTIAL`, never a
+successful full-document parse. Do not bypass a CAPTCHA. A title-only source
+lead in `holdout-intake.json` is **not** a verified event or gold label; two
+independent annotations are required before it can validate the parser.
+
+`SOURCE_REVIEW_CANDIDATE` means a novel-looking official document was found
+by source-side lexical intake. Review the official body and attachments before
+calling it a parser error or changing production events.
+
 ## Deterministic gate
 
 Run these commands from `portfel-inwestora` after changing parser, projection,
@@ -15,6 +42,7 @@ npm run gpw:anomalies
 npm run gpw:benchmark
 npm run gpw:mutation
 npm run gpw:e2e
+npm run gpw:readiness
 ```
 
 Each command writes a JSON report and a Markdown report below
@@ -78,6 +106,31 @@ Remove-Item Env:MEXO_GPW_TEST_DATABASE_URL
 Never point this variable at Aiven, Oracle, a shared development database, or
 a production URL.  The command does not provision PostgreSQL, use Docker, or
 fall back to `DATABASE_URL`.
+
+The separate `npm run gpw:http:e2e` runs a real local Next.js server and writes
+only to that same dedicated `mexo_gpw_test` database. It checks login, calendar
+API/HTML/ICS, a corrected date, stale-cache invalidation and stable source
+identity. Both commands refuse non-loopback hosts or another database name.
+Authenticated GPW read routes in this application may opportunistically sync;
+**do not** treat a GET on production as read-only evidence. The HTTP E2E is
+therefore deliberately isolated, not pointed at Aiven or Oracle.
+
+## Reprojection decision
+
+After producing a read-only Aiven projection snapshot, run
+`node scripts/run-gpw-reprojection-manifest.mjs` to produce a source-backed
+action manifest. `LINK_SOURCE`, `UPDATE`, `DEACTIVATE` and `REVIEW` are proposed
+actions, not applied changes. The manifest fails closed when any source
+identity or attachment is unresolved. It is not authorization for an Aiven
+write: a complete isolated replay with idempotency, interruption/resumption,
+API/ICS verification and human approval must precede any production repair.
+
+`npm run gpw:readiness` reports separate code-review, parser, reprojection,
+synchronization, source-completeness and deployment decisions. A parser fixture
+PASS, a passing build or a production revision endpoint never substitutes for
+independent source coverage. `npm run gpw:quality:gate` exits nonzero while its
+strict independent-evidence requirements are unmet; that is an expected NO-GO,
+not a reason to weaken the gate.
 
 ## Prepared post-deployment check — not activated
 

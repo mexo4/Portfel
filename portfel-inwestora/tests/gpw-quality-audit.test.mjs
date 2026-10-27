@@ -92,6 +92,26 @@ test("GPW projection comparison reports a stale identity, not a missing document
   assert.ok(findings.every((item) => item.code !== "MISSING_SOURCE_DOCUMENT"));
 });
 
+test("a source with incomplete identity does not claim an existing same-day issuer report is missing", () => {
+  const source = { id: "gpw:499072:0", documentId: "gpw:499072", issuer: "PLXTPL000018",
+    identity: "QUARTERLY_REPORT:Q3:", eventDate: "2026-11-25",
+    sourceUrl: "https://www.gpw.pl/komunikat?geru_id=499072" };
+  const existing = { id: "stable", issuer: "PLXTPL000018",
+    identity: "QUARTERLY_REPORT:Q3:2026", eventDate: "2026-11-25" };
+  const findings = auditGpwProjectionSnapshots([source], [], [], [existing]);
+  assert.deepEqual(findings.map((item) => item.code), ["UNLINKED_SOURCE_PROJECTION"]);
+  assert.match(findings[0].suggestedAction, /link the document/);
+});
+
+test("same issuer and publication day cannot bridge distinct known report periods", () => {
+  const source = { id: "source", issuer: "PLTEST0000001",
+    identity: "QUARTERLY_REPORT:Q3:2026", eventDate: "2026-11-25" };
+  const wrongPeriod = { id: "different-period", issuer: "PLTEST0000001",
+    identity: "QUARTERLY_REPORT:Q2:2026", eventDate: "2026-11-25" };
+  const findings = auditGpwProjectionSnapshots([source], [], [], [wrongPeriod]);
+  assert.deepEqual(findings.map((item) => item.code), ["STALE_PROJECTION"]);
+});
+
 test("GPW source inventory makes partial fetches and unparsed documents explicit resync candidates", () => {
   const report = auditGpwSourceInventory([
     { id: "a", issuer: "Fixture A", sourceUrl: "https://issuer.example/a", fetchStatus: "FETCHED", parseStatus: "NOT_ATTEMPTED" },

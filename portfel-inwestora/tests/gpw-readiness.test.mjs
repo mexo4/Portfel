@@ -45,7 +45,11 @@ test("a manifest with unresolved identities cannot authorize reprojection even a
   input.httpE2e = { status: "HTTP_E2E_PASS" };
   input.manifest = { status: "REVIEW_REQUIRED", safeToApply: false, unresolved: 1,
     isolatedReplay: { status: "PASS" } };
+  input.isolatedReplay = { status: "ISOLATED_REPLAY_PASS_WITH_REVIEW_BLOCKED", testedActions: 42,
+    blockedReviews: 1, http: { api: "PASS", ics: "PASS" } };
   const result = assessGpwReadiness(input);
   assert.equal(result.reprojection.status, "NOT_READY");
   assert.equal(result.reprojection.evidence.unresolved, 1);
+  assert.equal(result.reprojection.evidence.replayedActions, 42);
+  assert.equal(result.reprojection.evidence.blockedReviews, 1);
 });

@@ -143,9 +143,12 @@ const verifyLocalHttp = async (client, manifest, snapshot) => {
   const feed = await request(`/api/calendar/gpw.ics?categories=reports&tickers=${ticker}`);
   assert.equal(feed.status, 200);
   const ics = await feed.text();
-  assert.ok(ics.includes(candidate.proposedState.eventDate.replaceAll("-", "")));
+  const icalEvent = ics.split("BEGIN:VEVENT").find((item) =>
+    item.includes(`UID:${candidate.eventId}:report@mexo.com.pl`));
+  assert.ok(icalEvent, "Corrected event must keep a stable ICS UID");
+  assert.ok(icalEvent.includes(`DTSTART;VALUE=DATE:${candidate.proposedState.eventDate.replaceAll("-", "")}`));
   if (candidate.current.eventDate !== candidate.proposedState.eventDate) {
-    assert.ok(!ics.includes(candidate.current.eventDate.replaceAll("-", "")));
+    assert.ok(!icalEvent.includes(`DTSTART;VALUE=DATE:${candidate.current.eventDate.replaceAll("-", "")}`));
   }
   return { eventId: candidate.eventId, ticker, api: "PASS", page: "PASS", ics: "PASS" };
 };
@@ -222,6 +225,14 @@ try {
   check("non-manifest-events-unchanged", isDeepStrictEqual(
     state.events.filter((item) => !actionIds.has(item.id)),
     snapshot.events.filter((item) => !actionIds.has(item.id))));
+  for (const type of ["GENERAL_MEETING", "UPCOMING_DIVIDEND"]) {
+    check(`unscoped-${type.toLowerCase()}-unchanged`, isDeepStrictEqual(
+      state.events.filter((item) => item.event_type === type),
+      snapshot.events.filter((item) => item.event_type === type)));
+  }
+  const activeKeys = state.events.filter((item) => item.active && item.event_identity)
+    .map((item) => `${item.instrument_id}:${item.event_type}:${item.event_date}:${item.event_identity}`);
+  check("no-active-identical-report-duplicates", new Set(activeKeys).size === activeKeys.length);
   check("original-event-ids-stable", state.events.length === snapshot.events.length &&
     state.events.every((event) => snapshot.events.some((originalEvent) => originalEvent.id === event.id)));
   const mutatingCount = manifest.actions.filter((item) =>

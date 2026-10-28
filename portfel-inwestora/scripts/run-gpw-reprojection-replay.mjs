@@ -30,6 +30,8 @@ await initializeDatabase();
 const client = new pg.Client({ connectionString: databaseUrl, application_name: "mexo-gpw-isolated-replay" });
 const eventIds = snapshot.events.map((item) => item.id);
 const issuerIds = snapshot.instruments.map((item) => item.id);
+const actionableCount = manifest.actions.filter((item) => item.proposedAction !== "REVIEW").length;
+const reviewCount = manifest.actions.length - actionableCount;
 const sourceLanes = ["GPW_REPORT_SCHEDULES", "GPW_WZA", "GPW_DIVIDENDS"];
 let seeded = false;
 let server;
@@ -195,9 +197,11 @@ try {
   check("interruption-rolls-back-all-actions", await compareSnapshotState());
 
   const first = await replayGpwManifest(client, manifest, snapshot);
-  check("resume-after-rollback", first.processed.length === 42);
-  check("all-approved-actions-replayed", first.processed.length === 42 &&
-    first.blocked.length === 1 && first.blocked[0].documentId === "gpw:499257");
+  check("resume-after-rollback", first.processed.length === actionableCount);
+  check("all-approved-actions-replayed", first.processed.length === actionableCount &&
+    first.blocked.length === reviewCount);
+  if (reviewCount) check("unresolved-official-source-stays-blocked",
+    first.blocked.some((item) => item.documentId === "gpw:499257"));
   report.testedActions = first.processed.length;
   report.blockedReviews = first.blocked.length;
 
@@ -213,14 +217,19 @@ try {
           source.corporate_event_id === event.id && source.source_url === action.proposedState.linkSource)
           : event.active === action.current.active && event.event_identity === action.current.identity);
   }
-  const actionIds = new Set(manifest.actions.filter((item) => item.eventId).map((item) => item.eventId));
+  const actionIds = new Set(manifest.actions.filter((item) => item.eventId &&
+    item.proposedAction !== "REVIEW").map((item) => item.eventId));
   check("non-manifest-events-unchanged", isDeepStrictEqual(
     state.events.filter((item) => !actionIds.has(item.id)),
     snapshot.events.filter((item) => !actionIds.has(item.id))));
   check("original-event-ids-stable", state.events.length === snapshot.events.length &&
     state.events.every((event) => snapshot.events.some((originalEvent) => originalEvent.id === event.id)));
-  check("history-records-written", state.history.length > snapshot.history.length &&
-    state.projectionChanges.length === snapshot.projectionChanges.length + 32);
+  const mutatingCount = manifest.actions.filter((item) =>
+    ["UPDATE", "DEACTIVATE", "LINK_SOURCE"].includes(item.proposedAction)).length;
+  const dateChanges = manifest.actions.filter((item) => item.proposedAction === "UPDATE" &&
+    item.current.eventDate !== item.proposedState.eventDate).length;
+  check("history-records-written", state.history.length === snapshot.history.length + dateChanges &&
+    state.projectionChanges.length === snapshot.projectionChanges.length + mutatingCount);
   const getin = manifest.actions.find((item) => item.source?.sourceId === "gpw:499304");
   check("getin-corrected-date-history", state.history.some((item) =>
     item.corporate_event_id === getin.eventId && item.previous_event_date === "2026-11-30" &&
@@ -238,14 +247,25 @@ try {
     .filter((item) => item.proposedAction === "NO_CHANGE")
     .every((item) => isDeepStrictEqual(state.events.find((event) => event.id === item.eventId),
       snapshot.events.find((event) => event.id === item.eventId))));
-  const second = await replayGpwManifest(client, manifest, snapshot, { idempotentRun: true });
+  const replayedUpdate = state.events.find((item) => item.id === updated.eventId);
+  await client.query("UPDATE corporate_events SET source_priority = source_priority + 1 WHERE id = $1",
+    [updated.eventId]);
+  await assert.rejects(replayGpwManifest(client, manifest, snapshot,
+    { idempotentRun: true, expectedPostState: state }), /IDEMPOTENT_POST_STATE_DRIFT/);
+  await client.query("UPDATE corporate_events SET source_priority = $2 WHERE id = $1",
+    [updated.eventId, replayedUpdate.source_priority]);
+  check("idempotent-rerun-rejects-hidden-row-drift", isDeepStrictEqual(
+    await readIsolatedMarketState(client, snapshot), state));
+  const second = await replayGpwManifest(client, manifest, snapshot,
+    { idempotentRun: true, expectedPostState: state });
   const afterSecond = await readIsolatedMarketState(client, snapshot);
-  check("identical-manifest-idempotent", second.processed.length === 42 &&
+  check("identical-manifest-idempotent", second.processed.length === actionableCount &&
     isDeepStrictEqual(afterSecond, state));
   const http = await verifyLocalHttp(client, manifest, snapshot);
   report.http = http;
   check("local-api-page-and-ics-match-replay", http.api === "PASS" && http.page === "PASS" && http.ics === "PASS");
-  report.status = "ISOLATED_REPLAY_PASS_WITH_REVIEW_BLOCKED";
+  report.status = reviewCount === 0 ? "ISOLATED_REPLAY_PASS" :
+    "ISOLATED_REPLAY_PASS_WITH_REVIEW_BLOCKED";
 } catch (error) {
   report.failure = error instanceof Error ? error.message : "unknown";
 } finally {
@@ -293,4 +313,4 @@ const artifacts = await writeGpwQualityArtifacts({ outputDir, basename: "reproje
 printArtifactSummary({ name: "gpw:reprojection:replay", status: report.status, artifacts,
   summary: { testedActions: report.testedActions, blockedReviews: report.blockedReviews,
     checks: report.checks.length, failure: report.failure } });
-if (report.status !== "ISOLATED_REPLAY_PASS_WITH_REVIEW_BLOCKED") process.exitCode = 1;
+if (!["ISOLATED_REPLAY_PASS", "ISOLATED_REPLAY_PASS_WITH_REVIEW_BLOCKED"].includes(report.status)) process.exitCode = 1;

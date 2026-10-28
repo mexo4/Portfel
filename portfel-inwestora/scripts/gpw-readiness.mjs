@@ -18,8 +18,10 @@ export const assessGpwReadiness = ({ audit, sources, projections, e2e, manifest,
   const futureEventsVerified = documentedFutureHorizon?.completeness === "VERIFIED" &&
     documentedFutureHorizon?.independentInventory === true;
   const projectionFindings = projections?.findings?.length ?? null;
-  const replayPass = isolatedReplay?.status === "ISOLATED_REPLAY_PASS_WITH_REVIEW_BLOCKED" &&
-    isolatedReplay?.testedActions === 42 && isolatedReplay?.blockedReviews === 1 &&
+  const actionableCount = manifest?.actions?.filter((item) => item.proposedAction !== "REVIEW").length;
+  const replayPass = isolatedReplay?.status === "ISOLATED_REPLAY_PASS" &&
+    Number.isInteger(actionableCount) && actionableCount > 0 &&
+    isolatedReplay?.testedActions === actionableCount && isolatedReplay?.blockedReviews === 0 &&
     isolatedReplay?.http?.api === "PASS" && isolatedReplay?.http?.ics === "PASS";
   const reprojectionReady = manifest?.safeToApply === true && manifest?.unresolved === 0 &&
     replayPass && postgresPass && httpPass;

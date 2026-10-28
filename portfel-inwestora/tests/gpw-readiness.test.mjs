@@ -53,3 +53,19 @@ test("a manifest with unresolved identities cannot authorize reprojection even a
   assert.equal(result.reprojection.evidence.replayedActions, 42);
   assert.equal(result.reprojection.evidence.blockedReviews, 1);
 });
+
+test("a complete replay can reach human approval only with zero blocked reviews", () => {
+  const input = evidence();
+  input.httpE2e = { status: "HTTP_E2E_PASS" };
+  input.manifest = { status: "SOURCE_REVIEWED", safeToApply: true, unresolved: 0,
+    actions: [{ proposedAction: "UPDATE" }, { proposedAction: "NO_CHANGE" }] };
+  input.isolatedReplay = { status: "ISOLATED_REPLAY_PASS", testedActions: 2,
+    blockedReviews: 0, http: { api: "PASS", ics: "PASS" } };
+  assert.equal(assessGpwReadiness(input).reprojection.status, "READY_FOR_HUMAN_APPROVAL");
+  input.isolatedReplay.blockedReviews = 1;
+  assert.equal(assessGpwReadiness(input).reprojection.status, "NOT_READY");
+  input.isolatedReplay.blockedReviews = 0;
+  input.manifest.actions = [];
+  input.isolatedReplay.testedActions = 0;
+  assert.equal(assessGpwReadiness(input).reprojection.status, "NOT_READY");
+});

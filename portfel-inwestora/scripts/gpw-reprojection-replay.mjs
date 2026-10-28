@@ -147,7 +147,8 @@ const addChange = async (client, action, event, url, timestamp) => {
 /** All actionable decisions run in one SERIALIZABLE transaction. One REVIEW
  * stays blocked. An injected interruption rolls the entire manifest back. */
 export const replayGpwManifest = async (client, manifest, snapshot, {
-  interruptAfter = null, idempotentRun = false, timestamp = new Date().toISOString(),
+  interruptAfter = null, idempotentRun = false, expectedPostState = null,
+  timestamp = new Date().toISOString(),
 } = {}) => {
   await assertIsolatedReplayServer(client);
   verifyReplayInputs(manifest, snapshot);
@@ -158,6 +159,9 @@ export const replayGpwManifest = async (client, manifest, snapshot, {
   try {
     await client.query("SET LOCAL statement_timeout = '15s'");
     const state = await readIsolatedMarketState(client, snapshot);
+    if (idempotentRun && (!expectedPostState || !equal(state, expectedPostState))) {
+      throw new Error("IDEMPOTENT_POST_STATE_DRIFT");
+    }
     const byId = new Map(state.events.map((item) => [item.id, item]));
     const original = new Map(snapshot.events.map((item) => [item.id, item]));
     const actionIds = new Set(targetActions(manifest).map((item) => item.eventId));

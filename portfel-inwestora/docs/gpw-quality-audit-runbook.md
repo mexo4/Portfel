@@ -154,7 +154,8 @@ Never reconstruct expected source decisions from the same parser under test.
    and database names. Run `node --experimental-strip-types --import ./tests/register-alias-loader.mjs scripts/run-gpw-reprojection-replay.mjs`.
    It seeds public market rows into that isolated DB,
    tests drift, source priority, identity collision, interruption, rollback,
-   resume and idempotency, then verifies local API, page and ICS. The script
+   resume and idempotency (including rejection of an altered post-state), then
+   verifies local API, page and ICS. The script
    deletes only its own isolated fixtures. It cannot write Aiven.
 4. Run `npm run gpw:readiness`. A 42/43 local replay remains `NOT_READY`
    for a production reprojection while the remaining `REVIEW` is unresolved.

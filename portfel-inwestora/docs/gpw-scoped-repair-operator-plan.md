@@ -9,8 +9,12 @@ The global GPW quality/readiness gate remains NO-GO.
 ## Independent source review
 
 Run `node scripts/run-gpw-scoped-repair-proposal.mjs` against the read-only
-snapshot and original manifest. For **each of the 32 modifications**, an
-independent reviewer must open every cited official GPW report and record:
+snapshot and original manifest. Use the source-grouped
+[`gpw-scoped-source-evidence-2026-10-28.md`](gpw-scoped-source-evidence-2026-10-28.md)
+as the review worksheet; its short excerpts and confidence assessments are
+preparation for review, **not** pre-filled approval.
+For **each of the 32 modifications**, an independent reviewer must open every
+cited official GPW report and record:
 
 | Field | Required entry |
 | --- | --- |

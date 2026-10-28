@@ -84,12 +84,18 @@ export const seedIsolatedMarketSnapshot = async (client, snapshot) => {
     for (const row of snapshot.sources) await insertRow(client, "corporate_event_sources", row);
     for (const row of snapshot.history) await insertRow(client, "corporate_event_history", row);
     for (const row of snapshot.projectionChanges) await insertRow(client, "corporate_event_projection_changes", row);
+    for (const row of snapshot.reports) await insertRow(client, "espi_reports", {
+      id: `replay-report-${row.source_id}`, source: "GPW_REPLAY_FIXTURE", source_id: row.source_id,
+      issuer_id: row.issuer_id, issuer_name: "GPW replay fixture", market: row.market,
+      report_type: "CURRENT", published_at: row.published_at, source_title: row.source_title,
+      title: row.source_title, body_text: "Isolated metadata fixture only", category: "OTHER",
+      source_url: row.source_url, discovered_at: row.published_at, updated_at: row.published_at,
+    });
     await client.query("COMMIT");
   } catch (error) { await client.query("ROLLBACK"); throw error; }
 };
 
-export const readIsolatedMarketState = async (client, snapshot) => {
-  assertIsolatedReplayClient(client);
+const readMarketState = async (client, snapshot) => {
   const issuerIds = snapshot.instruments.map((item) => item.id);
   const instruments = (await client.query("SELECT * FROM corporate_event_instruments WHERE id = ANY($1::text[]) ORDER BY id", [issuerIds])).rows;
   const events = (await client.query("SELECT * FROM corporate_events WHERE instrument_id = ANY($1::text[]) ORDER BY id", [issuerIds])).rows;
@@ -103,6 +109,11 @@ export const readIsolatedMarketState = async (client, snapshot) => {
     JOIN corporate_events AS event ON event.id = change.corporate_event_id
     WHERE event.instrument_id = ANY($1::text[]) ORDER BY change.id`, [issuerIds])).rows;
   return { instruments, events, sources, history, projectionChanges };
+};
+
+export const readIsolatedMarketState = async (client, snapshot) => {
+  assertIsolatedReplayClient(client);
+  return readMarketState(client, snapshot);
 };
 
 const reportForUrl = (snapshot, url) => snapshot.reports.find((item) => item.source_id === officialId(url) &&
@@ -146,19 +157,22 @@ const addChange = async (client, action, event, url, timestamp) => {
 
 /** All actionable decisions run in one SERIALIZABLE transaction. One REVIEW
  * stays blocked. An injected interruption rolls the entire manifest back. */
-export const replayGpwManifest = async (client, manifest, snapshot, {
+const executeManifestTransaction = async (client, manifest, snapshot, {
   interruptAfter = null, idempotentRun = false, expectedPostState = null,
-  timestamp = new Date().toISOString(),
+  timestamp = new Date().toISOString(), dryRun = false,
+  assertServer = assertIsolatedReplayServer, beforeSnapshot = null, beforeActions = null,
 } = {}) => {
-  await assertIsolatedReplayServer(client);
   verifyReplayInputs(manifest, snapshot);
   const actions = manifest.actions.filter((item) => item.proposedAction !== "REVIEW")
     .sort((a, b) => ({ DEACTIVATE: 0, UPDATE: 1, LINK_SOURCE: 2, NO_CHANGE: 3 }[a.proposedAction] -
       { DEACTIVATE: 0, UPDATE: 1, LINK_SOURCE: 2, NO_CHANGE: 3 }[b.proposedAction]));
-  await client.query("BEGIN ISOLATION LEVEL SERIALIZABLE");
+  await client.query(`BEGIN ISOLATION LEVEL SERIALIZABLE${dryRun ? " READ ONLY" : ""}`);
   try {
     await client.query("SET LOCAL statement_timeout = '15s'");
-    const state = await readIsolatedMarketState(client, snapshot);
+    if (beforeSnapshot) await beforeSnapshot(client);
+    await assertServer(client);
+    if (beforeActions) await beforeActions(client);
+    const state = await readMarketState(client, snapshot);
     if (idempotentRun && (!expectedPostState || !equal(state, expectedPostState))) {
       throw new Error("IDEMPOTENT_POST_STATE_DRIFT");
     }
@@ -207,9 +221,11 @@ export const replayGpwManifest = async (client, manifest, snapshot, {
       if (action.proposedAction === "NO_CHANGE") {
         processed.push({ eventId: event.id, decision: "NO_CHANGE", result: "UNCHANGED" });
       } else if (action.proposedAction === "DEACTIVATE") {
-        await addChange(client, action, event, url, timestamp);
-        await client.query("UPDATE corporate_events SET active = FALSE, updated_at = $2 WHERE id = $1", [event.id, timestamp]);
-        processed.push({ eventId: event.id, decision: "DEACTIVATE", result: "DEACTIVATED" });
+        if (!dryRun) {
+          await addChange(client, action, event, url, timestamp);
+          await client.query("UPDATE corporate_events SET active = FALSE, updated_at = $2 WHERE id = $1", [event.id, timestamp]);
+        }
+        processed.push({ eventId: event.id, decision: "DEACTIVATE", result: dryRun ? "WOULD_DEACTIVATE" : "DEACTIVATED" });
       } else if (action.proposedAction === "UPDATE") {
         const target = action.proposedState;
         const label = targetLabel(target.identity);
@@ -223,28 +239,30 @@ export const replayGpwManifest = async (client, manifest, snapshot, {
             (!event.source_published_at || item.published_at >= event.source_published_at))) {
           throw new Error(`NEW_SOURCE_NOT_VERIFIED:${event.id}`);
         }
-        await addChange(client, action, event, url, timestamp);
-        await client.query(`UPDATE corporate_events SET event_date = $2, event_identity = $3,
+        if (!dryRun) {
+          await addChange(client, action, event, url, timestamp);
+          await client.query(`UPDATE corporate_events SET event_date = $2, event_identity = $3,
           fiscal_period = $4, fiscal_year = $5, fiscal_year_label = $6, updated_at = $7 WHERE id = $1`,
-        [event.id, target.eventDate, target.identity, label.fiscalPeriod, label.fiscalYear,
-          label.fiscalYearLabel, timestamp]);
-        if (event.event_date !== target.eventDate) {
-          await client.query(`INSERT INTO corporate_event_history
+          [event.id, target.eventDate, target.identity, label.fiscalPeriod, label.fiscalYear,
+            label.fiscalYearLabel, timestamp]);
+          if (event.event_date !== target.eventDate) {
+            await client.query(`INSERT INTO corporate_event_history
             (id, corporate_event_id, previous_event_date, next_event_date, source_url, detected_at)
             VALUES ($1, $2, $3, $4, $5, $6)`, [randomUUID(), event.id, event.event_date,
             target.eventDate, url, timestamp]);
-        }
-        if (target.linkSource) {
-          const report = reportForUrl(snapshot, target.linkSource);
-          if (!sourceForUrl(state.sources, event.id, target.linkSource)) {
-            await client.query(`INSERT INTO corporate_event_sources
+          }
+          if (target.linkSource) {
+            const report = reportForUrl(snapshot, target.linkSource);
+            if (!sourceForUrl(state.sources, event.id, target.linkSource)) {
+              await client.query(`INSERT INTO corporate_event_sources
               (id, corporate_event_id, source_type, source_url, source_published_at,
                source_priority, discovered_at, source_title)
               VALUES ($1, $2, 'ISSUER_CURRENT_REPORT', $3, $4, 300, $5, $6)`,
-            [randomUUID(), event.id, target.linkSource, report.published_at, timestamp, report.source_title]);
+              [randomUUID(), event.id, target.linkSource, report.published_at, timestamp, report.source_title]);
+            }
           }
         }
-        processed.push({ eventId: event.id, decision: "UPDATE", result: "UPDATED" });
+        processed.push({ eventId: event.id, decision: "UPDATE", result: dryRun ? "WOULD_UPDATE" : "UPDATED" });
       } else if (action.proposedAction === "LINK_SOURCE") {
         const report = reportForUrl(snapshot, action.proposedState.linkSource);
         if (!report || report.issuer_id !== event.instrument_id || report.market !== "GPW" ||
@@ -255,21 +273,78 @@ export const replayGpwManifest = async (client, manifest, snapshot, {
         if (sourceForUrl(state.sources, event.id, action.proposedState.linkSource)) {
           throw new Error(`SOURCE_ALREADY_LINKED:${event.id}`);
         }
-        await addChange(client, action, event, url, timestamp);
-        await client.query(`INSERT INTO corporate_event_sources
+        if (!dryRun) {
+          await addChange(client, action, event, url, timestamp);
+          await client.query(`INSERT INTO corporate_event_sources
           (id, corporate_event_id, source_type, source_url, source_published_at,
            source_priority, discovered_at, source_title)
           VALUES ($1, $2, 'ISSUER_CURRENT_REPORT', $3, $4, 300, $5, $6)`,
-        [randomUUID(), event.id, action.proposedState.linkSource, report.published_at, timestamp, report.source_title]);
-        processed.push({ eventId: event.id, decision: "LINK_SOURCE", result: "LINKED" });
+          [randomUUID(), event.id, action.proposedState.linkSource, report.published_at, timestamp, report.source_title]);
+        }
+        processed.push({ eventId: event.id, decision: "LINK_SOURCE", result: dryRun ? "WOULD_LINK" : "LINKED" });
       } else throw new Error(`UNSUPPORTED_ACTION:${action.proposedAction}`);
       if (interruptAfter === processed.length) throw new Error(`INJECTED_REPLAY_INTERRUPTION:${interruptAfter}`);
     }
-    await client.query("COMMIT");
+    if (!dryRun && !idempotentRun) {
+      const after = await readMarketState(client, snapshot);
+      const afterById = new Map(after.events.map((event) => [event.id, event]));
+      for (const action of actions) {
+        const event = afterById.get(action.eventId);
+        const target = action.proposedState ?? {};
+        const before = original.get(action.eventId);
+        const expected = action.proposedAction === "DEACTIVATE"
+          ? { ...before, active: false, updated_at: timestamp }
+          : action.proposedAction === "UPDATE" ? (() => {
+            const label = targetLabel(target.identity);
+            return { ...before, event_date: target.eventDate, event_identity: target.identity,
+              fiscal_period: label.fiscalPeriod, fiscal_year: label.fiscalYear,
+              fiscal_year_label: label.fiscalYearLabel, updated_at: timestamp };
+          })() : before;
+        const valid = action.proposedAction === "NO_CHANGE" ? equal(event, original.get(action.eventId))
+          : equal(event, expected) && (action.proposedAction !== "LINK_SOURCE" ||
+            Boolean(sourceForUrl(after.sources, action.eventId, target.linkSource))) &&
+            (action.proposedAction !== "UPDATE" || !target.linkSource ||
+              Boolean(sourceForUrl(after.sources, action.eventId, target.linkSource)));
+        if (!valid) throw new Error(`POST_STATE_MISMATCH:${action.eventId}`);
+      }
+      if (!equal(after.events.filter((event) => !actionIds.has(event.id)),
+        state.events.filter((event) => !actionIds.has(event.id)))) throw new Error("POST_NON_MANIFEST_DRIFT");
+      const mutations = actions.filter((action) => action.proposedAction !== "NO_CHANGE");
+      const dateChanges = actions.filter((action) => action.proposedAction === "UPDATE" &&
+        action.current.eventDate !== action.proposedState.eventDate);
+      const addedSources = actions.filter((action) => action.proposedState?.linkSource &&
+        !sourceForUrl(state.sources, action.eventId, action.proposedState.linkSource));
+      if (after.projectionChanges.length !== state.projectionChanges.length + mutations.length ||
+        after.history.length !== state.history.length + dateChanges.length ||
+        after.sources.length !== state.sources.length + addedSources.length) {
+        throw new Error("POST_PROVENANCE_COUNT_MISMATCH");
+      }
+    }
+    await client.query(dryRun ? "ROLLBACK" : "COMMIT");
     return { processed, blocked: manifest.actions.filter((item) => item.proposedAction === "REVIEW")
       .map((item) => ({ documentId: item.current?.documentId, reason: item.reason })) };
   } catch (error) {
     await client.query("ROLLBACK").catch(() => undefined);
     throw error;
   }
+};
+
+/** Existing loopback-only replay remains the integration test entry point. */
+export const replayGpwManifest = (client, manifest, snapshot, options = {}) =>
+  executeManifestTransaction(client, manifest, snapshot,
+    { ...options, dryRun: false, assertServer: assertIsolatedReplayServer, beforeActions: null });
+
+export const dryRunIsolatedGpwManifest = (client, manifest, snapshot) =>
+  executeManifestTransaction(client, manifest, snapshot,
+    { dryRun: true, assertServer: assertIsolatedReplayServer, beforeActions: null });
+
+/** Shared transaction logic, but production access is gated by the separate
+ * scoped-repair module. Never call this with an application connection. */
+export const executeApprovedManifestTransaction = (client, manifest, snapshot, gates) => {
+  assert.equal(typeof gates?.assertServer, "function");
+  assert.equal(typeof gates?.beforeActions, "function");
+  return executeManifestTransaction(client, manifest, snapshot, {
+    dryRun: gates.dryRun, assertServer: gates.assertServer,
+    beforeSnapshot: gates.beforeSnapshot, beforeActions: gates.beforeActions,
+  });
 };

@@ -14,7 +14,8 @@ cytacie oznacza pominięcie słów, **nie zmianę daty**. Tekst źródła jest
 oddzielony od wniosku o rekordzie. „Wysoka” znaczy, że treść wprost określa
 termin/okres lub formalną korektę, a istniejący rekord da się porównać z
 projekcją; „warunkowa” oznacza, że dezaktywacja wynika z błędnego odczytania
-daty kontekstowej lub braku wydarzenia w kompletnym harmonogramie. Żaden
+roli daty kontekstowej i wymaga niezależnej decyzji o konkretnym rekordzie.
+Sam brak terminu w harmonogramie nie dowodzi braku każdej innej publikacji. Żaden
 stopień pewności **nie jest niezależnym zatwierdzeniem**. Przed zapisem trzeba
 sprawdzić aktualność źródła i świeży snapshot.
 
@@ -59,17 +60,39 @@ jednej zależnej korekty blokuje zatwierdzenie całego atomowego zakresu.
 
 ## 5. AB S.A. — `gpw:499171` (nowy rok) i `gpw:475396` (poprzedni rok)
 
-[Harmonogram 2026/2027](https://www.gpw.pl/komunikat?geru_id=499171) wyznacza Q1 na **22.02.2027**, półrocze na **08.06.2027**, Q3 na **23.08.2027** i raport roczny na **07.01.2028**. Fragment: „Skonsolidowany Raport za rok obrotowy 2026/2027 ... zostanie opublikowany w dniu 07-01-2028 r.” Data 30.09.2027 jest **końcem okresu**, nie publikacją. [Harmonogram 2025/2026](https://www.gpw.pl/komunikat?geru_id=475396) dotyczy innego roku i wskazuje raport roczny 07.01.2027. W obu komunikatach „6 czerwca 2025 roku” oznacza datę **rozporządzenia MF**, nie termin raportu. To uzasadnia wyłączenie fałszywych projekcji 06.06.2025, ale jako wniosek z kontekstu i kompletności obu harmonogramów, a nie dosłowne zdanie „usuń rekord”. Pewność: **wysoka dla trzech duplikatów, warunkowa dla dwóch rekordów 06.06.2025**.
+Kontrola pochodzenia z **oryginalnych komunikatów**, nie tylko z wniosku parsera:
+[PAP 50/2025](https://pap-mediaroom.pl/biznes-i-finanse/ab-sa-502025-terminy-przekazywania-przez-spolke-raportow-okresowych-w-roku)
+oraz [PDF emitenta 50/2025](https://www.ab.pl/wp-content/uploads/2025/10/RB_50_2025_terminy_raportowania-1.pdf)
+podają w podstawie prawnej „Rozporządzenia Ministra Finansów z dnia 6 czerwca 2025 roku”,
+natomiast termin Q1 to 26.02.2026, a H1 to 08.06.2026. Analogicznie
+[PAP 25/2026](https://pap-mediaroom.pl/biznes-i-finanse/ab-sa-252026-terminy-przekazywania-przez-spolke-raportow-okresowych-w-roku)
+cytuje ten sam akt prawny, lecz wyznacza Q1 na 22.02.2027 i H1 na 08.06.2027.
+Oba sporne rekordy są powiązane z tymi harmonogramami, mają niekompletną
+tożsamość (`QUARTERLY_REPORT::`, `HALF_YEAR_REPORT:H1:`) i datę 06.06.2025.
+Zestawienie fragmentu prawnego z jawnie opisanymi datami publikacji wskazuje
+na **promowanie daty aktu prawnego do daty kalendarzowej**. Nie dowodzi to, że
+AB nigdy nie opublikowała *jakiegokolwiek innego* raportu 06.06.2025;
+dezaktywacja dotyczy tylko tych dwóch projekcji z tych źródeł.
+
+[Harmonogram 2026/2027](https://www.gpw.pl/komunikat?geru_id=499171) wyznacza Q1 na **22.02.2027**, półrocze na **08.06.2027**, Q3 na **23.08.2027** i raport roczny na **07.01.2028**. Fragment: „Skonsolidowany Raport za rok obrotowy 2026/2027 ... zostanie opublikowany w dniu 07-01-2028 r.” Data 30.09.2027 jest **końcem okresu**, nie publikacją. [Harmonogram 2025/2026](https://www.gpw.pl/komunikat?geru_id=475396) dotyczy innego roku i wskazuje raport roczny 07.01.2027. W obu komunikatach „6 czerwca 2025 roku” oznacza datę **rozporządzenia MF**, nie termin raportu. To uzasadnia wyłączenie tych konkretnych fałszywych projekcji 06.06.2025 na podstawie roli daty w zdaniu źródłowym; nie dowodzi braku każdej możliwej publikacji tego dnia. Pewność: **wysoka dla trzech duplikatów, warunkowa dla dwóch rekordów 06.06.2025**.
 
 | Rekord | Obecna projekcja → propozycja | Pozostaje aktywne | Decyzja człowieka / drugi recenzent / uzasadnienie / data |
 | --- | --- | --- | --- |
 | `d4eb35ba` DEACTIVATE | roczny na 30.09.2027 (koniec FY) → nieaktywne | `f1b9781d`, FY 2026/27 na 07.01.2028 | `___ / ___ / ___ / ___` |
 | `026701ae` DEACTIVATE | osobny H1 „UNIT” 08.06.2027 → nieaktywne; emitent zapowiedział jednostkowy jako część skonsolidowanego | `df3c91a3`, H1 FY 2026/27 na 08.06.2027 | `___ / ___ / ___ / ___` |
 | `bfad642e` DEACTIVATE | roczny FY bez roku 07.01.2028 → nieaktywne | `f1b9781d`, FY 2026/27 na 07.01.2028 | `___ / ___ / ___ / ___` |
-| `797979f1` DEACTIVATE | kwartalny 06.06.2025 → nieaktywne; data pochodzi z cytatu prawnego, nie z kalendarza | brak raportu tego dnia; z harmonogramu 2025/26 pozostają m.in. `e681e508` Q1 i `1c1bf8c9` Q3 | `___ / ___ / ___ / ___` |
-| `e20269d0` DEACTIVATE | półroczny 06.06.2025 → nieaktywne; ten sam błąd daty prawnej | brak raportu tego dnia; pozostają `16e1f289` H1 FY 2025/26 i `df3c91a3` H1 FY 2026/27 | `___ / ___ / ___ / ___` |
+| `797979f1` DEACTIVATE | kwartalny 06.06.2025 → nieaktywne; data z cytatu prawnego, nie z terminu raportu | `e681e508` Q1 FY 2025/26 i `1c1bf8c9` Q3 pozostają aktywne; nie orzekamy o innych publikacjach tego dnia | `___ / ___ / ___ / ___` |
+| `e20269d0` DEACTIVATE | półroczny 06.06.2025 → nieaktywne; ten sam fragment prawny | `16e1f289` H1 FY 2025/26 i `df3c91a3` H1 FY 2026/27 pozostają aktywne | `___ / ___ / ___ / ___` |
 
 ## 6. DELKO — `gpw:493765`
+
+Oryginalny [komunikat GPW 17/2026](https://www.gpw.pl/komunikat?geru_id=493765)
+w tytule i pierwszym zdaniu opisuje „rok obrotowy trwający od 01.07.2026
+do 30.06.2027”; dalej wylicza osobne terminy publikacji: Q1 25.11.2026,
+H1 25.03.2027, Q3 26.05.2027. Rekord `558db458` jest kwartalny z pustym
+okresem/rokiem i datą 30.06.2027, powiązany z tym źródłem. To wskazuje na
+**promowanie końca roku obrotowego do daty publikacji**, a nie na dowód,
+że emitent nie mógł opublikować dowolnego innego dokumentu 30.06.2027.
 
 [Harmonogram ESPI](https://www.gpw.pl/komunikat?geru_id=493765) podaje krótko: „29.10.2026 roku”, „25.11.2026 r.”, „26.05.2027 r.” odpowiednio dla rocznego FY 2025/26, Q1 FY 2026/27 i Q3 FY 2026/27. Fragment „od 01.07.2026 do 30.06.2027” opisuje **granice roku obrotowego**, nie termin raportu 30.06.2027. Pewność: **wysoka dla trzech uzupełnień okresu, warunkowa dla dezaktywacji 30.06**.
 
@@ -78,7 +101,7 @@ jednej zależnej korekty blokuje zatwierdzenie całego atomowego zakresu.
 | `fc1afce0` UPDATE | roczny 29.10.2026: FY pusty → FY 2025/26 | — | `___ / ___ / ___` |
 | `64f527b7` UPDATE | Q1 25.11.2026: rok pusty → FY 2026/27 | — | `___ / ___ / ___` |
 | `88f792d4` UPDATE | Q3 26.05.2027: rok pusty → FY 2026/27 | — | `___ / ___ / ___` |
-| `558db458` DEACTIVATE | kwartalny 30.06.2027 → nieaktywne; to koniec FY, nie publikacja | brak raportu w tym dniu; aktywne pozostają trzy wskazane wyżej właściwe daty, w tym `88f792d4` | `___ / ___ / ___ / ___` |
+| `558db458` DEACTIVATE | kwartalny 30.06.2027 → nieaktywne; to koniec FY, nie termin wskazanej publikacji | aktywne pozostają właściwe Q1 `64f527b7`, H1 z harmonogramu oraz Q3 `88f792d4`; inne publikacje nie są tu oceniane | `___ / ___ / ___ / ___` |
 
 ## 7. GreenX — `gpw:497077`
 

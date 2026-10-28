@@ -11,7 +11,9 @@ import { isDeepStrictEqual } from "node:util";
 import bcrypt from "bcryptjs";
 import pg from "pg";
 import { assertIsolatedReplayDatabase, readIsolatedMarketState,
-  replayGpwManifest, seedIsolatedMarketSnapshot, verifyReplayInputs } from "./gpw-reprojection-replay.mjs";
+  dryRunIsolatedGpwManifest, replayGpwManifest, seedIsolatedMarketSnapshot,
+  verifyReplayInputs } from "./gpw-reprojection-replay.mjs";
+import { assertRestoredBackup } from "./gpw-scoped-repair-executor.mjs";
 import { getAuditOutputDirectory, printArtifactSummary, renderGenericMarkdown, writeGpwQualityArtifacts } from "./gpw-quality-io.mjs";
 
 const outputDir = getAuditOutputDirectory();
@@ -158,6 +160,19 @@ try {
   await seedIsolatedMarketSnapshot(client, snapshot);
   seeded = true;
   check("isolated-market-snapshot-exact", await compareSnapshotState());
+  await assertRestoredBackup(client, manifest, snapshot);
+  check("isolated-restored-market-row-verifier", true);
+  const reportRow = snapshot.reports[0];
+  await client.query("UPDATE espi_reports SET source_title = 'drift' WHERE source_id = $1", [reportRow.source_id]);
+  await assert.rejects(assertRestoredBackup(client, manifest, snapshot), /RESTORED_BACKUP_DRIFT:reports/);
+  await client.query("UPDATE espi_reports SET source_title = $2 WHERE source_id = $1",
+    [reportRow.source_id, reportRow.source_title]);
+  await assertRestoredBackup(client, manifest, snapshot);
+  check("restored-report-drift-fail-closed", true);
+  const preview = await dryRunIsolatedGpwManifest(client, manifest, snapshot);
+  check("read-only-dry-run-validates-42-and-rolls-back", preview.processed.length === actionableCount &&
+    preview.processed.filter((item) => item.result.startsWith("WOULD_")).length === 32 &&
+    await compareSnapshotState());
 
   const updated = manifest.actions.find((item) => item.proposedAction === "UPDATE");
   const original = snapshot.events.find((item) => item.id === updated.eventId);
@@ -304,6 +319,8 @@ try {
     try {
       // The dedicated database was verified to have none of these issuer IDs
       // before import; remove only rows introduced by this isolated run.
+      await client.query("DELETE FROM espi_reports WHERE source = 'GPW_REPLAY_FIXTURE' AND source_id = ANY($1::text[])",
+        [snapshot.reports.map((item) => item.source_id)]);
       await client.query("DELETE FROM corporate_event_instruments WHERE id = ANY($1::text[])", [issuerIds]);
       const remaining = await client.query("SELECT COUNT(*)::int AS count FROM corporate_events WHERE id = ANY($1::text[])", [eventIds]);
       if (remaining.rows[0]?.count !== 0) throw new Error("ISOLATED_FIXTURE_CLEANUP_FAILED");

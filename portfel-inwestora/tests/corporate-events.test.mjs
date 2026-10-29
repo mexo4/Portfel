@@ -144,6 +144,19 @@ test("same-source report reprojection applies an in-place corrected date despite
   assert.equal(shouldApplyEvent(existing, sameOfficialSchedule, parsed, false), false);
 });
 
+test("a conflicting date from another report source cannot silently move an existing appointment", () => {
+  const existing = {
+    event_date: "2026-11-30", status: "CONFIRMED", source_type: "ISSUER_CURRENT_REPORT",
+    source_priority: 300, source_published_at: "2026-01-22T12:04:00.000Z",
+  };
+  const newer = { sourceType: "ISSUER_CURRENT_REPORT", sourceUrl: "https://issuer.example/new-source",
+    sourcePublishedAt: "2026-10-23T12:04:00.000Z" };
+  const candidate = { eventType: "QUARTERLY_REPORT", eventDate: "2026-10-28",
+    fiscalPeriod: "Q3", fiscalYear: 2026, isScheduleChange: false };
+  assert.equal(shouldApplyEvent(existing, newer, candidate, false), false);
+  assert.equal(shouldApplyEvent(existing, newer, { ...candidate, isScheduleChange: true }, false), true);
+});
+
 test("an older syndicated schedule cannot roll back a newer date during source reprojection", () => {
   const existing = {
     event_date: "2026-10-27",

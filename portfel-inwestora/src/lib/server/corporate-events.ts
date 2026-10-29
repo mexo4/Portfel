@@ -36,6 +36,7 @@ import { fetchWithSystemTrust } from "@/lib/server/system-trust-fetch";
 import { readOfficialMeetingPdf } from "@/lib/server/general-meeting-pdf";
 import { normalizeText, uniqueBy } from "@/lib/utils";
 import { getReportScheduleProjectionStatus, planReportScheduleReprojection, type StoredReportProjection } from "@/lib/report-schedule-reprojection";
+import { assessReportPublicationBatch } from "@/lib/report-schedule-publication";
 import { invalidatePublicGpwEventsCache } from "@/lib/server/public-gpw-cache";
 import {
   isDividendReportSuperseded,
@@ -995,6 +996,8 @@ export const shouldApplyEvent = (
   const isReportSchedule = parsed.eventType === "QUARTERLY_REPORT" ||
     parsed.eventType === "HALF_YEAR_REPORT" ||
     parsed.eventType === "ANNUAL_REPORT";
+  if (isReportSchedule && existing.event_date && existing.event_date !== parsed.eventDate &&
+    !parsed.isScheduleChange && !sameSourceReprojection) return false;
   if (
     sameSourceReprojection &&
     isReportSchedule &&
@@ -1056,14 +1059,21 @@ const upsertParsedEvents = async (
   instrument: CanonicalInstrument,
   batch: ProviderEventBatch
 ) => {
-  if (batch.events.length === 0) return { created: 0, duplicates: 0, saved: 0, changed: 0 };
+  if (batch.events.length === 0) return { created: 0, duplicates: 0, saved: 0, changed: 0, reviewReasons: [] as string[] };
 
   let created = 0;
   let duplicates = 0;
   let saved = 0;
   let changed = 0;
+  const reviewReasons: string[] = [];
 
-  for (const parsed of batch.events) {
+  for (const { event: parsed, publish, reasons } of assessReportPublicationBatch(batch.events)) {
+    if (!publish) {
+      reviewReasons.push(...reasons);
+      diagnose({ provider: "report-schedule-publication", sourceUrl: batch.source.sourceUrl,
+        phase: "quarantined", reasons });
+      continue;
+    }
     const eventIdentity = getCorporateEventIdentityKey(parsed);
     let existing: ExistingEventRow | undefined = (
       await transaction.query<ExistingEventRow>(
@@ -1239,6 +1249,13 @@ const upsertParsedEvents = async (
         [eventId, batch.source.sourceUrl]
       )
     ).length > 0);
+    if (existing && isReportSchedule && existing.event_date !== parsed.eventDate &&
+      !parsed.isScheduleChange && !sameSourceReprojection) {
+      reviewReasons.push("CONFLICTING_DATE_FROM_DIFFERENT_SOURCE");
+      diagnose({ provider: "report-schedule-publication", sourceUrl: batch.source.sourceUrl,
+        phase: "conflicting-date-quarantined", eventId: existing.id });
+      continue;
+    }
     const apply = shouldApplyEvent(existing, batch.source, parsed, sameSourceReprojection);
     const sourceId = randomUUID();
 
@@ -1442,7 +1459,7 @@ const upsertParsedEvents = async (
       [new Date().toISOString(), instrument.id, fiscalYear, `dividend:${fiscalYear}:single`]
     );
   }
-  return { created, duplicates, saved, changed };
+  return { created, duplicates, saved, changed, reviewReasons: [...new Set(reviewReasons)] };
 };
 
 const recordSourceCheck = async (
@@ -1764,12 +1781,13 @@ let globalReportScheduleSyncInFlight: Promise<GlobalGeneralMeetingSyncResult> | 
 
 const updateReportScheduleProjectionStatus = (
   reportId: string,
-  status: "SUCCESS" | "NO_EVENT" | "UNMATCHED" | "PARSE_ERROR"
+  status: "SUCCESS" | "NO_EVENT" | "UNMATCHED" | "PARSE_ERROR" | "REVIEW_REQUIRED"
 ) => execute(
   `UPDATE espi_reports
    SET report_schedule_projection_status = $1,
        report_schedule_projected_at = $2,
-       report_schedule_projection_version = $3
+       report_schedule_projection_version = $3,
+       report_schedule_review_reasons = '[]'::jsonb
    WHERE id = $4`,
   [status, new Date().toISOString(), REPORT_SCHEDULE_PROJECTION_VERSION, reportId]
 );
@@ -1869,12 +1887,13 @@ export const synchronizeGlobalReportSchedules = ({ force = false, refreshSource 
               phase: "attachment", error: error instanceof Error ? error.name : "unknown" });
           }
         }
-        const reviewEvents = [...events.values()].filter((event) => event.requiresReview);
+        const publicationDecisions = assessReportPublicationBatch([...events.values()]);
+        const reviewEvents = publicationDecisions.filter((decision) => !decision.publish);
         reviewed += reviewEvents.length;
         if (reviewEvents.length) {
           diagnose({ provider: "global-espi-report-schedule", sourceId: report.source_id,
             phase: "semantic-validation", reviewed: reviewEvents.length,
-            reasons: [...new Set(reviewEvents.flatMap((event) => event.reviewReasons ?? []))] });
+            reasons: [...new Set(reviewEvents.flatMap((decision) => decision.reasons))] });
         }
         if (events.size === 0) {
           await updateReportScheduleProjectionStatus(report.id, getReportScheduleProjectionStatus(0, parseComplete));
@@ -1907,23 +1926,32 @@ export const synchronizeGlobalReportSchedules = ({ force = false, refreshSource 
               sourcePublishedAt: report.published_at, sourceTitle: report.source_title || report.title },
             reportSourceComplete: parseComplete && reviewEvents.length === 0,
           });
-          if (projectionPlan.deactivateIds.length > 0) {
+          if (projectionPlan.deactivateIds.length > 0 && upsert.reviewReasons.length === 0) {
             await deactivateEventProjection(transaction, projectionPlan.deactivateIds,
               "REPORT_SCHEDULE_REPROJECTION", report.source_url);
           }
-          if (projectionPlan.ambiguousIds.length > 0 || !parseComplete || reviewEvents.length > 0) {
+          const reviewReasons = [...new Set([
+            ...reviewEvents.flatMap((decision) => decision.reasons), ...upsert.reviewReasons,
+            ...(projectionPlan.ambiguousIds.length > 0 ? ["AMBIGUOUS_REPROJECTION"] : []),
+          ])];
+          if (reviewReasons.length > 0 || !parseComplete) {
             diagnose({ provider: "global-espi-report-schedule", sourceId: report.source_id,
               phase: "reprojection-review", ambiguous: projectionPlan.ambiguousIds.length,
-              parseComplete, reviewed: reviewEvents.length });
+              parseComplete, reviewed: reviewReasons.length });
           }
           await transaction.execute(
             `UPDATE espi_reports SET report_schedule_projection_status = $4,
-              report_schedule_projected_at = $1, report_schedule_projection_version = $2 WHERE id = $3`,
+              report_schedule_projected_at = $1, report_schedule_projection_version = $2,
+              report_schedule_review_reasons = $5::jsonb WHERE id = $3`,
             [new Date().toISOString(), REPORT_SCHEDULE_PROJECTION_VERSION, report.id,
-              getReportScheduleProjectionStatus(events.size, parseComplete)]
+              !parseComplete ? "PARSE_ERROR" : reviewReasons.length ? "REVIEW_REQUIRED"
+                : getReportScheduleProjectionStatus(events.size, parseComplete),
+              JSON.stringify(reviewReasons)]
           );
-          return { upsert, changed: upsert.changed > 0 || projectionPlan.deactivateIds.length > 0 };
+          return { upsert, changed: upsert.changed > 0 ||
+            (projectionPlan.deactivateIds.length > 0 && upsert.reviewReasons.length === 0) };
         });
+        reviewed += result.upsert.reviewReasons.length;
         created += result.upsert.created;
         duplicates += result.upsert.duplicates;
         saved += result.upsert.saved;

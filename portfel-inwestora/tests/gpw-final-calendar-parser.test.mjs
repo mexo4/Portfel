@@ -412,6 +412,35 @@ test("official AB 2026/2027 schedule keeps Q1, Q3, H1 and FY publication dates o
   ]);
 });
 
+test("DELKO date-bounded fiscal years label each report without publishing the year-end", () => {
+  // GPW communication 493765: the dates in "trwający od ... do ..." are period bounds.
+  const source = [
+    "Terminy publikacji raportów okresowych w roku obrotowym trwającym od 01.07.2026 do 30.06.2027:",
+    "1. Jednostkowy raport roczny za rok obrotowy trwający od 01.07.2025 do 30.06.2026 - 29.10.2026 roku.",
+    "2. Skonsolidowane rozszerzone raporty kwartalne:",
+    "a. za I kwartał trwający od 01.07.2026 do 30.09.2026 - 25.11.2026 r.,",
+    "b. za III kwartał trwający od 01.01.2027 do 31.03.2027 - 26.05.2027 r.",
+    "3. Skonsolidowany rozszerzony raport półroczny za I półrocze trwające od 01.07.2026 do 31.12.2026 - 25.03.2027 r.",
+    "Spółka nie będzie publikowała raportu kwartalnego za IV kwartał roku obrotowego trwającego od 01.07.2025 do 30.06.2026 oraz za II kwartał roku obrotowego trwającego od 01.07.2026 do 30.06.2027.",
+  ].join("\n");
+  assert.deepEqual(reportEvents(source).map(({ eventType, eventDate, fiscalPeriod, fiscalYearLabel, requiresReview }) =>
+    [eventType, eventDate, fiscalPeriod, fiscalYearLabel, Boolean(requiresReview)]), [
+    ["ANNUAL_REPORT", "2026-10-29", "FY", "2025/2026", false],
+    ["QUARTERLY_REPORT", "2026-11-25", "Q1", "2026/2027", false],
+    ["HALF_YEAR_REPORT", "2027-03-25", "H1", "2026/2027", false],
+    ["QUARTERLY_REPORT", "2027-05-26", "Q3", "2026/2027", false],
+  ]);
+});
+
+test("AB legal citation date is not a publication even beside a valid H1 appointment", () => {
+  // GPW communications 475396 and 499171 cite the regulation of 6 June 2025.
+  const source = [
+    "Raport za I półrocze roku obrotowego 2026/2027 zostanie opublikowany w dniu 08-06-2027 r.",
+    "Zgodnie z § 63 ust. 1 Rozporządzenia Ministra Finansów z dnia 6 czerwca 2025 roku spółka przekazuje raporty okresowe.",
+  ].join("\n");
+  assert.deepEqual(reportEvents(source).map(({ eventDate }) => eventDate), ["2027-06-08"]);
+});
+
 test("Atlanta and HELIO preserve an explicitly prior annual fiscal year from the report row", () => {
   const atlanta = parseCorporateEventDocument(`ATLANTA POLAND SA (4/2026). Spółka informuje o terminach raportów okresowych w bieżącym roku obrotowym 2026/2027, trwającym od 01.07.2026 r. do 30.06.2027 r.:
 - raport roczny za rok obrotowy 2025/2026 - 28.10.2026 r.,

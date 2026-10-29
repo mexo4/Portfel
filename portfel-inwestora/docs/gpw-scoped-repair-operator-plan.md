@@ -115,6 +115,15 @@ snapshot before approval.
    `MEXO_GPW_REPAIR_DATABASE_URL` and a verified CA through
    `POSTGRES_CA_CERT_BASE64` or `POSTGRES_CA_CERT_PATH`. No application DB
    fallback exists. This role has **not** been created by this PR.
+   Before provisioning, the independent, read-only privilege preflight may be
+   run without a backup, paused sync or signed decisions:
+   `node scripts/run-gpw-repair-role-preflight.mjs` from `portfel-inwestora/`,
+   with `MEXO_GPW_AUDIT_READONLY_DATABASE_URL` and a verified
+   `POSTGRES_CA_CERT_BASE64` or `POSTGRES_CA_CERT_PATH` set in the environment.
+   It prints `READY` only for the dedicated role's catalog permissions, not
+   authorization to repair. If the role is absent it prints proposed SQL for
+   separate operator review; it never executes that SQL. Lock findings are a
+   momentary diagnostic, not a guarantee that a future write cannot block.
 4. With GPW writers stopped and the verified backup restored separately,
    capture a fresh read-only snapshot (`gpw-reprojection-snapshot.mjs`) and
    confirm it matches the approved manifest and all review/backup fingerprints.

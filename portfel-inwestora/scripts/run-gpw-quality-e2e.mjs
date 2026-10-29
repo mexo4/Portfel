@@ -28,6 +28,7 @@ const focusedTests = [
   "tests/gpw-report-calendar.test.mjs",
   "tests/gpw-report-date-role.test.mjs",
   "tests/gpw-reprojection-action-plan.test.mjs",
+  "tests/gpw-repair-role-preflight.test.mjs",
   "tests/gpw-sync-health.test.mjs",
   "tests/gpw-calendar-sync-launcher.test.mjs",
   "tests/gpw-calendar-upgrade.test.mjs",

@@ -4,6 +4,8 @@ import { readFile } from "node:fs/promises";
 import { assertIsolatedReplayClient, assertIsolatedReplayDatabase,
   executeApprovedManifestTransaction, readIsolatedMarketState,
   verifyReplayInputs } from "./gpw-reprojection-replay.mjs";
+import { REPAIR_ROLE, REPAIR_READ_TABLES, REPAIR_WRITE_PRIVILEGES,
+  REPAIR_FORBIDDEN_PRIVILEGES } from "./gpw-repair-role-policy.mjs";
 
 const sha256 = (data) => createHash("sha256").update(data).digest("hex");
 const stable = (value) => Array.isArray(value) ? value.map(stable)
@@ -136,46 +138,37 @@ export function assertProductionConnectionString(value) {
   assert.ok(value, "MEXO_GPW_REPAIR_DATABASE_URL_REQUIRED");
   const url = new URL(value);
   assert.ok(["postgres:", "postgresql:"].includes(url.protocol), "POSTGRES_URI_REQUIRED");
-  assert.equal(decodeURIComponent(url.username), "mexo_gpw_repair", "DEDICATED_REPAIR_ROLE_REQUIRED");
+  assert.equal(decodeURIComponent(url.username), REPAIR_ROLE, "DEDICATED_REPAIR_ROLE_REQUIRED");
   assert.ok(url.hostname.endsWith(".aivencloud.com"), "AIVEN_HOST_REQUIRED");
   assert.equal(url.searchParams.get("sslmode"), "require", "SSL_REQUIRE_REQUIRED");
 }
 
 const assertProductionServer = async (client) => {
   assert.ok(client?.connectionParameters?.host?.endsWith(".aivencloud.com"), "AIVEN_CLIENT_HOST_REQUIRED");
-  assert.equal(client?.connectionParameters?.user, "mexo_gpw_repair", "REPAIR_CLIENT_ROLE_MISMATCH");
+  assert.equal(client?.connectionParameters?.user, REPAIR_ROLE, "REPAIR_CLIENT_ROLE_MISMATCH");
   const session = (await client.query(`SELECT current_user AS role, current_database() AS database,
     current_setting('transaction_read_only') AS read_only, ssl.ssl AS ssl,
     roles.rolsuper AS superuser, roles.rolcreatedb AS create_database,
     roles.rolcreaterole AS create_role, roles.rolbypassrls AS bypass_rls
     FROM pg_stat_ssl ssl JOIN pg_roles roles ON roles.rolname = current_user
     WHERE ssl.pid = pg_backend_pid()`)).rows[0];
-  assert.equal(session?.role, "mexo_gpw_repair", "REPAIR_ROLE_MISMATCH");
+  assert.equal(session?.role, REPAIR_ROLE, "REPAIR_ROLE_MISMATCH");
   assert.equal(session?.ssl, true, "SSL_NOT_ACTIVE");
   assert.equal(session?.superuser, false, "SUPERUSER_FORBIDDEN");
   assert.equal(session?.create_database, false, "CREATEDB_FORBIDDEN");
   assert.equal(session?.create_role, false, "CREATEROLE_FORBIDDEN");
   assert.equal(session?.bypass_rls, false, "BYPASSRLS_FORBIDDEN");
-  const mustRead = ["corporate_event_instruments", "corporate_events", "corporate_event_sources",
-    "corporate_event_history", "corporate_event_projection_changes", "espi_reports", "espi_sync_state"];
-  for (const table of mustRead) {
+  for (const table of REPAIR_READ_TABLES) {
     const allowed = (await client.query("SELECT has_table_privilege(current_user, $1, 'SELECT') AS allowed",
       [`public.${table}`])).rows[0]?.allowed;
     assert.equal(allowed, true, `REPAIR_SELECT_DENIED:${table}`);
   }
-  const write = [["corporate_events", "UPDATE"], ["corporate_event_sources", "INSERT"],
-    ["corporate_event_history", "INSERT"], ["corporate_event_projection_changes", "INSERT"]];
-  for (const [table, privilege] of write) {
+  for (const [table, privilege] of REPAIR_WRITE_PRIVILEGES) {
     const allowed = (await client.query("SELECT has_table_privilege(current_user, $1, $2) AS allowed",
       [`public.${table}`, privilege])).rows[0]?.allowed;
     assert.equal(allowed, true, `REPAIR_WRITE_DENIED:${table}:${privilege}`);
   }
-  const forbidden = [["users", ["INSERT", "UPDATE", "DELETE", "TRUNCATE"]],
-    ["core_operations", ["INSERT", "UPDATE", "DELETE", "TRUNCATE"]],
-    ["corporate_events", ["DELETE", "TRUNCATE"]],
-    ...["corporate_event_sources", "corporate_event_history", "corporate_event_projection_changes"]
-      .map((table) => [table, ["UPDATE", "DELETE", "TRUNCATE"]])];
-  for (const [table, privileges] of forbidden) for (const privilege of privileges) {
+  for (const [table, privileges] of REPAIR_FORBIDDEN_PRIVILEGES) for (const privilege of privileges) {
     const allowed = (await client.query("SELECT has_table_privilege(current_user, $1, $2) AS allowed",
       [`public.${table}`, privilege])).rows[0]?.allowed;
     assert.equal(allowed, false, `OVERPRIVILEGED_REPAIR_ROLE:${table}:${privilege}`);

@@ -34,12 +34,13 @@ const formatPublishedAt = (date: string) => {
     new Intl.DateTimeFormat("pl-PL", { dateStyle: "medium", timeZone: "Europe/Warsaw" }).format(parsed);
 };
 
-function EventCard({ event }: { event: PublicGpwCalendarEvent }) {
+function EventCard({ event, agendaDate }: { event: PublicGpwCalendarEvent; agendaDate: string }) {
   const type = getGpwEventCategory(event.kind);
   const amount = event.dividendPerShare === undefined ? null :
     `${new Intl.NumberFormat("pl-PL", { maximumFractionDigits: 4 }).format(event.dividendPerShare)} ${event.dividendCurrency || "PLN"} / akcję`;
   return (
-    <article className={styles.eventCard}>
+    <article className={styles.eventCard} data-gpw-event-id={event.id}
+      data-gpw-event-date={event.date} data-gpw-agenda-date={agendaDate}>
       <span className={`${styles.typeStripe} ${styles[`stripe_${type}`]}`} aria-hidden="true" />
       <div className={styles.eventBody}>
         <div className={styles.eventHeading}>
@@ -152,7 +153,7 @@ export default function PublicCalendarClient({ month, category, company, events,
               eventDays.map((day) => (
                 <div className={styles.agendaDay} key={day.date}>
                   <div className={styles.agendaDate}><strong>{formatDate(day.date, { day: "2-digit" })}</strong><span>{formatDate(day.date, { weekday: "long", month: "long" })}</span></div>
-                  <div className={styles.dayList}>{day.events.map((event) => <EventCard key={event.id} event={event} />)}</div>
+                  <div className={styles.dayList}>{day.events.map((event) => <EventCard key={event.id} event={event} agendaDate={day.date} />)}</div>
                 </div>
               ))}
           </div>

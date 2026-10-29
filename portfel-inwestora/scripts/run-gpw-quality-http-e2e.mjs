@@ -13,7 +13,9 @@ const appRoot = path.resolve(fileURLToPath(new URL("../", import.meta.url)));
 const require = createRequire(import.meta.url);
 const nextBinary = require.resolve("next/dist/bin/next");
 const outputDir = path.join(appRoot, "artifacts", "gpw-quality");
-const outputPath = path.join(outputDir, "http-e2e.json");
+const dateCase = process.argv.find((arg) => arg.startsWith("--date-case="))?.split("=")[1] ?? "same-month";
+assert.ok(["same-month", "cross-month"].includes(dateCase), "Unsupported --date-case");
+const outputPath = path.join(outputDir, `http-e2e-${dateCase}.json`);
 const databaseUrl = process.env.MEXO_GPW_TEST_DATABASE_URL;
 const holdOpenMs = Number(process.argv.find((arg) => arg.startsWith("--hold-open-ms="))?.split("=")[1] ?? 0);
 assert.ok(Number.isInteger(holdOpenMs) && holdOpenMs >= 0 && holdOpenMs <= 120_000,
@@ -105,6 +107,29 @@ const polishDate = (isoDate) => new Intl.DateTimeFormat("pl-PL", {
   timeZone: "UTC", day: "numeric", month: "long", year: "numeric",
 }).format(new Date(`${isoDate}T12:00:00.000Z`));
 
+const fixtureDate = () => {
+  const firstOfThisMonth = `${today().slice(0, 7)}-01`;
+  const firstOfNextMonth = new Date(`${firstOfThisMonth}T12:00:00.000Z`);
+  firstOfNextMonth.setUTCMonth(firstOfNextMonth.getUTCMonth() + 1);
+  const nextMonthStart = firstOfNextMonth.toISOString().slice(0, 10);
+  if (dateCase === "same-month") return nextMonthStart;
+  const endOfThisMonth = addDays(nextMonthStart, -1);
+  if (endOfThisMonth > today()) return endOfThisMonth;
+  const firstOfFollowingMonth = new Date(firstOfNextMonth);
+  firstOfFollowingMonth.setUTCMonth(firstOfFollowingMonth.getUTCMonth() + 1);
+  return addDays(firstOfFollowingMonth.toISOString().slice(0, 10), -1);
+};
+
+const renderedEventCards = (html, eventId) => [...html.matchAll(/<article\b[^>]*>/gu)]
+  .map(([tag]) => Object.fromEntries([...tag.matchAll(/\b(data-gpw-[\w-]+)="([^"]*)"/gu)]
+    .map((match) => [match[1], match[2]])))
+  .filter((card) => card["data-gpw-event-id"] === eventId);
+
+const reportIcsEvents = (ics, eventId) => [...ics.matchAll(/BEGIN:VEVENT\r?\n([\s\S]*?)\r?\nEND:VEVENT/gu)]
+  .map(([, body]) => ({ uid: body.match(/^UID:(.+)$/mu)?.[1]?.trim(),
+    date: body.match(/^DTSTART;VALUE=DATE:(\d{8})$/mu)?.[1] }))
+  .filter((event) => event.uid === `${eventId}:report@mexo.com.pl`);
+
 const waitForCorrectedProjection = async (client, eventId, correctedDate) => {
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
@@ -119,7 +144,7 @@ const waitForCorrectedProjection = async (client, eventId, correctedDate) => {
 const addFixture = async (client) => {
   const now = new Date().toISOString();
   const ticker = `HT${runId.replaceAll("-", "").slice(0, 8).toUpperCase()}`;
-  const eventDate = addDays(today(), 3);
+  const eventDate = fixtureDate();
   const correctedDate = addDays(eventDate, 1);
   const paymentDate = addDays(eventDate, 5);
   const registrationDate = addDays(eventDate, -16);
@@ -139,10 +164,13 @@ const addFixture = async (client) => {
     (id, canonical_key, market, ticker, company_name, created_at, updated_at)
     VALUES ($1, $2, 'GPW', $3, 'GPW HTTP Fixture', $4, $4)`,
     [instrumentId, `gpw:ticker:${ticker}`, ticker, now]);
+  const fiscalYear = Number(today().slice(0, 4));
   const rows = [
-    { suffix: "report", type: "QUARTERLY_REPORT", date: eventDate, identity: "QUARTERLY_REPORT:Q3:2026", extra: { fiscal_period: "Q3", fiscal_year: 2026 } },
+    { suffix: "report", type: "QUARTERLY_REPORT", date: eventDate,
+      identity: `QUARTERLY_REPORT:Q3:${fiscalYear}`, extra: { fiscal_period: "Q3", fiscal_year: fiscalYear } },
     { suffix: "meeting", type: "GENERAL_MEETING", date: eventDate, identity: `GENERAL_MEETING:NWZ:${eventDate}`, extra: { general_meeting_type: "NWZ", registration_date: registrationDate } },
-    { suffix: "dividend", type: "UPCOMING_DIVIDEND", date: eventDate, identity: "UPCOMING_DIVIDEND:2026", extra: { dividend_per_share: 1.18, dividend_currency: "PLN", record_date: eventDate, payment_date: paymentDate } },
+    { suffix: "dividend", type: "UPCOMING_DIVIDEND", date: eventDate,
+      identity: `UPCOMING_DIVIDEND:${fiscalYear}`, extra: { dividend_per_share: 1.18, dividend_currency: "PLN", record_date: eventDate, payment_date: paymentDate } },
   ];
   for (const row of rows) {
     const id = `${prefix}-${row.suffix}`;
@@ -177,12 +205,12 @@ const addFixture = async (client) => {
         status = EXCLUDED.status, backfill_complete = TRUE, updated_at = EXCLUDED.updated_at`,
       [source, now]);
   }
-  return { ticker, eventDate, correctedDate, paymentDate, email, password,
+  return { ticker, eventDate, correctedDate, paymentDate, fiscalYear, email, password,
     reportEventId: `${prefix}-report` };
 };
 
 const addCorrectedSource = async (client, fixture) => {
-  const fiscalYear = new Date().getUTCFullYear();
+  const fiscalYear = fixture.fiscalYear;
   const now = new Date(Date.now() + 60_000).toISOString();
   const title = `Harmonogram publikacji raportów okresowych za ${fiscalYear} rok`;
   const body = `Raport kwartalny za III kwartał ${fiscalYear} r. zostanie opublikowany ${polishDate(fixture.correctedDate)}.`;
@@ -238,7 +266,10 @@ try {
   const calendar = await request(base, calendarRoute);
   assert.equal(calendar.status, 200);
   const initialCalendarHtml = await calendar.text();
-  assert.ok(initialCalendarHtml.includes(fixture.ticker) && initialCalendarHtml.includes(fixture.eventDate));
+  assert.deepEqual(renderedEventCards(initialCalendarHtml, fixture.reportEventId), [
+    { "data-gpw-event-id": fixture.reportEventId, "data-gpw-event-date": fixture.eventDate,
+      "data-gpw-agenda-date": fixture.eventDate },
+  ]);
   checks.push({ name: "rendered-public-calendar", status: "PASS" });
 
   const appPage = await request(base, "/market/events", { headers: { cookie } });
@@ -257,7 +288,9 @@ try {
 
   const reportFeedRoute = `/api/calendar/gpw.ics?categories=reports&tickers=${fixture.ticker}`;
   const initialReportIcs = await (await request(base, reportFeedRoute)).text();
-  assert.ok(initialReportIcs.includes(fixture.eventDate.replaceAll("-", "")));
+  assert.deepEqual(reportIcsEvents(initialReportIcs, fixture.reportEventId), [
+    { uid: `${fixture.reportEventId}:report@mexo.com.pl`, date: fixture.eventDate.replaceAll("-", "") },
+  ]);
 
   // Prime the public caches, then submit one synthetic ESPI date correction.
   // Restarting only the isolated Next process resets its in-memory sync cooldown;
@@ -283,15 +316,29 @@ try {
     `/kalendarz-gpw?miesiac=${correctedMonth}&typ=reports&spolka=${fixture.ticker}`);
   assert.equal(correctedCalendar.status, 200);
   const correctedHtml = await correctedCalendar.text();
-  assert.ok(correctedHtml.includes(fixture.correctedDate));
-  if (month === correctedMonth) assert.ok(!correctedHtml.includes(fixture.eventDate));
+  assert.deepEqual(renderedEventCards(correctedHtml, fixture.reportEventId), [
+    { "data-gpw-event-id": fixture.reportEventId, "data-gpw-event-date": fixture.correctedDate,
+      "data-gpw-agenda-date": fixture.correctedDate },
+  ]);
+  if (dateCase === "same-month") {
+    assert.equal(month, correctedMonth);
+    assert.ok(correctedHtml.includes(fixture.eventDate),
+      "The old date also occurs as the serialized month start; card-level assertions distinguish it");
+  } else {
+    assert.notEqual(month, correctedMonth);
+    const oldMonthAfterCorrection = await request(base, calendarRoute);
+    assert.equal(oldMonthAfterCorrection.status, 200);
+    assert.deepEqual(renderedEventCards(await oldMonthAfterCorrection.text(), fixture.reportEventId), [],
+      "The original month must not retain a cached copy of the corrected report");
+  }
   checks.push({ name: "corrected-date-public-calendar-cache", status: "PASS" });
 
   const correctedFeed = await request(base, reportFeedRoute);
   assert.equal(correctedFeed.status, 200);
   const correctedIcs = await correctedFeed.text();
-  assert.ok(correctedIcs.includes(fixture.correctedDate.replaceAll("-", "")));
-  assert.ok(!correctedIcs.includes(fixture.eventDate.replaceAll("-", "")));
+  assert.deepEqual(reportIcsEvents(correctedIcs, fixture.reportEventId), [
+    { uid: `${fixture.reportEventId}:report@mexo.com.pl`, date: fixture.correctedDate.replaceAll("-", "") },
+  ]);
   assert.equal((correctedIcs.match(/BEGIN:VEVENT/g) ?? []).length, 1);
   checks.push({ name: "corrected-date-ics-cache-old-entry-absent", status: "PASS" });
 
@@ -328,7 +375,7 @@ try {
   if (globalThis.portfelPostgresPool) await globalThis.portfelPostgresPool.end();
   mkdirSync(outputDir, { recursive: true });
   const report = {
-    schemaVersion: 1, status, checks, failure,
+    schemaVersion: 1, status, checks, failure, dateCase,
     scope: {
       database: "dedicated loopback mexo_gpw_test only",
       next: "local production build over HTTP",
@@ -345,7 +392,7 @@ try {
     },
   };
   writeFileSync(outputPath, `${JSON.stringify(report, null, 2)}\n`);
-  console.log(JSON.stringify({ name: "gpw:http:e2e", status, checks: checks.length,
+  console.log(JSON.stringify({ name: "gpw:http:e2e", dateCase, status, checks: checks.length,
     failure: failure?.replace(/postgres(?:ql)?:\/\/[^\s]+/giu, "[redacted]") ?? null }));
 }
 if (status !== "HTTP_E2E_PASS") process.exitCode = 1;

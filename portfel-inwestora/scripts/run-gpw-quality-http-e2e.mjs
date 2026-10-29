@@ -308,7 +308,8 @@ try {
   const correctedEvents = (await correctedReport.json()).events
     .filter((event) => event.ticker === fixture.ticker && event.eventType === "QUARTERLY_REPORT");
   assert.deepEqual(correctedEvents.map((event) => event.eventDate), [fixture.correctedDate]);
-  assert.ok(correctedEvents.every((event) => event.id === fixture.reportEventId && event.status === "CONFIRMED"));
+  assert.ok(correctedEvents.every((event) => event.id === fixture.reportEventId && event.status === "CHANGED"),
+    "a formal date correction must retain its event ID and carry the changed-status marker");
   checks.push({ name: "corrected-date-api-stable-identity-old-date-absent", status: "PASS" });
 
   const correctedMonth = fixture.correctedDate.slice(0, 7);

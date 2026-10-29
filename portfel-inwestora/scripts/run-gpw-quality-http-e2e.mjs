@@ -212,8 +212,8 @@ const addFixture = async (client) => {
 const addCorrectedSource = async (client, fixture) => {
   const fiscalYear = fixture.fiscalYear;
   const now = new Date(Date.now() + 60_000).toISOString();
-  const title = `Harmonogram publikacji raportów okresowych za ${fiscalYear} rok`;
-  const body = `Raport kwartalny za III kwartał ${fiscalYear} r. zostanie opublikowany ${polishDate(fixture.correctedDate)}.`;
+  const title = `Zmiana terminu publikacji raportu okresowego za III kwartał ${fiscalYear} roku`;
+  const body = `Zmiana terminu publikacji raportu kwartalnego za III kwartał ${fiscalYear} roku z ${polishDate(fixture.eventDate)} na ${polishDate(fixture.correctedDate)}.`;
   await client.query(`INSERT INTO espi_reports
     (id, source, source_id, issuer_id, issuer_name, market, source_ticker,
      report_type, published_at, source_title, title, body_text, category,

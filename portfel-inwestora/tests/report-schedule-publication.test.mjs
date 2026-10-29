@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { assessReportPublicationBatch } from "../src/lib/report-schedule-publication.ts";
+import { parseCorporateEventDocument } from "../src/lib/corporate-events.ts";
 
 const report = (eventDate = "2026-11-20", overrides = {}) => ({
   eventType: "QUARTERLY_REPORT", eventDate, fiscalPeriod: "Q3", fiscalYear: 2026,
@@ -10,6 +11,16 @@ const report = (eventDate = "2026-11-20", overrides = {}) => ({
 test("an explicit fiscal period and publication date can pass the read-side policy", () => {
   assert.deepEqual(assessReportPublicationBatch([report()]).map(({ publish, reasons }) => ({ publish, reasons })),
     [{ publish: true, reasons: [] }]);
+});
+
+test("an explicit official-style correction passes the gate with its old and new dates", () => {
+  const parsed = parseCorporateEventDocument(
+    "Zmiana terminu publikacji raportu kwartalnego za III kwartał 2026 roku z 1 listopada 2026 na 2 listopada 2026."
+  );
+  assert.deepEqual(parsed.map(({ previousEventDate, eventDate, isScheduleChange }) =>
+    [previousEventDate, eventDate, isScheduleChange]), [["2026-11-01", "2026-11-02", true]]);
+  assert.deepEqual(assessReportPublicationBatch(parsed).map(({ publish, reasons }) =>
+    ({ publish, reasons })), [{ publish: true, reasons: [] }]);
 });
 
 test("legal-act and fiscal-end candidates needing review are quarantined", () => {

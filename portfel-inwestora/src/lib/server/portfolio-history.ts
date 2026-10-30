@@ -1719,11 +1719,49 @@ export const buildPortfolioHistory = async ({
 
   const fxStartedAt = performance.now();
   const requiredFxCodes = getNeededFxCodes(assets, sales, benchmarks, operations);
-  const { fxSeriesByCode, historicalFxSeriesByCode, warnings: fxWarnings, warningsByCode } = await buildFxSeries(
+  // Historical FX and instrument quotes are independent remote reads. Start the
+  // FX side before assembling quote definitions, then wait for both below.
+  // This deliberately leaves the cache keys, fallbacks and post-fetch
+  // calculations unchanged.
+  const fxSeriesPromise = buildFxSeries(
     [...new Set([...requiredFxCodes, normalizedPresentationCurrency])],
     startDate,
     today
+  ).then((fxSeries) => {
+    logHistoryDiagnostic("fx-ready", {
+      currencies: requiredFxCodes.length,
+      durationMs: Math.round(performance.now() - fxStartedAt),
+    });
+    return fxSeries;
+  });
+  const instrumentDefinitions = Array.from(
+    new Map(
+      [
+        ...buildInstrumentDefinitions(segments),
+        ...buildBenchmarkInstrumentDefinitions({
+          benchmarks,
+          startDate,
+        }),
+      ].map((definition) => [definition.historyKey, definition] as const)
+    ).values()
   );
+  const quotesStartedAt = performance.now();
+  const instrumentHistoryEntriesPromise = Promise.all(
+    instrumentDefinitions.map(async (definition) => {
+      const history = await fetchInstrumentHistory(definition, startDate, today);
+      return [definition.historyKey, history] as const;
+    })
+  ).then((entries) => {
+    logHistoryDiagnostic("quotes-ready", {
+      instruments: instrumentDefinitions.length,
+      durationMs: Math.round(performance.now() - quotesStartedAt),
+    });
+    return entries;
+  });
+  const [
+    { fxSeriesByCode, historicalFxSeriesByCode, warnings: fxWarnings, warningsByCode },
+    instrumentHistoryEntries,
+  ] = await Promise.all([fxSeriesPromise, instrumentHistoryEntriesPromise]);
 
   for (const warning of fxWarnings) {
     warnings.add(warning);
@@ -1732,10 +1770,6 @@ export const buildPortfolioHistory = async ({
   // unreliable. A missing rate only for the selected display currency must
   // not invalidate the independently calculated PLN TWR.
   getPortfolioTwrFxWarnings(requiredFxCodes, warningsByCode).forEach((warning) => twrIssues.add(warning));
-  logHistoryDiagnostic("fx-ready", {
-    currencies: requiredFxCodes.length,
-    durationMs: Math.round(performance.now() - fxStartedAt),
-  });
 
   const legacyCashflows = buildBuyCashflowEvents(
     assets,
@@ -1760,30 +1794,12 @@ export const buildPortfolioHistory = async ({
     addAmountToDateMap(netInvestedEvents, date, amount)
   );
   const adjustmentEvents = buildAdjustmentEvents(realizedAdjustments);
-  const instrumentDefinitions = Array.from(
-    new Map(
-      [
-        ...buildInstrumentDefinitions(segments),
-        ...buildBenchmarkInstrumentDefinitions({
-          benchmarks,
-          startDate,
-        }),
-      ].map((definition) => [definition.historyKey, definition] as const)
-    ).values()
-  );
   const assetSeriesDefinitions = buildAssetSeriesDefinitions({ assets, sales });
   const assetValueByGroupKey = new Map(
     assetSeriesDefinitions.map((definition) => [
       definition.groupKey,
       new Map<string, number>(dates.map((date) => [date, 0] as [string, number])),
     ] as const)
-  );
-  const quotesStartedAt = performance.now();
-  const instrumentHistoryEntries = await Promise.all(
-    instrumentDefinitions.map(async (definition) => {
-      const history = await fetchInstrumentHistory(definition, startDate, today);
-      return [definition.historyKey, history] as const;
-    })
   );
   const instrumentHistoryByKey = new Map<string, InstrumentHistoryResult>(
     instrumentHistoryEntries
@@ -1794,10 +1810,6 @@ export const buildPortfolioHistory = async ({
       warnings.add(history.warning);
     }
   }
-  logHistoryDiagnostic("quotes-ready", {
-    instruments: instrumentDefinitions.length,
-    durationMs: Math.round(performance.now() - quotesStartedAt),
-  });
 
   const benchmarkSeries = buildBenchmarkReturnSeries({
     benchmarks,

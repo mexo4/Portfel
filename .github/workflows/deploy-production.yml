@@ -310,25 +310,43 @@ jobs:
             console.error("ERROR: unexpected production start command; refusing activation.");
             process.exit(1);
           }
-          // Dependencies are installed and built in an isolated release tree,
-          // never in the live shared node_modules. Keep lifecycle scripts and
-          // all non-dependency manifest settings pinned to the previous release.
-          const stripReleaseDependencies = (manifest) => {
+          // npm ci and npm run build execute a small, explicit set of lifecycle
+          // scripts. Keep that set pinned, but do not reject a release merely
+          // because it adds a non-production helper such as a GPW audit command.
+          const productionScriptNames = [
+            "preinstall", "install", "postinstall", "prepublish", "preprepare",
+            "prepare", "prepack", "postpack", "prebuild", "build", "postbuild",
+            "prestart", "start", "poststart",
+          ];
+          const getProductionScripts = (manifest) => Object.fromEntries(
+            productionScriptNames
+              .filter((name) => Object.hasOwn(manifest.scripts ?? {}, name))
+              .map((name) => [name, manifest.scripts[name]])
+          );
+          const assertProductionScriptsUnchanged = (previous, next, label) => {
+            if (JSON.stringify(getProductionScripts(previous)) !== JSON.stringify(getProductionScripts(next))) {
+              console.error(`ERROR: ${label} production lifecycle scripts changed; refusing activation.`);
+              process.exit(1);
+            }
+          };
+          const stripReleaseDependenciesAndScripts = (manifest) => {
             const copy = structuredClone(manifest);
             delete copy.dependencies;
             delete copy.devDependencies;
             delete copy.optionalDependencies;
             delete copy.peerDependencies;
-            delete copy.scripts?.["audit:gpw-dividends"];
+            delete copy.scripts;
             return copy;
           };
           const previousRoot = JSON.parse(execFileSync("git", ["show", `${previousRevision}:package.json`], { encoding: "utf8" }));
           const buildRoot = JSON.parse(execFileSync("git", ["show", `${buildRevision}:package.json`], { encoding: "utf8" }));
-          if (JSON.stringify(previousRoot) !== JSON.stringify(buildRoot)) {
+          assertProductionScriptsUnchanged(previousRoot, buildRoot, "root workspace");
+          assertProductionScriptsUnchanged(previousManifest, buildManifest, "application");
+          if (JSON.stringify(stripReleaseDependenciesAndScripts(previousRoot)) !== JSON.stringify(stripReleaseDependenciesAndScripts(buildRoot))) {
             console.error("ERROR: root workspace configuration changed; refusing this release until the deploy workflow explicitly supports it.");
             process.exit(1);
           }
-          if (JSON.stringify(stripReleaseDependencies(previousManifest)) !== JSON.stringify(stripReleaseDependencies(buildManifest))) {
+          if (JSON.stringify(stripReleaseDependenciesAndScripts(previousManifest)) !== JSON.stringify(stripReleaseDependenciesAndScripts(buildManifest))) {
             console.error("ERROR: non-dependency application manifest settings changed; refusing activation.");
             process.exit(1);
           }

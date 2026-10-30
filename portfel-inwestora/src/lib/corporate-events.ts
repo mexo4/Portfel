@@ -556,7 +556,7 @@ export const getCandidateSegments = (text: string) => {
     // their date. A detached continuation loses its report type entirely.
     if (/^(?:\d+[.)]\s+(?:roczn|kwartaln|półroczn|skonsolidowan|jednostkow|raport)|[-–—•]\s+za\s+)/iu.test(line) &&
       isReportType(getEventType(line)) &&
-      !/(?:termin\s+publikacji|zostanie\s+opublikowan|\s[-–—]\s+)\w*[\s\S]{0,80}?\d{1,2}\s+\p{L}+\s+20\d{2}/iu.test(line)) {
+      !/(?:termin\s+publikacji|zostanie\s+opublikowan|\s[-–—]\s+)\w*[\s\S]{0,80}?(?:\d{1,2}\s+\p{L}+\s+20\d{2}|\d{1,2}[.\/-]\d{1,2}[.\/-]20\d{2})/iu.test(line)) {
       for (let continuation = 0; continuation < 4; continuation += 1) {
         const next = lines[index + 1];
         if (!next || /^\d+[.)]\s+(?:roczn|kwartaln|półroczn|skonsolidowan|jednostkow|raport)/iu.test(next) ||
@@ -564,7 +564,7 @@ export const getCandidateSegments = (text: string) => {
           isIndependentReportScheduleLine(next)) break;
         line += ` ${next}`;
         index += 1;
-        if (/(?:termin\s+publikacji|zostanie\s+opublikowan)[\s\S]{0,80}?\d{1,2}\s+\p{L}+\s+20\d{2}/iu.test(line) ||
+        if (/(?:termin\s+publikacji|zostanie\s+opublikowan|\s[-–—]\s+)[\s\S]{0,80}?(?:\d{1,2}\s+\p{L}+\s+20\d{2}|\d{1,2}[.\/-]\d{1,2}[.\/-]20\d{2})/iu.test(line) ||
           extractPolishDates(line).length >= 3 && /\s[-–—]\s+\d{1,2}\s+\p{L}+\s+20\d{2}/iu.test(line)) break;
       }
     }
@@ -651,6 +651,7 @@ const getReportPublicationDate = (clause: string) => {
   if (periodRange && dates.length < 3) return undefined;
   const last = dates.at(-1)!;
   const before = withoutOldDate.slice(0, last.index);
+  if (/\bdo\s*$/iu.test(before)) return undefined;
   if (!/[:–—-]\s*$|\b(?:w\s+dniu|dnia)\s*$/iu.test(before) && dates.length > 1 && !periodRange) {
     return undefined;
   }
@@ -659,7 +660,8 @@ const getReportPublicationDate = (clause: string) => {
 
 const getExplicitReportPeriod = (clause: string) => {
   const context = clause.match(/\([^)]*(?:od\s+\d{1,2}|\d{1,2}[.\-/]\d{1,2}[.\-/]20\d{2}\s*[-–—])[^)]*\)/u)?.[0] ??
-    clause.match(/\b(?:(?:obejmuj\p{L}*|za|w)\s+)?okres(?:\s+od)?\s+[^;\n]{0,100}\bdo\s+[^;\n]{0,50}/iu)?.[0];
+    clause.match(/\b(?:(?:obejmuj\p{L}*|za|w)\s+)?okres(?:\s+od)?\s+[^;\n]{0,100}\bdo\s+[^;\n]{0,50}/iu)?.[0] ??
+    clause.match(/\btrwaj\p{L}*\s+od\s+\d{1,2}[.\/-]\d{1,2}[.\/-]20\d{2}\s+do\s+\d{1,2}[.\/-]\d{1,2}[.\/-]20\d{2}/iu)?.[0];
   const dates = context ? extractPolishDates(context) : [];
   if (dates.length >= 2) return { periodStart: dates[0], periodEnd: dates[1] };
   const calendarQuarters = Array.from(clause.matchAll(
@@ -701,7 +703,7 @@ const splitIndependentReportMentions = (text: string) => {
   return anchors.map((anchor, index) => text.slice(anchor.start, anchors[index + 1]?.start ?? text.length).trim()).filter(Boolean);
 };
 
-const getExplicitNonCalendarFiscalYears = (text: string) => {
+const getExplicitNonCalendarFiscalRanges = (text: string) => {
   const dateToken = String.raw`(?:\d{1,2}\s+[\p{L}]+\s+20\d{2}(?:\s*(?:r\.?|roku))?|\d{1,2}[.\-/]\d{1,2}[.\-/]20\d{2})`;
   const fiscalYearRanges = text.matchAll(
     new RegExp(
@@ -709,20 +711,24 @@ const getExplicitNonCalendarFiscalYears = (text: string) => {
       "giu"
     )
   );
-  const years = new Set<number>();
+  const ranges: Array<{ start: string; end: string; label: string }> = [];
   for (const match of fiscalYearRanges) {
     const start = extractPolishDates(match[1] ?? "")[0];
     const end = extractPolishDates(match[2] ?? "")[0];
-    if (!start || !end) continue;
+    if (!start || !end || start >= end || Number(end.slice(0, 4)) - Number(start.slice(0, 4)) !== 1) continue;
     const startMonthDay = start.slice(5);
     const endMonthDay = end.slice(5);
     if (startMonthDay !== "01-01" || endMonthDay !== "12-31") {
-      years.add(Number(start.slice(0, 4)));
-      years.add(Number(end.slice(0, 4)));
+      ranges.push({ start, end, label: `${start.slice(0, 4)}/${end.slice(0, 4)}` });
     }
   }
-  return years;
+  return ranges;
 };
+
+const getExplicitNonCalendarFiscalYears = (text: string) => new Set(
+  getExplicitNonCalendarFiscalRanges(text).flatMap(({ start, end }) =>
+    [Number(start.slice(0, 4)), Number(end.slice(0, 4))])
+);
 
 const isNonCalendarFiscalYearEvent = (event: ParsedCorporateEvent, fiscalYears: ReadonlySet<number>) => {
   const eventYears = (event.fiscalYearLabel ?? String(event.fiscalYear ?? "")).match(/20\d{2}/g)?.map(Number) ?? [];
@@ -767,6 +773,7 @@ const assessReportScheduleEvent = (
 const parseReportScheduleEvents = (text: string) => {
   const events = new Map<string, ParsedCorporateEvent>();
   const nonCalendarFiscalYears = getExplicitNonCalendarFiscalYears(text);
+  const fiscalRanges = getExplicitNonCalendarFiscalRanges(text);
   const explicitFiscalScheduleRange = text.match(
     /\broku?\s+(?:obrotow\p{L}*|finansow\p{L}*)[^.\n]{0,120}?\b(20\d{2})\s*\/\s*(20\d{2})\b/iu
   );
@@ -803,8 +810,21 @@ const parseReportScheduleEvents = (text: string) => {
     if (!eventDate) continue;
     const fiscalPeriod = getFiscalPeriod(clause, type);
     const periodBounds = getExplicitReportPeriod(clause);
+    const matchingRanges = fiscalRanges.filter(({ start, end }) =>
+      periodBounds.periodStart && periodBounds.periodEnd &&
+      start <= periodBounds.periodStart && periodBounds.periodEnd <= end);
+    const rangeLabels = [...new Set(matchingRanges.map(({ label }) => label))];
+    // An explicit fiscal range may be written as dates rather than "2026/27".
+    // Only one containing range may label a quarterly/half-year row. An FY
+    // row naming its own start and end can use that exact period instead.
+    const boundedFiscalYearLabel = rangeLabels.length === 1 ? rangeLabels[0]
+      : fiscalPeriod === "FY" && periodBounds.periodStart && periodBounds.periodEnd &&
+        /\brok\s+obrotow\p{L}*\s+trwaj\p{L}*\s+od/iu.test(clause) &&
+        periodBounds.periodStart.slice(0, 4) !== periodBounds.periodEnd.slice(0, 4)
+        ? `${periodBounds.periodStart.slice(0, 4)}/${periodBounds.periodEnd.slice(0, 4)}`
+        : undefined;
     const endingYear = clause.match(/\broku?\s+obrotow\w*\s+kończąc\w*\s+się\s+(?:w\s+dniu\s+)?\d{1,2}\s+\p{L}+\s+(20\d{2})/iu)?.[1];
-    const fiscalYearLabel = endingYear && periodBounds.periodEnd &&
+    const fiscalYearLabel = boundedFiscalYearLabel ?? (endingYear && periodBounds.periodEnd &&
       Number(periodBounds.periodEnd.slice(0, 4)) === Number(endingYear) - 1
       ? `${Number(endingYear) - 1}/${endingYear}`
       : (() => {
@@ -823,7 +843,7 @@ const parseReportScheduleEvents = (text: string) => {
         const belongsToScheduleRange = scheduleYears.length === 2 &&
           (!clauseYears.length || clauseYears.every((year) => scheduleYears.includes(year)));
         return belongsToScheduleRange ? scheduleYearLabel : clauseYearLabel ?? scheduleYearLabel;
-      })();
+      })());
     const fiscalYear = fiscalYearLabel ? Number(fiscalYearLabel.slice(-4)) : undefined;
     const event: ParsedCorporateEvent = {
       eventType: type, eventDate, fiscalPeriod, fiscalYear, fiscalYearLabel,

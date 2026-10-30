@@ -579,6 +579,7 @@ const schemaStatements = [
   "ALTER TABLE espi_reports ADD COLUMN IF NOT EXISTS report_schedule_projection_status TEXT",
   "ALTER TABLE espi_reports ADD COLUMN IF NOT EXISTS report_schedule_projected_at TEXT",
   "ALTER TABLE espi_reports ADD COLUMN IF NOT EXISTS report_schedule_projection_version INTEGER",
+  "ALTER TABLE espi_reports ADD COLUMN IF NOT EXISTS report_schedule_review_reasons JSONB NOT NULL DEFAULT '[]'::jsonb",
   "ALTER TABLE espi_reports ADD COLUMN IF NOT EXISTS issuer_metadata_version INTEGER",
   "ALTER TABLE espi_reports ADD COLUMN IF NOT EXISTS issuer_metadata_checked_at TEXT",
   "ALTER TABLE espi_reports ADD COLUMN IF NOT EXISTS source_checked_at TEXT",

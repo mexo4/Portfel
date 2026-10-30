@@ -135,6 +135,13 @@ test("PostgreSQL: schedule projection is idempotent, correction-safe, and preser
     assert.equal(ordinaryProjection[0]?.report_schedule_projection_status, null,
       "an already published results report is not a future publication schedule candidate");
     assert.ok(first.reviewed >= 1, "late schedule should be surfaced for review");
+    const quarantined = await query(
+      "SELECT report_schedule_projection_status, report_schedule_review_reasons FROM espi_reports WHERE id = $1",
+      [reportRows[2].id],
+    );
+    assert.equal(quarantined[0]?.report_schedule_projection_status, "REVIEW_REQUIRED");
+    assert.ok(quarantined[0]?.report_schedule_review_reasons?.length > 0,
+      "an uncertain source must retain machine-readable reasons, not look successfully published");
 
     let events = await query(
       `SELECT id, event_type, event_date, fiscal_period, fiscal_year, event_identity,

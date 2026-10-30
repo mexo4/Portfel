@@ -145,7 +145,9 @@ jobs:
           POSTGRES_CA_CERT_PATH: ""
 
       - name: Exercise real local HTTP calendar, API and ICS reads
-        run: npm --workspace portfel-inwestora run gpw:http:e2e
+        run: |
+          npm --workspace portfel-inwestora run gpw:http:e2e -- --date-case=same-month
+          npm --workspace portfel-inwestora run gpw:http:e2e -- --date-case=cross-month
         env:
           POSTGRES_CA_CERT_BASE64: ""
           POSTGRES_CA_CERT_PATH: ""
@@ -166,6 +168,6 @@ jobs:
           name: gpw-postgres-e2e-${{ github.run_id }}
           path: |
             portfel-inwestora/artifacts/gpw-quality/e2e.*
-            portfel-inwestora/artifacts/gpw-quality/http-e2e.json
+            portfel-inwestora/artifacts/gpw-quality/http-e2e-*.json
           if-no-files-found: warn
           retention-days: 30

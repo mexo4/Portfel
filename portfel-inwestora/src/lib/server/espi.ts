@@ -684,7 +684,12 @@ const upsertEspiReport = async (report: ParsedPapEspiReport) => {
                 WHEN source_title IS DISTINCT FROM $10 OR title IS DISTINCT FROM $11
                   OR body_text IS DISTINCT FROM $12 OR issuer_id IS DISTINCT FROM COALESCE($2, issuer_id)
                   OR market IS DISTINCT FROM $4
-                THEN NULL ELSE report_schedule_projection_version END
+                THEN NULL ELSE report_schedule_projection_version END,
+              report_schedule_review_reasons = CASE
+                WHEN source_title IS DISTINCT FROM $10 OR title IS DISTINCT FROM $11
+                  OR body_text IS DISTINCT FROM $12 OR issuer_id IS DISTINCT FROM COALESCE($2, issuer_id)
+                  OR market IS DISTINCT FROM $4
+                THEN '[]'::jsonb ELSE report_schedule_review_reasons END
           WHERE id = $19
         `,
         [

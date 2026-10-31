@@ -9,6 +9,7 @@ import {
 } from "../src/lib/benchmark-search.ts";
 import { buildPortfolioDailyMetricPoints } from "../src/lib/portfolio-daily-metrics.ts";
 import { aggregatePortfolioHistoryPoints, buildBuyCashflowEvents, getAggregateTwrStatus, getPortfolioTwrFxWarnings, hasUnreliableHistoryGap } from "../src/lib/server/portfolio-history.ts";
+import { isGpwTradingDay } from "../src/lib/gpw-market-calendar.ts";
 import { getDashboardHistoryMetrics } from "../src/lib/dashboard-read-model.ts";
 
 const readSource = (relativePath) =>
@@ -281,7 +282,7 @@ test("legacy sales without a cash-impact operation are explicitly identified as 
   assert.equal(mirrored.hasUnmirroredSale, false);
 });
 
-test("TWR completeness rejects long price-history gaps but tolerates normal weekends", () => {
+test("TWR completeness checks missing trading sessions instead of raw calendar days", () => {
   assert.equal(hasUnreliableHistoryGap([
     { date: "2026-08-10", close: 100 },
     { date: "2026-08-13", close: 101 },
@@ -290,6 +291,23 @@ test("TWR completeness rejects long price-history gaps but tolerates normal week
     { date: "2026-08-10", close: 100 },
     { date: "2026-08-21", close: 103 },
   ], "2026-08-10", "2026-08-21"), true);
+  // GPW was closed on Christmas Eve (from 2025), Christmas Day, Boxing Day,
+  // and then the weekend. The six-day calendar interval contains no missing
+  // exchange session and must not invalidate the portfolio TWR.
+  assert.equal(hasUnreliableHistoryGap([
+    { date: "2025-12-23", close: 100 },
+    { date: "2025-12-29", close: 101 },
+  ], "2025-12-23", "2025-12-29", isGpwTradingDay), false);
+  // Three missing open sessions remain a real data-quality gap.
+  assert.equal(hasUnreliableHistoryGap([
+    { date: "2025-12-29", close: 100 },
+    { date: "2026-01-05", close: 101 },
+  ], "2025-12-29", "2026-01-05", isGpwTradingDay), true);
+  // Unlike exchange-traded securities, crypto is expected to have weekend data.
+  assert.equal(hasUnreliableHistoryGap([
+    { date: "2026-08-07", close: 100 },
+    { date: "2026-08-13", close: 101 },
+  ], "2026-08-07", "2026-08-13", () => true), true);
 });
 
 test("aggregate TWR is unavailable or incomplete if any non-empty component history is unreliable", () => {

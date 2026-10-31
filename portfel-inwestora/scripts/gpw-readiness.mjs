@@ -1,12 +1,14 @@
 /** Independent decisions: a reviewable code diff is not evidence that the
  * market feed, a database rewrite, or a production deploy is safe. */
-export const assessGpwReadiness = ({ audit, sources, projections, e2e, manifest, httpE2e, strictGate }) => {
+export const assessGpwReadiness = ({ audit, sources, projections, e2e, manifest, httpE2e,
+  isolatedReplay, holdoutValidation, strictGate }) => {
   const regressionPass = audit?.qualityGate?.parserRegressionFree === true &&
     audit?.antiTickerPolicy?.status === "PASS";
   const postgresPass = e2e?.status === "POSTGRES_E2E_PASS" &&
     e2e?.nativePostgres?.status === "POSTGRES_E2E_PASS";
   const httpPass = httpE2e?.status === "HTTP_E2E_PASS";
-  const holdoutPass = strictGate?.stages?.holdout === "HOLDOUT_PASS";
+  const holdoutPass = strictGate?.stages?.holdout === "HOLDOUT_PASS" &&
+    holdoutValidation?.status === "INDEPENDENT_HOLDOUT_SCORED";
   const coverage = sources?.coverage ?? [];
   const publicationHorizon = sources?.sourcePublicationHorizon;
   const publicationComplete = coverage.length > 0 &&
@@ -16,8 +18,13 @@ export const assessGpwReadiness = ({ audit, sources, projections, e2e, manifest,
   const futureEventsVerified = documentedFutureHorizon?.completeness === "VERIFIED" &&
     documentedFutureHorizon?.independentInventory === true;
   const projectionFindings = projections?.findings?.length ?? null;
+  const actionableCount = manifest?.actions?.filter((item) => item.proposedAction !== "REVIEW").length;
+  const replayPass = isolatedReplay?.status === "ISOLATED_REPLAY_PASS" &&
+    Number.isInteger(actionableCount) && actionableCount > 0 &&
+    isolatedReplay?.testedActions === actionableCount && isolatedReplay?.blockedReviews === 0 &&
+    isolatedReplay?.http?.api === "PASS" && isolatedReplay?.http?.ics === "PASS";
   const reprojectionReady = manifest?.safeToApply === true && manifest?.unresolved === 0 &&
-    manifest?.isolatedReplay?.status === "PASS" && postgresPass && httpPass;
+    replayPass && postgresPass && httpPass;
   const syncReady = publicationComplete && holdoutPass && httpPass &&
     sources?.scope?.boundedSyncProbe?.status === "PASS";
 
@@ -39,7 +46,8 @@ export const assessGpwReadiness = ({ audit, sources, projections, e2e, manifest,
       "A source-backed action manifest, zero unresolved identities, isolated replay, PostgreSQL and live local HTTP checks are all required before applying a production reprojection.",
     ],
     evidence: { manifestStatus: manifest?.status ?? "NOT_RUN", unresolved: manifest?.unresolved ?? null,
-      projectionFindings, isolatedReplay: manifest?.isolatedReplay?.status ?? "NOT_RUN" },
+      projectionFindings, isolatedReplay: isolatedReplay?.status ?? "NOT_RUN",
+      replayedActions: isolatedReplay?.testedActions ?? null, blockedReviews: isolatedReplay?.blockedReviews ?? null },
   };
   const synchronization = {
     status: syncReady ? "READY_FOR_BOUNDED_SYNC" : "NOT_VERIFIED",

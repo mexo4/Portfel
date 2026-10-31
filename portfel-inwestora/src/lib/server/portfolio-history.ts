@@ -2052,6 +2052,7 @@ export const buildPortfolioHistory = async ({
         ? round(portfolioValuePresentation - presentationNetInvested + cumulativeAdjustmentsPresentation)
         : null;
 
+    let presentationDailyTimeWeightedReturnDecimal: number | null = null;
     if (
       previousPortfolioValuePresentation !== null &&
       previousPortfolioValuePresentation > 0 &&
@@ -2064,10 +2065,12 @@ export const buildPortfolioHistory = async ({
         previousPortfolioValuePresentation - externalFlowPresentation
       ) / previousPortfolioValuePresentation;
       if (Number.isFinite(dailyPresentationReturn)) {
+        presentationDailyTimeWeightedReturnDecimal = dailyPresentationReturn;
         cumulativePresentationReturnFactor *= 1 + dailyPresentationReturn;
       }
     }
 
+    let dailyTimeWeightedReturnDecimal: number | null = null;
     if (previousPortfolioValuePln !== null && previousPortfolioValuePln > 0) {
       const dailyReturn =
         (portfolioValuePln +
@@ -2077,6 +2080,7 @@ export const buildPortfolioHistory = async ({
         previousPortfolioValuePln;
 
       if (Number.isFinite(dailyReturn)) {
+        dailyTimeWeightedReturnDecimal = dailyReturn;
         cumulativeTimeWeightedReturnFactor *= 1 + dailyReturn;
       }
     }
@@ -2086,6 +2090,7 @@ export const buildPortfolioHistory = async ({
       portfolioValuePln,
       netInvestedPln,
       profitLossPln,
+      dailyTimeWeightedReturnDecimal,
       timeWeightedReturnPercent: round(
         (cumulativeTimeWeightedReturnFactor - 1) * 100,
         2
@@ -2093,6 +2098,7 @@ export const buildPortfolioHistory = async ({
       presentationPortfolioValue: portfolioValuePresentation,
       presentationNetInvested,
       presentationProfitLoss,
+      presentationDailyTimeWeightedReturnDecimal,
       presentationTimeWeightedReturnPercent: round(
         (cumulativePresentationReturnFactor - 1) * 100,
         2
@@ -2285,18 +2291,22 @@ export const aggregatePortfolioHistoryPoints = (
     const netInvestedPln = round(currentPoints.reduce((total, point) => total + point.netInvestedPln, 0));
     const profitLossPln = round(currentPoints.reduce((total, point) => total + point.profitLossPln, 0));
 
+    let dailyTimeWeightedReturnDecimal: number | null = null;
     if (previousAggregateValuePln > 0) {
       // Per-portfolio P/L deltas already remove deposits/withdrawals and add
       // realized adjustments. Weight their returns by prior portfolio values.
       const dailyReturn = aggregateProfitLossDeltaPln / previousAggregateValuePln;
       if (Number.isFinite(dailyReturn)) {
+        dailyTimeWeightedReturnDecimal = dailyReturn;
         cumulativeTimeWeightedReturnFactor *= 1 + dailyReturn;
       }
     }
 
+    let presentationDailyTimeWeightedReturnDecimal: number | null = null;
     if (previousAggregatePresentationValue > 0) {
       const dailyPresentationReturn = aggregatePresentationProfitLossDelta / previousAggregatePresentationValue;
       if (Number.isFinite(dailyPresentationReturn)) {
+        presentationDailyTimeWeightedReturnDecimal = dailyPresentationReturn;
         cumulativePresentationReturnFactor *= 1 + dailyPresentationReturn;
       }
     }
@@ -2318,12 +2328,14 @@ export const aggregatePortfolioHistoryPoints = (
       portfolioValuePln,
       netInvestedPln,
       profitLossPln,
+      dailyTimeWeightedReturnDecimal,
       timeWeightedReturnPercent: round((cumulativeTimeWeightedReturnFactor - 1) * 100, 2),
       ...(presentationHistoryCount > 0
         ? {
             presentationPortfolioValue,
             presentationNetInvested,
             presentationProfitLoss,
+            presentationDailyTimeWeightedReturnDecimal,
             presentationTimeWeightedReturnPercent: round((cumulativePresentationReturnFactor - 1) * 100, 2),
           }
         : {}),

@@ -9,6 +9,7 @@ import {
 } from "../src/lib/benchmark-search.ts";
 import { buildPortfolioDailyMetricPoints } from "../src/lib/portfolio-daily-metrics.ts";
 import { aggregatePortfolioHistoryPoints, buildBuyCashflowEvents, getAggregateTwrStatus, getHistoryTradingDayPredicate, getPortfolioTwrFxWarnings, hasUnreliableHistoryGap } from "../src/lib/server/portfolio-history.ts";
+import { buildCalendarReturns, deriveDailyCashFlowNeutralReturns } from "../src/lib/portfolio-risk-analytics.ts";
 import { isGpwTradingDay } from "../src/lib/gpw-market-calendar.ts";
 import { isXetraTradingDay } from "../src/lib/market-session-calendar.ts";
 import { getDashboardHistoryMetrics } from "../src/lib/dashboard-read-model.ts";
@@ -167,6 +168,36 @@ test("custom aggregate TWR does not count a later portfolio's inception profit a
   assert.equal(points[1]?.timeWeightedReturnPercent, 10);
   assert.equal(points[2]?.timeWeightedReturnPercent, 21);
   assert.equal(points[2]?.profitLossPln, 61);
+
+  const dailyReturns = deriveDailyCashFlowNeutralReturns(points);
+  assert.deepEqual(dailyReturns.map((item) => item.returnDecimal), [0.1, 0.1]);
+  assert.deepEqual(dailyReturns.map((item) => item.resultPln), [10, 31]);
+  const monthly = buildCalendarReturns(dailyReturns, "month")[0];
+  const yearly = buildCalendarReturns(dailyReturns, "year")[0];
+  assert.ok(Math.abs((monthly?.returnDecimal ?? Number.NaN) - 0.21) < 1e-12);
+  assert.ok(Math.abs((yearly?.returnDecimal ?? Number.NaN) - 0.21) < 1e-12);
+  assert.equal(yearly?.resultAmount, 41);
+  assert.equal(yearly?.isComplete, false);
+});
+
+test("partial-year calendar separates positive nominal result from negative TWR", () => {
+  const points = aggregatePortfolioHistoryPoints([{
+    points: [
+      { date: "2025-07-31", portfolioValuePln: 100, netInvestedPln: 100, profitLossPln: 0, timeWeightedReturnPercent: 0 },
+      { date: "2025-08-01", portfolioValuePln: 50, netInvestedPln: 100, profitLossPln: -50, timeWeightedReturnPercent: -50 },
+      // A 1,000 PLN external deposit changes capital, not investment return.
+      { date: "2025-09-01", portfolioValuePln: 1_050, netInvestedPln: 1_100, profitLossPln: -50, timeWeightedReturnPercent: -50 },
+      { date: "2025-12-31", portfolioValuePln: 1_155, netInvestedPln: 1_100, profitLossPln: 55, timeWeightedReturnPercent: -45 },
+    ],
+  }]);
+
+  const yearly = buildCalendarReturns(deriveDailyCashFlowNeutralReturns(points), "year")[0];
+
+  assert.equal(yearly?.resultAmount, 55);
+  assert.ok(Math.abs((yearly?.returnDecimal ?? Number.NaN) - -0.45) < 1e-12);
+  assert.equal(yearly?.isComplete, false);
+  assert.equal(yearly?.dateFrom, "2025-07-31");
+  assert.equal(yearly?.dateTo, "2025-12-31");
 });
 
 test("custom aggregate weights returns by capital rather than averaging portfolio percentages", () => {
@@ -218,6 +249,8 @@ test("presentation-currency TWR follows daily values after historical FX convers
 
   assert.equal(points.at(-1)?.timeWeightedReturnPercent, 10);
   assert.equal(points.at(-1)?.presentationTimeWeightedReturnPercent, 0);
+  assert.equal(points.at(-1)?.dailyTimeWeightedReturnDecimal, 0.1);
+  assert.equal(points.at(-1)?.presentationDailyTimeWeightedReturnDecimal, 0);
 });
 
 test("presentation-only FX gaps do not invalidate the independently computed PLN TWR", () => {

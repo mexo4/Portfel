@@ -606,11 +606,14 @@ export type PortfolioHistoryPoint = {
   netInvestedPln: number;
   profitLossPln: number;
   timeWeightedReturnPercent: number | null;
+  /** Precise cash-flow-neutral return for this interval, before cumulative rounding. */
+  dailyTimeWeightedReturnDecimal?: number | null;
   /** Values converted with the historical FX rate for the request's presentation currency. */
   presentationPortfolioValue?: number | null;
   presentationNetInvested?: number | null;
   presentationProfitLoss?: number | null;
   presentationTimeWeightedReturnPercent?: number | null;
+  presentationDailyTimeWeightedReturnDecimal?: number | null;
 };
 
 /**

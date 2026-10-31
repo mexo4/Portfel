@@ -182,6 +182,7 @@ test("virtual history aggregates independently calculated portfolios in PLN with
     portfolioValuePln: 530,
     netInvestedPln: 500,
     profitLossPln: 30,
+    dailyTimeWeightedReturnDecimal: 0.06,
     timeWeightedReturnPercent: 6,
   });
 });

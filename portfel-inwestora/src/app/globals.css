@@ -5018,7 +5018,8 @@ textarea {
   max-width: 100%;
   border: 1px solid var(--line);
   border-radius: 14px;
-  overflow: hidden;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
 }
 
 .risk-monthly-matrix-wrap {

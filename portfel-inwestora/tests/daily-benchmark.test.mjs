@@ -194,10 +194,27 @@ test("partial-year calendar separates positive nominal result from negative TWR"
   const yearly = buildCalendarReturns(deriveDailyCashFlowNeutralReturns(points), "year")[0];
 
   assert.equal(yearly?.resultAmount, 55);
+  // The ordinary capital return is nominal period P/L divided by net capital
+  // invested at the period end: +55 / 1,100 = +5%, unlike the flow-neutral TWR.
+  assert.equal(yearly?.capitalReturnDecimal, 0.05);
   assert.ok(Math.abs((yearly?.returnDecimal ?? Number.NaN) - -0.45) < 1e-12);
   assert.equal(yearly?.isComplete, false);
   assert.equal(yearly?.dateFrom, "2025-07-31");
   assert.equal(yearly?.dateTo, "2025-12-31");
+});
+
+test("calendar simple return is unavailable when ending net invested capital is not positive", () => {
+  const returns = [{
+    startDate: "2026-01-01",
+    endDate: "2026-01-31",
+    returnDecimal: 0.1,
+    resultPln: 10,
+    netInvestedAmount: 0,
+    previousValuePln: 100,
+    valuePln: 110,
+  }];
+
+  assert.equal(buildCalendarReturns(returns, "month")[0]?.capitalReturnDecimal, null);
 });
 
 test("custom aggregate weights returns by capital rather than averaging portfolio percentages", () => {

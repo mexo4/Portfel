@@ -4994,6 +4994,25 @@ textarea {
   background: var(--surface-soft);
 }
 
+.risk-history-diagnostic {
+  margin-top: 8px;
+  color: var(--text);
+}
+
+.risk-history-diagnostic summary {
+  width: fit-content;
+  color: var(--accent);
+  cursor: pointer;
+  font-weight: 650;
+}
+
+.risk-history-diagnostic p {
+  max-width: 100%;
+  margin: 8px 0 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
 .risk-annual-table-wrap,
 .risk-monthly-matrix-wrap {
   max-width: 100%;

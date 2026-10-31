@@ -46,6 +46,16 @@ test("average purchase and unit-price cells inherit the same numeric rendering a
   assert.doesNotMatch(selector[1], /"tnum"/);
 });
 
+test("incomplete return analytics expose the server's concrete data-quality reason", async () => {
+  const source = await readSource("src/components/PortfolioPerformanceResults.tsx");
+
+  assert.match(source, /baseCurrency === "PLN"\s*\? history\.twrStatusReason/);
+  assert.match(source, /history\.presentationTwrStatusReason\s*\?\?\s*history\.twrStatusReason/);
+  assert.match(source, /Pokaż, co blokuje wiarygodny zwrot/);
+  assert.match(source, /historyQualityReasonText/);
+  assert.match(source, /Sama zmiana waluty prezentacji na PLN tego nie uzupełnia/);
+});
+
 test("current-position primary prices reuse the exact dividend-report hierarchy", async () => {
   const table = await readSource("src/components/AssetTable.tsx");
   const styles = await readSource("src/app/globals.css");

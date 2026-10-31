@@ -107,6 +107,14 @@ export default function PortfolioPerformanceResults({ assets, sales, realizedAdj
     [baseCurrency, configuredBenchmark, history.benchmarkSeries, history.presentationCurrency]
   );
   const presentationHistoryStatus = baseCurrency === "PLN" ? history.twrStatus : history.presentationTwrStatus;
+  const historyQualityReason = baseCurrency === "PLN"
+    ? history.twrStatusReason
+    : history.presentationTwrStatusReason ?? history.twrStatusReason;
+  const historyQualityReasonText = historyQualityReason
+    ? historyQualityReason.length > 1800
+      ? `${historyQualityReason.slice(0, 1800)}… (lista skrócona)`
+      : historyQualityReason
+    : "Co najmniej jedna pozycja nie ma pełnej, potwierdzonej historii wycen lub przepływów.";
   const analytics = useMemo(() => calculatePortfolioRiskAnalytics({
     points: analysisPoints,
     period: effectivePeriod,
@@ -190,7 +198,7 @@ export default function PortfolioPerformanceResults({ assets, sales, realizedAdj
     {!isHistoryLoading && historyError ? <div className="risk-analytics-state is-error"><strong>Analiza jest chwilowo niedostępna</strong><span>{historyError}</span></div> : null}
     {!isHistoryLoading && !historyError && !history.points.length ? <div className="risk-analytics-state"><strong>Brak danych</strong><span>Dodaj co najmniej jedną wiarygodną wycenę, aby zobaczyć podsumowanie. Zwroty i ryzyko wymagają historii z co najmniej dwóch dni.</span></div> : null}
     {isVisible("portfolio-value", "total-result", "net-external-capital", "twr", "xirr", "cagr") || hasReturnHistory ? <div className="risk-analytics-sections">
-      {hasReturnHistory ? isSelectedPeriodUnavailable ? <div className="risk-inline-notice">Zakres „{PERIOD_LABELS[effectivePeriod]}” nie ma pełnej historii. Nie zastępujemy go zakresem MAX — wybierz dostępny zakres, aby zobaczyć zwroty i ryzyko.</div> : presentationHistoryStatus !== "complete" ? <div className="risk-inline-notice">Historia w wybranej walucie jest niepełna lub zawiera niezweryfikowany FX. Nominalna wartość pozostaje widoczna, ale TWR, CAGR, ryzyko i benchmark nie są pokazywane jako wiarygodne.</div> : <div className="risk-inline-notice is-positive">Dane zwrotu są kompletne dla wybranego zakresu i waluty prezentacji.</div> : null}
+      {hasReturnHistory ? isSelectedPeriodUnavailable ? <div className="risk-inline-notice">Zakres „{PERIOD_LABELS[effectivePeriod]}” nie ma pełnej historii. Nie zastępujemy go zakresem MAX — wybierz dostępny zakres, aby zobaczyć zwroty i ryzyko.</div> : presentationHistoryStatus !== "complete" ? <div className="risk-inline-notice">{baseCurrency === "PLN" ? "Historia źródłowych wycen, przepływów lub kursów walut potrzebnych do obliczeń jest niepełna. Sama zmiana waluty prezentacji na PLN tego nie uzupełnia." : "Historia w wybranej walucie jest niepełna lub zawiera niezweryfikowany FX."} Nominalna wartość pozostaje widoczna, ale TWR, CAGR, ryzyko i benchmark nie są pokazywane jako wiarygodne.<details className="risk-history-diagnostic"><summary>Pokaż, co blokuje wiarygodny zwrot</summary><p>{historyQualityReasonText}</p></details></div> : <div className="risk-inline-notice is-positive">Dane zwrotu są kompletne dla wybranego zakresu i waluty prezentacji.</div> : null}
       {isVisible("portfolio-value", "total-result", "net-external-capital", "twr", "xirr", "cagr") ? <section className="risk-section" aria-labelledby="risk-summary-title"><div className="risk-section-heading"><div><p className="eyebrow">Podsumowanie</p><h3 id="risk-summary-title">Wartość, wynik i jakość zwrotu</h3></div><span>Wartość, wynik i przepływy: od początku · TWR/CAGR: {PERIOD_LABELS[effectivePeriod]}</span></div><div className="risk-metric-grid risk-metric-grid-summary">
         {visibleMetrics.includes("portfolio-value") ? <MetricCard title="Aktualna wartość" value={latestPoint ? formatPln(latestPoint.portfolioValuePln) : "Niedostępne"} detail={latestPoint ? "Wycena na ostatni dostępny dzień" : "Wymaga pobrania historii wycen"} description="Bieżąca wycena portfela w wybranej walucie prezentacji." /> : null}
         {visibleMetrics.includes("total-result") ? <MetricCard title="Wynik nominalny" value={formatCurrency(combinedProfitLoss, baseCurrency)} tone={toneForValue(combinedProfitLoss)} detail="Od początku · wynik portfela, nie stopa zwrotu" description="Różnica pomiędzy aktualną wartością a kosztem według istniejącego modelu portfela." /> : null}

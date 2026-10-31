@@ -2361,12 +2361,12 @@ export const buildAggregatePortfolioHistory = async ({
   const externalCashFlows = aggregateExternalCashFlows(histories);
   const twrStatusReason = Array.from(
     new Set(histories.flatMap((history, index) => history.twrStatusReason
-      ? [`${uniqueScopes[index]?.portfolioName ?? "Portfel"} (${uniqueScopes[index]?.portfolioId ?? "?"}): ${history.twrStatusReason}`]
+      ? [`${uniqueScopes[index]?.portfolioName ?? "Portfel"}: ${history.twrStatusReason}`]
       : []))
   ).join(" ");
   const presentationTwrStatusReason = Array.from(
     new Set(histories.flatMap((history, index) => history.presentationTwrStatusReason
-      ? [`${uniqueScopes[index]?.portfolioName ?? "Portfel"} (${uniqueScopes[index]?.portfolioId ?? "?"}): ${history.presentationTwrStatusReason}`]
+      ? [`${uniqueScopes[index]?.portfolioName ?? "Portfel"}: ${history.presentationTwrStatusReason}`]
       : []))
   ).join(" ");
 

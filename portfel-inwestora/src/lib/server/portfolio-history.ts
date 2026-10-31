@@ -4,6 +4,7 @@ import { fetchFxRatesServer } from "@/lib/server/market-data";
 import { fetchTreasuryBondQuoteSeriesServer } from "@/lib/server/treasury-bonds";
 import { normalizeYahooMoneyUnit } from "@/lib/server/yahoo";
 import { isGpwTradingDay, shiftCalendarDate } from "@/lib/gpw-market-calendar";
+import { isXetraTradingDay } from "@/lib/market-session-calendar";
 import { FALLBACK_FX_RATES } from "@/lib/constants";
 import {
   getOperationCashDeltas,
@@ -61,6 +62,8 @@ type PortfolioHistorySegment = {
   startDate: string;
   endDate: string;
   marketCurrency: CurrencyCode;
+  marketMic?: string;
+  marketExchange?: string;
   purchaseCurrency: CurrencyCode;
   purchasePriceCurrency?: CurrencyCode;
   purchaseFxRateToPln?: number;
@@ -436,6 +439,34 @@ export const hasUnreliableHistoryGap = (
   }
 
   return false;
+};
+
+export const getHistoryTradingDayPredicate = ({
+  symbol,
+  providerId,
+  kind,
+  mic,
+  exchange,
+}: {
+  symbol: string;
+  providerId?: string;
+  kind: AssetKind;
+  mic?: string;
+  exchange?: string;
+}) => {
+  if (isGpwSymbol(symbol)) return isGpwTradingDay;
+
+  const exchangeIdentity = `${mic ?? ""} ${exchange ?? ""}`.toUpperCase();
+  const isGermanCashMarket =
+    /(?:^|\W)(?:XETR|XFRA)(?:$|\W)/.test(exchangeIdentity) ||
+    /XETRA|FRANKFURT/.test(exchangeIdentity) ||
+    // Yahoo Finance uses `.DE` for German cash-market listings; this is only
+    // a venue-calendar fallback and never determines quote currency.
+    /\.DE$/i.test(symbol) ||
+    /\.DE$/i.test(providerId ?? "");
+  if (isGermanCashMarket) return isXetraTradingDay;
+  if (kind === "crypto") return () => true;
+  return undefined;
 };
 
 const dedupeAndSortFxPoints = (points: FxPoint[]) => {
@@ -1143,6 +1174,8 @@ const buildOpenAssetSegment = (asset: PortfolioAsset, today: string): PortfolioH
   startDate: asset.purchaseDate,
   endDate: today,
   marketCurrency: toCurrencyCode(asset.marketCurrency),
+  marketMic: asset.instrumentIdentity?.mic,
+  marketExchange: asset.instrumentIdentity?.exchangeCode ?? asset.instrumentIdentity?.exchange,
   purchaseCurrency: toCurrencyCode(asset.purchaseCurrency),
   purchasePriceCurrency:
     typeof asset.purchasePriceCurrency === "string" && asset.purchasePriceCurrency
@@ -1190,6 +1223,12 @@ const buildSoldAllocationSegment = (
     startDate,
     endDate,
     marketCurrency: toCurrencyCode(allocation.marketCurrency ?? sale.marketCurrency),
+    marketMic: allocation.instrumentIdentity?.mic ?? sale.instrumentIdentity?.mic,
+    marketExchange:
+      allocation.instrumentIdentity?.exchangeCode ??
+      allocation.instrumentIdentity?.exchange ??
+      sale.instrumentIdentity?.exchangeCode ??
+      sale.instrumentIdentity?.exchange,
     purchaseCurrency: toCurrencyCode(allocation.purchaseCurrency),
     purchasePriceCurrency:
       typeof allocation.purchasePriceCurrency === "string" && allocation.purchasePriceCurrency
@@ -1865,11 +1904,13 @@ export const buildPortfolioHistory = async ({
     if (history?.warning) {
       twrIssues.add(`Brak pełnej historii notowań ${segment.symbol} (${segment.startDate}–${segment.endDate}).`);
     }
-    const historyTradingDayPredicate = isGpwSymbol(segment.symbol)
-      ? isGpwTradingDay
-      : segment.kind === "crypto"
-        ? () => true
-        : undefined;
+    const historyTradingDayPredicate = getHistoryTradingDayPredicate({
+      symbol: segment.symbol,
+      providerId: segment.providerId,
+      kind: segment.kind,
+      mic: segment.marketMic,
+      exchange: segment.marketExchange,
+    });
     if (hasUnreliableHistoryGap(historyPoints, segment.startDate, segment.endDate, historyTradingDayPredicate)) {
       twrIssues.add(`Historia notowań ${segment.symbol} pomija więcej niż ${MAX_MISSING_PRICE_SESSIONS} kolejnych sesji (${segment.startDate}–${segment.endDate}).`);
     }

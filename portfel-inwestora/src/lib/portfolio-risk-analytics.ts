@@ -2,6 +2,7 @@ import type {
   PortfolioBenchmarkHistorySeries,
   PortfolioHistoryPoint,
 } from "@/types/portfolio";
+import { calculateCapitalReturnPercent } from "@/lib/portfolio-performance";
 
 export const RISK_ANNUALIZATION_DAYS = 365;
 export const CAGR_DAYS_PER_YEAR = 365.2425;
@@ -53,6 +54,8 @@ export type PortfolioDailyReturn = {
   endDate: string;
   returnDecimal: number;
   resultPln: number;
+  /** Net invested capital at the interval end, in the analyzed currency. */
+  netInvestedAmount?: number | null;
   previousValuePln: number;
   valuePln: number;
 };
@@ -68,6 +71,8 @@ export type CalendarReturn = {
   month: number | null;
   /** Cash-flow-neutral P/L amount in the same currency as the analyzed points. */
   resultAmount: number;
+  /** Simple period result / ending net invested capital; null when capital is not positive. */
+  capitalReturnDecimal: number | null;
   returnDecimal: number;
   isComplete: boolean;
   observationCount: number;
@@ -237,6 +242,7 @@ export const deriveDailyCashFlowNeutralReturns = (
         endDate: point.date,
         returnDecimal,
         resultPln: returnDecimal * previous.portfolioValuePln,
+        netInvestedAmount: point.netInvestedPln,
         previousValuePln: previous.portfolioValuePln,
         valuePln: point.portfolioValuePln,
       }];
@@ -249,6 +255,7 @@ export const deriveDailyCashFlowNeutralReturns = (
       endDate: point.date,
       returnDecimal,
       resultPln,
+      netInvestedAmount: point.netInvestedPln,
       previousValuePln: previous.portfolioValuePln,
       valuePln: point.portfolioValuePln,
     }];
@@ -289,11 +296,16 @@ export const buildCalendarReturns = (
     const expectedEnd = granularity === "month"
       ? monthEndDate(year, month!)
       : `${key}-12-31`;
+    const resultAmount = bucket.reduce((total, item) => total + item.resultPln, 0);
+    const capitalReturnPercent = typeof last.netInvestedAmount === "number"
+      ? calculateCapitalReturnPercent(resultAmount, last.netInvestedAmount)
+      : null;
     return {
       key,
       year,
       month,
-      resultAmount: bucket.reduce((total, item) => total + item.resultPln, 0),
+      resultAmount,
+      capitalReturnDecimal: capitalReturnPercent === null ? null : capitalReturnPercent / 100,
       returnDecimal: compound(bucket.map((item) => item.returnDecimal)),
       isComplete: first.startDate <= expectedStart && last.endDate >= expectedEnd,
       observationCount: bucket.length,

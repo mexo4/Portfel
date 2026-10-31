@@ -3,6 +3,7 @@ import { isReusableHistoryCacheEntry } from "@/lib/server/portfolio-history-cach
 import { fetchFxRatesServer } from "@/lib/server/market-data";
 import { fetchTreasuryBondQuoteSeriesServer } from "@/lib/server/treasury-bonds";
 import { normalizeYahooMoneyUnit } from "@/lib/server/yahoo";
+import { isGpwTradingDay, shiftCalendarDate } from "@/lib/gpw-market-calendar";
 import { FALLBACK_FX_RATES } from "@/lib/constants";
 import {
   getOperationCashDeltas,
@@ -406,20 +407,35 @@ const dedupeAndSortPricePoints = (points: PricePoint[]) => {
     .sort((left, right) => left.date.localeCompare(right.date));
 };
 
-const MAX_RELIABLE_PRICE_GAP_DAYS = 5;
+const MAX_MISSING_PRICE_SESSIONS = 2;
 
 export const hasUnreliableHistoryGap = (
   points: readonly PricePoint[],
   startDate: string,
-  endDate: string
-) => {
-  let cursor = startDate;
-  for (const point of points) {
-    if (point.date < startDate || point.date > endDate) continue;
-    if (getDaysBetween(cursor, point.date) > MAX_RELIABLE_PRICE_GAP_DAYS) return true;
-    cursor = point.date;
+  endDate: string,
+  isTradingDay: (date: string) => boolean = (date) => {
+    const dayOfWeek = new Date(`${date}T12:00:00.000Z`).getUTCDay();
+    return dayOfWeek !== 0 && dayOfWeek !== 6;
   }
-  return getDaysBetween(cursor, endDate) > MAX_RELIABLE_PRICE_GAP_DAYS;
+) => {
+  const quotedDates = new Set(
+    points
+      .filter((point) => point.date >= startDate && point.date <= endDate && Number.isFinite(point.close) && point.close > 0)
+      .map((point) => point.date)
+  );
+  let missingPriceSessions = 0;
+
+  for (let date = startDate; date <= endDate; date = shiftCalendarDate(date, 1)) {
+    if (!isTradingDay(date)) continue;
+    if (quotedDates.has(date)) {
+      missingPriceSessions = 0;
+      continue;
+    }
+    missingPriceSessions += 1;
+    if (missingPriceSessions > MAX_MISSING_PRICE_SESSIONS) return true;
+  }
+
+  return false;
 };
 
 const dedupeAndSortFxPoints = (points: FxPoint[]) => {
@@ -1849,8 +1865,13 @@ export const buildPortfolioHistory = async ({
     if (history?.warning) {
       twrIssues.add(`Brak pełnej historii notowań ${segment.symbol} (${segment.startDate}–${segment.endDate}).`);
     }
-    if (hasUnreliableHistoryGap(historyPoints, segment.startDate, segment.endDate)) {
-      twrIssues.add(`Historia notowań ${segment.symbol} ma luki przekraczające 5 dni (${segment.startDate}–${segment.endDate}).`);
+    const historyTradingDayPredicate = isGpwSymbol(segment.symbol)
+      ? isGpwTradingDay
+      : segment.kind === "crypto"
+        ? () => true
+        : undefined;
+    if (hasUnreliableHistoryGap(historyPoints, segment.startDate, segment.endDate, historyTradingDayPredicate)) {
+      twrIssues.add(`Historia notowań ${segment.symbol} pomija więcej niż ${MAX_MISSING_PRICE_SESSIONS} kolejnych sesji (${segment.startDate}–${segment.endDate}).`);
     }
     let pointIndex = 0;
     let lastKnownClose: number | undefined;

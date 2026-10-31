@@ -66,6 +66,8 @@ export type CalendarReturn = {
   key: string;
   year: number;
   month: number | null;
+  /** Cash-flow-neutral P/L amount in the same currency as the analyzed points. */
+  resultAmount: number;
   returnDecimal: number;
   isComplete: boolean;
   observationCount: number;
@@ -227,6 +229,18 @@ export const deriveDailyCashFlowNeutralReturns = (
   return sorted.slice(1).flatMap((point, index) => {
     const previous = sorted[index]!;
     if (!(previous.portfolioValuePln > 0)) return [];
+    if (Object.hasOwn(point, "dailyTimeWeightedReturnDecimal")) {
+      const returnDecimal = point.dailyTimeWeightedReturnDecimal;
+      if (typeof returnDecimal !== "number" || !Number.isFinite(returnDecimal)) return [];
+      return [{
+        startDate: previous.date,
+        endDate: point.date,
+        returnDecimal,
+        resultPln: returnDecimal * previous.portfolioValuePln,
+        previousValuePln: previous.portfolioValuePln,
+        valuePln: point.portfolioValuePln,
+      }];
+    }
     const resultPln = point.profitLossPln - previous.profitLossPln;
     const returnDecimal = resultPln / previous.portfolioValuePln;
     if (!Number.isFinite(returnDecimal)) return [];
@@ -279,6 +293,7 @@ export const buildCalendarReturns = (
       key,
       year,
       month,
+      resultAmount: bucket.reduce((total, item) => total + item.resultPln, 0),
       returnDecimal: compound(bucket.map((item) => item.returnDecimal)),
       isComplete: first.startDate <= expectedStart && last.endDate >= expectedEnd,
       observationCount: bucket.length,

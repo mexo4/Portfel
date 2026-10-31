@@ -614,6 +614,21 @@ export type PortfolioHistoryPoint = {
 };
 
 /**
+ * A verified external cash movement expressed from the portfolio's point of
+ * view: deposits are positive and withdrawals are negative. Trades, internal
+ * transfers, dividends and fees are deliberately excluded so money-weighted
+ * return never counts an internal event twice.
+ */
+export type PortfolioExternalCashFlow = {
+  date: string;
+  amountPln: number;
+  /** Historical conversion to the requested presentation currency, if known. */
+  presentationAmount?: number | null;
+  /** Keeps gross capital totals separate from analytical scope adjustments. */
+  kind?: "DEPOSIT" | "WITHDRAW" | "BALANCE_ADJUSTMENT" | "ARCHIVE_ADJUSTMENT";
+};
+
+/**
  * A concrete portfolio payload used exclusively to build a virtual
  * all-portfolios history. The virtual "all" selection is never persisted and
  * must not collapse identically named/tickered positions into one portfolio.
@@ -888,6 +903,8 @@ export type PortfolioHistoryResponse = {
   twrStatusReason?: string;
   presentationTwrStatus?: "complete" | "incomplete" | "unavailable";
   presentationTwrStatusReason?: string;
+  /** External cash movements needed for money-weighted return (XIRR). */
+  externalCashFlows?: PortfolioExternalCashFlow[];
   assetSeries: PortfolioAssetHistorySeries[];
   benchmarkSeries: PortfolioBenchmarkHistorySeries[];
 };

@@ -1403,6 +1403,7 @@ const buildCashLedgerEvents = (
 ) => {
   const deltasByDate = new Map<string, ReturnType<typeof getOperationCashDeltas>>();
   const externalFlowsByDate = new Map<string, number>();
+  const externalCashFlowEntries: Array<{ date: string; amountPln: number; kind: "DEPOSIT" | "WITHDRAW" | "BALANCE_ADJUSTMENT" | "ARCHIVE_ADJUSTMENT" }> = [];
 
   operations.forEach((operation) => {
     const date = toDateInputValue(operation.date, "");
@@ -1426,6 +1427,17 @@ const buildCashLedgerEvents = (
         0
       );
       addAmountToDateMap(externalFlowsByDate, date, flowPln);
+      if (flowPln !== 0) {
+        externalCashFlowEntries.push({
+          date,
+          amountPln: round(flowPln),
+          kind: operation.operationType === "DEPOSIT"
+            ? "DEPOSIT"
+            : operation.operationType === "WITHDRAW"
+              ? "WITHDRAW"
+              : "BALANCE_ADJUSTMENT",
+        });
+      }
     }
   });
 
@@ -1464,11 +1476,16 @@ const buildCashLedgerEvents = (
         );
       if (removedValuePln !== 0) {
         addAmountToDateMap(externalFlowsByDate, date, -removedValuePln);
+        externalCashFlowEntries.push({
+          date,
+          amountPln: round(-removedValuePln),
+          kind: "ARCHIVE_ADJUSTMENT",
+        });
       }
     }
   }
 
-  return { deltasByDate, externalFlowsByDate };
+  return { deltasByDate, externalFlowsByDate, externalCashFlowEntries };
 };
 
 const buildAdjustmentEvents = (realizedAdjustments: PortfolioRealizedAdjustment[]) => {
@@ -2046,6 +2063,28 @@ export const buildPortfolioHistory = async ({
     for (const point of points) point.presentationTimeWeightedReturnPercent = null;
   }
 
+  // Keep the external ledger movements alongside the derived history. This is
+  // intentionally a narrow feed: buys, sells, dividends and internal
+  // transfers stay inside the portfolio and must never become XIRR cash flows.
+  const externalCashFlows = cashLedgerEvents.externalCashFlowEntries
+    .sort((left, right) => left.date.localeCompare(right.date))
+    .map(({ date, amountPln, kind }) => {
+      const presentationRateToPln = getHistoricalFxRateForDate(
+        historicalFxSeriesByCode,
+        normalizedPresentationCurrency,
+        date
+      );
+      return {
+        date,
+        amountPln: round(amountPln),
+        kind,
+        presentationAmount:
+          typeof presentationRateToPln === "number" && presentationRateToPln > 0
+            ? round(amountPln / presentationRateToPln)
+            : null,
+      };
+    });
+
   const assetSeries: PortfolioAssetHistorySeries[] = assetSeriesDefinitions
     .map((definition) => ({
       groupKey: definition.groupKey,
@@ -2113,6 +2152,7 @@ export const buildPortfolioHistory = async ({
       : presentationTwrStatus === "unavailable"
         ? { presentationTwrStatusReason: "Brak wystarczających danych historycznych do wyliczenia TWR." }
         : {}),
+    externalCashFlows,
   };
 };
 
@@ -2239,6 +2279,16 @@ export const getAggregateTwrStatus = (
     : "unavailable";
 };
 
+const aggregateExternalCashFlows = (
+  histories: ReadonlyArray<Pick<PortfolioHistoryResponse, "externalCashFlows">>
+) => {
+  // Preserve individual dated entries so gross contributions remain visible.
+  // XIRR combines same-date movements internally for its NPV calculation.
+  return histories
+    .flatMap((history) => history.externalCashFlows ?? [])
+    .sort((left, right) => left.date.localeCompare(right.date));
+};
+
 export const buildAggregatePortfolioHistory = async ({
   portfolioScopes,
   benchmarks = [],
@@ -2274,6 +2324,7 @@ export const buildAggregatePortfolioHistory = async ({
       presentationCurrency: normalizedPresentationCurrency,
       presentationTwrStatus: "unavailable",
       presentationTwrStatusReason: "Brak danych historycznych do wyliczenia TWR.",
+      externalCashFlows: [],
       assetSeries: [],
       benchmarkSeries: [],
     };
@@ -2307,6 +2358,7 @@ export const buildAggregatePortfolioHistory = async ({
     presentationTimeWeightedReturnPercent:
       presentationTwrStatus === "complete" ? point.presentationTimeWeightedReturnPercent ?? null : null,
   }));
+  const externalCashFlows = aggregateExternalCashFlows(histories);
   const twrStatusReason = Array.from(
     new Set(histories.flatMap((history, index) => history.twrStatusReason
       ? [`${uniqueScopes[index]?.portfolioName ?? "Portfel"} (${uniqueScopes[index]?.portfolioId ?? "?"}): ${history.twrStatusReason}`]
@@ -2337,6 +2389,7 @@ export const buildAggregatePortfolioHistory = async ({
     presentationTwrStatus,
     ...(twrStatusReason ? { twrStatusReason } : {}),
     ...(presentationTwrStatusReason ? { presentationTwrStatusReason } : {}),
+    externalCashFlows,
     assetSeries: [],
     benchmarkSeries: [],
   };

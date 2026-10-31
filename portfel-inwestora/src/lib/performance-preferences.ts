@@ -1,9 +1,13 @@
 export const PERFORMANCE_METRIC_IDS = [
+  "portfolio-value",
   "total-result",
+  "net-external-capital",
+  "twr",
+  "xirr",
+  "cagr",
   "latest-value-change",
   "best-day",
   "best-daily-result",
-  "period-return",
   "worst-day",
   "best-month",
   "worst-month",
@@ -27,11 +31,15 @@ export type PerformanceMetricId = (typeof PERFORMANCE_METRIC_IDS)[number];
 export const DEFAULT_PERFORMANCE_METRICS: PerformanceMetricId[] = [...PERFORMANCE_METRIC_IDS];
 
 export const PERFORMANCE_METRIC_LABELS: Record<PerformanceMetricId, string> = {
+  "portfolio-value": "Aktualna wartość",
   "total-result": "Wynik łączny",
+  "net-external-capital": "Kapitał zewnętrzny netto",
+  twr: "TWR",
+  xirr: "XIRR",
+  cagr: "CAGR",
   "latest-value-change": "Ostatnia zmiana wartości",
   "best-day": "Najlepszy dzień",
-  "best-daily-result": "Najlepszy wynik dzienny",
-  "period-return": "Wynik wybranego okresu",
+  "best-daily-result": "Największy wynik dzienny",
   "worst-day": "Najgorszy dzień",
   "best-month": "Najlepszy miesiąc",
   "worst-month": "Najgorszy miesiąc",
@@ -49,6 +57,18 @@ export const PERFORMANCE_METRIC_LABELS: Record<PerformanceMetricId, string> = {
   "tracking-error": "Tracking Error",
   "calendar-results": "Wyniki kalendarzowe",
 };
+
+export const PERFORMANCE_METRIC_SECTIONS: Array<{
+  title: string;
+  metricIds: PerformanceMetricId[];
+}> = [
+  { title: "Podsumowanie", metricIds: ["portfolio-value", "total-result", "net-external-capital", "twr", "xirr", "cagr"] },
+  { title: "Statystyki wyniku", metricIds: ["latest-value-change", "best-day", "best-daily-result", "worst-day", "best-month", "worst-month", "best-year", "worst-year"] },
+  { title: "Ryzyko", metricIds: ["volatility", "max-drawdown", "time-under-water"] },
+  { title: "Efektywność ryzyka", metricIds: ["sharpe", "sortino", "calmar"] },
+  { title: "Benchmark", metricIds: ["beta", "alpha", "information-ratio", "tracking-error"] },
+  { title: "Kalendarz wyników", metricIds: ["calendar-results"] },
+];
 
 export const normalizePerformanceMetricIds = (value: unknown): PerformanceMetricId[] => {
   if (!Array.isArray(value)) return [...DEFAULT_PERFORMANCE_METRICS];

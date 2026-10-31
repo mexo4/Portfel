@@ -105,6 +105,34 @@ test("period selection keeps the baseline point immediately before its start", (
   assert.ok(getAvailableRiskPeriods(points).includes("MAX"));
 });
 
+test("3Y and 5Y controls are hidden until the full requested history exists", () => {
+  const points = buildPoints(Array(900).fill(0.0001), "2024-01-01");
+  const periods = getAvailableRiskPeriods(points);
+  assert.ok(periods.includes("1Y"));
+  assert.ok(!periods.includes("3Y"));
+  assert.ok(!periods.includes("5Y"));
+});
+
+test("largest daily currency result is not substituted with the best percentage day", () => {
+  const points = [
+    { date: "2026-01-01", portfolioValuePln: 100, netInvestedPln: 100, profitLossPln: 0, timeWeightedReturnPercent: 0 },
+    { date: "2026-01-02", portfolioValuePln: 120, netInvestedPln: 100, profitLossPln: 20, timeWeightedReturnPercent: 20 },
+    { date: "2026-01-03", portfolioValuePln: 1042, netInvestedPln: 1000, profitLossPln: 42, timeWeightedReturnPercent: 4 },
+  ];
+  const result = calculatePortfolioRiskAnalytics({ points, period: "MAX", riskFreeRates: zeroRates(points) });
+  assert.equal(result.bestDay.value.endDate, "2026-01-02");
+  assert.equal(result.bestDailyResult.value.endDate, "2026-01-03");
+  assert.equal(result.bestDailyResult.value.resultPln, 22);
+});
+
+test("incomplete price or FX history makes return and risk metrics unavailable", () => {
+  const points = buildPoints(Array(40).fill(0.001));
+  const result = calculatePortfolioRiskAnalytics({ points, period: "MAX", riskFreeRates: zeroRates(points), historyStatus: "incomplete" });
+  assert.equal(result.totalReturn.unavailableCode, "HISTORY_INCOMPLETE");
+  assert.equal(result.drawdown.unavailableCode, "HISTORY_INCOMPLETE");
+  assert.equal(result.benchmark.beta.unavailableCode, "HISTORY_INCOMPLETE");
+});
+
 test("monthly and yearly results compound daily returns", () => {
   const returns = deriveDailyCashFlowNeutralReturns(buildPoints([0.1, 0.1], "2024-01-01"));
   assert.ok(Math.abs(buildCalendarReturns(returns, "month")[0].returnDecimal - 0.21) < 1e-12);

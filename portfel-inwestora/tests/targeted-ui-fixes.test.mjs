@@ -163,5 +163,5 @@ test("results panel renders the newest raw daily movement separately from histor
   assert.match(panel, /Ostatnia zmiana wartości/);
   assert.match(panel, /metrics\.latestRaw\.rawValueChangePln/);
   assert.match(panel, /Najlepszy dzień/);
-  assert.match(panel, /Najlepszy wynik dzienny/);
+  assert.match(panel, /Największy wynik dzienny/);
 });

@@ -5,6 +5,26 @@ import type {
 
 export const RISK_ANNUALIZATION_DAYS = 365;
 export const CAGR_DAYS_PER_YEAR = 365.2425;
+const DAY_MS = 86_400_000;
+
+export const calculateCagrFromTotalReturn = ({
+  totalReturn,
+  startDate,
+  endDate,
+}: {
+  totalReturn: number | null;
+  startDate: string | null;
+  endDate: string | null;
+}) => {
+  if (typeof totalReturn !== "number" || !Number.isFinite(totalReturn) || !startDate || !endDate) return null;
+  const start = Date.parse(`${startDate}T00:00:00.000Z`);
+  const end = Date.parse(`${endDate}T00:00:00.000Z`);
+  const elapsedDays = (end - start) / DAY_MS;
+  if (!Number.isFinite(start) || !Number.isFinite(end) || elapsedDays < 365 || 1 + totalReturn <= 0) {
+    return null;
+  }
+  return (1 + totalReturn) ** (CAGR_DAYS_PER_YEAR / elapsedDays) - 1;
+};
 
 export type RiskAnalyticsPeriod = "YTD" | "1Y" | "3Y" | "5Y" | "MAX";
 
@@ -16,6 +36,7 @@ export type RiskMetricUnavailableCode =
   | "NO_DOWNSIDE"
   | "ZERO_DRAWDOWN"
   | "RISK_FREE_UNAVAILABLE"
+  | "HISTORY_INCOMPLETE"
   | "BENCHMARK_REQUIRED"
   | "AGGREGATE_BENCHMARK_UNAVAILABLE";
 
@@ -89,6 +110,7 @@ export type PortfolioRiskAnalytics = {
   totalReturn: RiskMetric<number>;
   annualizedReturn: RiskMetric<number>;
   bestDay: RiskMetric<PortfolioDailyReturn>;
+  bestDailyResult: RiskMetric<PortfolioDailyReturn>;
   worstDay: RiskMetric<PortfolioDailyReturn>;
   bestMonth: RiskMetric<CalendarReturn>;
   worstMonth: RiskMetric<CalendarReturn>;
@@ -105,7 +127,6 @@ export type PortfolioRiskAnalytics = {
   benchmark: BenchmarkRiskMetrics;
 };
 
-const DAY_MS = 86_400_000;
 const FLOATING_POINT_NOISE = Number.EPSILON * 32;
 
 const metricBounds = <T>(
@@ -221,9 +242,18 @@ export const deriveDailyCashFlowNeutralReturns = (
 };
 
 export const getAvailableRiskPeriods = (points: PortfolioHistoryPoint[]) =>
-  (["YTD", "1Y", "3Y", "5Y", "MAX"] as RiskAnalyticsPeriod[]).filter(
-    (period) => deriveDailyCashFlowNeutralReturns(selectRiskPeriodPoints(points, period)).length > 0
-  );
+  (["YTD", "1Y", "3Y", "5Y", "MAX"] as RiskAnalyticsPeriod[]).filter((period) => {
+    const sorted = sortUniqueHistoryPoints(points);
+    const endDate = sorted.at(-1)?.date;
+    if (!endDate) return false;
+    const returns = deriveDailyCashFlowNeutralReturns(selectRiskPeriodPoints(sorted, period));
+    if (!returns.length) return false;
+    // Never present a shorter MAX range under a 1Y, 3Y, or 5Y label.
+    if (period === "1Y" || period === "3Y" || period === "5Y") {
+      return sorted[0]!.date <= periodStartDate(period, endDate)!;
+    }
+    return true;
+  });
 
 export const buildCalendarReturns = (
   returns: PortfolioDailyReturn[],
@@ -487,12 +517,14 @@ export const calculatePortfolioRiskAnalytics = ({
   benchmark,
   riskFreeRates,
   isAggregate = false,
+  historyStatus = "complete",
 }: {
   points: PortfolioHistoryPoint[];
   period: RiskAnalyticsPeriod;
   benchmark?: PortfolioBenchmarkHistorySeries;
   riskFreeRates: RiskFreeRatePoint[] | null;
   isAggregate?: boolean;
+  historyStatus?: "complete" | "incomplete" | "unavailable";
 }): PortfolioRiskAnalytics => {
   const selectedPoints = selectRiskPeriodPoints(points, period);
   const dailyReturns = deriveDailyCashFlowNeutralReturns(selectedPoints);
@@ -501,11 +533,49 @@ export const calculatePortfolioRiskAnalytics = ({
   const elapsedDays = dailyReturns.length
     ? calendarDaysBetween(dailyReturns[0]!.startDate, dailyReturns.at(-1)!.endDate)
     : 0;
-  const annualizedReturnValue = totalReturnValue !== null && elapsedDays > 0 && 1 + totalReturnValue > 0
-    ? (1 + totalReturnValue) ** (CAGR_DAYS_PER_YEAR / elapsedDays) - 1
-    : null;
+  const annualizedReturnValue = calculateCagrFromTotalReturn({
+    totalReturn: totalReturnValue,
+    startDate: dailyReturns[0]?.startDate ?? null,
+    endDate: dailyReturns.at(-1)?.endDate ?? null,
+  });
   const monthlyReturns = buildCalendarReturns(dailyReturns, "month");
   const yearlyReturns = buildCalendarReturns(dailyReturns, "year");
+  if (historyStatus !== "complete") {
+    const unavailableCode = "HISTORY_INCOMPLETE" as const;
+    const unavailableBenchmark: BenchmarkRiskMetrics = {
+      benchmarkId: benchmark?.id ?? null,
+      benchmarkLabel: benchmark?.label ?? null,
+      beta: unavailable<number>(dailyReturns, unavailableCode),
+      alpha: unavailable<number>(dailyReturns, unavailableCode),
+      informationRatio: unavailable<number>(dailyReturns, unavailableCode),
+      trackingError: unavailable<number>(dailyReturns, unavailableCode),
+      monthlyReturns: [],
+      yearlyReturns: [],
+    };
+    return {
+      period,
+      points: selectedPoints,
+      dailyReturns,
+      totalReturn: unavailable<number>(dailyReturns, unavailableCode),
+      annualizedReturn: unavailable<number>(dailyReturns, unavailableCode),
+      bestDay: unavailable<PortfolioDailyReturn>(dailyReturns, unavailableCode),
+      bestDailyResult: unavailable<PortfolioDailyReturn>(dailyReturns, unavailableCode),
+      worstDay: unavailable<PortfolioDailyReturn>(dailyReturns, unavailableCode),
+      bestMonth: unavailable<CalendarReturn>(dailyReturns, unavailableCode),
+      worstMonth: unavailable<CalendarReturn>(dailyReturns, unavailableCode),
+      bestYear: unavailable<CalendarReturn>(dailyReturns, unavailableCode),
+      worstYear: unavailable<CalendarReturn>(dailyReturns, unavailableCode),
+      monthlyReturns: [],
+      yearlyReturns: [],
+      volatility: unavailable<number>(dailyReturns, unavailableCode),
+      drawdown: unavailable<DrawdownDetails>(dailyReturns, unavailableCode),
+      timeUnderWater: unavailable<TimeUnderWaterDetails>(dailyReturns, unavailableCode),
+      sharpe: unavailable<number>(dailyReturns, unavailableCode),
+      sortino: unavailable<number>(dailyReturns, unavailableCode),
+      calmar: unavailable<number>(dailyReturns, unavailableCode),
+      benchmark: unavailableBenchmark,
+    };
+  }
   const deviation = values.length >= 30 ? sampleStandardDeviation(values) : null;
   const volatility = values.length < 30
     ? unavailable<number>(dailyReturns, "INSUFFICIENT_OBSERVATIONS")
@@ -547,6 +617,7 @@ export const calculatePortfolioRiskAnalytics = ({
       : unavailable<number>(dailyReturns, "ZERO_DRAWDOWN");
   const sortedBest = [...dailyReturns].sort((left, right) => right.returnDecimal - left.returnDecimal);
   const sortedWorst = [...dailyReturns].sort((left, right) => left.returnDecimal - right.returnDecimal);
+  const sortedDailyResult = [...dailyReturns].sort((left, right) => right.resultPln - left.resultPln);
   return {
     period,
     points: selectedPoints,
@@ -559,6 +630,9 @@ export const calculatePortfolioRiskAnalytics = ({
       : metricBounds(dailyReturns, annualizedReturnValue),
     bestDay: sortedBest[0]
       ? metricBounds(dailyReturns, sortedBest[0])
+      : unavailable(dailyReturns, "NO_DATA"),
+    bestDailyResult: sortedDailyResult[0]
+      ? metricBounds(dailyReturns, sortedDailyResult[0])
       : unavailable(dailyReturns, "NO_DATA"),
     worstDay: sortedWorst[0]
       ? metricBounds(dailyReturns, sortedWorst[0])

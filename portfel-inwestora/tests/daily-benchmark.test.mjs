@@ -8,8 +8,9 @@ import {
   rankBenchmarkSearchResults,
 } from "../src/lib/benchmark-search.ts";
 import { buildPortfolioDailyMetricPoints } from "../src/lib/portfolio-daily-metrics.ts";
-import { aggregatePortfolioHistoryPoints, buildBuyCashflowEvents, getAggregateTwrStatus, getPortfolioTwrFxWarnings, hasUnreliableHistoryGap } from "../src/lib/server/portfolio-history.ts";
+import { aggregatePortfolioHistoryPoints, buildBuyCashflowEvents, getAggregateTwrStatus, getHistoryTradingDayPredicate, getPortfolioTwrFxWarnings, hasUnreliableHistoryGap } from "../src/lib/server/portfolio-history.ts";
 import { isGpwTradingDay } from "../src/lib/gpw-market-calendar.ts";
+import { isXetraTradingDay } from "../src/lib/market-session-calendar.ts";
 import { getDashboardHistoryMetrics } from "../src/lib/dashboard-read-model.ts";
 
 const readSource = (relativePath) =>
@@ -298,16 +299,53 @@ test("TWR completeness checks missing trading sessions instead of raw calendar d
     { date: "2025-12-23", close: 100 },
     { date: "2025-12-29", close: 101 },
   ], "2025-12-23", "2025-12-29", isGpwTradingDay), false);
+  // Xetra/Frankfurt are also closed on Dec 24-26; the weekend follows, so
+  // Dec 23 -> Dec 29 is not a multi-session price-history gap there either.
+  assert.equal(hasUnreliableHistoryGap([
+    { date: "2025-12-23", close: 100 },
+    { date: "2025-12-29", close: 101 },
+  ], "2025-12-23", "2025-12-29", isXetraTradingDay), false);
   // Three missing open sessions remain a real data-quality gap.
   assert.equal(hasUnreliableHistoryGap([
     { date: "2025-12-29", close: 100 },
     { date: "2026-01-05", close: 101 },
   ], "2025-12-29", "2026-01-05", isGpwTradingDay), true);
+  // A real Xetra data outage spanning three open sessions must still block
+  // completeness; the calendar only exempts official venue holidays.
+  assert.equal(hasUnreliableHistoryGap([
+    { date: "2025-12-29", close: 100 },
+    { date: "2026-01-06", close: 101 },
+  ], "2025-12-29", "2026-01-06", isXetraTradingDay), true);
   // Unlike exchange-traded securities, crypto is expected to have weekend data.
   assert.equal(hasUnreliableHistoryGap([
     { date: "2026-08-07", close: 100 },
     { date: "2026-08-13", close: 101 },
   ], "2026-08-07", "2026-08-13", () => true), true);
+});
+
+test("2B7C.DE uses Xetra session calendar for history completeness", () => {
+  assert.equal(isXetraTradingDay("2025-12-24"), false);
+  assert.equal(isXetraTradingDay("2025-12-30"), true);
+  assert.equal(isXetraTradingDay("2025-12-31"), false);
+  assert.equal(isXetraTradingDay("2026-01-01"), false);
+
+  const isTradingDay = getHistoryTradingDayPredicate({
+    symbol: "2B7C.DE",
+    providerId: "2B7C.DE",
+    kind: "etf",
+  });
+  assert.equal(isTradingDay, isXetraTradingDay);
+  assert.equal(hasUnreliableHistoryGap([
+    { date: "2025-12-23", close: 100 },
+    { date: "2025-12-29", close: 101 },
+  ], "2025-12-23", "2025-12-29", isTradingDay), false);
+
+  const byMic = getHistoryTradingDayPredicate({
+    symbol: "VWRL",
+    kind: "etf",
+    mic: "XETR",
+  });
+  assert.equal(byMic, isXetraTradingDay);
 });
 
 test("aggregate TWR is unavailable or incomplete if any non-empty component history is unreliable", () => {

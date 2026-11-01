@@ -65,6 +65,7 @@ import {
   type PortfolioAssetGroup,
 } from "@/lib/pricing";
 import {
+  clearPortfolioHistoryRequestCache,
   createPortfolioHistoryRequestDescriptor,
   getPortfolioHistoryCached,
   hasPortfolioHistoryInputs,
@@ -5186,6 +5187,7 @@ export default function PortfolioApp({
 
     try {
       await logoutUser();
+      clearPortfolioHistoryRequestCache();
       window.location.href = "/login";
     } catch (error) {
       setSyncError(toErrorMessage(error, "Nie udalo sie wylogowac."));

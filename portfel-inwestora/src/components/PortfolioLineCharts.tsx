@@ -40,7 +40,13 @@ import {
   type ChartViewport,
 } from "@/lib/chart-viewport";
 import { SEARCH_DEBOUNCE_MS, VISIBLE_SEARCH_MODE_OPTIONS } from "@/lib/constants";
-import { fetchPortfolioHistory, searchAssets, searchEtfInstruments } from "@/lib/api";
+import { searchAssets, searchEtfInstruments } from "@/lib/api";
+import {
+  createPortfolioHistoryRequestDescriptor,
+  getPortfolioHistoryCached,
+  hasPortfolioHistoryInputs,
+  type PortfolioHistoryRequest,
+} from "@/lib/portfolio-history-client-cache";
 import {
   createPortfolioBenchmarkDefinition,
   hasExactCoreBenchmarkMatch,
@@ -90,6 +96,7 @@ type PortfolioLineChartsProps = {
   baseCurrency: CurrencyCode;
   combinedProfitLoss: number;
   refreshRevision: number;
+  historyUserId: string;
   operations?: PortfolioOperation[];
   accounts?: PortfolioAccount[];
   accountType?: PortfolioAccountType;
@@ -142,42 +149,6 @@ type ChartLineDefinition = {
   connectNulls?: boolean;
   valueFormatter: (value: number) => string;
   detailFormatter?: (row: ChartRow) => string | null;
-};
-
-type HistoryRequestPayload = {
-  assets: PortfolioAsset[];
-  sales: PortfolioSale[];
-  realizedAdjustments: PortfolioRealizedAdjustment[];
-  operations?: PortfolioOperation[];
-  accounts?: PortfolioAccount[];
-  accountType?: PortfolioAccountType;
-  benchmarks: PortfolioBenchmarkDefinition[];
-  portfolioScopes?: PortfolioHistoryScope[];
-  presentationCurrency: CurrencyCode;
-};
-
-// React Strict Mode intentionally re-runs effects in development. A history
-// build is expensive and deterministic for one request signature, so share it
-// until it settles instead of asking the server/providers twice.
-const portfolioHistoryRequestsInFlight = new Map<
-  string,
-  Promise<PortfolioHistoryResponse>
->();
-
-const getPortfolioHistoryOnce = (
-  requestSignature: string,
-  payload: HistoryRequestPayload
-) => {
-  const existing = portfolioHistoryRequestsInFlight.get(requestSignature);
-  if (existing) {
-    return existing;
-  }
-
-  const request = fetchPortfolioHistory(payload).finally(() => {
-    portfolioHistoryRequestsInFlight.delete(requestSignature);
-  });
-  portfolioHistoryRequestsInFlight.set(requestSignature, request);
-  return request;
 };
 
 type ChartStat = {
@@ -881,6 +852,7 @@ export default function PortfolioLineCharts({
   baseCurrency,
   combinedProfitLoss,
   refreshRevision,
+  historyUserId,
   operations = [],
   accounts = [],
   accountType,
@@ -1149,72 +1121,31 @@ export default function PortfolioLineCharts({
   // Provider history is determined by transactions and selected benchmarks,
   // not by the latest in-memory quote. Excluding volatile quote fields keeps
   // the 15/30-second quote refresh from re-fetching a complete chart history.
-  const historyRequestSignature = useMemo(
-    () =>
-      JSON.stringify({
-        assets: (portfolioScopes?.length ? [] : assets).map((asset) => {
-          const historyAsset = { ...asset };
-          delete historyAsset.latestPrice;
-          delete historyAsset.latestPriceDate;
-          delete historyAsset.latestPriceMarketTimestamp;
-          delete historyAsset.latestPriceFetchedAt;
-          delete historyAsset.previousClose;
-          delete historyAsset.lastUpdatedAt;
-          return historyAsset;
-        }),
+  const historyRequestDescriptor = useMemo(
+    () => createPortfolioHistoryRequestDescriptor({
+      userId: historyUserId,
+      refreshRevision,
+      payload: {
+        assets,
         sales,
         realizedAdjustments,
-        operations: portfolioScopes?.length ? [] : operations,
-        accounts: portfolioScopes?.length ? [] : accounts,
-        accountType: portfolioScopes?.length ? undefined : accountType,
+        operations,
+        accounts,
+        accountType,
         benchmarks: selectedBenchmarks,
+        portfolioScopes,
         presentationCurrency: baseCurrency,
-        portfolioScopes: portfolioScopes?.map((scope) => ({
-          portfolioId: scope.portfolioId,
-          accountType: scope.accountType,
-          assets: scope.assets.map((asset) => {
-            const historyAsset = { ...asset };
-            delete historyAsset.latestPrice;
-            delete historyAsset.latestPriceDate;
-            delete historyAsset.latestPriceMarketTimestamp;
-            delete historyAsset.latestPriceFetchedAt;
-            delete historyAsset.previousClose;
-            delete historyAsset.lastUpdatedAt;
-            return historyAsset;
-          }),
-          sales: scope.sales,
-          realizedAdjustments: scope.realizedAdjustments,
-          operations: scope.operations ?? [],
-          accounts: scope.accounts ?? [],
-        })),
-        refreshRevision,
-      }),
-    [accountType, accounts, assets, baseCurrency, operations, portfolioScopes, realizedAdjustments, refreshRevision, sales, selectedBenchmarks]
+      },
+    }),
+    [accountType, accounts, assets, baseCurrency, historyUserId, operations, portfolioScopes, realizedAdjustments, refreshRevision, sales, selectedBenchmarks]
   );
+  const historyRequestSignature = historyRequestDescriptor.key;
 
   useEffect(() => {
     let isCancelled = false;
-    const historyRequest = JSON.parse(historyRequestSignature) as {
-      assets: PortfolioAsset[];
-      sales: PortfolioSale[];
-      realizedAdjustments: PortfolioRealizedAdjustment[];
-      operations?: PortfolioOperation[];
-      accounts?: PortfolioAccount[];
-      accountType?: PortfolioAccountType;
-      benchmarks: PortfolioBenchmarkDefinition[];
-      portfolioScopes?: PortfolioHistoryScope[];
-      presentationCurrency?: CurrencyCode;
-    };
+    const historyRequest = JSON.parse(historyRequestSignature).request as PortfolioHistoryRequest;
 
-    if (
-      historyRequest.assets.length === 0 &&
-      historyRequest.sales.length === 0 &&
-      historyRequest.realizedAdjustments.length === 0 &&
-      (historyRequest.operations?.length ?? 0) === 0 &&
-      !(historyRequest.portfolioScopes?.some((scope) =>
-        scope.assets.length || scope.sales.length || scope.realizedAdjustments.length || (scope.operations?.length ?? 0)
-      ))
-    ) {
+    if (!hasPortfolioHistoryInputs(historyRequest)) {
       setServerHistory(EMPTY_HISTORY);
       setServerHistorySignature(historyRequestSignature);
       setWarnings([]);
@@ -1230,15 +1161,12 @@ export default function PortfolioLineCharts({
 
     void (async () => {
       try {
-        const response = await getPortfolioHistoryOnce(historyRequestSignature, {
-          assets: historyRequest.assets,
-          sales: historyRequest.sales,
-          realizedAdjustments: historyRequest.realizedAdjustments,
-          operations: historyRequest.operations,
-          accounts: historyRequest.accounts,
-          benchmarks: historyRequest.benchmarks,
-          portfolioScopes: historyRequest.portfolioScopes,
-          presentationCurrency: historyRequest.presentationCurrency ?? baseCurrency,
+        const response = await getPortfolioHistoryCached({
+          key: historyRequestSignature,
+          payload: {
+            ...historyRequest,
+            presentationCurrency: historyRequest.presentationCurrency ?? baseCurrency,
+          },
         });
 
         if (isCancelled) {

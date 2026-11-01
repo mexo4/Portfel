@@ -65,6 +65,12 @@ import {
   type PortfolioAssetGroup,
 } from "@/lib/pricing";
 import {
+  createPortfolioHistoryRequestDescriptor,
+  getPortfolioHistoryCached,
+  hasPortfolioHistoryInputs,
+  type PortfolioHistoryRequest,
+} from "@/lib/portfolio-history-client-cache";
+import {
   buildCashImpactBuyOperation,
   buildCashImpactSellOperation,
   calculateCashBalances,
@@ -1348,6 +1354,85 @@ export default function PortfolioApp({
     isAllPortfoliosSelected,
     selectedPortfolios,
   ]);
+  const portfolioHistoryPrefetchDescriptor = useMemo(() => {
+    const payload: PortfolioHistoryRequest = isAllPortfoliosSelected
+      ? {
+          assets: displayedAssets,
+          sales: displayedSales,
+          realizedAdjustments: effectiveRealizedAdjustments,
+          operations: [],
+          accounts: [],
+          benchmarks: [],
+          portfolioScopes: selectedPortfolios.map((portfolio) => ({
+            portfolioId: portfolio.id,
+            accountType: portfolio.accountType,
+            assets: portfolio.assets,
+            sales: portfolio.sales,
+            realizedAdjustments: portfolio.realizedAdjustments,
+            operations: portfolio.operations ?? [],
+            accounts: portfolio.accounts ?? [],
+          })),
+          presentationCurrency: activeBaseCurrency,
+        }
+      : {
+          assets: displayedAssets,
+          sales: displayedSales,
+          realizedAdjustments: effectiveRealizedAdjustments,
+          operations: activePortfolio?.operations ?? [],
+          accounts: activePortfolio?.accounts ?? [],
+          accountType: activePortfolio?.accountType,
+          benchmarks: activePortfolio?.benchmarks ?? [],
+          presentationCurrency: activeBaseCurrency,
+        };
+
+    return createPortfolioHistoryRequestDescriptor({
+      userId: account.id,
+      refreshRevision,
+      payload,
+    });
+  }, [
+    account.id,
+    activeBaseCurrency,
+    activePortfolio?.accountType,
+    activePortfolio?.accounts,
+    activePortfolio?.benchmarks,
+    activePortfolio?.operations,
+    displayedAssets,
+    displayedSales,
+    effectiveRealizedAdjustments,
+    isAllPortfoliosSelected,
+    refreshRevision,
+    selectedPortfolios,
+  ]);
+  useEffect(() => {
+    if (!hasPortfolioHistoryInputs(portfolioHistoryPrefetchDescriptor.payload)) return;
+
+    let cancelled = false;
+    let idleCallbackId: number | null = null;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    const runPrefetch = () => {
+      if (cancelled) return;
+      void getPortfolioHistoryCached(portfolioHistoryPrefetchDescriptor).catch(() => {
+        // Prefetch is opportunistic; the visible chart owns its normal error UI.
+      });
+    };
+    const idleWindow = window as Window & {
+      requestIdleCallback?: (callback: IdleRequestCallback, options?: IdleRequestOptions) => number;
+      cancelIdleCallback?: (handle: number) => void;
+    };
+
+    if (idleWindow.requestIdleCallback) {
+      idleCallbackId = idleWindow.requestIdleCallback(runPrefetch, { timeout: 500 });
+    } else {
+      timeoutId = setTimeout(runPrefetch, 120);
+    }
+
+    return () => {
+      cancelled = true;
+      if (idleCallbackId !== null) idleWindow.cancelIdleCallback?.(idleCallbackId);
+      if (timeoutId !== null) clearTimeout(timeoutId);
+    };
+  }, [portfolioHistoryPrefetchDescriptor]);
   const hasProFeatures = canUseProFeatures(account);
   const getFreePlanAssetLimitError = (
     nextAssetGroups = new Set(assets.map(getPortfolioAssetGroupKey)).size + 1

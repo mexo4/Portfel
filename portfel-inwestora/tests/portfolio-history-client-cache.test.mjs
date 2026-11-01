@@ -138,7 +138,7 @@ test("session cache survives a full page reload and serves the exact user reques
   const storage = createSessionStorage();
   const response = { points: [{ date: "2026-10-31", value: 4_179.68 }] };
   const beforeReload = createPortfolioHistoryRequestCache({
-    ttlMs: 15 * 60 * 1_000,
+    ttlMs: 30 * 60 * 1_000,
     now: () => now,
     storage,
   });
@@ -150,7 +150,7 @@ test("session cache survives a full page reload and serves the exact user reques
   assert.equal(apiCalls, 1);
 
   const afterReload = createPortfolioHistoryRequestCache({
-    ttlMs: 15 * 60 * 1_000,
+    ttlMs: 30 * 60 * 1_000,
     now: () => now,
     storage,
   });
@@ -167,7 +167,7 @@ test("session cache survives a full page reload and serves the exact user reques
   });
   assert.equal(apiCalls, 2);
 
-  now += 15 * 60 * 1_000 + 1;
+  now += 30 * 60 * 1_000 + 1;
   const expiredCache = createPortfolioHistoryRequestCache({ now: () => now, storage });
   await expiredCache.getOrLoad("user-b:portfolio-all:PLN:revision-1", async () => {
     apiCalls += 1;

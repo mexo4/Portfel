@@ -8,7 +8,7 @@ export type PortfolioHistoryRequestDescriptor = {
   payload: PortfolioHistoryRequest;
 };
 
-const HISTORY_REQUEST_CACHE_TTL_MS = 15 * 60 * 1_000;
+const HISTORY_REQUEST_CACHE_TTL_MS = 30 * 60 * 1_000;
 const HISTORY_REQUEST_CACHE_MAX_ENTRIES = 8;
 const SESSION_CACHE_STORAGE_KEY = "mexo.portfolio-history.v1";
 const SESSION_CACHE_MAX_CHARS = 1_500_000;

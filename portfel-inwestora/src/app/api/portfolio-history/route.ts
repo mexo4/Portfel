@@ -233,6 +233,10 @@ export async function POST(request: Request) {
         accounts,
         benchmarks,
         presentationCurrency,
+        // The application renders portfolio-level history only. Keep the
+        // builder's richer series available to other callers, but do not
+        // serialize unused per-asset daily data in this latency-sensitive API.
+        includeAssetSeries: false,
       })
     );
 

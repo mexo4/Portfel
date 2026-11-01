@@ -1,5 +1,8 @@
-import { getMarketCacheEntry, setMarketCachePayload } from "@/lib/server/market-cache";
-import { isReusableHistoryCacheEntry } from "@/lib/server/portfolio-history-cache-policy";
+import { getMarketCacheEntry, setMarketCachePayloadIfNewer } from "@/lib/server/market-cache";
+import {
+  migrateLegacyHistoryRangeCache,
+  resolveHistoryRangeCache,
+} from "@/lib/portfolio-history-range-cache";
 import { fetchFxRatesServer } from "@/lib/server/market-data";
 import { fetchTreasuryBondQuoteSeriesServer } from "@/lib/server/treasury-bonds";
 import { normalizeYahooMoneyUnit } from "@/lib/server/yahoo";
@@ -96,11 +99,7 @@ type AssetSeriesDefinition = {
   kind: AssetKind;
 };
 
-const setCachedPayload = setMarketCachePayload;
-
 const EODHD_API_KEY = process.env.EODHD_API_KEY ?? "";
-const HISTORY_CACHE_TTL_MS = 6 * 60 * 60 * 1_000;
-const FX_HISTORY_CACHE_TTL_MS = 24 * 60 * 60 * 1_000;
 const historyCacheRequestsInFlight = new Map<string, Promise<unknown>>();
 
 const isHistoryDiagnosticsEnabled = () =>
@@ -341,55 +340,68 @@ const getDaysBetween = (startDate: string, endDate: string) => {
   return Math.max(0, Math.floor((end - start) / 86_400_000));
 };
 
-const getCachedOrFetch = async <T,>(
+const getCachedOrFetchHistoryRange = async <TPoint extends { date: string }>(
   key: string,
-  ttlMs: number,
-  fetcher: () => Promise<T>
+  startDate: string,
+  endDate: string,
+  fetcher: (rangeStart: string, rangeEnd: string) => Promise<TPoint[]>,
+  legacyCacheKey?: string,
 ) => {
-  const inFlight = historyCacheRequestsInFlight.get(key);
-  if (inFlight) return inFlight as Promise<T>;
+  const requestKey = `${key}:${endDate}`;
+  const inFlight = historyCacheRequestsInFlight.get(requestKey);
+  if (inFlight) return inFlight as Promise<TPoint[]>;
 
   const request = (async () => {
     const startedAt = performance.now();
-    const cachedEntry = await getMarketCacheEntry(key, ttlMs);
-
-    if (cachedEntry !== null && isReusableHistoryCacheEntry(cachedEntry.payload, cachedEntry.updatedAt)) {
-      const cachedPayload = cachedEntry.payload as T;
-      const isNegativeArrayCache = Array.isArray(cachedPayload) && cachedPayload.length === 0;
-      logHistoryDiagnostic("cache-hit", {
-        key: createHash("sha256").update(key).digest("hex").slice(0, 10),
-        source: key.startsWith("portfolio-history:") ? key.split(":")[1] ?? "history" : "history",
-        empty: isNegativeArrayCache ? 1 : 0,
-        points: Array.isArray(cachedPayload) ? cachedPayload.length : 0,
-        durationMs: Math.round(performance.now() - startedAt),
-      });
-      return cachedPayload;
+    const requestStartedAt = new Date().toISOString();
+    let cachedEntry = await getMarketCacheEntry(key, Number.POSITIVE_INFINITY);
+    let migratedLegacyCache = false;
+    if (!cachedEntry && legacyCacheKey) {
+      const legacyEntry = await getMarketCacheEntry(legacyCacheKey, Number.POSITIVE_INFINITY);
+      const migratedEntry = migrateLegacyHistoryRangeCache<TPoint>(legacyEntry, startDate, endDate);
+      if (migratedEntry) {
+        cachedEntry = migratedEntry;
+        migratedLegacyCache = true;
+      }
     }
-
-    const fetchStartedAt = performance.now();
-    const payload = await fetcher();
-    const fetchMs = performance.now() - fetchStartedAt;
-    const storeStartedAt = performance.now();
-    await setCachedPayload(key, payload);
-    const storeMs = performance.now() - storeStartedAt;
-    logHistoryDiagnostic("cache-miss", {
-      key: createHash("sha256").update(key).digest("hex").slice(0, 10),
-      source: key.startsWith("portfolio-history:") ? key.split(":")[1] ?? "history" : "history",
-      empty: Array.isArray(payload) && payload.length === 0 ? 1 : 0,
-      points: Array.isArray(payload) ? payload.length : 0,
-      fetchMs: Math.round(fetchMs),
-      cacheWriteMs: Math.round(storeMs),
-      totalMs: Math.round(performance.now() - startedAt),
+    let fetchMs = 0;
+    const resolution = await resolveHistoryRangeCache<TPoint>({
+      cached: cachedEntry,
+      startDate,
+      endDate,
+      fetchRange: async (rangeStart, rangeEnd) => {
+        const fetchStartedAt = performance.now();
+        const points = await fetcher(rangeStart, rangeEnd);
+        fetchMs += performance.now() - fetchStartedAt;
+        return points;
+      },
     });
-    return payload;
+    const storeStartedAt = performance.now();
+    if (resolution.cacheStatus !== "hit" || migratedLegacyCache) {
+      await setMarketCachePayloadIfNewer(key, resolution.payload, requestStartedAt);
+    }
+    const sourceParts = key.split(":");
+    logHistoryDiagnostic("range-cache", {
+      source:
+        sourceParts[2] === "v2"
+          ? sourceParts[3] ?? "history"
+          : sourceParts[2] ?? "history",
+      cacheAction: resolution.cacheStatus,
+      migratedLegacyCache: migratedLegacyCache ? 1 : 0,
+      points: resolution.payload.points.length,
+      fetchMs: Math.round(fetchMs),
+      cacheWriteMs: Math.round(performance.now() - storeStartedAt),
+      durationMs: Math.round(performance.now() - startedAt),
+    });
+    return resolution.payload.points.filter((point) => point.date >= startDate && point.date <= endDate);
   })();
 
-  historyCacheRequestsInFlight.set(key, request);
+  historyCacheRequestsInFlight.set(requestKey, request);
   try {
     return await request;
   } finally {
-    if (historyCacheRequestsInFlight.get(key) === request) {
-      historyCacheRequestsInFlight.delete(key);
+    if (historyCacheRequestsInFlight.get(requestKey) === request) {
+      historyCacheRequestsInFlight.delete(requestKey);
     }
   }
 };
@@ -536,17 +548,18 @@ const fetchYahooStockHistory = async (
   fallbackPriceScale = 1
 ) => {
   const yahooSymbol = toYahooStockSymbol(symbol);
-  const period1 = Math.floor(new Date(`${startDate}T00:00:00.000Z`).getTime() / 1_000);
-  const period2 = Math.floor(new Date(`${endDate}T23:59:59.000Z`).getTime() / 1_000);
 
-  return getCachedOrFetch<PricePoint[]>(
-    `portfolio-history:yahoo:${isGpwSymbol(yahooSymbol) ? "gpw-v2:" : ""}${normalizeSymbol(
+  return getCachedOrFetchHistoryRange<PricePoint>(
+    `portfolio-history:v2:yahoo:${isGpwSymbol(yahooSymbol) ? "gpw-v2:" : ""}${normalizeSymbol(
       yahooSymbol
-    )}:${startDate}:${endDate}:${
+    )}:${startDate}:${
       fallbackPriceScale ?? 1
     }`,
-    HISTORY_CACHE_TTL_MS,
-    async () => {
+    startDate,
+    endDate,
+    async (rangeStart, rangeEnd) => {
+      const period1 = Math.floor(new Date(`${rangeStart}T00:00:00.000Z`).getTime() / 1_000);
+      const period2 = Math.floor(new Date(`${rangeEnd}T23:59:59.000Z`).getTime() / 1_000);
       const payload = await safeFetchJson<YahooChartResponse>(
         `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(
           yahooSymbol
@@ -567,7 +580,10 @@ const fetchYahooStockHistory = async (
           close: Number(adjustedCloses[index] ?? closes[index]) * priceScale,
         }))
       );
-    }
+    },
+    `portfolio-history:yahoo:${isGpwSymbol(yahooSymbol) ? "gpw-v2:" : ""}${normalizeSymbol(
+      yahooSymbol
+    )}:${startDate}:${endDate}:${fallbackPriceScale ?? 1}`
   );
 };
 
@@ -588,19 +604,22 @@ const fetchStooqStockHistory = async (
         )
       );
   const start = startDate.replaceAll("-", "");
-  const end = endDate.replaceAll("-", "");
 
   for (const candidate of candidates) {
-    const cacheKey = `portfolio-history:stooq:${candidate}:${start}:${end}`;
-    const points = await getCachedOrFetch<PricePoint[]>(
+    const cacheKey = `portfolio-history:v2:stooq:${candidate}:${start}`;
+    const points = await getCachedOrFetchHistoryRange<PricePoint>(
       cacheKey,
-      HISTORY_CACHE_TTL_MS,
-      async () => {
+      startDate,
+      endDate,
+      async (rangeStart, rangeEnd) => {
+        const rangeStartCompact = rangeStart.replaceAll("-", "");
+        const rangeEndCompact = rangeEnd.replaceAll("-", "");
         const csv = await safeFetchText(
-          `https://stooq.pl/q/d/l/?s=${encodeURIComponent(candidate)}&d1=${start}&d2=${end}&i=d`
+          `https://stooq.pl/q/d/l/?s=${encodeURIComponent(candidate)}&d1=${rangeStartCompact}&d2=${rangeEndCompact}&i=d`
         );
         return csv ? parseStooqHistory(csv) : [];
-      }
+      },
+      `portfolio-history:stooq:${candidate}:${start}:${endDate.replaceAll("-", "")}`
     );
 
     if (points.length > 0) {
@@ -658,12 +677,13 @@ const fetchEodhdHistoryForProviderId = async (
 
   const normalizedProviderId = normalizeSymbol(providerId);
 
-  return getCachedOrFetch<PricePoint[]>(
-    `portfolio-history:eodhd:${normalizedProviderId}:${startDate}:${endDate}:${
+  return getCachedOrFetchHistoryRange<PricePoint>(
+    `portfolio-history:v2:eodhd:${normalizedProviderId}:${startDate}:${
       priceScale ?? 1
     }`,
-    HISTORY_CACHE_TTL_MS,
-    async () => {
+    startDate,
+    endDate,
+    async (rangeStart, rangeEnd) => {
       const payload = await safeFetchJson<
         Array<{
           date?: string;
@@ -675,7 +695,7 @@ const fetchEodhdHistoryForProviderId = async (
           normalizedProviderId
         )}?api_token=${encodeURIComponent(
           EODHD_API_KEY
-        )}&fmt=json&from=${startDate}&to=${endDate}`,
+        )}&fmt=json&from=${rangeStart}&to=${rangeEnd}`,
         25_000
       );
 
@@ -688,7 +708,8 @@ const fetchEodhdHistoryForProviderId = async (
               : item.close) ?? 0) * (priceScale ?? 1),
         }))
       );
-    }
+    },
+    `portfolio-history:eodhd:${normalizedProviderId}:${startDate}:${endDate}:${priceScale ?? 1}`
   );
 };
 
@@ -747,13 +768,13 @@ const fetchCoinGeckoHistory = async (
   startDate: string,
   endDate: string
 ) => {
-  const from = Math.floor(new Date(`${startDate}T00:00:00.000Z`).getTime() / 1_000);
-  const to = Math.floor(new Date(`${endDate}T23:59:59.000Z`).getTime() / 1_000);
-
-  return getCachedOrFetch<PricePoint[]>(
-    `portfolio-history:coingecko:${providerId.toLowerCase()}:${startDate}:${endDate}`,
-    HISTORY_CACHE_TTL_MS,
-    async () => {
+  return getCachedOrFetchHistoryRange<PricePoint>(
+    `portfolio-history:v2:coingecko:${providerId.toLowerCase()}:${startDate}`,
+    startDate,
+    endDate,
+    async (rangeStart, rangeEnd) => {
+      const from = Math.floor(new Date(`${rangeStart}T00:00:00.000Z`).getTime() / 1_000);
+      const to = Math.floor(new Date(`${rangeEnd}T23:59:59.000Z`).getTime() / 1_000);
       const payload = await safeFetchJson<{
         prices?: Array<[number, number]>;
       }>(
@@ -769,7 +790,8 @@ const fetchCoinGeckoHistory = async (
           close: round(close, 8),
         }))
       );
-    }
+    },
+    `portfolio-history:coingecko:${providerId.toLowerCase()}:${startDate}:${endDate}`
   );
 };
 
@@ -1019,23 +1041,29 @@ const fetchHistoricalFxPoints = async (
     return [{ date: startDate, rate: 1 }];
   }
 
-  const cacheKey = `portfolio-history:fx:${code}:${startDate}:${endDate}`;
+  const cacheKey = `portfolio-history:v2:fx:${code}:${startDate}`;
 
-  return getCachedOrFetch<FxPoint[]>(cacheKey, FX_HISTORY_CACHE_TTL_MS, async () => {
-    const chunkPoints = await Promise.all(
-      chunkDateRange(startDate, endDate).map(async (chunk) => {
-        const tableAPoints = await fetchNbpFxChunk("A", code, chunk.startDate, chunk.endDate);
+  return getCachedOrFetchHistoryRange<FxPoint>(
+    cacheKey,
+    startDate,
+    endDate,
+    async (rangeStart, rangeEnd) => {
+      const chunkPoints = await Promise.all(
+        chunkDateRange(rangeStart, rangeEnd).map(async (chunk) => {
+          const tableAPoints = await fetchNbpFxChunk("A", code, chunk.startDate, chunk.endDate);
 
-        if (tableAPoints.length > 0) {
-          return tableAPoints;
-        }
+          if (tableAPoints.length > 0) {
+            return tableAPoints;
+          }
 
-        return fetchNbpFxChunk("B", code, chunk.startDate, chunk.endDate);
-      })
-    );
+          return fetchNbpFxChunk("B", code, chunk.startDate, chunk.endDate);
+        })
+      );
 
-    return dedupeAndSortFxPoints(chunkPoints.flat());
-  });
+      return dedupeAndSortFxPoints(chunkPoints.flat());
+    },
+    `portfolio-history:fx:${code}:${startDate}:${endDate}`
+  );
 };
 
 const buildFxSeries = async (
@@ -1747,6 +1775,7 @@ export const buildPortfolioHistory = async ({
   accounts = [],
   benchmarks = [],
   presentationCurrency = "PLN",
+  includeAssetSeries = true,
 }: {
   assets: PortfolioAsset[];
   sales: PortfolioSale[];
@@ -1755,6 +1784,8 @@ export const buildPortfolioHistory = async ({
   accounts?: PortfolioAccount[];
   benchmarks?: PortfolioBenchmarkDefinition[];
   presentationCurrency?: CurrencyCode;
+  /** Per-instrument daily series are optional; portfolio charts only need total points. */
+  includeAssetSeries?: boolean;
 }): Promise<PortfolioHistoryResponse> => {
   const normalizedPresentationCurrency = toCurrencyCode(presentationCurrency, "PLN");
   const buildStartedAt = performance.now();
@@ -1866,7 +1897,12 @@ export const buildPortfolioHistory = async ({
     addAmountToDateMap(netInvestedEvents, date, amount)
   );
   const adjustmentEvents = buildAdjustmentEvents(realizedAdjustments);
-  const assetSeriesDefinitions = buildAssetSeriesDefinitions({ assets, sales });
+  // Aggregate history discards per-asset lines, and the current chart screens
+  // consume only portfolio-level points. Avoid allocating and filling another
+  // date map per instrument unless an explicit caller asks for these series.
+  const assetSeriesDefinitions = includeAssetSeries
+    ? buildAssetSeriesDefinitions({ assets, sales })
+    : [];
   const assetValueByGroupKey = new Map(
     assetSeriesDefinitions.map((definition) => [
       definition.groupKey,
@@ -1943,12 +1979,14 @@ export const buildPortfolioHistory = async ({
       const nextValue = round((portfolioValueByDate.get(date) ?? 0) + convertedValue);
 
       portfolioValueByDate.set(date, nextValue);
-      assetValueByGroupKey
-        .get(segment.groupKey)
-        ?.set(
-          date,
-          round((assetValueByGroupKey.get(segment.groupKey)?.get(date) ?? 0) + convertedValue)
-        );
+      if (includeAssetSeries) {
+        assetValueByGroupKey
+          .get(segment.groupKey)
+          ?.set(
+            date,
+            round((assetValueByGroupKey.get(segment.groupKey)?.get(date) ?? 0) + convertedValue)
+          );
+      }
 
       if (!hasProviderPrice) {
         usedFallback = true;
@@ -2176,6 +2214,7 @@ export const buildPortfolioHistory = async ({
     days: points.length,
     instruments: instrumentDefinitions.length,
     segments: segments.length,
+    assetSeries: assetSeries.length,
     operations: operations.length,
     accounts: accounts.length,
     warnings: warnings.size,
@@ -2413,6 +2452,7 @@ export const buildAggregatePortfolioHistory = async ({
         operations: scope.operations ?? [],
         accounts: scope.accounts ?? [],
         presentationCurrency: normalizedPresentationCurrency,
+        includeAssetSeries: false,
         // A user-selected benchmark has no single economically correct
         // aggregate start/cash-flow basis. Keep the existing per-portfolio
         // calculation honest rather than producing a synthetic comparison.

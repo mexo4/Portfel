@@ -8,8 +8,21 @@ export type PortfolioHistoryRequestDescriptor = {
   payload: PortfolioHistoryRequest;
 };
 
-const HISTORY_REQUEST_CACHE_TTL_MS = 3 * 60 * 1_000;
+const HISTORY_REQUEST_CACHE_TTL_MS = 15 * 60 * 1_000;
 const HISTORY_REQUEST_CACHE_MAX_ENTRIES = 8;
+const SESSION_CACHE_STORAGE_KEY = "mexo.portfolio-history.v1";
+const SESSION_CACHE_MAX_CHARS = 1_500_000;
+
+type PersistentCacheStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
+
+const getBrowserSessionStorage = (): PersistentCacheStorage | undefined => {
+  if (typeof window === "undefined") return undefined;
+  try {
+    return window.sessionStorage;
+  } catch {
+    return undefined;
+  }
+};
 
 const withoutLiveQuoteFields = <T extends PortfolioHistoryRequest["assets"][number]>(asset: T) => {
   const historyAsset = { ...asset };
@@ -79,12 +92,61 @@ export const createPortfolioHistoryRequestCache = <TResponse>({
   ttlMs = HISTORY_REQUEST_CACHE_TTL_MS,
   maxEntries = HISTORY_REQUEST_CACHE_MAX_ENTRIES,
   now = Date.now,
+  storage,
 }: {
   ttlMs?: number;
   maxEntries?: number;
   now?: () => number;
+  storage?: PersistentCacheStorage | null;
 } = {}) => {
   const entries = new Map<string, { promise: Promise<TResponse>; expiresAt: number | null }>();
+  const getStorage = () => storage === null ? undefined : storage ?? getBrowserSessionStorage();
+
+  const readPersistent = (key: string): { response: TResponse; expiresAt: number } | undefined => {
+    const sessionStorage = getStorage();
+    if (!sessionStorage) return undefined;
+
+    try {
+      const serialized = sessionStorage.getItem(SESSION_CACHE_STORAGE_KEY);
+      if (!serialized) return undefined;
+      const record = JSON.parse(serialized) as {
+        key?: unknown;
+        expiresAt?: unknown;
+        response?: TResponse;
+      };
+      if (
+        typeof record.key !== "string" ||
+        typeof record.expiresAt !== "number" ||
+        record.expiresAt <= now() ||
+        record.key !== key ||
+        record.response === undefined
+      ) {
+        sessionStorage.removeItem(SESSION_CACHE_STORAGE_KEY);
+        return undefined;
+      }
+      return { response: record.response, expiresAt: record.expiresAt };
+    } catch {
+      try {
+        sessionStorage.removeItem(SESSION_CACHE_STORAGE_KEY);
+      } catch {
+        // Storage can be disabled or quota-limited; in-memory caching still works.
+      }
+      return undefined;
+    }
+  };
+
+  const writePersistent = (key: string, response: TResponse, expiresAt: number) => {
+    const sessionStorage = getStorage();
+    if (!sessionStorage) return;
+
+    try {
+      const serialized = JSON.stringify({ key, expiresAt, response });
+      if (serialized.length > SESSION_CACHE_MAX_CHARS) return;
+      sessionStorage.setItem(SESSION_CACHE_STORAGE_KEY, serialized);
+    } catch {
+      // Private browsing and full storage must not turn a successful API read into an error.
+    }
+  };
 
   const prune = () => {
     for (const [key, entry] of entries) {
@@ -107,8 +169,20 @@ export const createPortfolioHistoryRequestCache = <TResponse>({
         return existing.promise;
       }
 
+      let responseExpiresAt: number | null = null;
       const entry: { promise: Promise<TResponse>; expiresAt: number | null } = {
-        promise: Promise.resolve().then(load),
+        promise: Promise.resolve().then(async () => {
+          const persistentResponse = readPersistent(key);
+          if (persistentResponse) {
+            responseExpiresAt = persistentResponse.expiresAt;
+            return persistentResponse.response;
+          }
+
+          const response = await load();
+          responseExpiresAt = now() + ttlMs;
+          writePersistent(key, response, responseExpiresAt);
+          return response;
+        }),
         expiresAt: null,
       };
       entries.set(key, entry);
@@ -116,7 +190,7 @@ export const createPortfolioHistoryRequestCache = <TResponse>({
       void entry.promise.then(
         () => {
           if (entries.get(key) === entry) {
-            entry.expiresAt = now() + ttlMs;
+            entry.expiresAt = responseExpiresAt ?? now() + ttlMs;
             prune();
           }
         },
@@ -144,3 +218,13 @@ export const getPortfolioHistoryCached = (descriptor: PortfolioHistoryRequestDes
     descriptor.key,
     () => fetchPortfolioHistory(descriptor.payload)
   );
+
+export const clearPortfolioHistoryRequestCache = () => {
+  portfolioHistoryRequestCache.clear();
+  const storage = getBrowserSessionStorage();
+  try {
+    storage?.removeItem(SESSION_CACHE_STORAGE_KEY);
+  } catch {
+    // Logout should not be blocked if browser storage is unavailable.
+  }
+};

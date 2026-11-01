@@ -35,6 +35,15 @@ const payload = (patch = {}) => ({
   ...patch,
 });
 
+const createSessionStorage = () => {
+  const values = new Map();
+  return {
+    getItem: (key) => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, value),
+    removeItem: (key) => values.delete(key),
+  };
+};
+
 test("history request identity ignores changing live quotes but includes user, scope, currency, and revision", () => {
   const first = createPortfolioHistoryRequestDescriptor({
     userId: "user-a",
@@ -121,4 +130,59 @@ test("request cache stays bounded under changing portfolio scopes", async () => 
   await cache.getOrLoad("three", async () => 3);
   assert.equal(cache.size, 2);
   assert.equal(await cache.getOrLoad("one", async () => 4), 4);
+});
+
+test("session cache survives a full page reload and serves the exact user request without another API call", async () => {
+  let now = 100;
+  let apiCalls = 0;
+  const storage = createSessionStorage();
+  const response = { points: [{ date: "2026-10-31", value: 4_179.68 }] };
+  const beforeReload = createPortfolioHistoryRequestCache({
+    ttlMs: 15 * 60 * 1_000,
+    now: () => now,
+    storage,
+  });
+
+  assert.deepEqual(await beforeReload.getOrLoad("user-a:portfolio-all:PLN:revision-1", async () => {
+    apiCalls += 1;
+    return response;
+  }), response);
+  assert.equal(apiCalls, 1);
+
+  const afterReload = createPortfolioHistoryRequestCache({
+    ttlMs: 15 * 60 * 1_000,
+    now: () => now,
+    storage,
+  });
+  assert.deepEqual(await afterReload.getOrLoad("user-a:portfolio-all:PLN:revision-1", async () => {
+    apiCalls += 1;
+    return { points: [] };
+  }), response);
+  assert.equal(apiCalls, 1);
+
+  const otherUserCache = createPortfolioHistoryRequestCache({ now: () => now, storage });
+  await otherUserCache.getOrLoad("user-b:portfolio-all:PLN:revision-1", async () => {
+    apiCalls += 1;
+    return { points: ["other user"] };
+  });
+  assert.equal(apiCalls, 2);
+
+  now += 15 * 60 * 1_000 + 1;
+  const expiredCache = createPortfolioHistoryRequestCache({ now: () => now, storage });
+  await expiredCache.getOrLoad("user-b:portfolio-all:PLN:revision-1", async () => {
+    apiCalls += 1;
+    return { points: ["fresh"] };
+  });
+  assert.equal(apiCalls, 3);
+});
+
+test("session storage failures never prevent a successful history request", async () => {
+  const storage = {
+    getItem() { throw new Error("storage disabled"); },
+    setItem() { throw new Error("storage full"); },
+    removeItem() { throw new Error("storage disabled"); },
+  };
+  const cache = createPortfolioHistoryRequestCache({ storage });
+
+  assert.deepEqual(await cache.getOrLoad("history", async () => ({ points: [1] })), { points: [1] });
 });

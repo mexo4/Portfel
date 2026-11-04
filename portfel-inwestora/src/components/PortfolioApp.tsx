@@ -1423,9 +1423,11 @@ export default function PortfolioApp({
     };
 
     if (idleWindow.requestIdleCallback) {
-      idleCallbackId = idleWindow.requestIdleCallback(runPrefetch, { timeout: 500 });
+      // Warm the shared chart-history cache shortly after the workspace paints,
+      // so opening Wykresy cannot beat a long idle-only prefetch on busy devices.
+      idleCallbackId = idleWindow.requestIdleCallback(runPrefetch, { timeout: 100 });
     } else {
-      timeoutId = setTimeout(runPrefetch, 120);
+      timeoutId = setTimeout(runPrefetch, 80);
     }
 
     return () => {

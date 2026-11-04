@@ -3,6 +3,8 @@ import {
   migrateLegacyHistoryRangeCache,
   resolveHistoryRangeCache,
 } from "@/lib/portfolio-history-range-cache";
+import { fetchPreferredHistoryWithHedge } from "@/lib/history-provider-fallback";
+import type { PortfolioHistoryProgressUpdate } from "@/lib/portfolio-history-progress";
 import { fetchFxRatesServer } from "@/lib/server/market-data";
 import { fetchTreasuryBondQuoteSeriesServer } from "@/lib/server/treasury-bonds";
 import { normalizeYahooMoneyUnit } from "@/lib/server/yahoo";
@@ -605,9 +607,9 @@ const fetchStooqStockHistory = async (
       );
   const start = startDate.replaceAll("-", "");
 
-  for (const candidate of candidates) {
+  const fetchCandidate = (candidate: string) => {
     const cacheKey = `portfolio-history:v2:stooq:${candidate}:${start}`;
-    const points = await getCachedOrFetchHistoryRange<PricePoint>(
+    return getCachedOrFetchHistoryRange<PricePoint>(
       cacheKey,
       startDate,
       endDate,
@@ -621,13 +623,22 @@ const fetchStooqStockHistory = async (
       },
       `portfolio-history:stooq:${candidate}:${start}:${endDate.replaceAll("-", "")}`
     );
+  };
 
-    if (points.length > 0) {
-      return points;
-    }
+  if (candidates.length <= 1) {
+    return fetchCandidate(candidates[0] ?? "");
   }
 
-  return [];
+  return fetchPreferredHistoryWithHedge(
+    () => fetchCandidate(candidates[0]!),
+    async () => {
+      for (const candidate of candidates.slice(1)) {
+        const points = await fetchCandidate(candidate);
+        if (points.length > 0) return points;
+      }
+      return [];
+    },
+  );
 };
 
 const fetchStockHistory = async (
@@ -636,18 +647,15 @@ const fetchStockHistory = async (
   endDate: string,
   yahooFallbackPriceScale?: number
 ) => {
-  const yahooPoints = await fetchYahooStockHistory(
-    symbol,
-    startDate,
-    endDate,
-    yahooFallbackPriceScale
+  return fetchPreferredHistoryWithHedge(
+    () => fetchYahooStockHistory(
+      symbol,
+      startDate,
+      endDate,
+      yahooFallbackPriceScale
+    ),
+    () => fetchStooqStockHistory(symbol, startDate, endDate),
   );
-
-  if (yahooPoints.length > 0) {
-    return yahooPoints;
-  }
-
-  return fetchStooqStockHistory(symbol, startDate, endDate);
 };
 
 const getEodhdHistoryProviderIdCandidates = (providerId: string) => {
@@ -719,20 +727,24 @@ const fetchEodhdHistory = async (
   endDate: string,
   priceScale?: number
 ) => {
-  for (const candidateProviderId of getEodhdHistoryProviderIdCandidates(providerId)) {
-    const points = await fetchEodhdHistoryForProviderId(
-      candidateProviderId,
-      startDate,
-      endDate,
-      priceScale
-    );
+  const candidates = getEodhdHistoryProviderIdCandidates(providerId);
+  const fetchCandidate = (candidate: string) =>
+    fetchEodhdHistoryForProviderId(candidate, startDate, endDate, priceScale);
 
-    if (points.length > 0) {
-      return points;
-    }
+  if (candidates.length <= 1) {
+    return fetchCandidate(candidates[0] ?? providerId);
   }
 
-  return [];
+  return fetchPreferredHistoryWithHedge(
+    () => fetchCandidate(candidates[0]!),
+    async () => {
+      for (const candidate of candidates.slice(1)) {
+        const points = await fetchCandidate(candidate);
+        if (points.length > 0) return points;
+      }
+      return [];
+    },
+  );
 };
 
 const COINGECKO_SYMBOL_PROVIDER_IDS: Record<string, string> = {
@@ -883,31 +895,25 @@ const fetchInstrumentHistory = async ({
     }
 
     if (resolvedKind === "stock") {
-      if (resolvedProvider === "eodhd" && resolvedProviderId) {
-        const eodhdPoints = await fetchEodhdHistory(
-          resolvedProviderId,
-          startDate,
-          endDate,
-          resolvedPriceScale
-        );
-
-        if (eodhdPoints.length > 0) {
-          return { points: eodhdPoints };
+      const symbolHistory = async () => {
+        for (const stockHistorySymbol of historyLookupSymbols) {
+          const points = await fetchStockHistory(
+            stockHistorySymbol,
+            startDate,
+            endDate,
+            resolvedPriceScale
+          );
+          if (points.length > 0) return points;
         }
-      }
-
-      for (const stockHistorySymbol of historyLookupSymbols) {
-        const points = await fetchStockHistory(
-          stockHistorySymbol,
-          startDate,
-          endDate,
-          resolvedPriceScale
-        );
-
-        if (points.length > 0) {
-          return { points };
-        }
-      }
+        return [];
+      };
+      const points = resolvedProvider === "eodhd" && resolvedProviderId
+        ? await fetchPreferredHistoryWithHedge(
+            () => fetchEodhdHistory(resolvedProviderId, startDate, endDate, resolvedPriceScale),
+            symbolHistory,
+          )
+        : await symbolHistory();
+      if (points.length > 0) return { points };
 
       return {
         points: [],
@@ -916,26 +922,25 @@ const fetchInstrumentHistory = async ({
     }
 
     if (resolvedKind === "etf") {
-      const eodhdPoints = resolvedProvider === "eodhd" && resolvedProviderId
-        ? await fetchEodhdHistory(resolvedProviderId, startDate, endDate, resolvedPriceScale)
-        : [];
-
-      if (eodhdPoints.length > 0) {
-        return { points: eodhdPoints };
-      }
-
-      for (const etfHistorySymbol of lookupSymbols) {
-        const points = await fetchStockHistory(
-          etfHistorySymbol,
-          startDate,
-          endDate,
-          resolvedPriceScale
-        );
-
-        if (points.length > 0) {
-          return { points };
+      const symbolHistory = async () => {
+        for (const etfHistorySymbol of lookupSymbols) {
+          const points = await fetchStockHistory(
+            etfHistorySymbol,
+            startDate,
+            endDate,
+            resolvedPriceScale
+          );
+          if (points.length > 0) return points;
         }
-      }
+        return [];
+      };
+      const points = resolvedProvider === "eodhd" && resolvedProviderId
+        ? await fetchPreferredHistoryWithHedge(
+            () => fetchEodhdHistory(resolvedProviderId, startDate, endDate, resolvedPriceScale),
+            symbolHistory,
+          )
+        : await symbolHistory();
+      if (points.length > 0) return { points };
 
       return {
         points: [],
@@ -1776,6 +1781,7 @@ export const buildPortfolioHistory = async ({
   benchmarks = [],
   presentationCurrency = "PLN",
   includeAssetSeries = true,
+  onProgress,
 }: {
   assets: PortfolioAsset[];
   sales: PortfolioSale[];
@@ -1786,6 +1792,7 @@ export const buildPortfolioHistory = async ({
   presentationCurrency?: CurrencyCode;
   /** Per-instrument daily series are optional; portfolio charts only need total points. */
   includeAssetSeries?: boolean;
+  onProgress?: (progress: PortfolioHistoryProgressUpdate) => void;
 }): Promise<PortfolioHistoryResponse> => {
   const normalizedPresentationCurrency = toCurrencyCode(presentationCurrency, "PLN");
   const buildStartedAt = performance.now();
@@ -1798,6 +1805,7 @@ export const buildPortfolioHistory = async ({
   });
 
   if (!startDate) {
+    onProgress?.({ completed: 1, total: 1, phase: "Brak historii do pobrania" });
     return {
       points: [],
       warnings: [],
@@ -1820,6 +1828,33 @@ export const buildPortfolioHistory = async ({
   const warnings = new Set<string>();
   const twrIssues = new Set<string>();
 
+  const instrumentDefinitions = Array.from(
+    new Map(
+      [
+        ...buildInstrumentDefinitions(segments),
+        ...buildBenchmarkInstrumentDefinitions({
+          benchmarks,
+          startDate,
+        }),
+      ].map((definition) => [definition.historyKey, definition] as const)
+    ).values()
+  );
+  let completedHistoryTasks = 0;
+  const totalHistoryTasks = instrumentDefinitions.length + 2;
+  const reportHistoryTask = (phase: string) => {
+    completedHistoryTasks = Math.min(totalHistoryTasks, completedHistoryTasks + 1);
+    onProgress?.({
+      completed: completedHistoryTasks,
+      total: totalHistoryTasks,
+      phase,
+    });
+  };
+  onProgress?.({
+    completed: 0,
+    total: totalHistoryTasks,
+    phase: "Przygotowuję historię portfela",
+  });
+
   const fxStartedAt = performance.now();
   const requiredFxCodes = getNeededFxCodes(assets, sales, benchmarks, operations);
   // Historical FX and instrument quotes are independent remote reads. Start the
@@ -1835,23 +1870,14 @@ export const buildPortfolioHistory = async ({
       currencies: requiredFxCodes.length,
       durationMs: Math.round(performance.now() - fxStartedAt),
     });
+    reportHistoryTask("Historia kursów walut gotowa");
     return fxSeries;
   });
-  const instrumentDefinitions = Array.from(
-    new Map(
-      [
-        ...buildInstrumentDefinitions(segments),
-        ...buildBenchmarkInstrumentDefinitions({
-          benchmarks,
-          startDate,
-        }),
-      ].map((definition) => [definition.historyKey, definition] as const)
-    ).values()
-  );
   const quotesStartedAt = performance.now();
   const instrumentHistoryEntriesPromise = Promise.all(
-    instrumentDefinitions.map(async (definition) => {
+    instrumentDefinitions.map(async (definition, index) => {
       const history = await fetchInstrumentHistory(definition, startDate, today);
+      reportHistoryTask(`Notowania ${index + 1}/${instrumentDefinitions.length} gotowe`);
       return [definition.historyKey, history] as const;
     })
   ).then((entries) => {
@@ -2222,6 +2248,7 @@ export const buildPortfolioHistory = async ({
     twrStatus: twrStatus ?? "unavailable",
   });
 
+  reportHistoryTask("Przeliczanie portfela zakończone");
   return {
     points,
     assetSeries,
@@ -2406,10 +2433,12 @@ export const buildAggregatePortfolioHistory = async ({
   portfolioScopes,
   benchmarks = [],
   presentationCurrency = "PLN",
+  onProgress,
 }: {
   portfolioScopes: PortfolioHistoryScope[];
   benchmarks?: PortfolioBenchmarkDefinition[];
   presentationCurrency?: CurrencyCode;
+  onProgress?: (progress: PortfolioHistoryProgressUpdate) => void;
 }): Promise<PortfolioHistoryResponse> => {
   const aggregateStartedAt = performance.now();
   const normalizedPresentationCurrency = toCurrencyCode(presentationCurrency, "PLN");
@@ -2443,6 +2472,7 @@ export const buildAggregatePortfolioHistory = async ({
     };
   }
 
+  const scopedProgress = new Map<string, PortfolioHistoryProgressUpdate>();
   const histories = await Promise.all(
     uniqueScopes.map((scope) =>
       buildPortfolioHistory({
@@ -2457,6 +2487,29 @@ export const buildAggregatePortfolioHistory = async ({
         // aggregate start/cash-flow basis. Keep the existing per-portfolio
         // calculation honest rather than producing a synthetic comparison.
         benchmarks: [],
+        onProgress: (progress) => {
+          scopedProgress.set(scope.portfolioId, progress);
+          if (scopedProgress.size !== uniqueScopes.length) {
+            onProgress?.({
+              completed: 0,
+              total: uniqueScopes.length,
+              phase: `Przygotowuję historię: ${scopedProgress.size}/${uniqueScopes.length} portfeli`,
+            });
+            return;
+          }
+
+          const progressValues = Array.from(scopedProgress.values());
+          const total = progressValues.reduce((sum, item) => sum + item.total, 0);
+          const completed = progressValues.reduce((sum, item) => sum + item.completed, 0);
+          const slowest = [...progressValues].sort((left, right) =>
+            left.completed / Math.max(1, left.total) - right.completed / Math.max(1, right.total)
+          )[0];
+          onProgress?.({
+            completed,
+            total: total + 1,
+            phase: slowest?.phase ?? "Pobieram historię wybranych portfeli",
+          });
+        },
       })
     )
   );
@@ -2494,6 +2547,14 @@ export const buildAggregatePortfolioHistory = async ({
   if (benchmarks.length > 0) {
     warnings.add("Benchmarki są dostępne po wyborze konkretnego portfela; widok łączny nie tworzy syntetycznej serii.");
   }
+
+  const finalProgress = Array.from(scopedProgress.values());
+  const scopedTaskTotal = finalProgress.reduce((sum, item) => sum + item.total, 0);
+  onProgress?.({
+    completed: scopedTaskTotal + 1,
+    total: scopedTaskTotal + 1,
+    phase: "Wykres gotowy",
+  });
 
   return {
     points,

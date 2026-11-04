@@ -1075,6 +1075,7 @@ export const fetchPortfolioHistory = async ({
   benchmarks,
   portfolioScopes,
   presentationCurrency,
+  progressId,
   signal,
 }: {
   assets: PortfolioAsset[];
@@ -1086,11 +1087,12 @@ export const fetchPortfolioHistory = async ({
   benchmarks?: PortfolioBenchmarkDefinition[];
   portfolioScopes?: PortfolioHistoryScope[];
   presentationCurrency?: CurrencyCode;
+  progressId?: string;
   signal?: AbortSignal;
 }) => {
   const body = portfolioScopes !== undefined
-    ? { portfolioScopeIds: portfolioScopes.map(({ portfolioId }) => portfolioId), benchmarks, presentationCurrency }
-    : { assets, sales, realizedAdjustments, operations, accounts, accountType, benchmarks, presentationCurrency };
+    ? { portfolioScopeIds: portfolioScopes.map(({ portfolioId }) => portfolioId), benchmarks, presentationCurrency, progressId }
+    : { assets, sales, realizedAdjustments, operations, accounts, accountType, benchmarks, presentationCurrency, progressId };
   return requestJson<PortfolioHistoryResponse>("/api/portfolio-history", {
     method: "POST",
     signal,

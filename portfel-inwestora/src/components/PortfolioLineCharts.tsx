@@ -47,6 +47,7 @@ import {
   hasPortfolioHistoryInputs,
   type PortfolioHistoryRequest,
 } from "@/lib/portfolio-history-client-cache";
+import type { PortfolioHistoryProgress } from "@/lib/portfolio-history-progress";
 import {
   createPortfolioBenchmarkDefinition,
   hasExactCoreBenchmarkMatch,
@@ -883,6 +884,10 @@ export default function PortfolioLineCharts({
   const [warnings, setWarnings] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [historyProgressState, setHistoryProgressState] = useState<{
+    signature: string;
+    progress: PortfolioHistoryProgress | null;
+  }>({ signature: "", progress: null });
   const chartFrameRef = useRef<HTMLDivElement | null>(null);
   const modalChartFrameRef = useRef<HTMLDivElement | null>(null);
   const dragStateRef = useRef<ChartDragState | null>(null);
@@ -1167,6 +1172,8 @@ export default function PortfolioLineCharts({
             ...historyRequest,
             presentationCurrency: historyRequest.presentationCurrency ?? baseCurrency,
           },
+        }, (progress) => {
+          if (!isCancelled) setHistoryProgressState({ signature: historyRequestSignature, progress });
         });
 
         if (isCancelled) {
@@ -1203,6 +1210,9 @@ export default function PortfolioLineCharts({
 
   const isHistoryPending =
     isLoading || serverHistorySignature !== historyRequestSignature;
+  const historyProgress = historyProgressState.signature === historyRequestSignature
+    ? historyProgressState.progress
+    : null;
   const effectiveServerHistory =
     serverHistorySignature === historyRequestSignature ? serverHistory : EMPTY_HISTORY;
   const historyPoints = useMemo(
@@ -3258,6 +3268,35 @@ export default function PortfolioLineCharts({
         </div>
       )}
       </section>
+
+      {isHistoryPending && typeof document !== "undefined"
+        ? createPortal(
+            <div className="portfolio-history-progress" role="status" aria-live="polite">
+              <div className="portfolio-history-progress-heading">
+                <span className="portfolio-history-progress-spinner" aria-hidden="true" />
+                <div>
+                  <strong>Ładowanie wykresu</strong>
+                  <p>{historyProgress?.phase ?? "Przygotowuję pobieranie historii…"}</p>
+                </div>
+                <span className="portfolio-history-progress-percent">
+                  {historyProgress?.percentage ?? 0}%
+                </span>
+              </div>
+              <progress
+                className="portfolio-history-progress-bar"
+                max={100}
+                value={historyProgress?.percentage ?? 0}
+                aria-label="Postęp przygotowania historii wykresu"
+              />
+              <span className="portfolio-history-progress-detail">
+                {historyProgress
+                  ? `${historyProgress.completed} z ${historyProgress.total} etapów`
+                  : "Pobieram dane rynkowe i kursy walut"}
+              </span>
+            </div>,
+            document.body,
+          )
+        : null}
 
       {isChartModalOpen && hasSelectedChartData && typeof document !== "undefined"
         ? createPortal(

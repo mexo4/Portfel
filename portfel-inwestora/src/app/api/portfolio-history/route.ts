@@ -20,6 +20,12 @@ import type {
   PortfolioState,
   PortfolioHistoryResponse,
 } from "@/types/portfolio";
+import {
+  failPortfolioHistoryProgress,
+  finishPortfolioHistoryProgress,
+  registerPortfolioHistoryProgress,
+  reportPortfolioHistoryProgress,
+} from "@/lib/server/portfolio-history-progress";
 
 export const runtime = "nodejs";
 
@@ -103,6 +109,8 @@ const mergeRealizedAdjustments = (
 
 export async function POST(request: Request) {
   const requestStartedAt = performance.now();
+  let progressId: string | undefined;
+  let progressBuildKey: string | undefined;
   const authStartedAt = requestStartedAt;
   // Historical series still need quote snapshots because they carry verified
   // listing metadata (provider, venue and quote currency). Issuer-country
@@ -129,7 +137,9 @@ export async function POST(request: Request) {
       portfolioScopes?: PortfolioHistoryScope[];
       portfolioScopeIds?: string[];
       presentationCurrency?: string;
+      progressId?: string;
     };
+    progressId = typeof payload.progressId === "string" ? payload.progressId : undefined;
     const presentationCurrency = toCurrencyCode(payload.presentationCurrency, "PLN");
     const benchmarks = Array.isArray(payload.benchmarks) ? payload.benchmarks : [];
     const rawScopes = Array.isArray(payload.portfolioScopes) ? payload.portfolioScopes : [];
@@ -181,10 +191,25 @@ export async function POST(request: Request) {
         presentationCurrency,
         historyDate: currentHistoryDate(),
       });
+      progressBuildKey = historyKey;
+      const progressEnabled = registerPortfolioHistoryProgress(
+        progressId,
+        accountData.user.id,
+        historyKey,
+        historyBuildsInFlight.has(historyKey),
+      );
       const { response: history, cacheStatus } = await getOrBuildHistoryResponse(
         historyKey,
-        () => buildAggregatePortfolioHistory({ portfolioScopes, benchmarks, presentationCurrency })
+        () => buildAggregatePortfolioHistory({
+          portfolioScopes,
+          benchmarks,
+          presentationCurrency,
+          onProgress: progressEnabled
+            ? (progress) => reportPortfolioHistoryProgress(historyKey, accountData.user.id, progress)
+            : undefined,
+        })
       );
+      if (progressEnabled) finishPortfolioHistoryProgress(historyKey, accountData.user.id);
       return respondWithTiming(
         history,
         200,
@@ -223,6 +248,13 @@ export async function POST(request: Request) {
       presentationCurrency,
       historyDate: currentHistoryDate(),
     });
+    progressBuildKey = historyKey;
+    const progressEnabled = registerPortfolioHistoryProgress(
+      progressId,
+      accountData.user.id,
+      historyKey,
+      historyBuildsInFlight.has(historyKey),
+    );
     const { response: history, cacheStatus } = await getOrBuildHistoryResponse(
       historyKey,
       () => buildPortfolioHistory({
@@ -237,8 +269,12 @@ export async function POST(request: Request) {
         // builder's richer series available to other callers, but do not
         // serialize unused per-asset daily data in this latency-sensitive API.
         includeAssetSeries: false,
+        onProgress: progressEnabled
+          ? (progress) => reportPortfolioHistoryProgress(historyKey, accountData.user.id, progress)
+          : undefined,
       })
     );
+    if (progressEnabled) finishPortfolioHistoryProgress(historyKey, accountData.user.id);
 
     return respondWithTiming(
       history,
@@ -250,6 +286,7 @@ export async function POST(request: Request) {
       cacheStatus
     );
   } catch (error) {
+    if (progressBuildKey && progressId) failPortfolioHistoryProgress(progressBuildKey, accountData.user.id);
     const message =
       error instanceof Error
         ? error.message

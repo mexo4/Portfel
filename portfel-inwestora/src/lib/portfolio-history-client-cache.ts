@@ -1,4 +1,5 @@
 import { fetchPortfolioHistory } from "@/lib/api";
+import type { PortfolioHistoryProgress } from "@/lib/portfolio-history-progress";
 import type { PortfolioHistoryResponse } from "@/types/portfolio";
 
 export type PortfolioHistoryRequest = Omit<Parameters<typeof fetchPortfolioHistory>[0], "signal">;
@@ -12,6 +13,12 @@ const HISTORY_REQUEST_CACHE_TTL_MS = 30 * 60 * 1_000;
 const HISTORY_REQUEST_CACHE_MAX_ENTRIES = 8;
 const SESSION_CACHE_STORAGE_KEY = "mexo.portfolio-history.v1";
 const SESSION_CACHE_MAX_CHARS = 1_500_000;
+const historyProgressByKey = new Map<string, PortfolioHistoryProgress>();
+const historyProgressListeners = new Map<
+  string,
+  Set<(progress: PortfolioHistoryProgress | null) => void>
+>();
+const historyProgressAbortControllers = new Set<AbortController>();
 
 type PersistentCacheStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 
@@ -212,15 +219,132 @@ export const createPortfolioHistoryRequestCache = <TResponse>({
 
 const portfolioHistoryRequestCache = createPortfolioHistoryRequestCache<PortfolioHistoryResponse>();
 
+const publishHistoryProgress = (
+  key: string,
+  progress: PortfolioHistoryProgress | null,
+) => {
+  if (progress) {
+    historyProgressByKey.delete(key);
+    historyProgressByKey.set(key, progress);
+    while (historyProgressByKey.size > HISTORY_REQUEST_CACHE_MAX_ENTRIES) {
+      const oldestKey = historyProgressByKey.keys().next().value;
+      if (oldestKey === undefined) break;
+      historyProgressByKey.delete(oldestKey);
+    }
+  } else {
+    historyProgressByKey.delete(key);
+  }
+  historyProgressListeners.get(key)?.forEach((listener) => listener(progress));
+};
+
+const subscribeToHistoryProgress = (
+  key: string,
+  listener?: (progress: PortfolioHistoryProgress | null) => void,
+) => {
+  if (!listener) return () => undefined;
+  const listeners = historyProgressListeners.get(key) ?? new Set();
+  listeners.add(listener);
+  historyProgressListeners.set(key, listeners);
+  const current = historyProgressByKey.get(key);
+  if (current) listener(current);
+  return () => {
+    listeners.delete(listener);
+    if (listeners.size === 0) historyProgressListeners.delete(key);
+  };
+};
+
+const createProgressId = () => {
+  if (typeof window !== "undefined" && typeof window.crypto?.randomUUID === "function") {
+    return window.crypto.randomUUID();
+  }
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
+};
+
+const startHistoryProgressStream = (key: string, progressId: string) => {
+  const controller = new AbortController();
+  historyProgressAbortControllers.add(controller);
+  publishHistoryProgress(key, {
+    completed: 0,
+    total: 1,
+    percentage: 0,
+    phase: "Uruchamiam pobieranie historii",
+    done: false,
+  });
+
+  void (async () => {
+    try {
+      const response = await fetch(
+        `/api/portfolio-history/progress?id=${encodeURIComponent(progressId)}`,
+        { cache: "no-store", credentials: "same-origin", signal: controller.signal },
+      );
+      if (!response.ok || !response.body) return;
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      while (!controller.signal.aborted) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const frames = buffer.split("\n\n");
+        buffer = frames.pop() ?? "";
+        for (const frame of frames) {
+          const data = frame.split("\n")
+            .find((line) => line.startsWith("data:"))
+            ?.slice(5)
+            .trim();
+          if (!data) continue;
+          try {
+            publishHistoryProgress(key, JSON.parse(data) as PortfolioHistoryProgress);
+          } catch {
+            // Ignore malformed progress events; the history response remains authoritative.
+          }
+        }
+      }
+    } catch {
+      // Progress is auxiliary; do not fail or delay the actual chart request.
+    }
+  })().finally(() => historyProgressAbortControllers.delete(controller));
+
+  return controller;
+};
+
 /** Used both for background prefetch and for the visible chart request. */
-export const getPortfolioHistoryCached = (descriptor: PortfolioHistoryRequestDescriptor) =>
-  portfolioHistoryRequestCache.getOrLoad(
-    descriptor.key,
-    () => fetchPortfolioHistory(descriptor.payload)
-  );
+export const getPortfolioHistoryCached = (
+  descriptor: PortfolioHistoryRequestDescriptor,
+  onProgress?: (progress: PortfolioHistoryProgress | null) => void,
+) => {
+  const unsubscribe = subscribeToHistoryProgress(descriptor.key, onProgress);
+  const response = portfolioHistoryRequestCache.getOrLoad(descriptor.key, async () => {
+    const progressId = createProgressId();
+    const progressController = startHistoryProgressStream(descriptor.key, progressId);
+    try {
+      const history = await fetchPortfolioHistory({ ...descriptor.payload, progressId });
+      publishHistoryProgress(descriptor.key, {
+        completed: 1,
+        total: 1,
+        percentage: 100,
+        phase: "Wykres gotowy",
+        done: true,
+      });
+      return history;
+    } catch (error) {
+      publishHistoryProgress(descriptor.key, null);
+      throw error;
+    } finally {
+      progressController.abort();
+      historyProgressAbortControllers.delete(progressController);
+    }
+  });
+  return response.finally(unsubscribe);
+};
 
 export const clearPortfolioHistoryRequestCache = () => {
   portfolioHistoryRequestCache.clear();
+  historyProgressAbortControllers.forEach((controller) => controller.abort());
+  historyProgressAbortControllers.clear();
+  historyProgressByKey.clear();
+  historyProgressListeners.clear();
   const storage = getBrowserSessionStorage();
   try {
     storage?.removeItem(SESSION_CACHE_STORAGE_KEY);

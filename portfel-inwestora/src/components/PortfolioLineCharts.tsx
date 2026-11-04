@@ -29,7 +29,10 @@ import { acquireBodyScrollLock } from "@/lib/client/body-scroll-lock";
 import TruncatedText from "@/components/TruncatedText";
 import { getUserFacingHistoryWarnings } from "@/lib/history-warning-visibility";
 import {
+  excludeWeekendZeroPoints,
   filterChartPointsByRange,
+  getPaddedChartNumberDomain,
+  getPortfolioValueRangeSummary,
   getChartRangeViewport,
   getFullChartViewport,
   getSupportedChartRangePresets,
@@ -753,27 +756,6 @@ const calculateRelativeReturnPercent = (
   return round(((1 + currentNumber / 100) / baselineFactor - 1) * 100, 2);
 };
 
-const getPaddedNumberDomain = (values: Array<number | null | undefined>) => {
-  const numericValues = values.filter(
-    (value): value is number => typeof value === "number" && Number.isFinite(value)
-  );
-
-  if (numericValues.length === 0) {
-    return undefined;
-  }
-
-  const minValue = Math.min(...numericValues);
-  const maxValue = Math.max(...numericValues);
-  const range = maxValue - minValue;
-  const maxAbsValue = Math.max(Math.abs(minValue), Math.abs(maxValue), 1);
-  const padding =
-    range > 0 ? Math.max(range * 0.14, maxAbsValue * 0.003) : Math.max(maxAbsValue * 0.02, 1);
-  const lowerBound = minValue >= 0 ? Math.max(0, minValue - padding) : minValue - padding;
-  const upperBound = maxValue + padding;
-
-  return [round(lowerBound, 2), round(upperBound, 2)] satisfies [number, number];
-};
-
 function ChartTooltip({
   active,
   isFullscreen = false,
@@ -1454,7 +1436,7 @@ export default function PortfolioLineCharts({
         lastPoint.netInvestedPln > 0
           ? round((lastPoint.profitLossPln / lastPoint.netInvestedPln) * 100, 2)
           : 0;
-      const yAxisDomain = getPaddedNumberDomain(
+      const yAxisDomain = getPaddedChartNumberDomain(
         visiblePoints.flatMap((point) => [point.portfolioValuePln, point.netInvestedPln])
       );
 
@@ -2101,17 +2083,94 @@ export default function PortfolioLineCharts({
     return chartModel.data.slice(startIndex, endIndex + 1);
   }, [chartModel.data, effectiveChartViewport]);
 
+  const visiblePortfolioValuePoints = useMemo(() =>
+    renderedChartData.flatMap((point) => {
+      const portfolioValuePln = getFiniteNumber(point.portfolioValuePln);
+      const netInvestedPln = getFiniteNumber(point.netInvestedPln);
+      const profitLossPln = getFiniteNumber(point.profitLossPln);
+      if (
+        typeof point.date !== "string" ||
+        portfolioValuePln === null ||
+        netInvestedPln === null ||
+        profitLossPln === null
+      ) return [];
+
+      return [{
+        date: point.date,
+        portfolioValuePln,
+        netInvestedPln,
+        profitLossPln,
+        timeWeightedReturnPercent: getFiniteNumber(point.timeWeightedReturnPercent),
+      }];
+    }),
+    [renderedChartData]
+  );
+
+  const visibleChartSummary = useMemo(() => {
+    if (mode !== "value") return chartModel;
+    const rangeSummary = getPortfolioValueRangeSummary(visiblePortfolioValuePoints);
+    if (!rangeSummary) return chartModel;
+
+    return {
+      ...chartModel,
+      deltaValue: rangeSummary.valueChangePln === null
+        ? "—"
+        : formatSignedCurrency(rangeSummary.valueChangePln, baseCurrency),
+      deltaTone: getToneClass(rangeSummary.valueChangePln ?? 0),
+      stats: [
+        {
+          label: "Wynik w zakresie",
+          value: rangeSummary.investmentResultPln === null
+            ? "—"
+            : formatSignedCurrency(rangeSummary.investmentResultPln, baseCurrency),
+          tone: getToneClass(rangeSummary.investmentResultPln ?? 0),
+        },
+        {
+          label: "Zwrot w zakresie · TWR",
+          value: rangeSummary.timeWeightedReturnPercent === null
+            ? "—"
+            : formatSignedPercent(rangeSummary.timeWeightedReturnPercent),
+          tone: getToneClass(rangeSummary.timeWeightedReturnPercent ?? 0),
+        },
+        {
+          label: "Zmiana kapitału netto",
+          value: rangeSummary.netInvestedChangePln === null
+            ? "—"
+            : formatSignedCurrency(rangeSummary.netInvestedChangePln, baseCurrency),
+          tone: getToneClass(rangeSummary.netInvestedChangePln ?? 0),
+        },
+      ],
+    } satisfies ChartModel;
+  }, [baseCurrency, chartModel, mode, visiblePortfolioValuePoints]);
+  const renderedChartYAxisDomain = useMemo(
+    () => mode === "value"
+      ? getPaddedChartNumberDomain(
+          renderedChartData.flatMap((point) => [
+            getFiniteNumber(point.portfolioValuePln),
+            getFiniteNumber(point.netInvestedPln),
+          ])
+        )
+      : chartModel.yAxisDomain,
+    [chartModel.yAxisDomain, mode, renderedChartData]
+  );
+
   // This panel is deliberately independent from the selected main-chart mode.
   // It shares the user's chosen time range, while its values are the existing
   // P/L deltas, so deposits and withdrawals cannot be painted as daily gain.
   const renderedDailyInvestmentResultPoints = useMemo(
-    () => filterChartPointsByRange(dailyInvestmentResultPoints, rangePreset),
+    () => filterChartPointsByRange(
+      excludeWeekendZeroPoints(
+        dailyInvestmentResultPoints,
+        (point) => Math.abs(point.investmentResult) < 0.005,
+      ),
+      rangePreset,
+    ),
     [dailyInvestmentResultPoints, rangePreset]
   );
   const hasDailyInvestmentResultData = renderedDailyInvestmentResultPoints.length > 0;
   const dailyInvestmentResultDomain = useMemo(
     () =>
-      getPaddedNumberDomain(
+      getPaddedChartNumberDomain(
         renderedDailyInvestmentResultPoints.map((point) => point.investmentResult)
       ),
     [renderedDailyInvestmentResultPoints]
@@ -2740,14 +2799,14 @@ export default function PortfolioLineCharts({
       }
     >
       <article className="line-visual-hero">
-        <span className="line-visual-hero-label">{chartModel.summaryLabel}</span>
-        <strong className="line-visual-hero-value">{chartModel.summaryValue}</strong>
-        <span className={`line-visual-hero-delta ${chartModel.deltaTone}`}>
-          {chartModel.deltaLabel}: {chartModel.deltaValue}
+        <span className="line-visual-hero-label">{visibleChartSummary.summaryLabel}</span>
+        <strong className="line-visual-hero-value">{visibleChartSummary.summaryValue}</strong>
+        <span className={`line-visual-hero-delta ${visibleChartSummary.deltaTone}`}>
+          {visibleChartSummary.deltaLabel}: {visibleChartSummary.deltaValue}
         </span>
       </article>
 
-      {chartModel.stats.map((stat) => (
+      {visibleChartSummary.stats.map((stat) => (
         <article key={stat.label} className="line-visual-stat-card">
           <span className="line-visual-stat-label">{stat.label}</span>
           <strong className={stat.tone ?? "tone-neutral"}>{stat.value}</strong>
@@ -2827,7 +2886,7 @@ export default function PortfolioLineCharts({
             />
             <YAxis
               axisLine={false}
-              domain={chartModel.yAxisDomain}
+              domain={renderedChartYAxisDomain}
               orientation="right"
               tick={{ fill: "#7b8895", fontSize: axisFontSize, fontWeight: 700 }}
               tickFormatter={(value: number) => chartModel.yAxisTickFormatter(value)}

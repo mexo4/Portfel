@@ -1,3 +1,5 @@
+import { round } from "@/lib/utils";
+
 export type ChartRangePreset =
   | "1D"
   | "5D"
@@ -19,6 +21,84 @@ export type ChartViewport = {
 type DatedPoint = {
   date: string;
 };
+
+export type PortfolioValueChartPoint = {
+  date: string;
+  portfolioValuePln: number;
+  netInvestedPln: number;
+  profitLossPln: number;
+  timeWeightedReturnPercent: number | null;
+};
+
+export type PortfolioValueRangeSummary = {
+  valueChangePln: number | null;
+  investmentResultPln: number | null;
+  timeWeightedReturnPercent: number | null;
+  netInvestedChangePln: number | null;
+};
+
+/** Summarize the displayed window from the existing history snapshots. */
+export const getPortfolioValueRangeSummary = (
+  points: PortfolioValueChartPoint[],
+): PortfolioValueRangeSummary | null => {
+  const first = points[0];
+  const last = points.at(-1);
+  if (!first || !last) return null;
+  if (points.length < 2) {
+    return {
+      valueChangePln: null,
+      investmentResultPln: null,
+      timeWeightedReturnPercent: null,
+      netInvestedChangePln: null,
+    };
+  }
+
+  const startFactor = first.timeWeightedReturnPercent === null
+    ? null
+    : 1 + first.timeWeightedReturnPercent / 100;
+  const endFactor = last.timeWeightedReturnPercent === null
+    ? null
+    : 1 + last.timeWeightedReturnPercent / 100;
+
+  return {
+    valueChangePln: round(last.portfolioValuePln - first.portfolioValuePln),
+    investmentResultPln: round(last.profitLossPln - first.profitLossPln),
+    timeWeightedReturnPercent:
+      startFactor !== null && endFactor !== null && startFactor > 0 && endFactor >= 0
+        ? round(((endFactor / startFactor) - 1) * 100, 2)
+        : null,
+    netInvestedChangePln: round(last.netInvestedPln - first.netInvestedPln),
+  };
+};
+
+export const getPaddedChartNumberDomain = (
+  values: Array<number | null | undefined>,
+) => {
+  const numericValues = values.filter(
+    (value): value is number => typeof value === "number" && Number.isFinite(value)
+  );
+
+  if (numericValues.length === 0) return undefined;
+
+  const minValue = Math.min(...numericValues);
+  const maxValue = Math.max(...numericValues);
+  const range = maxValue - minValue;
+  const maxAbsValue = Math.max(Math.abs(minValue), Math.abs(maxValue), 1);
+  const padding =
+    range > 0 ? Math.max(range * 0.14, maxAbsValue * 0.003) : Math.max(maxAbsValue * 0.02, 1);
+  const lowerBound = minValue >= 0 ? Math.max(0, minValue - padding) : minValue - padding;
+  const upperBound = maxValue + padding;
+
+  return [round(lowerBound, 2), round(upperBound, 2)] satisfies [number, number];
+};
+
+export const excludeWeekendZeroPoints = <T extends DatedPoint>(
+  points: T[],
+  isZeroResult: (point: T) => boolean,
+) => points.filter((point) => {
+  const day = getPointDate(point.date).getUTCDay();
+  return !((day === 0 || day === 6) && isZeroResult(point));
+});
 
 export const CHART_RANGE_PRESETS: ChartRangePreset[] = [
   "1D",

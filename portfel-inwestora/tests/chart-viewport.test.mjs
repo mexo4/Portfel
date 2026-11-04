@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  excludeWeekendZeroPoints,
   filterChartPointsByRange,
+  getPaddedChartNumberDomain,
   getChartRangeViewport,
+  getPortfolioValueRangeSummary,
   getSupportedChartRangePresets,
   normalizeChartRangePreset,
   panChartViewport,
@@ -94,5 +97,70 @@ test("uses the selected range as the initial viewport while preserving earlier h
       deltaPoints: -1,
     }),
     { startIndex: 1, endIndex: 2 }
+  );
+});
+
+test("value chart summaries follow the visible range and preserve flow-neutral TWR semantics", () => {
+  const summary = getPortfolioValueRangeSummary([
+    {
+      date: "2026-01-01",
+      portfolioValuePln: 1_000,
+      netInvestedPln: 900,
+      profitLossPln: 50,
+      timeWeightedReturnPercent: 5,
+    },
+    {
+      date: "2026-02-01",
+      portfolioValuePln: 1_200,
+      netInvestedPln: 1_000,
+      profitLossPln: 100,
+      timeWeightedReturnPercent: 10,
+    },
+  ]);
+
+  assert.deepEqual(summary, {
+    valueChangePln: 200,
+    investmentResultPln: 50,
+    timeWeightedReturnPercent: 4.76,
+    netInvestedChangePln: 100,
+  });
+  assert.deepEqual(getPortfolioValueRangeSummary([
+    {
+      date: "2026-02-01",
+      portfolioValuePln: 1_200,
+      netInvestedPln: 1_000,
+      profitLossPln: 100,
+      timeWeightedReturnPercent: 10,
+    },
+  ]), {
+    valueChangePln: null,
+    investmentResultPln: null,
+    timeWeightedReturnPercent: null,
+    netInvestedChangePln: null,
+  });
+});
+
+test("value chart y-axis fits the selected points instead of all-time extrema", () => {
+  const allTimeDomain = getPaddedChartNumberDomain([1_000, 10_000]);
+  const selectedRangeDomain = getPaddedChartNumberDomain([9_400, 9_500, 9_600]);
+
+  assert.ok(allTimeDomain);
+  assert.ok(selectedRangeDomain);
+  assert.ok(selectedRangeDomain[1] - selectedRangeDomain[0] < allTimeDomain[1] - allTimeDomain[0]);
+  assert.ok(selectedRangeDomain[0] < 9_400);
+  assert.ok(selectedRangeDomain[1] > 9_600);
+});
+
+test("daily chart omits zero-result weekends but preserves real weekend and weekday values", () => {
+  const points = [
+    { date: "2026-08-07", value: 0 },
+    { date: "2026-08-08", value: 0 },
+    { date: "2026-08-09", value: 12.5 },
+    { date: "2026-08-10", value: 0 },
+  ];
+
+  assert.deepEqual(
+    excludeWeekendZeroPoints(points, (point) => Math.abs(point.value) < 0.005),
+    [points[0], points[2], points[3]],
   );
 });

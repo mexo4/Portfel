@@ -460,6 +460,14 @@ test("daily result is the sixth integrated mode on the Wykresy route", async () 
   );
 });
 
+test("selected chart range drives the summary and value-axis scale, and weekend zeroes are omitted", async () => {
+  const source = await readFile(new URL("../src/components/PortfolioLineCharts.tsx", import.meta.url), "utf8");
+
+  assert.match(source, /getPortfolioValueRangeSummary\(visiblePortfolioValuePoints\)/);
+  assert.match(source, /domain=\{renderedChartYAxisDomain\}/);
+  assert.match(source, /filterChartPointsByRange\([\s\S]*excludeWeekendZeroPoints\(/);
+});
+
 test("benchmark UI has a core-index short circuit, abortable provider search, and no global search rewrite", async () => {
   const source = await readSource("src/components/PortfolioLineCharts.tsx");
 

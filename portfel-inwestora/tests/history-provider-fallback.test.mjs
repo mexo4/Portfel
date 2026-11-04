@@ -20,19 +20,25 @@ test("history hedge does not call the fallback when the primary is fast and succ
 
 test("history hedge starts the fallback while a slow primary is pending but preserves primary precedence", async () => {
   let fallbackCalls = 0;
-  const startedAt = Date.now();
-  const result = await fetchPreferredHistoryWithHedge(
-    () => new Promise((resolve) => setTimeout(() => resolve([{ source: "primary" }]), 50)),
+  let resolvePrimary;
+  let signalFallbackCalled;
+  const fallbackCalled = new Promise((resolve) => { signalFallbackCalled = resolve; });
+  const primary = new Promise((resolve) => { resolvePrimary = resolve; });
+  const resultPromise = fetchPreferredHistoryWithHedge(
+    () => primary,
     async () => {
       fallbackCalls += 1;
+      signalFallbackCalled();
       return [{ source: "fallback" }];
     },
     5,
   );
 
-  assert.deepEqual(result, [{ source: "primary" }]);
+  await fallbackCalled;
   assert.equal(fallbackCalls, 1);
-  assert.ok(Date.now() - startedAt < 100);
+  resolvePrimary([{ source: "primary" }]);
+  const result = await resultPromise;
+  assert.deepEqual(result, [{ source: "primary" }]);
 });
 
 test("an empty or failed primary returns fallback history", async () => {

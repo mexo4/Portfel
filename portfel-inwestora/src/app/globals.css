@@ -8566,8 +8566,21 @@ textarea {
 .workspace-subnav { display: flex; width: max-content; max-width: 100%; gap: 4px; padding: 4px; border: 1px solid var(--line); border-radius: 11px; background: rgba(255,255,255,.56); }
 .workspace-subnav button { min-height: 34px; border: 0; border-radius: 7px; padding: 0 13px; color: var(--muted); background: transparent; font-size: .82rem; font-weight: 750; cursor: pointer; }
 .workspace-subnav button.is-active { color: var(--accent); background: #fff; box-shadow: 0 2px 6px rgba(20,35,48,.08); }
+.workspace-aggregate-income-controls { min-width: 0; align-items: center; }
+.workspace-aggregate-income-scope { display: grid; min-width: 0; gap: 4px; }
+.workspace-aggregate-income-scope .eyebrow,
+.workspace-aggregate-income-scope .section-copy { margin: 0; }
+.workspace-aggregate-income-tabs { flex: 0 0 auto; }
+.workspace-aggregate-cash-view { min-width: 0; }
+.workspace-aggregate-cash-view[hidden] { display: none; }
 .workspace-portfolio-manager .portfolio-switch-card { text-align: left; }
 .workspace-plan-placeholder { max-width: 540px; }
+
+@media (max-width: 720px) {
+  .workspace-aggregate-income-controls { align-items: stretch; flex-direction: column; }
+  .workspace-aggregate-income-tabs { width: 100%; max-width: none; }
+  .workspace-aggregate-income-tabs button { flex: 1 1 0; min-width: 0; }
+}
 
 .workspace-position-cards { display: grid; gap: 10px; }
 .workspace-position-filter { display: grid; grid-template-columns: minmax(0, 1fr) minmax(126px, auto); align-items: end; gap: 5px 10px; padding: 3px 1px; color: var(--text); font-size: .88rem; font-weight: 760; }

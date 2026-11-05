@@ -84,11 +84,55 @@ export function WorkspaceOperationsPage() {
 
 export function WorkspaceDividendsPage() {
   const workspace = usePortfolioWorkspace();
+  const [aggregateIncomeView, setAggregateIncomeView] = useState<"dividends" | "cash">("dividends");
   const eventScopeProps = workspace.portfolioScope.mode === "CUSTOM"
     ? { portfolioId: "custom", portfolioIds: workspace.selectedPortfolioIds }
     : { portfolioId: workspace.isAllRealPortfoliosSelected ? "all" : workspace.activePortfolioId, portfolioIds: undefined };
   if (!workspace.isAllPortfoliosSelected) return <div className="workspace-page"><UpcomingDividendsPanel key={workspace.activePortfolioId} {...eventScopeProps} />{workspace.incomeWorkspace}</div>;
-  return <div className="workspace-page"><section className="panel"><p className="eyebrow">Dywidendy</p><h2 className="section-title">Dywidendy · {workspace.portfolioScopeLabel}</h2><p className="section-copy">Podsumowanie jest agregowane wyłącznie do odczytu; dodawanie i edycja wymagają konkretnego portfela.</p><div className="workspace-performance-metric-grid mt-6"><article><span>Dywidendy YTD</span><strong>{formatCurrency(workspace.activeDividendYtd, workspace.activeBaseCurrency)}</strong></article><article><span>W tym miesiącu</span><strong>{formatCurrency(workspace.activeDividendMonth, workspace.activeBaseCurrency)}</strong></article><article><span>Roczny dochód</span><strong>{formatCurrency(workspace.activeDividendAnnualIncome, workspace.activeBaseCurrency)}</strong></article></div><Link href={workspace.getReadHref("/portfolios")} className="ghost-button mt-6">Wybierz portfel do zmian</Link></section><UpcomingDividendsPanel key={`${workspace.portfolioScopeLabel}:${workspace.selectedPortfolioIds.join(",")}`} {...eventScopeProps} /><AggregateDividendHistory />{workspace.incomeWorkspace}</div>;
+  return (
+    <div className="workspace-page workspace-aggregate-income-page">
+      <section className="workspace-page-actions workspace-aggregate-income-controls">
+        <div className="workspace-aggregate-income-scope">
+          <p className="eyebrow">Analizowany zakres</p>
+          <p className="section-copy">{workspace.portfolioScopeLabel} · widok łączny, bez mieszania rachunków źródłowych</p>
+        </div>
+        <div className="workspace-subnav workspace-aggregate-income-tabs" role="group" aria-label="Widok dywidend i gotówki">
+          <button
+            type="button"
+            className={aggregateIncomeView === "dividends" ? "is-active" : ""}
+            aria-pressed={aggregateIncomeView === "dividends"}
+            onClick={() => setAggregateIncomeView("dividends")}
+          >Dywidendy</button>
+          <button
+            type="button"
+            className={aggregateIncomeView === "cash" ? "is-active" : ""}
+            aria-pressed={aggregateIncomeView === "cash"}
+            onClick={() => setAggregateIncomeView("cash")}
+          >Gotówka</button>
+        </div>
+      </section>
+      {aggregateIncomeView === "dividends" ? (
+        <>
+          <section className="panel">
+            <p className="eyebrow">Dywidendy · {workspace.portfolioScopeLabel}</p>
+            <h2 className="section-title">Podsumowanie dywidend</h2>
+            <p className="section-copy">Podsumowanie jest agregowane wyłącznie do odczytu; dodawanie i edycja wymagają konkretnego portfela.</p>
+            <div className="workspace-performance-metric-grid mt-6">
+              <article><span>Dywidendy YTD</span><strong>{formatCurrency(workspace.activeDividendYtd, workspace.activeBaseCurrency)}</strong></article>
+              <article><span>W tym miesiącu</span><strong>{formatCurrency(workspace.activeDividendMonth, workspace.activeBaseCurrency)}</strong></article>
+              <article><span>Roczny dochód</span><strong>{formatCurrency(workspace.activeDividendAnnualIncome, workspace.activeBaseCurrency)}</strong></article>
+            </div>
+            <Link href={workspace.getReadHref("/portfolios")} className="ghost-button mt-6">Wybierz portfel do zmian</Link>
+          </section>
+          <UpcomingDividendsPanel key={`${workspace.portfolioScopeLabel}:${workspace.selectedPortfolioIds.join(",")}`} {...eventScopeProps} />
+          <AggregateDividendHistory />
+        </>
+      ) : null}
+      <div className="workspace-aggregate-cash-view" hidden={aggregateIncomeView !== "cash"}>
+        {workspace.incomeWorkspace}
+      </div>
+    </div>
+  );
 }
 
 export function WorkspaceImportPage() { const workspace = usePortfolioWorkspace(); return <div className="workspace-page workspace-import-page"><section className="workspace-page-actions"><p>{workspace.isAllPortfoliosSelected ? "Import wymaga wskazania jednego portfela docelowego." : "Import tworzy rzeczywiste operacje w aktywnym portfelu. Kurs bieżący nie blokuje zapisu transakcji."}</p><Link href={workspace.getReadHref(workspace.isAllPortfoliosSelected ? "/portfolios" : "/portfolio/positions")} className="ghost-button">{workspace.isAllPortfoliosSelected ? "Wybierz portfel" : "Wróć do pozycji"}</Link></section>{workspace.isAllPortfoliosSelected ? null : workspace.importWorkspace}</div>; }

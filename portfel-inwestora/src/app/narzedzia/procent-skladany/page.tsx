@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import CompoundInterestCalculator from "./CompoundInterestCalculator";
+import CompoundInterestGuide from "./CompoundInterestGuide";
 import styles from "./page.module.css";
 
 const SITE_URL = "https://mexo.com.pl";
@@ -43,6 +44,16 @@ const faq = [
     answer:
       "Nie. Wynik jest uproszczoną symulacją i nie uwzględnia podatków, kosztów transakcyjnych, opłat funduszy, zmian kursów walut ani inflacji.",
   },
+  {
+    question: "Czy wynik jest prognozą przyszłej wartości inwestycji?",
+    answer:
+      "Nie. To scenariusz matematyczny oparty na stałej, hipotetycznej stopie zwrotu. Rzeczywiste wyniki mogą być zmienne i ujemne, a końcowa wartość może różnić się od symulacji.",
+  },
+  {
+    question: "Czy kalkulator zakłada reinwestowanie wypracowanego wzrostu?",
+    answer:
+      "Tak, model zakłada, że wypracowany wzrost pozostaje w wartości inwestycji i może uczestniczyć w dalszym wzroście. Nie modeluje osobno wypłat ani ręcznych decyzji o reinwestowaniu dywidend.",
+  },
 ];
 
 export default function CompoundInterestPage() {
@@ -82,26 +93,7 @@ export default function CompoundInterestPage() {
       </section>
 
       <CompoundInterestCalculator />
-
-      <section className={styles.explainer}>
-        <div>
-          <p className="eyebrow">Jak czytać wynik</p>
-          <h2>Wpłaty budują bazę. Czas pozwala działać procentowi składanemu.</h2>
-        </div>
-        <div className={styles.explainerCopy}>
-          <p>
-            Kalkulator rozdziela końcową wartość inwestycji na wpłacony kapitał
-            oraz przyrost wynikający z przyjętej stopy zwrotu. Dzięki temu
-            od razu widać, jak wraz z wydłużaniem horyzontu rośnie znaczenie
-            samego procentu składanego.
-          </p>
-          <p>
-            Symulacja zakłada stałą roczną stopę zwrotu przeliczaną na okresy
-            miesięczne oraz regularną wpłatę na koniec każdego miesiąca.
-            Rzeczywisty rynek nie rośnie w tak równym tempie.
-          </p>
-        </div>
-      </section>
+      <CompoundInterestGuide />
 
       <section className={styles.faqSection}>
         <p className="eyebrow">FAQ</p>

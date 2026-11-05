@@ -49,10 +49,58 @@
 .chartSummary p { margin:0; }
 .chartSummary strong { color:var(--text); font-family:var(--font-mono); }
 .disclaimer { grid-column:1/-1; max-width:920px; margin:-2px 0 0; color:var(--muted); font-size:.76rem; line-height:1.6; }
-.explainer { display:grid; gap:42px; align-items:start; padding:70px 0; grid-template-columns:minmax(0,.86fr) minmax(0,1.14fr); }
-.explainer h2,.faqSection h2,.cta h2 { font-size:clamp(2rem,4vw,3.2rem); line-height:1.05; }
-.explainerCopy { display:grid; gap:16px; color:var(--muted); font-size:.98rem; line-height:1.75; }
-.explainerCopy p { margin:0; }
+.guide { padding: 0 0 58px; }
+.guide h2,.guide h3,.guide h4 { color:var(--text); letter-spacing:-.035em; }
+.guideIntro { display:grid; gap:clamp(28px,5vw,72px); align-items:start; padding:70px 0 50px; grid-template-columns:minmax(0,.9fr) minmax(0,1.1fr); }
+.guideIntro h2,.faqSection h2,.cta h2 { margin:6px 0 0; font-size:clamp(2rem,4vw,3.2rem); line-height:1.05; }
+.guideIntroCopy { display:grid; gap:16px; color:var(--muted); font-size:.98rem; line-height:1.75; }
+.guideIntroCopy p { margin:0; }
+.simpleVsCompound { display:grid; gap:clamp(28px,5vw,72px); align-items:center; border-top:1px solid var(--line); border-bottom:1px solid var(--line); padding:42px 0; grid-template-columns:minmax(0,.9fr) minmax(0,1.1fr); }
+.simpleVsCompound h3,.formulaCopy h3,.scenarioHeading h3,.driversHeading h3,.limitsNote h3 { margin:6px 0 12px; font-size:clamp(1.55rem,3vw,2.25rem); line-height:1.08; }
+.simpleVsCompoundCopy p:not(.eyebrow),.formulaCopy p:not(.eyebrow) { margin:0; color:var(--muted); line-height:1.72; }
+.simpleVsCompoundCopy small { display:block; margin-top:14px; color:var(--muted); font-size:.76rem; line-height:1.5; }
+.comparisonValues { display:grid; gap:14px; grid-template-columns:repeat(2,minmax(0,1fr)); }
+.simpleValue,.compoundValue { display:flex; min-width:0; min-height:126px; flex-direction:column; justify-content:space-between; border-left:3px solid #aeb8be; padding:10px 0 10px 18px; }
+.compoundValue { border-color:var(--accent); }
+.simpleValue span,.compoundValue span { color:var(--muted); font-size:.82rem; font-weight:700; }
+.simpleValue strong,.compoundValue strong { color:var(--text); font-family:var(--font-mono); font-size:clamp(1.3rem,2.2vw,1.8rem); font-weight:550; letter-spacing:-.045em; }
+.compoundValue strong { color:var(--accent); }
+.formulaSection { display:grid; gap:clamp(28px,5vw,72px); align-items:center; padding:58px 0; grid-template-columns:minmax(0,.85fr) minmax(0,1.15fr); }
+.formulaCopy p:not(.eyebrow) { max-width:550px; }
+.formulaPanel { min-width:0; border:1px solid rgba(15,118,110,.22); border-radius:20px; padding:26px; background:linear-gradient(145deg,rgba(220,245,239,.62),rgba(255,253,248,.96)); box-shadow:var(--shadow); }
+.formula { margin:0; color:var(--text); font-family:var(--font-mono); font-size:clamp(.9rem,1.6vw,1.12rem); font-weight:600; line-height:1.7; overflow-wrap:anywhere; }
+.formula sup { font-family:var(--font-sans); font-size:.72em; }
+.formulaZeroRate { margin:8px 0 0; color:var(--muted); font-family:var(--font-mono); font-size:.84rem; }
+.formulaDefinitions { display:grid; gap:8px 18px; margin:22px 0 0; grid-template-columns:repeat(2,minmax(0,1fr)); }
+.formulaDefinitions div { display:grid; min-width:0; gap:8px; grid-template-columns:20px minmax(0,1fr); }
+.formulaDefinitions dt { color:var(--accent); font-family:var(--font-mono); font-weight:750; }
+.formulaDefinitions dd { margin:0; color:var(--muted); font-size:.8rem; line-height:1.5; }
+.formulaPanel>small { display:block; margin-top:18px; border-top:1px solid rgba(15,118,110,.18); padding-top:14px; color:var(--muted); font-size:.76rem; line-height:1.5; }
+.scenarioSection { border-top:1px solid var(--line); padding:54px 0 48px; }
+.scenarioHeading { display:flex; align-items:flex-end; justify-content:space-between; gap:30px; margin-bottom:22px; }
+.scenarioHeading h3 { margin-bottom:0; }
+.scenarioHeading>p { max-width:430px; margin:0; color:var(--muted); font-size:.88rem; line-height:1.6; }
+.scenarioTableWrap { max-width:100%; overflow-x:auto; border:1px solid var(--line); border-radius:16px; background:rgba(255,253,248,.72); -webkit-overflow-scrolling:touch; }
+.scenarioTable { width:100%; min-width:520px; border-collapse:collapse; font-variant-numeric:tabular-nums; }
+.scenarioTable caption { padding:14px 18px; color:var(--muted); text-align:left; font-size:.78rem; }
+.scenarioTable th,.scenarioTable td { border-top:1px solid var(--line); padding:14px 18px; text-align:right; white-space:nowrap; }
+.scenarioTable thead th { color:var(--muted); font-size:.8rem; font-weight:700; }
+.scenarioTable thead th:first-child,.scenarioTable tbody th { text-align:left; }
+.scenarioTable tbody th { color:var(--text); font-weight:750; }
+.scenarioTable td { color:var(--text); font-family:var(--font-mono); font-size:.86rem; }
+.scenarioTable tbody tr:nth-child(2) { background:rgba(220,245,239,.4); }
+.tableNote { margin:12px 0 0; color:var(--muted); font-size:.76rem; line-height:1.55; }
+.driversSection { display:grid; gap:38px; border-top:1px solid var(--line); padding:54px 0; grid-template-columns:minmax(0,.78fr) minmax(0,1.22fr); }
+.driversHeading h3 { max-width:440px; }
+.driverList { display:grid; gap:0 26px; margin:0; padding:0; grid-template-columns:repeat(2,minmax(0,1fr)); list-style:none; }
+.driverList li { display:grid; min-width:0; gap:14px; border-top:1px solid var(--line); padding:18px 0; grid-template-columns:30px minmax(0,1fr); }
+.driverList li>span { color:var(--accent); font-family:var(--font-mono); font-size:.76rem; font-weight:750; }
+.driverList h4 { margin:0 0 5px; font-size:1rem; }
+.driverList p { margin:0; color:var(--muted); font-size:.84rem; line-height:1.65; }
+.limitsNote { display:grid; gap:18px; border:1px solid rgba(138,103,42,.2); border-radius:18px; padding:25px; background:rgba(248,242,226,.7); grid-template-columns:32px minmax(0,1fr); }
+.limitsMark { display:grid; width:28px; height:28px; place-items:center; border:1px solid rgba(138,103,42,.3); border-radius:50%; color:#795b25; font-family:var(--font-mono); font-weight:750; }
+.limitsNote h3 { margin-bottom:9px; font-size:clamp(1.3rem,2.5vw,1.8rem); }
+.limitsNote>div>p:last-child { max-width:900px; margin:0; color:var(--muted); font-size:.88rem; line-height:1.7; }
 .faqSection { border-top:1px solid var(--line); padding:62px 0 68px; }
 .faqList { margin-top:28px; border-top:1px solid var(--line); }
 .faqItem { border-bottom:1px solid var(--line); }
@@ -70,7 +118,9 @@
   .hero { padding-top:52px; }
   .calculatorShell { grid-template-columns:1fr; }
   .chartCard,.disclaimer { grid-column:auto; }
-  .explainer { gap:26px; grid-template-columns:1fr; }
+  .guideIntro,.simpleVsCompound,.formulaSection,.driversSection { gap:26px; grid-template-columns:1fr; }
+  .scenarioHeading { align-items:flex-start; flex-direction:column; gap:12px; }
+  .scenarioHeading>p { max-width:650px; }
   .chartHeader,.cta { align-items:flex-start; flex-direction:column; }
   .chartLegend { justify-content:flex-start; }
   .cta>a { width:100%; text-align:center; }
@@ -80,6 +130,18 @@
   .hero h1 { font-size:clamp(2.55rem,13vw,4rem); }
   .controlsPanel,.resultsPanel,.chartCard { border-radius:18px; padding:20px; }
   .fieldsGrid,.resultStats { grid-template-columns:1fr; }
+  .guideIntro { padding:50px 0 36px; }
+  .simpleVsCompound,.formulaSection { padding:36px 0; }
+  .comparisonValues { gap:10px; }
+  .simpleValue,.compoundValue { min-height:108px; padding-left:12px; }
+  .simpleValue span,.compoundValue span { font-size:.74rem; }
+  .simpleValue strong,.compoundValue strong { font-size:1.22rem; }
+  .formulaPanel { border-radius:16px; padding:20px; }
+  .formulaDefinitions { gap:8px 12px; grid-template-columns:1fr; }
+  .scenarioSection,.driversSection { padding:38px 0; }
+  .scenarioTable th,.scenarioTable td { padding:12px 14px; }
+  .driverList { grid-template-columns:1fr; }
+  .limitsNote { gap:13px; padding:19px; grid-template-columns:27px minmax(0,1fr); }
   .chart { height:300px; margin-left:-8px; width:calc(100% + 8px); }
   .resultHero strong { font-size:clamp(2.2rem,12vw,3rem); }
   .cta { padding:26px 22px; }

@@ -83,6 +83,7 @@ import {
 import {
   buildDividendForecast,
   getPortfolioDividends,
+  summarizeDividendTotals,
 } from "@/lib/dividend-engine";
 import {
   getMinimumSearchLength,
@@ -1561,6 +1562,10 @@ export default function PortfolioApp({
   const activeDividendForecast = useMemo(
     () => buildDividendForecast(activePortfolioDividends),
     [activePortfolioDividends]
+  );
+  const activeDividendTotals = useMemo(
+    () => summarizeDividendTotals(activePortfolioDividends, activeBaseCurrency, fxRates),
+    [activeBaseCurrency, activePortfolioDividends, fxRates]
   );
   const activeDividendYtd = useMemo(() => {
     const year = getTodayDateInputValue().slice(0, 4);
@@ -5751,7 +5756,7 @@ export default function PortfolioApp({
     onClearManualPrice: handleClearManualPrice,
     summaryTotalValue: summary.totalValue, summaryCombinedProfitLoss: summary.combinedProfitLoss,
     summaryTotalInvested: summary.totalInvested, summaryCashValue: summary.cashValue, refreshRevision,
-    activeDividendYtd, activeDividendMonth, activeDividendAnnualIncome, summaryPanel, assetEntryWorkspace, operationsWorkspace, incomeWorkspace, aggregateDividendWorkspace, importWorkspace, settingsWorkspace, portfolioManagementWorkspace: portfolioManagement, wealthWorkspace,
+    activeDividendYtd, activeDividendMonth, activeDividendAnnualIncome, activeDividendForecast, activeDividendTotals, summaryPanel, assetEntryWorkspace, operationsWorkspace, incomeWorkspace, aggregateDividendWorkspace, importWorkspace, settingsWorkspace, portfolioManagementWorkspace: portfolioManagement, wealthWorkspace,
     onFilterChange: setFilter, onSortModeChange: setAssetSortMode, onReorderGroups: handleReorderAssetGroups, onRemoveAsset: removeAsset,
   };
 

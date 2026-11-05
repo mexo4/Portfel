@@ -1,5 +1,5 @@
 import { BASE_CURRENCY } from "@/lib/constants";
-import { convertToPln } from "@/lib/portfolio-engine";
+import { convertFromPln, convertToPln } from "@/lib/portfolio-engine";
 import { round, toCurrencyCode, toDateInputValue } from "@/lib/utils";
 import type {
   DividendCalendarBucket,
@@ -213,6 +213,34 @@ export const getPortfolioDividends = (
         right.paymentDate.localeCompare(left.paymentDate) ||
         right.createdAt.localeCompare(left.createdAt)
     );
+
+export type DividendTotals = {
+  gross: number;
+  net: number;
+  taxes: number;
+  paymentsCount: number;
+};
+
+/** Aggregates already-normalized dividend amounts into the chosen display currency. */
+export const summarizeDividendTotals = (
+  dividends: PortfolioDividend[],
+  displayCurrency: PortfolioDividend["currency"],
+  fxRates: FxRates
+): DividendTotals => {
+  const grossPln = round(
+    dividends.reduce((total, dividend) => total + dividend.grossAmountPln, 0)
+  );
+  const netPln = round(
+    dividends.reduce((total, dividend) => total + dividend.netAmountPln, 0)
+  );
+
+  return {
+    gross: convertFromPln(grossPln, displayCurrency, fxRates),
+    net: convertFromPln(netPln, displayCurrency, fxRates),
+    taxes: convertFromPln(round(grossPln - netPln), displayCurrency, fxRates),
+    paymentsCount: dividends.length,
+  };
+};
 
 const getDividendReportKey = (
   dividend: PortfolioDividend,

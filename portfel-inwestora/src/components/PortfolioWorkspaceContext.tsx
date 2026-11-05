@@ -15,7 +15,9 @@ import type {
   AssetSearchResult,
   PortfolioBenchmarkDefinition,
   PortfolioSummary,
+  DividendForecast,
 } from "@/types/portfolio";
+import type { DividendTotals } from "@/lib/dividend-engine";
 
 export type PortfolioWorkspaceValue = {
   account: AuthenticatedUser;
@@ -79,6 +81,8 @@ export type PortfolioWorkspaceValue = {
   activeDividendYtd: number;
   activeDividendMonth: number;
   activeDividendAnnualIncome: number;
+  activeDividendForecast: DividendForecast;
+  activeDividendTotals: DividendTotals;
   summaryPanel: ReactNode;
   assetEntryWorkspace: ReactNode;
   operationsWorkspace: ReactNode;

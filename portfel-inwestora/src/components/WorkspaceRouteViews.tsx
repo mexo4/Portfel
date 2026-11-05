@@ -113,16 +113,37 @@ export function WorkspaceDividendsPage() {
       </section>
       {aggregateIncomeView === "dividends" ? (
         <>
-          <section className="panel">
+          <section className="panel panel-compact">
             <p className="eyebrow">Dywidendy · {workspace.portfolioScopeLabel}</p>
             <h2 className="section-title">Podsumowanie dywidend</h2>
-            <p className="section-copy">Podsumowanie i historia pozostają zbiorcze. Nową dywidendę przypiszesz do wybranego portfela docelowego; edycja istniejących operacji nadal wymaga pojedynczego portfela.</p>
-            <div className="workspace-performance-metric-grid mt-6">
-              <article><span>Dywidendy YTD</span><strong>{formatCurrency(workspace.activeDividendYtd, workspace.activeBaseCurrency)}</strong></article>
-              <article><span>W tym miesiącu</span><strong>{formatCurrency(workspace.activeDividendMonth, workspace.activeBaseCurrency)}</strong></article>
-              <article><span>Roczny dochód</span><strong>{formatCurrency(workspace.activeDividendAnnualIncome, workspace.activeBaseCurrency)}</strong></article>
+            <p className="section-copy">Kwoty łączne przeliczono do waluty prezentacji {workspace.presentationCurrency}. Historia każdej wypłaty zachowuje jej walutę źródłową.</p>
+            <div className="metric-grid mt-6">
+              <article className="metric-card"><span>Dywidendy YTD</span><strong>{formatCurrency(workspace.activeDividendYtd, workspace.presentationCurrency)}</strong></article>
+              <article className="metric-card"><span>Dywidendy w tym miesiącu</span><strong>{formatCurrency(workspace.activeDividendMonth, workspace.presentationCurrency)}</strong></article>
+              <article className="metric-card"><span>Roczny dochód z dywidend</span><strong>{formatCurrency(workspace.activeDividendAnnualIncome, workspace.presentationCurrency)}</strong></article>
+              <article className="metric-card metric-card-muted">
+                <span>Najbliższa wypłata</span>
+                <strong>{workspace.activeDividendForecast.nextPayment
+                  ? formatCurrency(workspace.activeDividendForecast.nextPayment.netAmount, workspace.activeDividendForecast.nextPayment.currency)
+                  : "Brak"}</strong>
+                <p className="metric-copy">{workspace.activeDividendForecast.nextPayment
+                  ? `${formatDate(workspace.activeDividendForecast.nextPayment.paymentDate)} · ${workspace.activeDividendForecast.nextPayment.symbol}`
+                  : workspace.activeDividendForecast.message ?? "Brak przyszłych dywidend."}</p>
+              </article>
             </div>
-            <Link href={workspace.getReadHref("/portfolios")} className="ghost-button mt-6">Wybierz portfel do zmian</Link>
+          </section>
+          <section className="panel sprint-wide-panel dividend-summary-panel">
+            <div className="sprint-panel-head">
+              <div><p className="eyebrow">Raporty dywidend</p><h2 className="section-title">Podsumowania i prognozy</h2></div>
+              <span className="tag">{formatCurrency(workspace.activeDividendTotals.net, workspace.presentationCurrency)} netto</span>
+            </div>
+            <p className="section-copy">Suma historii dla wszystkich portfeli w wybranym zakresie.</p>
+            <div className="metric-grid mt-6">
+              <article className="metric-card"><span>Suma brutto</span><strong>{formatCurrency(workspace.activeDividendTotals.gross, workspace.presentationCurrency)}</strong></article>
+              <article className="metric-card"><span>Suma netto</span><strong>{formatCurrency(workspace.activeDividendTotals.net, workspace.presentationCurrency)}</strong></article>
+              <article className="metric-card"><span>Podatki</span><strong>{formatCurrency(workspace.activeDividendTotals.taxes, workspace.presentationCurrency)}</strong></article>
+              <article className="metric-card"><span>Liczba wypłat</span><strong>{workspace.activeDividendTotals.paymentsCount}</strong></article>
+            </div>
           </section>
           {workspace.aggregateDividendWorkspace}
           <UpcomingDividendsPanel key={`${workspace.portfolioScopeLabel}:${workspace.selectedPortfolioIds.join(",")}`} {...eventScopeProps} />

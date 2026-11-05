@@ -22,6 +22,13 @@ test("aggregate income view separates dividends from cash and preserves scope co
   assert.notEqual(dividendBranchEnd, -1);
   const dividendBranch = route.slice(dividendBranchStart, dividendBranchEnd);
   assert.match(dividendBranch, /workspace\.aggregateDividendWorkspace/);
+  assert.match(dividendBranch, /Kwoty łączne przeliczono do waluty prezentacji \{workspace\.presentationCurrency\}/);
+  assert.match(dividendBranch, /workspace\.activeDividendForecast\.nextPayment/);
+  assert.match(dividendBranch, /workspace\.activeDividendTotals\.gross/);
+  assert.match(dividendBranch, /workspace\.activeDividendTotals\.net/);
+  assert.match(dividendBranch, /workspace\.activeDividendTotals\.taxes/);
+  assert.match(dividendBranch, /workspace\.activeDividendTotals\.paymentsCount/);
+  assert.doesNotMatch(dividendBranch, /workspace-performance-metric-grid|Wybierz portfel do zmian/);
   assert.match(dividendBranch, /UpcomingDividendsPanel[\s\S]*?AggregateDividendHistory \/>/);
   assert.doesNotMatch(dividendBranch, /workspace\.incomeWorkspace/);
   const cashPanelStart = route.indexOf('<div className="workspace-aggregate-cash-view"', dividendBranchEnd);

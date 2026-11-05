@@ -159,7 +159,9 @@ export default function PortfolioPositionCards({
                 {group.lots.map((lot) => (
                   <div key={lot.id}>
                     <span>{formatDate(lot.purchaseDate)} · {formatNumber(lot.quantity, lot.kind === "crypto" ? 12 : 6)}</span>
-                    <button type="button" onClick={() => onRemove(lot.id)} aria-label={`Usuń lot ${lot.symbol}`}>Usuń</button>
+                    {!workspace.isAllPortfoliosSelected ? (
+                      <button type="button" onClick={() => onRemove(lot.id)} aria-label={`Usuń lot ${lot.symbol}`}>Usuń</button>
+                    ) : null}
                   </div>
                 ))}
               </div>

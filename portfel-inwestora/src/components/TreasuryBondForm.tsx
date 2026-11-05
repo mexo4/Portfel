@@ -1,6 +1,8 @@
 "use client";
 
 import { formatCurrency, formatDate } from "@/lib/utils";
+import PortfolioTargetSelector from "@/components/PortfolioTargetSelector";
+import type { InvestmentPortfolio } from "@/types/portfolio";
 import type {
   BondRedemptionQuote,
   BondSwapQuote,
@@ -27,6 +29,11 @@ type TreasuryBondFormProps = {
   onSellSubmit: () => void;
   onRedeemSubmit: () => void;
   onSwapSubmit: () => void;
+  targetPortfolios?: InvestmentPortfolio[];
+  targetPortfolioId?: string;
+  onTargetPortfolioChange?: (portfolioId: string) => void;
+  isTargetPortfolioPending?: boolean;
+  successMessage?: string | null;
 };
 
 const parseIntegerInput = (value: string) => {
@@ -65,6 +72,11 @@ export default function TreasuryBondForm({
   onSellSubmit,
   onRedeemSubmit,
   onSwapSubmit,
+  targetPortfolios,
+  targetPortfolioId,
+  onTargetPortfolioChange,
+  isTargetPortfolioPending = false,
+  successMessage,
 }: TreasuryBondFormProps) {
   const swapPriceValue = series?.swapPrice ?? Math.max((series?.salePrice ?? 100) - 0.1, 0);
 
@@ -143,6 +155,18 @@ export default function TreasuryBondForm({
           <small className="field-note">Domyslnie cena emisji, mozesz wpisac wlasna.</small>
         </label>
 
+        {targetPortfolios && onTargetPortfolioChange ? (
+          <div className="xl:col-span-full">
+            <PortfolioTargetSelector
+              portfolios={targetPortfolios}
+              value={targetPortfolioId ?? ""}
+              onChange={onTargetPortfolioChange}
+              disabled={isTargetPortfolioPending}
+              id="bond-target-portfolio"
+            />
+          </div>
+        ) : null}
+
         <button
           className="transaction-button transaction-button-compact bond-transaction-button transaction-button-buy self-end"
           type="button"
@@ -219,6 +243,7 @@ export default function TreasuryBondForm({
       ) : null}
 
       {error ? <p className="field-note field-note-error mt-4">{error}</p> : null}
+      {successMessage ? <p className="field-note tone-positive mt-4" role="status">{successMessage}</p> : null}
       {redemptionError ? <p className="field-note field-note-error mt-2">{redemptionError}</p> : null}
       {swapError ? <p className="field-note field-note-error mt-2">{swapError}</p> : null}
 

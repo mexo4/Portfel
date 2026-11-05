@@ -6,6 +6,7 @@ import {
   SUPPORTED_CURRENCIES,
 } from "@/lib/constants";
 import CurrencyPicker from "@/components/CurrencyPicker";
+import PortfolioTargetSelector from "@/components/PortfolioTargetSelector";
 import TruncatedText from "@/components/TruncatedText";
 import { getMinimumSearchLength, getSearchPlaceholder } from "@/lib/search";
 import { getGpwWatchlistCanonicalKey, isWatchlistEligibleGpwResult } from "@/lib/watchlist";
@@ -41,6 +42,11 @@ type AddAssetFormProps = {
   onReuseLastAddedResult: (result: AssetSearchResult) => void;
   onBuySubmit: () => void;
   onSellSubmit: () => void;
+  targetPortfolios?: import("@/types/portfolio").InvestmentPortfolio[];
+  targetPortfolioId?: string;
+  onTargetPortfolioChange?: (portfolioId: string) => void;
+  isTargetPortfolioPending?: boolean;
+  successMessage?: string | null;
 };
 
 const parseNumericInput = (value: string) => {
@@ -92,6 +98,11 @@ export default function AddAssetForm({
   onReuseLastAddedResult,
   onBuySubmit,
   onSellSubmit,
+  targetPortfolios,
+  targetPortfolioId,
+  onTargetPortfolioChange,
+  isTargetPortfolioPending = false,
+  successMessage,
 }: AddAssetFormProps) {
   const [selectedEtfListing, setSelectedEtfListing] = useState<EtfListing | null>(null);
   const [expandedEtfGroupId, setExpandedEtfGroupId] = useState<string | null>(null);
@@ -520,6 +531,18 @@ export default function AddAssetForm({
           />
         </label>
 
+        {targetPortfolios && onTargetPortfolioChange ? (
+          <div className="xl:col-span-full">
+            <PortfolioTargetSelector
+              portfolios={targetPortfolios}
+              value={targetPortfolioId ?? ""}
+              onChange={onTargetPortfolioChange}
+              disabled={isTargetPortfolioPending || isBuyPending}
+              id="asset-target-portfolio"
+            />
+          </div>
+        ) : null}
+
         <button
           className="transaction-button transaction-button-compact transaction-button-buy self-end"
           type="button"
@@ -544,6 +567,12 @@ export default function AddAssetForm({
           </p>
         ) : null}
       </div>
+
+      {successMessage ? (
+        <p className="field-note tone-positive mt-4" role="status" aria-live="polite">
+          {successMessage}
+        </p>
+      ) : null}
     </section>
   );
 }

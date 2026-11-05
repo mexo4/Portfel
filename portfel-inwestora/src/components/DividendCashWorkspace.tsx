@@ -2,6 +2,7 @@
 
 import { useMemo, useRef, useState } from "react";
 import FormattedNumberInput from "@/components/FormattedNumberInput";
+import PortfolioTargetSelector from "@/components/PortfolioTargetSelector";
 import TruncatedText from "@/components/TruncatedText";
 import { getBlankDividendNumericInputs } from "@/lib/dividend-input-defaults";
 import {
@@ -44,6 +45,11 @@ import type {
 type DividendCashWorkspaceProps = {
   activeView: "dividends" | "cash";
   portfolio: InvestmentPortfolio;
+  portfolios?: InvestmentPortfolio[];
+  isAggregateMode?: boolean;
+  targetPortfolioId?: string;
+  onTargetPortfolioChange?: (portfolioId: string) => void;
+  entryOnly?: boolean;
   isPortfolioMutationPending?: boolean;
   fxRates: FxRates;
   baseCurrency: CurrencyCode;
@@ -234,17 +240,41 @@ const getReportLabel = (label: string, portfolio: InvestmentPortfolio) =>
 
 export default function DividendCashWorkspace({
   activeView,
-  portfolio,
+  portfolio: initialPortfolio,
+  portfolios = [initialPortfolio],
+  isAggregateMode = false,
+  targetPortfolioId = "",
+  onTargetPortfolioChange,
+  entryOnly = false,
   isPortfolioMutationPending = false,
   fxRates,
   baseCurrency,
   onPortfolioChange,
 }: DividendCashWorkspaceProps) {
+  const selectedTargetPortfolio = isAggregateMode
+    ? portfolios.find((item) => item.id === targetPortfolioId) ?? null
+    : initialPortfolio;
+  const portfolio = useMemo(
+    () => selectedTargetPortfolio ?? (isAggregateMode
+      ? {
+          ...initialPortfolio,
+          id: "",
+          accounts: [],
+          instruments: [],
+          operations: [],
+          assets: [],
+          sales: [],
+          realizedAdjustments: [],
+        }
+      : initialPortfolio),
+    [initialPortfolio, isAggregateMode, selectedTargetPortfolio]
+  );
   const [dividendDraft, setDividendDraft] = useState(() => getDefaultDividendDraft());
   const [cashDraft, setCashDraft] = useState(() => getDefaultCashDraft(portfolio));
   const [dividendReportBucket, setDividendReportBucket] =
     useState<DividendReportBucket>("monthly");
   const [dividendError, setDividendError] = useState<string | null>(null);
+  const [dividendSuccess, setDividendSuccess] = useState<string | null>(null);
   const [cashError, setCashError] = useState<string | null>(null);
   const [isSavingDividend, setIsSavingDividend] = useState(false);
   const [isSavingCash, setIsSavingCash] = useState(false);
@@ -270,6 +300,39 @@ export default function DividendCashWorkspace({
   const instruments = portfolioInstruments.filter(
     (instrument) => instrument.type !== "CASH"
   );
+  const changeAggregateDividendTarget = (nextId: string) => {
+    if (!isAggregateMode || !onTargetPortfolioChange) return;
+    const nextPortfolio = portfolios.find((item) => item.id === nextId) ?? null;
+    const nextInstruments = (nextPortfolio?.instruments ?? []).filter(
+      (instrument) => instrument.type !== "CASH" && instrument.portfolioId === nextId
+    );
+    const nextAccounts = getDividendAccountCandidates(nextPortfolio?.accounts ?? []).filter(
+      (account) => account.portfolioId === nextId
+    );
+    const instrumentStillBelongs = dividendDraft.useCustomInstrument ||
+      !dividendDraft.instrumentId ||
+      nextInstruments.some((instrument) => instrument.id === dividendDraft.instrumentId);
+    const accountStillBelongs = dividendDraft.accountId === CREATE_DIVIDEND_ACCOUNT_VALUE ||
+      !dividendDraft.accountId ||
+      nextAccounts.some((account) => account.id === dividendDraft.accountId);
+    const clearedInstrument = !instrumentStillBelongs;
+    const clearedAccount = !accountStillBelongs;
+
+    onTargetPortfolioChange(nextId);
+    setDividendDraft((current) => ({
+      ...current,
+      editingId: null,
+      instrumentId: instrumentStillBelongs ? current.instrumentId : "",
+      accountId: accountStillBelongs ? current.accountId : "",
+    }));
+    if (clearedInstrument || clearedAccount) {
+      setDividendError("Portfel docelowy zmieniono. Wyczyściłem tylko instrument lub konto, które do niego nie należą; pozostałe dane formularza zachowałem.");
+      setDividendSuccess(null);
+    } else {
+      setDividendError(null);
+      setDividendSuccess(null);
+    }
+  };
   const dividendInstrumentQuery = dividendDraft.instrumentSearch.trim().toLowerCase();
   const filteredDividendInstruments = dividendInstrumentQuery
     ? instruments.filter((instrument) =>
@@ -351,6 +414,7 @@ export default function DividendCashWorkspace({
   const resetDividendDraft = () => {
     setDividendDraft(getDefaultDividendDraft());
     setDividendError(null);
+    setDividendSuccess(null);
   };
 
   const handleDividendInstrumentChange = (instrumentId: string) => {
@@ -543,6 +607,10 @@ export default function DividendCashWorkspace({
 
   const saveDividend = async () => {
     if (isSavingDividend || isPortfolioMutationPending) return;
+    if (isAggregateMode && (!targetPortfolioId || !selectedTargetPortfolio)) {
+      setDividendError("Wybierz portfel docelowy przed zapisaniem dywidendy.");
+      return;
+    }
     const resolvedInstrument = getResolvedDividendInstrument();
     const instrument = resolvedInstrument.instrument;
     const resolvedAccount = getResolvedDividendAccount();
@@ -652,6 +720,7 @@ export default function DividendCashWorkspace({
         operations: nextOperations,
       });
       resetDividendDraft();
+      setDividendSuccess(`Dywidenda została zapisana w portfelu „${portfolio.name}”.`);
     } catch {
       setDividendError("Nie udało się zapisać dywidendy. Dane formularza pozostały zachowane.");
     } finally {
@@ -727,7 +796,7 @@ export default function DividendCashWorkspace({
 
   return (
     <>
-      <section className="panel panel-compact">
+      {!entryOnly ? <section className="panel panel-compact">
         <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
           <div>
             <p className="eyebrow">Sprint 2</p>
@@ -773,10 +842,10 @@ export default function DividendCashWorkspace({
             </p>
           </article>
         </div>
-      </section>
+      </section> : null}
 
       {activeView === "dividends" ? (
-        <section className="sprint-two-grid dividend-workspace-grid">
+        <section className={entryOnly ? "sprint-two-grid dividend-workspace-grid dividend-entry-only-grid" : "sprint-two-grid dividend-workspace-grid"}>
           <article className="panel sprint-wide-panel dividend-entry-panel">
             <div className="sprint-panel-head">
               <div>
@@ -1062,6 +1131,17 @@ export default function DividendCashWorkspace({
                   placeholder="np. kwartalna wyplata"
                 />
               </label>
+              {isAggregateMode && onTargetPortfolioChange ? (
+                <div className="field-full">
+                  <PortfolioTargetSelector
+                    portfolios={portfolios}
+                    value={targetPortfolioId}
+                    onChange={changeAggregateDividendTarget}
+                    disabled={isPortfolioMutationPending || isSavingDividend}
+                    id="dividend-target-portfolio"
+                  />
+                </div>
+              ) : null}
             </div>
 
             <div className="dividend-preview mt-5">
@@ -1100,9 +1180,14 @@ export default function DividendCashWorkspace({
             {dividendError ? (
               <p className="field-note field-note-error mt-4">{dividendError}</p>
             ) : null}
+            {dividendSuccess ? (
+              <p className="field-note tone-positive mt-4" role="status" aria-live="polite">
+                {dividendSuccess}
+              </p>
+            ) : null}
 
             <div className="sprint-action-row mt-5">
-              <button className="primary-button" type="button" onClick={() => void saveDividend()} disabled={isSavingDividend || isPortfolioMutationPending}>
+              <button className="primary-button" type="button" onClick={() => void saveDividend()} disabled={isSavingDividend || isPortfolioMutationPending || (isAggregateMode && !selectedTargetPortfolio)}>
                 {isSavingDividend ? "Zapisywanie…" : isPortfolioMutationPending ? "Zmiana portfela…" : dividendDraft.editingId ? "Zapisz dywidende" : "Dodaj dywidende"}
               </button>
               {dividendDraft.editingId ? (
@@ -1113,7 +1198,7 @@ export default function DividendCashWorkspace({
             </div>
           </article>
 
-          <article className="panel sprint-wide-panel dividend-summary-panel">
+          {!entryOnly ? <article className="panel sprint-wide-panel dividend-summary-panel">
             <div className="sprint-panel-head">
               <div>
                 <p className="eyebrow">Raporty dywidend</p>
@@ -1220,8 +1305,9 @@ export default function DividendCashWorkspace({
                 </small>
               </article>
             </div>
-          </article>
+          </article> : null}
 
+          {!entryOnly ? <>
           <article className="panel sprint-wide-panel">
             <div className="sprint-panel-head">
               <div>
@@ -1374,6 +1460,7 @@ export default function DividendCashWorkspace({
               ))}
             </div>
           </article>
+          </> : null}
         </section>
       ) : null}
 

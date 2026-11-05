@@ -83,6 +83,7 @@ export type PortfolioWorkspaceValue = {
   assetEntryWorkspace: ReactNode;
   operationsWorkspace: ReactNode;
   incomeWorkspace: ReactNode;
+  aggregateDividendWorkspace: ReactNode;
   importWorkspace: ReactNode;
   settingsWorkspace: ReactNode;
   portfolioManagementWorkspace: ReactNode;

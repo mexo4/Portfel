@@ -113,6 +113,10 @@ import {
 } from "@/lib/portfolio-selection";
 import { normalizePortfolioAccountType } from "@/lib/portfolio-account-rules";
 import {
+  isPortfolioOperationTargetCurrent,
+  resolvePortfolioOperationTarget,
+} from "@/lib/portfolio-operation-target";
+import {
   compareImportedBrokerOperations,
   getImportedCommissionMetadata,
   getImportedStatementAccount,
@@ -177,6 +181,9 @@ const BrokerImportPanel = dynamic(() => import("@/components/BrokerImportPanel")
 const ChangePasswordPanel = dynamic(() => import("@/components/ChangePasswordPanel"));
 const PortfolioIncomeWorkspace = dynamic(
   () => import("@/components/PortfolioIncomeWorkspace")
+);
+const DividendCashWorkspace = dynamic<ComponentProps<typeof import("@/components/DividendCashWorkspace").default>>(
+  () => import("@/components/DividendCashWorkspace")
 );
 const PortfolioAccountManagement = dynamic<ComponentProps<typeof import("@/components/PortfolioAccountManagement").default>>(
   () => import("@/components/PortfolioAccountManagement")
@@ -1085,6 +1092,7 @@ export default function PortfolioApp({
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isSavingPortfolio, setIsSavingPortfolio] = useState(false);
   const [isPortfolioMutationPending, setIsPortfolioMutationPending] = useState(false);
+  const operationTargetPortfolioIdRef = useRef("");
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [isSendingVerification, setIsSendingVerification] = useState(false);
   const [isQuoteLoading, setIsQuoteLoading] = useState(false);
@@ -1098,9 +1106,11 @@ export default function PortfolioApp({
   const [isBondRedemptionLoading, setIsBondRedemptionLoading] = useState(false);
   const [isBondSwapLoading, setIsBondSwapLoading] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
+  const [assetSuccess, setAssetSuccess] = useState<string | null>(null);
   const [quoteError, setQuoteError] = useState<string | null>(null);
   const [watchlistError, setWatchlistError] = useState<string | null>(null);
   const [bondError, setBondError] = useState<string | null>(null);
+  const [bondSuccess, setBondSuccess] = useState<string | null>(null);
   const [bondRedemptionError, setBondRedemptionError] = useState<string | null>(null);
   const [bondSwapError, setBondSwapError] = useState<string | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
@@ -1157,6 +1167,31 @@ export default function PortfolioApp({
     const selectedIds = new Set(selectedPortfolioIds);
     return portfolios.filter(({ id }) => selectedIds.has(id));
   }, [portfolios, selectedPortfolioIds]);
+  const operationScopeKey = `${portfolioScope.mode}:${selectedPortfolioIds.join(",")}`;
+  const [operationTargetSelection, setOperationTargetSelection] = useState({
+    scopeKey: "",
+    portfolioId: "",
+  });
+  const operationTargetPortfolioId = operationTargetSelection.scopeKey === operationScopeKey
+    ? operationTargetSelection.portfolioId
+    : "";
+  const selectedPortfolioIdsRef = useRef(selectedPortfolioIds);
+  const operationScopeKeyRef = useRef(operationScopeKey);
+  useLayoutEffect(() => {
+    selectedPortfolioIdsRef.current = selectedPortfolioIds;
+    operationScopeKeyRef.current = operationScopeKey;
+    operationTargetPortfolioIdRef.current = operationTargetPortfolioId;
+  }, [operationScopeKey, operationTargetPortfolioId, selectedPortfolioIds]);
+  const handleOperationTargetChange = useCallback((portfolioId: string) => {
+    const isAllowed = selectedPortfolioIdsRef.current.includes(portfolioId);
+    const nextId = isAllowed ? portfolioId : "";
+    operationTargetPortfolioIdRef.current = nextId;
+    setOperationTargetSelection({
+      scopeKey: operationScopeKeyRef.current,
+      portfolioId: nextId,
+    });
+    setSyncError(null);
+  }, []);
   const portfolioScopeLabel = useMemo(
     () => getPortfolioScopeLabel(portfolioScope, portfolios),
     [portfolioScope, portfolios]
@@ -1454,6 +1489,60 @@ export default function PortfolioApp({
           })
         : null,
     [activePortfolio, assets, realizedAdjustments, sales]
+  );
+  const resolveCurrentOperationTarget = useCallback(() => {
+    const resolution = resolvePortfolioOperationTarget({
+      portfolios: portfoliosRef.current,
+      selectedPortfolioIds: selectedPortfolioIdsRef.current,
+      isAggregate: currentPortfolioScopeRef.current.mode !== "SINGLE",
+      targetPortfolioId: operationTargetPortfolioIdRef.current,
+      activePortfolioId: activePortfolioIdRef.current,
+    });
+    if (!resolution.ok) {
+      setSyncError(
+        resolution.reason === "TARGET_REQUIRED"
+          ? "Wybierz portfel docelowy przed zapisaniem operacji."
+          : "Wybrany portfel nie należy już do aktualnego zakresu. Wybierz go ponownie."
+      );
+      return null;
+    }
+    if (
+      currentPortfolioScopeRef.current.mode === "SINGLE" &&
+      activePortfolioForEngine?.id === resolution.portfolio.id
+    ) {
+      return activePortfolioForEngine;
+    }
+    return ensurePortfolioCoreModel(resolution.portfolio);
+  }, [activePortfolioForEngine]);
+  const getCurrentOperationTarget = useCallback(
+    (targetPortfolioId: string, expectedScopeKey: string) => {
+      const isAggregate = currentPortfolioScopeRef.current.mode !== "SINGLE";
+      const currentTargetId = isAggregate
+        ? operationTargetPortfolioIdRef.current
+        : activePortfolioIdRef.current;
+      if (
+        !isPortfolioOperationTargetCurrent({
+          targetPortfolioId,
+          currentTargetPortfolioId: currentTargetId,
+          targetPortfolioIds: selectedPortfolioIdsRef.current,
+          originalScopeKey: expectedScopeKey,
+          currentScopeKey: operationScopeKeyRef.current,
+        })
+      ) {
+        throw new Error(
+          "Zakres lub portfel docelowy zmienił się przed zapisem. Sprawdź formularz i spróbuj ponownie."
+        );
+      }
+      const portfolio = portfoliosRef.current.find(
+        (candidate) => candidate.id === targetPortfolioId
+      );
+      if (!portfolio) throw new Error("Portfel docelowy nie jest już dostępny.");
+      if (!isAggregate && activePortfolioForEngine?.id === targetPortfolioId) {
+        return activePortfolioForEngine;
+      }
+      return ensurePortfolioCoreModel(portfolio);
+    },
+    [activePortfolioForEngine]
   );
   const activePortfolioDividends = useMemo(
     () => {
@@ -1967,9 +2056,12 @@ export default function PortfolioApp({
   );
 
   const persistPortfolioCoreModelChange = useCallback(
-    async (nextPortfolio: InvestmentPortfolio) => {
+    async (
+      nextPortfolio: InvestmentPortfolio,
+      options?: { includePortfolioSnapshots?: boolean }
+    ) => {
       if (!portfoliosRef.current.some((portfolio) => portfolio.id === nextPortfolio.id)) {
-        const message = "Nie znaleziono portfela docelowego dla operacji gotowkowej.";
+        const message = "Nie znaleziono portfela docelowego dla operacji.";
         setSyncError(message);
         throw new Error(message);
       }
@@ -1980,6 +2072,15 @@ export default function PortfolioApp({
         portfolio.id === nextPortfolio.id
           ? {
               ...portfolio,
+              ...(options?.includePortfolioSnapshots
+                ? {
+                    assets: normalizeStoredPortfolioAssets(nextPortfolio.assets),
+                    sales: getSortedPortfolioSales(nextPortfolio.sales),
+                    realizedAdjustments: getSortedPortfolioRealizedAdjustments(
+                      nextPortfolio.realizedAdjustments
+                    ),
+                  }
+                : {}),
               accounts: nextPortfolio.accounts,
               instruments: nextPortfolio.instruments,
               operations: nextPortfolio.operations,
@@ -2007,13 +2108,115 @@ export default function PortfolioApp({
         setPortfolios(previousPortfolios);
         const message = toErrorMessage(
           error,
-          "Nie udalo sie zapisac zmian w gotowce."
+          "Nie udalo sie zapisac zmian w portfelu."
         );
         setSyncError(message);
         throw error instanceof Error ? error : new Error(message);
       }
     },
     [queuePortfolioSave]
+  );
+
+  const persistOperationTargetChange = useCallback(
+    async (
+      nextPortfolio: InvestmentPortfolio,
+      expectedTargetPortfolioId: string,
+      expectedScopeKey: string
+    ) => {
+      const isCurrent = isPortfolioOperationTargetCurrent({
+        targetPortfolioId: expectedTargetPortfolioId,
+        currentTargetPortfolioId:
+          currentPortfolioScopeRef.current.mode === "SINGLE"
+            ? activePortfolioIdRef.current
+            : operationTargetPortfolioIdRef.current,
+        targetPortfolioIds:
+          currentPortfolioScopeRef.current.mode === "SINGLE"
+            ? [activePortfolioIdRef.current]
+            : selectedPortfolioIdsRef.current,
+        originalScopeKey: expectedScopeKey,
+        currentScopeKey: operationScopeKeyRef.current,
+      });
+      if (!isCurrent || nextPortfolio.id !== expectedTargetPortfolioId) {
+        throw new Error(
+          "Zakres lub portfel docelowy zmienił się przed zapisem. Sprawdź formularz i spróbuj ponownie."
+        );
+      }
+      const currentTarget = portfoliosRef.current.find(
+        (portfolio) => portfolio.id === expectedTargetPortfolioId
+      );
+      if (!currentTarget) {
+        throw new Error("Portfel docelowy nie jest już dostępny.");
+      }
+      await persistPortfolioCoreModelChange({
+        ...currentTarget,
+        assets: nextPortfolio.assets,
+        sales: nextPortfolio.sales,
+        realizedAdjustments: nextPortfolio.realizedAdjustments,
+        accounts: nextPortfolio.accounts,
+        instruments: nextPortfolio.instruments,
+        operations: nextPortfolio.operations,
+        benchmarks: nextPortfolio.benchmarks,
+      }, { includePortfolioSnapshots: true });
+    },
+    [persistPortfolioCoreModelChange]
+  );
+
+  const persistPortfolioWithinCurrentScope = useCallback(
+    async (nextPortfolio: InvestmentPortfolio, expectedScopeKey: string) => {
+      const isAggregate = currentPortfolioScopeRef.current.mode !== "SINGLE";
+      const allowedIds = isAggregate
+        ? selectedPortfolioIdsRef.current
+        : [activePortfolioIdRef.current];
+      if (expectedScopeKey !== operationScopeKeyRef.current || !allowedIds.includes(nextPortfolio.id)) {
+        throw new Error("Portfel nie należy do aktualnie wybranego zakresu.");
+      }
+      const currentTarget = portfoliosRef.current.find(
+        (portfolio) => portfolio.id === nextPortfolio.id
+      );
+      if (!currentTarget) throw new Error("Nie znaleziono portfela docelowego.");
+      await persistPortfolioCoreModelChange({
+        ...currentTarget,
+        assets: nextPortfolio.assets,
+        sales: nextPortfolio.sales,
+        realizedAdjustments: nextPortfolio.realizedAdjustments,
+        accounts: nextPortfolio.accounts,
+        instruments: nextPortfolio.instruments,
+        operations: nextPortfolio.operations,
+        benchmarks: nextPortfolio.benchmarks,
+      }, { includePortfolioSnapshots: true });
+    },
+    [persistPortfolioCoreModelChange]
+  );
+
+  const commitOperationPortfolioSnapshot = useCallback(
+    async (
+      nextPortfolio: InvestmentPortfolio,
+      targetPortfolioId: string,
+      expectedScopeKey: string
+    ) => {
+      const latestTarget = getCurrentOperationTarget(targetPortfolioId, expectedScopeKey);
+      if (nextPortfolio.id !== latestTarget.id) {
+        throw new Error("Operacja nie należy do wskazanego portfela docelowego.");
+      }
+      if (currentPortfolioScopeRef.current.mode !== "SINGLE") {
+        await persistOperationTargetChange(nextPortfolio, targetPortfolioId, expectedScopeKey);
+        return;
+      }
+      updateWorkspaceAssets(() => normalizeStoredPortfolioAssets(nextPortfolio.assets));
+      updateWorkspaceSales(() => getSortedPortfolioSales(nextPortfolio.sales));
+      updateWorkspaceRealizedAdjustments(() =>
+        getSortedPortfolioRealizedAdjustments(nextPortfolio.realizedAdjustments)
+      );
+      handlePortfolioCoreModelChange(nextPortfolio);
+    },
+    [
+      getCurrentOperationTarget,
+      handlePortfolioCoreModelChange,
+      persistOperationTargetChange,
+      updateWorkspaceAssets,
+      updateWorkspaceRealizedAdjustments,
+      updateWorkspaceSales,
+    ]
   );
 
   const restoreLastPersistedPortfolioBook = useCallback(() => {
@@ -2848,9 +3051,11 @@ export default function PortfolioApp({
     setIsSearching(false);
     setIsQuoteLoading(false);
     setSearchError(null);
+    setAssetSuccess(null);
     setQuoteError(null);
     setWatchlistError(null);
     setBondError(null);
+    setBondSuccess(null);
     setBondRedemptionError(null);
     setBondSwapError(null);
   }, []);
@@ -2909,26 +3114,36 @@ export default function PortfolioApp({
     handleSearchModeChange(mode);
   };
 
-  const getBondGroup = (code: string) => {
+  const getBondGroup = (
+    code: string,
+    portfolio: InvestmentPortfolio | null = activePortfolioForEngine
+  ) => {
+    if (!portfolio) return undefined;
     const normalizedCode = normalizeTreasuryBondCode(code);
     const groupKey = getPortfolioAssetGroupKey({
       kind: "bond",
       symbol: normalizedCode,
     });
 
-    return groupedAssets.find((group) => group.key === groupKey);
+    return getGroupedPortfolioAssets(
+      portfolio.assets,
+      fxRates,
+      toCurrencyCode(portfolio.baseCurrency, "PLN")
+    ).find((group) => group.key === groupKey);
   };
 
   const buildBondRedemptionPreview = async ({
     code,
     quantity,
     requestDate,
+    portfolio,
   }: {
     code: string;
     quantity: number;
     requestDate: string;
+    portfolio: InvestmentPortfolio;
   }) => {
-    const targetGroup = getBondGroup(code);
+    const targetGroup = getBondGroup(code, portfolio);
 
     if (!targetGroup) {
       throw new Error("Nie masz otwartej pozycji dla tej obligacji.");
@@ -2983,7 +3198,7 @@ export default function PortfolioApp({
           purchaseDate: request.lot.purchaseDate,
           requestDate,
           quantity: request.quantity,
-          accountType: normalizePortfolioAccountType(activePortfolioForEngine?.accountType),
+          accountType: normalizePortfolioAccountType(portfolio.accountType),
         });
 
         return response.redemption;
@@ -3049,17 +3264,20 @@ export default function PortfolioApp({
     requestDate,
     targetCode,
     targetQuantity,
+    portfolio,
   }: {
     code: string;
     quantity: number;
     requestDate: string;
     targetCode: string;
     targetQuantity: number;
+    portfolio: InvestmentPortfolio;
   }) => {
     const sourceRedemption = await buildBondRedemptionPreview({
       code,
       quantity,
       requestDate,
+      portfolio,
     });
     const response = await fetchTreasuryBondSwap({
       sourceRedemption,
@@ -3362,7 +3580,10 @@ export default function PortfolioApp({
   };
 
   const handleAddBondAsset = async () => {
-    if (!requireConcretePortfolioSelection()) {
+    const expectedScopeKey = operationScopeKeyRef.current;
+    const targetPortfolio = resolveCurrentOperationTarget();
+    if (!targetPortfolio) {
+      setBondError("Wybierz portfel docelowy przed dodaniem obligacji.");
       return;
     }
     const normalizedCode = normalizeTreasuryBondCode(bondDraft.code);
@@ -3377,7 +3598,14 @@ export default function PortfolioApp({
       return;
     }
 
-    const planLimitError = getFreePlanAssetLimitError();
+    const targetBondGroupKey = getPortfolioAssetGroupKey({
+      kind: "bond",
+      symbol: normalizedCode,
+    });
+    const targetBondGroups = new Set(targetPortfolio.assets.map(getPortfolioAssetGroupKey));
+    const planLimitError = getFreePlanAssetLimitError(
+      targetBondGroups.size + (targetBondGroups.has(targetBondGroupKey) ? 0 : 1)
+    );
 
     if (planLimitError) {
       setBondError(planLimitError);
@@ -3396,11 +3624,23 @@ export default function PortfolioApp({
               code: normalizedCode,
               purchaseDate,
             });
+      const currentTarget = getCurrentOperationTarget(
+        targetPortfolio.id,
+        expectedScopeKey
+      );
+      const currentBondGroups = new Set(currentTarget.assets.map(getPortfolioAssetGroupKey));
+      const currentPlanLimitError = getFreePlanAssetLimitError(
+        currentBondGroups.size + (currentBondGroups.has(targetBondGroupKey) ? 0 : 1)
+      );
+      if (currentPlanLimitError) {
+        setBondError(currentPlanLimitError);
+        return;
+      }
       const nextAssetGroupKey = getPortfolioAssetGroupKey({
         kind: "bond",
         symbol: normalizedCode,
       });
-      const existingGroupOrder = assets.find(
+      const existingGroupOrder = currentTarget.assets.find(
         (asset) => getPortfolioAssetGroupKey(asset) === nextAssetGroupKey
       )?.groupOrder;
       const nextAsset: PortfolioAsset = {
@@ -3423,21 +3663,30 @@ export default function PortfolioApp({
         latestPriceFetchedAt: response.quote.fetchedAt,
         lastUpdatedAt: response.quote.fetchedAt,
         bondMeta: response.series,
-        groupOrder: existingGroupOrder ?? getNextGroupOrder(assets),
+        groupOrder: existingGroupOrder ?? getNextGroupOrder(currentTarget.assets),
         createdAt: new Date().toISOString(),
       };
-
-      updateWorkspaceAssets((currentAssets) =>
-        normalizeStoredPortfolioAssets([nextAsset, ...currentAssets])
+      const nextPortfolio = ensurePortfolioCoreModel({
+        ...currentTarget,
+        assets: normalizeStoredPortfolioAssets([nextAsset, ...currentTarget.assets]),
+      });
+      await commitOperationPortfolioSnapshot(
+        nextPortfolio,
+        targetPortfolio.id,
+        expectedScopeKey
       );
       resetAssetEntryForm();
+      setBondSuccess(`Obligacja została dodana do portfela „${targetPortfolio.name}”.`);
     } catch (error) {
       setBondError(toErrorMessage(error, "Nie udalo sie dodac obligacji."));
     }
   };
 
   const handleSellBondAsset = async () => {
-    if (!requireConcretePortfolioSelection()) {
+    const expectedScopeKey = operationScopeKeyRef.current;
+    const targetPortfolio = resolveCurrentOperationTarget();
+    if (!targetPortfolio) {
+      setBondError("Wybierz portfel docelowy przed zapisaniem sprzedaży obligacji.");
       return;
     }
     const normalizedCode = normalizeTreasuryBondCode(bondDraft.code);
@@ -3454,7 +3703,11 @@ export default function PortfolioApp({
     }
 
     try {
-      const targetGroup = getBondGroup(normalizedCode);
+      const currentTarget = getCurrentOperationTarget(
+        targetPortfolio.id,
+        expectedScopeKey
+      );
+      const targetGroup = getBondGroup(normalizedCode, currentTarget);
 
       if (!targetGroup) {
         throw new Error("Nie znaleziono pozycji do sprzedazy.");
@@ -3462,7 +3715,7 @@ export default function PortfolioApp({
 
       const representativeLot = targetGroup.lots[0];
       const result = applySaleToPortfolio({
-        assets,
+        assets: currentTarget.assets,
         group: targetGroup,
         draft: {
           groupKey: targetGroup.key,
@@ -3485,13 +3738,20 @@ export default function PortfolioApp({
         fxRates,
       });
 
-      updateWorkspaceAssets(() => result.assets);
-      updateWorkspaceSales((currentSales) =>
-        getSortedPortfolioSales([result.sale, ...currentSales])
+      const nextPortfolio = ensurePortfolioCoreModel({
+        ...currentTarget,
+        assets: result.assets,
+        sales: getSortedPortfolioSales([result.sale, ...(currentTarget.sales ?? [])]),
+      });
+      await commitOperationPortfolioSnapshot(
+        nextPortfolio,
+        targetPortfolio.id,
+        expectedScopeKey
       );
       setBondRedemptionPreview(null);
       setBondSwapPreview(null);
       clearBondDraftSelection();
+      setBondSuccess(`Sprzedaż obligacji została zapisana w portfelu „${targetPortfolio.name}”.`);
       setBondError(null);
     } catch (error) {
       setBondError(toErrorMessage(error, "Nie udalo sie zapisac sprzedazy obligacji."));
@@ -3499,7 +3759,10 @@ export default function PortfolioApp({
   };
 
   const handleRedeemBondAsset = async () => {
-    if (!requireConcretePortfolioSelection()) {
+    const expectedScopeKey = operationScopeKeyRef.current;
+    const targetPortfolio = resolveCurrentOperationTarget();
+    if (!targetPortfolio) {
+      setBondRedemptionError("Wybierz portfel docelowy przed zapisaniem wykupu.");
       return;
     }
     const normalizedCode = normalizeTreasuryBondCode(bondDraft.code);
@@ -3522,16 +3785,24 @@ export default function PortfolioApp({
         code: normalizedCode,
         quantity: bondDraft.quantity,
         requestDate,
+        portfolio: targetPortfolio,
       });
-      const targetGroup = getBondGroup(normalizedCode);
+      const currentTarget = getCurrentOperationTarget(
+        targetPortfolio.id,
+        expectedScopeKey
+      );
+      const targetGroup = getBondGroup(normalizedCode, currentTarget);
 
       if (!targetGroup) {
         throw new Error("Nie znaleziono pozycji do wykupu.");
       }
+      if (bondDraft.quantity > targetGroup.quantity) {
+        throw new Error("Ilość wykupu przekracza aktualną pozycję w wybranym portfelu.");
+      }
 
       const representativeLot = targetGroup.lots[0];
       const result = applySaleToPortfolio({
-        assets,
+        assets: currentTarget.assets,
         group: targetGroup,
         draft: {
           groupKey: targetGroup.key,
@@ -3554,21 +3825,28 @@ export default function PortfolioApp({
         fxRates,
       });
 
-      updateWorkspaceAssets(() => result.assets);
-      updateWorkspaceSales((currentSales) =>
-        getSortedPortfolioSales([
+      const nextPortfolio = ensurePortfolioCoreModel({
+        ...currentTarget,
+        assets: result.assets,
+        sales: getSortedPortfolioSales([
           buildBondSettlementSale({
             baseSale: result.sale,
             representativeLot,
             preview,
             transactionKind: "bond-redemption",
           }),
-          ...currentSales,
-        ])
+          ...(currentTarget.sales ?? []),
+        ]),
+      });
+      await commitOperationPortfolioSnapshot(
+        nextPortfolio,
+        targetPortfolio.id,
+        expectedScopeKey
       );
       setBondRedemptionPreview(preview);
       setBondSwapPreview(null);
       clearBondDraftSelection();
+      setBondSuccess(`Wykup zapisano w portfelu „${targetPortfolio.name}”.`);
     } catch (error) {
       setBondRedemptionError(toErrorMessage(error, "Nie udalo sie zapisac wykupu."));
     } finally {
@@ -3577,7 +3855,10 @@ export default function PortfolioApp({
   };
 
   const handleSwapBondAsset = async () => {
-    if (!requireConcretePortfolioSelection()) {
+    const expectedScopeKey = operationScopeKeyRef.current;
+    const targetPortfolio = resolveCurrentOperationTarget();
+    if (!targetPortfolio) {
+      setBondSwapError("Wybierz portfel docelowy przed zapisaniem zamiany obligacji.");
       return;
     }
     const normalizedSourceCode = normalizeTreasuryBondCode(bondDraft.code);
@@ -3608,16 +3889,24 @@ export default function PortfolioApp({
         requestDate,
         targetCode: normalizedTargetCode,
         targetQuantity: bondDraft.swapTargetQuantity,
+        portfolio: targetPortfolio,
       });
-      const targetGroup = getBondGroup(normalizedSourceCode);
+      const currentTarget = getCurrentOperationTarget(
+        targetPortfolio.id,
+        expectedScopeKey
+      );
+      const targetGroup = getBondGroup(normalizedSourceCode, currentTarget);
 
       if (!targetGroup) {
         throw new Error("Nie znaleziono pozycji do zamiany.");
       }
+      if (bondDraft.quantity > targetGroup.quantity) {
+        throw new Error("Ilość zamiany przekracza aktualną pozycję w wybranym portfelu.");
+      }
 
       const representativeLot = targetGroup.lots[0];
       const result = applySaleToPortfolio({
-        assets,
+        assets: currentTarget.assets,
         group: targetGroup,
         draft: {
           groupKey: targetGroup.key,
@@ -3674,11 +3963,10 @@ export default function PortfolioApp({
         createdAt: new Date().toISOString(),
       };
 
-      updateWorkspaceAssets(() =>
-        normalizeStoredPortfolioAssets([targetAsset, ...result.assets])
-      );
-      updateWorkspaceSales((currentSales) =>
-        getSortedPortfolioSales([
+      const nextPortfolio = ensurePortfolioCoreModel({
+        ...currentTarget,
+        assets: normalizeStoredPortfolioAssets([targetAsset, ...result.assets]),
+        sales: getSortedPortfolioSales([
           buildBondSettlementSale({
             baseSale: result.sale,
             representativeLot,
@@ -3692,12 +3980,18 @@ export default function PortfolioApp({
               swapTargetAssetId,
             },
           }),
-          ...currentSales,
-        ])
+          ...(currentTarget.sales ?? []),
+        ]),
+      });
+      await commitOperationPortfolioSnapshot(
+        nextPortfolio,
+        targetPortfolio.id,
+        expectedScopeKey
       );
       setBondSwapPreview(preview);
       setBondRedemptionPreview(null);
       clearBondDraftSelection();
+      setBondSuccess(`Zamianę zapisano w portfelu „${targetPortfolio.name}”.`);
     } catch (error) {
       setBondSwapError(toErrorMessage(error, "Nie udalo sie zapisac zamiany."));
     } finally {
@@ -3706,7 +4000,10 @@ export default function PortfolioApp({
   };
 
   const handleAddAsset = async () => {
-    if (!requireConcretePortfolioSelection()) {
+    const expectedScopeKey = operationScopeKeyRef.current;
+    const targetPortfolio = resolveCurrentOperationTarget();
+    if (!targetPortfolio) {
+      setSearchError("Wybierz portfel docelowy przed dodaniem pozycji.");
       return;
     }
     const name = draft.name.trim() || draft.query.trim();
@@ -3747,7 +4044,16 @@ export default function PortfolioApp({
       return;
     }
 
-    const planLimitError = getFreePlanAssetLimitError();
+    const targetAssets = normalizeStoredPortfolioAssets(targetPortfolio.assets);
+    const prospectiveGroupKey = getPortfolioAssetGroupKey({
+      kind: draft.kind,
+      symbol,
+      instrumentIdentity: draft.instrumentIdentity,
+    });
+    const targetAssetGroups = new Set(targetAssets.map(getPortfolioAssetGroupKey));
+    const planLimitError = getFreePlanAssetLimitError(
+      targetAssetGroups.size + (targetAssetGroups.has(prospectiveGroupKey) ? 0 : 1)
+    );
 
     if (planLimitError) {
       setSearchError(planLimitError);
@@ -3819,12 +4125,25 @@ export default function PortfolioApp({
         );
         return;
       }
+      const currentTarget = getCurrentOperationTarget(
+        targetPortfolio.id,
+        expectedScopeKey
+      );
+      const currentAssets = normalizeStoredPortfolioAssets(currentTarget.assets);
       const nextAssetGroupKey = getPortfolioAssetGroupKey({
         kind: draft.kind,
         symbol: storedSymbol,
         instrumentIdentity: draft.instrumentIdentity,
       });
-      const existingGroupOrder = assets.find(
+      const currentAssetGroups = new Set(currentAssets.map(getPortfolioAssetGroupKey));
+      const currentPlanLimitError = getFreePlanAssetLimitError(
+        currentAssetGroups.size + (currentAssetGroups.has(nextAssetGroupKey) ? 0 : 1)
+      );
+      if (currentPlanLimitError) {
+        setSearchError(currentPlanLimitError);
+        return;
+      }
+      const existingGroupOrder = currentAssets.find(
         (asset) => getPortfolioAssetGroupKey(asset) === nextAssetGroupKey
       )?.groupOrder;
 
@@ -3860,17 +4179,17 @@ export default function PortfolioApp({
         latestPriceFetchedAt: quote?.fetchedAt,
         previousClose: quote?.previousClose ?? draft.previousClose,
         lastUpdatedAt: quote?.fetchedAt,
-        groupOrder: existingGroupOrder ?? getNextGroupOrder(assets),
+        groupOrder: existingGroupOrder ?? getNextGroupOrder(currentAssets),
         createdAt: new Date().toISOString(),
       };
 
       isManualSymbolRef.current = false;
-      const nextAssets = normalizeStoredPortfolioAssets([nextAsset, ...assets]);
+      const nextAssets = normalizeStoredPortfolioAssets([nextAsset, ...currentAssets]);
       const portfolioWithInstrument = ensurePortfolioCoreModel({
-        ...(activePortfolioForEngine ?? activePortfolio!),
+        ...currentTarget,
         assets: nextAssets,
-        sales,
-        realizedAdjustments,
+        sales: currentTarget.sales ?? [],
+        realizedAdjustments: currentTarget.realizedAdjustments ?? [],
       });
       let nextAccounts = portfolioWithInstrument.accounts ?? [];
 
@@ -3903,9 +4222,13 @@ export default function PortfolioApp({
         ],
       });
 
-      updateWorkspaceAssets(() => nextAssets);
-      handlePortfolioCoreModelChange(nextPortfolio);
+      await commitOperationPortfolioSnapshot(
+        nextPortfolio,
+        targetPortfolio.id,
+        expectedScopeKey
+      );
       resetAssetEntryForm();
+      setAssetSuccess(`Pozycja została dodana do portfela „${targetPortfolio.name}”.`);
     } catch (error) {
       setSearchError(toErrorMessage(error, "Nie udało się dodać pozycji."));
     } finally {
@@ -3915,7 +4238,10 @@ export default function PortfolioApp({
   };
 
   const handleSellAsset = async () => {
-    if (!requireConcretePortfolioSelection()) {
+    const expectedScopeKey = operationScopeKeyRef.current;
+    const targetPortfolio = resolveCurrentOperationTarget();
+    if (!targetPortfolio) {
+      setSearchError("Wybierz portfel docelowy przed zapisaniem sprzedaży.");
       return;
     }
     const name = draft.name.trim() || draft.query.trim();
@@ -3935,7 +4261,11 @@ export default function PortfolioApp({
       symbol,
       instrumentIdentity: draft.instrumentIdentity,
     });
-    const targetGroup = groupedAssets.find((group) => group.key === groupKey);
+    const targetGroup = getGroupedPortfolioAssets(
+      targetPortfolio.assets,
+      fxRates,
+      toCurrencyCode(targetPortfolio.baseCurrency, "PLN")
+    ).find((group) => group.key === groupKey);
 
     if (!targetGroup) {
       setSearchError("Nie masz otwartej pozycji dla tego aktywa.");
@@ -3990,20 +4320,36 @@ export default function PortfolioApp({
         return;
       }
 
+      const currentTarget = getCurrentOperationTarget(
+        targetPortfolio.id,
+        expectedScopeKey
+      );
+      const currentGroup = getGroupedPortfolioAssets(
+        currentTarget.assets,
+        saleFxRates,
+        toCurrencyCode(currentTarget.baseCurrency, "PLN")
+      ).find((group) => group.key === groupKey);
+      if (!currentGroup) {
+        throw new Error("Pozycja nie jest już dostępna w wybranym portfelu.");
+      }
+      const currentRepresentativeLot = currentGroup.lots[0];
+      if (draft.quantity > currentGroup.quantity) {
+        throw new Error("Ilość sprzedaży przekracza aktualną pozycję w tym portfelu.");
+      }
       const result = applySaleToPortfolio({
-        assets,
-        group: targetGroup,
+        assets: currentTarget.assets,
+        group: currentGroup,
         draft: {
           groupKey,
-          name: name || targetGroup.name,
+          name: name || currentGroup.name,
           symbol,
           kind: draft.kind,
           purchaseCurrency: settlementCurrency,
           marketCurrency: saleCurrency,
-          provider: representativeLot?.provider ?? draft.provider,
-          providerId: representativeLot?.providerId ?? draft.providerId,
-          priceScale: representativeLot?.priceScale ?? draft.priceScale,
-          maxQuantity: targetGroup.quantity,
+          provider: currentRepresentativeLot?.provider ?? draft.provider,
+          providerId: currentRepresentativeLot?.providerId ?? draft.providerId,
+          priceScale: currentRepresentativeLot?.priceScale ?? draft.priceScale,
+          maxQuantity: currentGroup.quantity,
           quantity: draft.quantity,
           quantityInput: draft.quantityInput,
           salePrice: draft.purchasePrice,
@@ -4015,12 +4361,12 @@ export default function PortfolioApp({
       });
 
       isManualSymbolRef.current = false;
-      const nextSales = getSortedPortfolioSales([result.sale, ...sales]);
+      const nextSales = getSortedPortfolioSales([result.sale, ...(currentTarget.sales ?? [])]);
       const portfolioWithSale = ensurePortfolioCoreModel({
-        ...(activePortfolioForEngine ?? activePortfolio!),
+        ...currentTarget,
         assets: result.assets,
         sales: nextSales,
-        realizedAdjustments,
+        realizedAdjustments: currentTarget.realizedAdjustments ?? [],
       });
       let nextAccounts = ensurePortfolioCashAccount(
         portfolioWithSale.accounts ?? [],
@@ -4051,10 +4397,13 @@ export default function PortfolioApp({
         ],
       });
 
-      updateWorkspaceAssets(() => result.assets);
-      updateWorkspaceSales(() => nextSales);
-      handlePortfolioCoreModelChange(nextPortfolio);
+      await commitOperationPortfolioSnapshot(
+        nextPortfolio,
+        targetPortfolio.id,
+        expectedScopeKey
+      );
       resetAssetEntryForm();
+      setAssetSuccess(`Sprzedaż została zapisana w portfelu „${targetPortfolio.name}”.`);
       setSyncError(null);
     } catch (error) {
       setSearchError(toErrorMessage(error, "Nie udalo sie zapisac sprzedazy."));
@@ -5339,8 +5688,8 @@ export default function PortfolioApp({
   };
 
   const assetEntryWorkspace = <>
-    <section className="panel panel-compact workspace-entry-head"><div><p className="eyebrow">Nowa operacja</p><h2 className="section-title">Dodaj instrument</h2><p className="section-copy">Wybierz klasę aktywa i dodaj zakup lub sprzedaż do aktywnego portfela.</p></div><AssetModeSelector value={entryMode} onChange={handleEntryModeChange} /></section>
-    {entryMode === "bond" ? <TreasuryBondForm draft={bondDraft} series={bondSeries} quote={bondQuote} redemptionPreview={bondRedemptionPreview} swapPreview={bondSwapPreview} isLoadingSeries={isBondLoading} isLoadingRedemption={isBondRedemptionLoading} isLoadingSwap={isBondSwapLoading} error={bondError} redemptionError={bondRedemptionError} swapError={bondSwapError} onChange={(nextDraft: TreasuryBondDraft) => { setBondDraft(nextDraft); resetBondInteractionState(); }} onCodeChange={(code: string) => { setBondDraft((currentDraft) => ({ ...currentDraft, code: normalizeTreasuryBondCode(code) })); setBondError(null); resetBondInteractionState(); }} onBuySubmit={() => { void handleAddBondAsset(); }} onSellSubmit={() => { void handleSellBondAsset(); }} onRedeemSubmit={() => { void handleRedeemBondAsset(); }} onSwapSubmit={() => { void handleSwapBondAsset(); }} /> : <AddAssetForm showModeSelector={false} searchMode={searchMode} draft={draft} results={results} etfResultGroups={etfResultGroups} lastAddedResult={lastAddedResult} isSearching={isSearching} isQuoteLoading={isQuoteLoading} isBuyPending={isAssetAddPending} searchError={searchError} quoteError={quoteError} watchlistKeys={watchlistKeys} isWatchlistTogglePending={isWatchlistTogglePending} watchlistError={watchlistError} onToggleWatchlist={(result: AssetSearchResult) => { void handleToggleWatchlist(result); }} onDraftChange={setDraft} onSearchModeChange={handleSearchModeChange} onQueryChange={(query: string) => { const trimmedQuery = query.trim(); const minimumSearchLength = getMinimumSearchLength(searchMode); quoteRequestSeqRef.current += 1; lastPreviewRequestKeyRef.current = ""; isManualSymbolRef.current = false; setIsSearching(trimmedQuery.length >= minimumSearchLength); setIsQuoteLoading(false); setResults([]); setEtfResultGroups([]); setSearchError(null); setQuoteError(null); setWatchlistError(null); setDraft((currentDraft) => ({ ...currentDraft, query, name: query, symbol: "", providerId: undefined, priceScale: undefined, issuerCountry: undefined, instrumentIdentity: undefined, marketCurrencyConfirmed: undefined, latestPrice: undefined, latestPriceDate: undefined, previousClose: undefined })); }} onSymbolChange={(symbol: string) => { quoteRequestSeqRef.current += 1; lastPreviewRequestKeyRef.current = ""; isManualSymbolRef.current = true; setIsSearching(false); setIsQuoteLoading(false); setResults([]); setEtfResultGroups([]); setSearchError(null); setQuoteError(null); setWatchlistError(null); setDraft((currentDraft) => ({ ...currentDraft, symbol: symbol.toUpperCase(), query: "", name: "", providerId: undefined, priceScale: undefined, issuerCountry: undefined, instrumentIdentity: undefined, marketCurrencyConfirmed: undefined, latestPrice: undefined, latestPriceDate: undefined, previousClose: undefined })); }} onPickResult={(result: AssetSearchResult) => { void handlePickResult(result); }} onReuseLastAddedResult={(result: AssetSearchResult) => { void handlePickResult(result); }} onBuySubmit={() => { void handleAddAsset(); }} onSellSubmit={() => { void handleSellAsset(); }} />}
+    <section className="panel panel-compact workspace-entry-head"><div><p className="eyebrow">Nowa operacja</p><h2 className="section-title">Dodaj instrument</h2><p className="section-copy">Wybierz klasę aktywa i dodaj zakup lub sprzedaż {isAllPortfoliosSelected ? "do wybranego portfela docelowego z bieżącego zakresu" : "do aktywnego portfela"}.</p></div><AssetModeSelector value={entryMode} onChange={handleEntryModeChange} /></section>
+    {entryMode === "bond" ? <TreasuryBondForm draft={bondDraft} series={bondSeries} quote={bondQuote} redemptionPreview={bondRedemptionPreview} swapPreview={bondSwapPreview} isLoadingSeries={isBondLoading} isLoadingRedemption={isBondRedemptionLoading} isLoadingSwap={isBondSwapLoading} error={bondError} redemptionError={bondRedemptionError} swapError={bondSwapError} successMessage={bondSuccess} targetPortfolios={isAllPortfoliosSelected ? selectedPortfolios : undefined} targetPortfolioId={operationTargetPortfolioId} onTargetPortfolioChange={isAllPortfoliosSelected ? handleOperationTargetChange : undefined} isTargetPortfolioPending={isPortfolioMutationPending || isBondRedemptionLoading || isBondSwapLoading} onChange={(nextDraft: TreasuryBondDraft) => { setBondDraft(nextDraft); setBondSuccess(null); resetBondInteractionState(); }} onCodeChange={(code: string) => { setBondDraft((currentDraft) => ({ ...currentDraft, code: normalizeTreasuryBondCode(code) })); setBondError(null); setBondSuccess(null); resetBondInteractionState(); }} onBuySubmit={() => { void handleAddBondAsset(); }} onSellSubmit={() => { void handleSellBondAsset(); }} onRedeemSubmit={() => { void handleRedeemBondAsset(); }} onSwapSubmit={() => { void handleSwapBondAsset(); }} /> : <AddAssetForm showModeSelector={false} searchMode={searchMode} draft={draft} results={results} etfResultGroups={etfResultGroups} lastAddedResult={lastAddedResult} isSearching={isSearching} isQuoteLoading={isQuoteLoading} isBuyPending={isAssetAddPending} searchError={searchError} quoteError={quoteError} successMessage={assetSuccess} targetPortfolios={isAllPortfoliosSelected ? selectedPortfolios : undefined} targetPortfolioId={operationTargetPortfolioId} onTargetPortfolioChange={isAllPortfoliosSelected ? handleOperationTargetChange : undefined} isTargetPortfolioPending={isPortfolioMutationPending} watchlistKeys={watchlistKeys} isWatchlistTogglePending={isWatchlistTogglePending} watchlistError={watchlistError} onToggleWatchlist={(result: AssetSearchResult) => { void handleToggleWatchlist(result); }} onDraftChange={setDraft} onSearchModeChange={handleSearchModeChange} onQueryChange={(query: string) => { const trimmedQuery = query.trim(); const minimumSearchLength = getMinimumSearchLength(searchMode); quoteRequestSeqRef.current += 1; lastPreviewRequestKeyRef.current = ""; isManualSymbolRef.current = false; setIsSearching(trimmedQuery.length >= minimumSearchLength); setIsQuoteLoading(false); setResults([]); setEtfResultGroups([]); setSearchError(null); setAssetSuccess(null); setQuoteError(null); setWatchlistError(null); setDraft((currentDraft) => ({ ...currentDraft, query, name: query, symbol: "", providerId: undefined, priceScale: undefined, issuerCountry: undefined, instrumentIdentity: undefined, marketCurrencyConfirmed: undefined, latestPrice: undefined, latestPriceDate: undefined, previousClose: undefined })); }} onSymbolChange={(symbol: string) => { quoteRequestSeqRef.current += 1; lastPreviewRequestKeyRef.current = ""; isManualSymbolRef.current = true; setIsSearching(false); setIsQuoteLoading(false); setResults([]); setEtfResultGroups([]); setSearchError(null); setAssetSuccess(null); setQuoteError(null); setWatchlistError(null); setDraft((currentDraft) => ({ ...currentDraft, symbol: symbol.toUpperCase(), query: "", name: "", providerId: undefined, priceScale: undefined, issuerCountry: undefined, instrumentIdentity: undefined, marketCurrencyConfirmed: undefined, latestPrice: undefined, latestPriceDate: undefined, previousClose: undefined })); }} onPickResult={(result: AssetSearchResult) => { void handlePickResult(result); }} onReuseLastAddedResult={(result: AssetSearchResult) => { void handlePickResult(result); }} onBuySubmit={() => { void handleAddAsset(); }} onSellSubmit={() => { void handleSellAsset(); }} />}
   </>;
 
   const portfolioManagement = <PortfolioAccountManagement portfolios={portfolios} activePortfolio={activePortfolio} activePortfolioId={activePortfolioId} isAllPortfoliosSelected={isAllPortfoliosSelected} summaries={portfolioSummaries} isPending={isSavingPortfolio || isPortfolioMutationPending} onSelect={(portfolioId: string) => { void handleSelectPortfolio(portfolioId); }} onRename={() => { void handleRenamePortfolio(); }} onDelete={() => { void handleDeletePortfolio(); }} onCreate={handleCreatePortfolio} onUpdateAccount={(input: Parameters<ComponentProps<typeof PortfolioAccountManagement>["onUpdateAccount"]>[0]) => { void handleUpdatePortfolioAccount(input); }} />;
@@ -5349,7 +5698,23 @@ export default function PortfolioApp({
   const incomePortfolio = isAllPortfoliosSelected ? selectedPortfolios[0] : activePortfolioForEngine;
   const incomePortfolios = isAllPortfoliosSelected ? selectedPortfolios : portfolios;
   const incomeScopeKey = `${portfolioScope.mode}:${portfolioScope.mode === "CUSTOM" ? portfolioScope.portfolioIds.join(",") : portfolioScope.mode === "SINGLE" ? portfolioScope.portfolioId : "all"}:active:${activePortfolioId}`;
-  const incomeWorkspace = incomePortfolio ? <PortfolioIncomeWorkspace key={incomeScopeKey} portfolio={ensurePortfolioCoreModel(incomePortfolio)} portfolios={incomePortfolios} activePortfolioId={isAllPortfoliosSelected ? incomePortfolio.id : activePortfolioId} isAllPortfoliosSelected={isAllPortfoliosSelected} isPortfolioMutationPending={isPortfolioMutationPending} fxRates={fxRates} baseCurrency={activeBaseCurrency} totalPortfolioValue={summary.totalValue} isAdmin={isAdmin} onPortfolioChange={persistPortfolioCoreModelChange} /> : null;
+  const incomeWorkspace = incomePortfolio ? <PortfolioIncomeWorkspace key={incomeScopeKey} portfolio={ensurePortfolioCoreModel(incomePortfolio)} portfolios={incomePortfolios} activePortfolioId={isAllPortfoliosSelected ? incomePortfolio.id : activePortfolioId} isAllPortfoliosSelected={isAllPortfoliosSelected} isPortfolioMutationPending={isPortfolioMutationPending} fxRates={fxRates} baseCurrency={activeBaseCurrency} totalPortfolioValue={summary.totalValue} isAdmin={isAdmin} onPortfolioChange={(nextPortfolio: InvestmentPortfolio) => persistPortfolioWithinCurrentScope(nextPortfolio, operationScopeKey)} /> : null;
+  const aggregateDividendWorkspace = isAllPortfoliosSelected && selectedPortfolios[0] ? (
+    <DividendCashWorkspace
+      key={`${incomeScopeKey}:aggregate-dividend-entry`}
+      activeView="dividends"
+      portfolio={ensurePortfolioCoreModel(selectedPortfolios[0])}
+      portfolios={selectedPortfolios}
+      isAggregateMode
+      targetPortfolioId={operationTargetPortfolioId}
+      onTargetPortfolioChange={handleOperationTargetChange}
+      entryOnly
+      isPortfolioMutationPending={isPortfolioMutationPending}
+      fxRates={fxRates}
+      baseCurrency={activeBaseCurrency}
+      onPortfolioChange={(nextPortfolio: InvestmentPortfolio) => persistPortfolioWithinCurrentScope(nextPortfolio, operationScopeKey)}
+    />
+  ) : null;
   const importWorkspace = <BrokerImportPanel onImport={handleImportBrokerOperations} />;
   const wealthWorkspace = <WealthWorkspace profile={profile} fxRates={fxRates} onChange={setProfile} />;
   const settingsWorkspace = <><UserProfilePanel account={account} profile={profile} positionsCount={groupedAssets.length} assetsCount={displayedAssets.length} isLoggingOut={isLoggingOut} onChange={(patch: Partial<UserProfile>) => setProfile((current) => ({ ...current, ...patch, updatedAt: new Date().toISOString() }))} onReset={() => setProfile((current) => ({ ...current, displayName: "", country: "", preferredBroker: "", investmentGoal: "", monthlyContributionPln: 0, updatedAt: new Date().toISOString() }))} onLogout={() => { void handleLogout(); }} /><ChangePasswordPanel hasPassword={account.hasPassword} /><section className="panel panel-compact workspace-plan-placeholder"><p className="eyebrow">Plan</p><h2 className="section-title">{MEXO_TESTER_MODE ? "Tester" : account.subscriptionPlan === "pro" ? "Mexo Pro" : "Mexo Free"}</h2><p className="section-copy">W trybie testowym wszystkie wdrożone funkcje są dostępne. Zarządzanie płatnościami pozostaje poza tą wersją aplikacji.</p></section></>;
@@ -5368,7 +5733,7 @@ export default function PortfolioApp({
     },
     onBaseCurrencyChange: (currency) => { void handleBaseCurrencyChange(currency); },
     getReadHref: (href) => getWorkspaceReadHref(href, selectedPortfolioId, activeBaseCurrency, portfolioScope),
-    onQuickAdd: () => { if (requireConcretePortfolioSelection()) router.push("/portfolio/positions?add=asset"); else router.push("/portfolios"); },
+    onQuickAdd: () => { router.push("/portfolio/positions?add=asset"); },
     resetAssetEntryForm,
     onLogout: () => { void handleLogout(); },
     displayedSyncError, assets: displayedAssets, sales: displayedSales, realizedAdjustments: displayedRealizedAdjustments, effectiveRealizedAdjustments, fxRates, groupedAssets,
@@ -5386,7 +5751,7 @@ export default function PortfolioApp({
     onClearManualPrice: handleClearManualPrice,
     summaryTotalValue: summary.totalValue, summaryCombinedProfitLoss: summary.combinedProfitLoss,
     summaryTotalInvested: summary.totalInvested, summaryCashValue: summary.cashValue, refreshRevision,
-    activeDividendYtd, activeDividendMonth, activeDividendAnnualIncome, summaryPanel, assetEntryWorkspace, operationsWorkspace, incomeWorkspace, importWorkspace, settingsWorkspace, portfolioManagementWorkspace: portfolioManagement, wealthWorkspace,
+    activeDividendYtd, activeDividendMonth, activeDividendAnnualIncome, summaryPanel, assetEntryWorkspace, operationsWorkspace, incomeWorkspace, aggregateDividendWorkspace, importWorkspace, settingsWorkspace, portfolioManagementWorkspace: portfolioManagement, wealthWorkspace,
     onFilterChange: setFilter, onSortModeChange: setAssetSortMode, onReorderGroups: handleReorderAssetGroups, onRemoveAsset: removeAsset,
   };
 

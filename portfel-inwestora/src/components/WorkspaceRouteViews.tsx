@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState } from "react";
 import AssetTable from "@/components/AssetTable";
 import ConfigurableDashboard from "@/components/ConfigurableDashboard";
 import CorporateEventsPanel from "@/components/CorporateEventsPanel";
+import DividendIncomeDashboard from "@/components/DividendIncomeDashboard";
 import GpwEventsWorkspace from "@/components/GpwEventsWorkspace";
 import UpcomingDividendsPanel from "@/components/UpcomingDividendsPanel";
 import WatchlistWorkspace from "@/components/WatchlistWorkspace";
@@ -85,17 +86,21 @@ export function WorkspaceOperationsPage() {
 export function WorkspaceDividendsPage() {
   const workspace = usePortfolioWorkspace();
   const [aggregateIncomeView, setAggregateIncomeView] = useState<"dividends" | "cash">("dividends");
+  const aggregateDividends = useMemo(() => workspace.selectedPortfolios.flatMap((portfolio) =>
+    getPortfolioDividends(ensurePortfolioCoreModel(portfolio), workspace.fxRates)
+  ), [workspace.fxRates, workspace.selectedPortfolios]);
   const eventScopeProps = workspace.portfolioScope.mode === "CUSTOM"
     ? { portfolioId: "custom", portfolioIds: workspace.selectedPortfolioIds }
     : { portfolioId: workspace.isAllRealPortfoliosSelected ? "all" : workspace.activePortfolioId, portfolioIds: undefined };
-  if (!workspace.isAllPortfoliosSelected) return <div className="workspace-page"><UpcomingDividendsPanel key={workspace.activePortfolioId} {...eventScopeProps} />{workspace.incomeWorkspace}</div>;
+  if (!workspace.isAllPortfoliosSelected) return <div className="workspace-page">{workspace.incomeWorkspace}</div>;
   return (
     <div className="workspace-page workspace-aggregate-income-page">
       <section className="workspace-page-actions workspace-aggregate-income-controls">
         <div className="workspace-aggregate-income-scope">
           <p className="eyebrow">Analizowany zakres</p>
-          <p className="section-copy">{workspace.portfolioScopeLabel} · widok łączny, bez mieszania rachunków źródłowych</p>
+          <p className="section-copy">{workspace.portfolioScopeLabel} · {workspace.selectedPortfolios.length} {workspace.selectedPortfolios.length === 1 ? "portfel" : "portfeli"} · widok łączny, bez mieszania rachunków źródłowych</p>
         </div>
+        <span className="income-currency-tag">Waluta prezentacji <strong>{workspace.presentationCurrency}</strong></span>
         <div className="workspace-subnav workspace-aggregate-income-tabs" role="group" aria-label="Widok dywidend i gotówki">
           <button
             type="button"
@@ -113,38 +118,13 @@ export function WorkspaceDividendsPage() {
       </section>
       {aggregateIncomeView === "dividends" ? (
         <>
-          <section className="panel panel-compact">
-            <p className="eyebrow">Dywidendy · {workspace.portfolioScopeLabel}</p>
-            <h2 className="section-title">Podsumowanie dywidend</h2>
-            <p className="section-copy">Kwoty łączne przeliczono do waluty prezentacji {workspace.presentationCurrency}. Historia każdej wypłaty zachowuje jej walutę źródłową.</p>
-            <div className="metric-grid mt-6">
-              <article className="metric-card"><span>Dywidendy YTD</span><strong>{formatCurrency(workspace.activeDividendYtd, workspace.presentationCurrency)}</strong></article>
-              <article className="metric-card"><span>Dywidendy w tym miesiącu</span><strong>{formatCurrency(workspace.activeDividendMonth, workspace.presentationCurrency)}</strong></article>
-              <article className="metric-card"><span>Roczny dochód z dywidend</span><strong>{formatCurrency(workspace.activeDividendAnnualIncome, workspace.presentationCurrency)}</strong></article>
-              <article className="metric-card metric-card-muted">
-                <span>Najbliższa wypłata</span>
-                <strong>{workspace.activeDividendForecast.nextPayment
-                  ? formatCurrency(workspace.activeDividendForecast.nextPayment.netAmount, workspace.activeDividendForecast.nextPayment.currency)
-                  : "Brak"}</strong>
-                <p className="metric-copy">{workspace.activeDividendForecast.nextPayment
-                  ? `${formatDate(workspace.activeDividendForecast.nextPayment.paymentDate)} · ${workspace.activeDividendForecast.nextPayment.symbol}`
-                  : workspace.activeDividendForecast.message ?? "Brak przyszłych dywidend."}</p>
-              </article>
-            </div>
-          </section>
-          <section className="panel sprint-wide-panel dividend-summary-panel">
-            <div className="sprint-panel-head">
-              <div><p className="eyebrow">Raporty dywidend</p><h2 className="section-title">Podsumowania i prognozy</h2></div>
-              <span className="tag">{formatCurrency(workspace.activeDividendTotals.net, workspace.presentationCurrency)} netto</span>
-            </div>
-            <p className="section-copy">Suma historii dla wszystkich portfeli w wybranym zakresie.</p>
-            <div className="metric-grid mt-6">
-              <article className="metric-card"><span>Suma brutto</span><strong>{formatCurrency(workspace.activeDividendTotals.gross, workspace.presentationCurrency)}</strong></article>
-              <article className="metric-card"><span>Suma netto</span><strong>{formatCurrency(workspace.activeDividendTotals.net, workspace.presentationCurrency)}</strong></article>
-              <article className="metric-card"><span>Podatki</span><strong>{formatCurrency(workspace.activeDividendTotals.taxes, workspace.presentationCurrency)}</strong></article>
-              <article className="metric-card"><span>Liczba wypłat</span><strong>{workspace.activeDividendTotals.paymentsCount}</strong></article>
-            </div>
-          </section>
+          <DividendIncomeDashboard
+            dividends={aggregateDividends}
+            portfolios={workspace.selectedPortfolios}
+            fxRates={workspace.fxRates}
+            currency={workspace.presentationCurrency}
+            mode="aggregate"
+          />
           {workspace.aggregateDividendWorkspace}
           <UpcomingDividendsPanel key={`${workspace.portfolioScopeLabel}:${workspace.selectedPortfolioIds.join(",")}`} {...eventScopeProps} />
           <AggregateDividendHistory />
@@ -240,18 +220,51 @@ function SelectedPortfolioOverview() {
 
 function AggregateDividendHistory() {
   const workspace = usePortfolioWorkspace();
+  const [query, setQuery] = useState("");
+  const [portfolioId, setPortfolioId] = useState("ALL");
+  const [currency, setCurrency] = useState("ALL");
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
+  const [sort, setSort] = useState<"date-desc" | "date-asc" | "amount-desc">("date-desc");
+  const [limit, setLimit] = useState(50);
   const dividends = useMemo(() => workspace.selectedPortfolios.flatMap((portfolio) =>
     getPortfolioDividends(ensurePortfolioCoreModel(portfolio), workspace.fxRates)
       .map((dividend) => ({ portfolio, dividend }))
   ).sort((left, right) => right.dividend.paymentDate.localeCompare(left.dividend.paymentDate)), [workspace.fxRates, workspace.selectedPortfolios]);
+  const currencies = useMemo(() => Array.from(new Set(dividends.map(({ dividend }) => dividend.currency))).sort(), [dividends]);
+  const effectivePortfolioId = portfolioId === "ALL" || workspace.selectedPortfolios.some((portfolio) => portfolio.id === portfolioId) ? portfolioId : "ALL";
+  const effectiveCurrency = currency === "ALL" || currencies.includes(currency) ? currency : "ALL";
+  const filtered = useMemo(() => {
+    const normalizedQuery = query.trim().toLocaleLowerCase("pl-PL");
+    if (startDate && endDate && startDate > endDate) return [];
+    return dividends
+      .filter(({ portfolio }) => effectivePortfolioId === "ALL" || portfolio.id === effectivePortfolioId)
+      .filter(({ dividend }) => effectiveCurrency === "ALL" || dividend.currency === effectiveCurrency)
+      .filter(({ dividend }) => !startDate || dividend.paymentDate >= startDate)
+      .filter(({ dividend }) => !endDate || dividend.paymentDate <= endDate)
+      .filter(({ portfolio, dividend }) => !normalizedQuery || `${dividend.symbol} ${dividend.instrumentName} ${portfolio.name}`.toLocaleLowerCase("pl-PL").includes(normalizedQuery))
+      .sort((left, right) => sort === "amount-desc"
+        ? right.dividend.netAmountPln - left.dividend.netAmountPln
+        : sort === "date-asc"
+          ? left.dividend.paymentDate.localeCompare(right.dividend.paymentDate)
+          : right.dividend.paymentDate.localeCompare(left.dividend.paymentDate));
+  }, [dividends, effectiveCurrency, effectivePortfolioId, endDate, query, sort, startDate]);
 
   return <section className="panel workspace-aggregate-dividends">
-    <div className="sprint-panel-head"><div><p className="eyebrow">Historia dywidend</p><h2 className="section-title">Wypłaty · {workspace.portfolioScopeLabel}</h2></div><span className="tag">{dividends.length} wypłat</span></div>
-    {dividends.length ? <ul className="workspace-aggregate-dividend-list">{dividends.slice(0, 100).map(({ portfolio, dividend }) => <li key={`${portfolio.id}:${dividend.id}`}>
-      <span><strong>{dividend.symbol} · {dividend.instrumentName}</strong><small>{portfolio.name} · {formatDate(dividend.paymentDate)} · {dividend.isAutomatic ? "Automatycznie" : "Ręcznie"}</small></span>
-      <span><strong>{formatCurrency(dividend.netAmount, dividend.currency)} netto</strong><small>{formatCurrency(convertFromPln(dividend.netAmountPln, workspace.activeBaseCurrency, workspace.fxRates), workspace.activeBaseCurrency)} · brutto {formatCurrency(dividend.grossAmount, dividend.currency)}</small></span>
-    </li>)}</ul> : <p className="workspace-empty-state">Brak zapisanych wypłat w wybranym zakresie.</p>}
-    {dividends.length > 100 ? <p className="field-note mt-4">Wyświetlono 100 z {dividends.length} wypłat; pozostałe dane pozostają zapisane w swoich portfelach.</p> : null}
+    <div className="sprint-panel-head"><div><p className="eyebrow">Historia dywidend</p><h2 className="section-title">Wypłaty · {workspace.portfolioScopeLabel}</h2></div><span className="tag">{filtered.length} wyników</span></div>
+    <div className="income-history-filters mt-5" aria-label="Filtry zagregowanej historii dywidend">
+      <label className="field income-history-search"><span>Spółka, ticker lub portfel</span><input value={query} onChange={(event) => { setQuery(event.target.value); setLimit(50); }} placeholder="np. PZU, XTB" /></label>
+      <label className="field"><span>Portfel źródłowy</span><select value={effectivePortfolioId} onChange={(event) => { setPortfolioId(event.target.value); setLimit(50); }}><option value="ALL">Wszystkie portfele</option>{workspace.selectedPortfolios.map((portfolio) => <option value={portfolio.id} key={portfolio.id}>{portfolio.name}</option>)}</select></label>
+      <label className="field"><span>Waluta źródłowa</span><select value={effectiveCurrency} onChange={(event) => { setCurrency(event.target.value); setLimit(50); }}><option value="ALL">Wszystkie waluty</option>{currencies.map((value) => <option value={value} key={value}>{value}</option>)}</select></label>
+      <label className="field"><span>Wypłata od</span><input type="date" value={startDate} onChange={(event) => { setStartDate(event.target.value); setLimit(50); }} /></label>
+      <label className="field"><span>Wypłata do</span><input type="date" value={endDate} onChange={(event) => { setEndDate(event.target.value); setLimit(50); }} /></label>
+      <label className="field"><span>Sortowanie</span><select value={sort} onChange={(event) => { setSort(event.target.value as typeof sort); setLimit(50); }}><option value="date-desc">Najnowsze wypłaty</option><option value="date-asc">Najstarsze wypłaty</option><option value="amount-desc">Najwyższa kwota netto</option></select></label>
+    </div>
+    {filtered.length ? <ul className="workspace-aggregate-dividend-list">{filtered.slice(0, limit).map(({ portfolio, dividend }) => <li key={`${portfolio.id}:${dividend.id}`}>
+      <span className="income-aggregate-dividend-source"><strong>{dividend.symbol} · {dividend.instrumentName}</strong><small>{portfolio.name} · wypłata {formatDate(dividend.paymentDate)} · {dividend.currency} · {dividend.isAutomatic ? "Automatycznie" : "Ręcznie"}</small></span>
+      <span className="income-aggregate-dividend-values"><strong>{formatCurrency(dividend.netAmount, dividend.currency)} netto</strong><small>Brutto {formatCurrency(dividend.grossAmount, dividend.currency)} · podatek {formatCurrency(dividend.withholdingTax + dividend.domesticTax, dividend.currency)}</small><small>{formatCurrency(convertFromPln(dividend.netAmountPln, workspace.presentationCurrency, workspace.fxRates), workspace.presentationCurrency)} w walucie prezentacji</small></span>
+    </li>)}</ul> : <p className="workspace-empty-state">{dividends.length ? "Brak zapisanych wypłat pasujących do filtrów." : "Brak zapisanych wypłat w wybranym zakresie."}</p>}
+    {filtered.length > limit ? <div className="income-history-more"><span>Wyświetlono {Math.min(limit, filtered.length)} z {filtered.length}</span><button type="button" className="ghost-button" onClick={() => setLimit((current) => current + 50)}>Pokaż kolejne</button></div> : null}
   </section>;
 }
 

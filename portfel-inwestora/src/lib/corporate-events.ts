@@ -132,6 +132,8 @@ export type CorporateEvent = {
   /** Response-only context: held positions retain entitlement projection; a
    * watchlist-only company is informational and never represents a claim. */
   trackingSource?: "HELD" | "WATCHLIST" | "HELD_AND_WATCHLIST";
+  /** Response-only names of selected real portfolios that currently hold this issuer. */
+  heldPortfolioNames?: string[];
   source?: CorporateEventSourceReference;
   sources?: CorporateEventSourceReference[];
 };

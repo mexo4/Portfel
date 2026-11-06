@@ -142,13 +142,19 @@ export default function UpcomingDividendsPanel({ portfolioId, portfolioIds }: Up
                   {isWatchlistOnly ? (
                     <span>Obserwowane · bez pozycji w portfelu</span>
                   ) : quantity !== undefined ? (
-                    <span>
-                      {event.eligibilityStatus === "ENTITLEMENT_CONFIRMED"
-                        ? "Akcje na dzień prawa"
-                        : "Obecna ilość do prognozy"}: {formatNumber(quantity)}
-                    </span>
+                    <>
+                      {event.heldPortfolioNames?.length ? <span>W portfelu: {event.heldPortfolioNames.join(", ")}</span> : null}
+                      <span>
+                        {event.eligibilityStatus === "ENTITLEMENT_CONFIRMED"
+                          ? "Akcje na dzień prawa"
+                          : "Obecna ilość do prognozy"}: {formatNumber(quantity)}
+                      </span>
+                    </>
                   ) : (
-                    <span>Ilość na dzień prawa: brak danych</span>
+                    <>
+                      {event.heldPortfolioNames?.length ? <span>W portfelu: {event.heldPortfolioNames.join(", ")}</span> : null}
+                      <span>Ilość na dzień prawa: brak danych</span>
+                    </>
                   )}
                   {!isWatchlistOnly && event.estimatedGrossAmount !== undefined ? (
                     <>

@@ -316,6 +316,12 @@
   --accent-soft: #dcf5ef;
   --accent-warm: #d38d38;
   --shadow: 0 24px 60px rgba(31, 41, 55, 0.08);
+  --income-series-1: #0f766e;
+  --income-series-2: #3877a8;
+  --income-series-3: #bd823b;
+  --income-series-4: #735c9d;
+  --income-series-5: #638d4d;
+  --income-series-6: #b85f59;
 }
 
 * {
@@ -10617,4 +10623,117 @@ textarea {
   .portfolio-scope-breakdown > button { grid-template-columns: minmax(0, 1fr) minmax(70px, .65fr) 14px; gap: 8px; padding-inline: 6px; }
   .workspace-aggregate-dividend-list > li { align-items: flex-start; gap: 8px; }
   .workspace-aggregate-dividend-list > li > span:last-child { max-width: 46%; }
+}
+
+/* Income workspace: shared dividend and cash presentation. */
+.income-workspace-heading,
+.income-dashboard-heading,
+.income-cash-section-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+.income-workspace-heading { padding: 4px 2px 0; }
+.income-workspace-heading .eyebrow,
+.income-workspace-heading .section-copy { margin: 0; }
+.income-workspace-heading .section-title { margin: 4px 0; }
+.income-currency-tag { display: inline-flex; align-items: center; gap: 8px; flex: 0 0 auto; padding: 8px 11px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); background: var(--surface); font-size: .72rem; }
+.income-currency-tag strong { color: var(--text); font-size: .75rem; }
+.income-dividend-dashboard { display: grid; min-width: 0; gap: 16px; }
+.income-dividend-overview,
+.income-dividend-chart-panel,
+.income-dividend-sources-panel { min-width: 0; }
+.income-dashboard-heading { align-items: center; }
+.income-dashboard-heading .eyebrow,
+.income-dashboard-heading .section-title { margin: 0; }
+.income-dashboard-heading .section-title { margin-top: 4px; }
+.income-dividend-overview > .section-copy { max-width: 840px; margin: 10px 0 0; }
+.income-dividend-kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.income-dividend-kpi { display: grid; min-width: 0; min-height: 98px; align-content: center; gap: 7px; padding: 14px 15px; border: 1px solid var(--line); border-radius: 13px; background: color-mix(in srgb, var(--surface-strong) 72%, var(--surface-soft)); }
+.income-dividend-kpi-primary { border-color: color-mix(in srgb, var(--accent) 28%, var(--line)); background: color-mix(in srgb, var(--accent-soft) 62%, var(--surface-strong)); }
+.income-dividend-kpi > span { color: var(--muted); font-size: .7rem; font-weight: 750; letter-spacing: .02em; }
+.income-dividend-kpi > strong { min-width: 0; color: var(--text); font-size: clamp(.84rem, 1.55vw, 1.32rem); font-variant-numeric: tabular-nums; letter-spacing: -.035em; overflow-wrap: anywhere; white-space: normal; }
+.income-dividend-kpi > small { color: var(--muted); font-size: .68rem; line-height: 1.4; }
+.income-dividend-insights-grid { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(270px, .75fr); align-items: start; gap: 16px; }
+.income-dividend-chart-panel,
+.income-dividend-sources-panel { padding: clamp(16px, 2vw, 22px); }
+.income-chart-mode,
+.income-range-tabs { display: inline-flex; align-items: center; gap: 3px; padding: 3px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-soft); }
+.income-chart-mode button,
+.income-range-tabs button { min-height: 30px; border: 0; border-radius: 7px; padding: 0 10px; color: var(--muted); background: transparent; font: inherit; font-size: .7rem; font-weight: 750; cursor: pointer; white-space: nowrap; }
+.income-chart-mode button.is-active,
+.income-range-tabs button.is-active { color: var(--accent); background: var(--surface-strong); box-shadow: 0 1px 4px rgb(18 33 42 / 9%); }
+.income-range-tabs { margin-top: 16px; max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+.income-range-tabs::-webkit-scrollbar { display: none; }
+.income-chart-legend { display: flex; max-width: 100%; gap: 8px 14px; margin-top: 10px; overflow-x: auto; padding: 1px 0 4px; scrollbar-width: thin; }
+.income-chart-legend > span { display: inline-flex; min-width: max-content; align-items: center; gap: 6px; color: var(--muted); font-size: .68rem; }
+.income-chart-legend i { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; }
+.income-dividend-chart { width: 100%; height: 264px; min-height: 264px; margin-top: 10px; }
+.income-dividend-chart .recharts-wrapper { outline: none; }
+.income-chart-empty,
+.income-source-empty { display: grid; min-height: 170px; align-content: center; justify-items: center; gap: 7px; padding: 22px; color: var(--muted); text-align: center; }
+.income-chart-empty strong { color: var(--text); font-size: .86rem; }
+.income-chart-empty span { max-width: 380px; font-size: .73rem; line-height: 1.55; }
+.income-source-ranking { display: grid; gap: 16px; }
+.income-source-row { display: grid; gap: 7px; min-width: 0; }
+.income-source-row-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.income-source-row-top > span { display: flex; min-width: 0; align-items: center; gap: 9px; }
+.income-source-row-top > span > span { display: grid; min-width: 0; gap: 2px; }
+.income-source-row-top strong { color: var(--text); font-size: .76rem; font-variant-numeric: tabular-nums; }
+.income-source-row-top small,
+.income-source-share { color: var(--muted); font-size: .67rem; }
+.income-source-dot { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; background: var(--income-series-1); }
+.income-source-dot-1 { background: var(--income-series-2); }
+.income-source-dot-2 { background: var(--income-series-3); }
+.income-source-dot-3 { background: var(--income-series-4); }
+.income-source-dot-4 { background: var(--income-series-5); }
+.income-source-dot-5 { background: var(--income-series-6); }
+.income-source-track { height: 5px; overflow: hidden; border-radius: 99px; background: var(--surface-soft); }
+.income-source-track i { display: block; height: 100%; border-radius: inherit; background: var(--accent); }
+.income-source-share { text-align: right; }
+.income-history-filters { display: grid; grid-template-columns: minmax(220px, 1.35fr) repeat(2, minmax(145px, .75fr)); align-items: end; gap: 10px; }
+.income-history-filters .field { min-width: 0; }
+.income-history-search { grid-column: span 1; }
+.income-history-more { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-top: 14px; padding-top: 13px; border-top: 1px solid var(--line); }
+.income-history-more > span { color: var(--muted); font-size: .72rem; }
+.income-aggregate-dividend-source,
+.income-aggregate-dividend-values { min-width: 0; }
+.income-aggregate-dividend-values small { white-space: normal; }
+.income-cash-currency-breakdown,
+.income-cash-portfolio-breakdown { padding: 14px; border: 1px solid var(--line); border-radius: 13px; background: color-mix(in srgb, var(--surface-strong) 76%, var(--surface-soft)); }
+.income-cash-section-heading { align-items: baseline; gap: 8px; }
+.income-cash-section-heading strong { color: var(--text); font-size: .78rem; }
+.income-cash-section-heading small { color: var(--muted); font-size: .66rem; }
+.income-cash-currency-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin-top: 11px; }
+.income-cash-currency-grid article { display: grid; min-width: 0; gap: 4px; padding: 10px 11px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-strong); }
+.income-cash-currency-grid article > span { color: var(--muted); font-size: .68rem; font-weight: 750; }
+.income-cash-currency-grid article > strong { color: var(--text); font-size: .92rem; font-variant-numeric: tabular-nums; }
+.income-cash-currency-grid article > small { color: var(--muted); font-size: .64rem; }
+.income-cash-portfolio-breakdown { display: grid; gap: 6px; }
+.income-cash-portfolio-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding-top: 8px; border-top: 1px solid var(--line); font-size: .74rem; }
+.income-cash-portfolio-row > span { overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
+.income-cash-portfolio-row > strong { flex: 0 0 auto; color: var(--text); font-variant-numeric: tabular-nums; }
+
+@media (max-width: 900px) {
+  .income-dividend-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .income-dividend-insights-grid { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 640px) {
+  .income-workspace-heading { align-items: flex-start; }
+  .income-currency-tag { padding: 7px 9px; font-size: .64rem; }
+  .income-dividend-kpis { gap: 7px; }
+  .income-dividend-kpi { min-height: 86px; padding: 11px; }
+  .income-dividend-kpi > strong { font-size: .98rem; }
+  .income-dashboard-chart-heading { align-items: flex-start; flex-direction: column; }
+  .income-chart-mode { align-self: stretch; }
+  .income-chart-mode button { flex: 1 1 0; }
+  .income-dividend-chart { height: 230px; min-height: 230px; }
+  .income-history-filters { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .income-history-search { grid-column: 1 / -1; }
+  .income-history-filters .field { font-size: .76rem; }
+  .income-aggregate-dividend-source strong { white-space: normal; }
+  .income-aggregate-dividend-values { max-width: 48%; text-align: right; }
+  .income-aggregate-dividend-values strong { white-space: normal; }
+  .income-cash-section-heading { align-items: flex-start; flex-direction: column; }
 }

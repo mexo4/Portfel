@@ -2,14 +2,13 @@
 
 import { useMemo, useRef, useState } from "react";
 import FormattedNumberInput from "@/components/FormattedNumberInput";
+import DividendIncomeDashboard from "@/components/DividendIncomeDashboard";
+import UpcomingDividendsPanel from "@/components/UpcomingDividendsPanel";
 import PortfolioTargetSelector from "@/components/PortfolioTargetSelector";
 import TruncatedText from "@/components/TruncatedText";
 import { getBlankDividendNumericInputs } from "@/lib/dividend-input-defaults";
 import {
-  buildDividendCalendar,
-  buildDividendForecast,
   buildDividendOperation,
-  buildDividendReport,
   getPortfolioDividends,
 } from "@/lib/dividend-engine";
 import { buildCashHistory, buildCashOperation, type CashOperationKind } from "@/lib/cash-engine";
@@ -30,8 +29,6 @@ import {
   toCurrencyCode,
 } from "@/lib/utils";
 import type {
-  DividendCalendarGroup,
-  DividendReportBucket,
   CurrencyCode,
   FxRates,
   InvestmentPortfolio,
@@ -88,19 +85,6 @@ type CashDraft = {
   date: string;
   notes: string;
 };
-
-const DIVIDEND_REPORT_OPTIONS: Array<{
-  value: DividendReportBucket;
-  label: string;
-}> = [
-  { value: "monthly", label: "Miesiecznie" },
-  { value: "quarterly", label: "Kwartalnie" },
-  { value: "yearly", label: "Rocznie" },
-  { value: "company", label: "Wedlug spolki" },
-  { value: "portfolio", label: "Wedlug portfela" },
-  { value: "currency", label: "Wedlug waluty" },
-  { value: "country", label: "Wedlug kraju" },
-];
 
 const CASH_OPERATION_OPTIONS: Array<{
   value: CashOperationKind;
@@ -208,36 +192,6 @@ const getDefaultCashDraft = (portfolio: InvestmentPortfolio): CashDraft => {
   };
 };
 
-const getDividendSummary = (dividends: PortfolioDividend[]) => {
-  const today = getTodayDateInputValue();
-  const currentYear = today.slice(0, 4);
-  const currentMonth = today.slice(0, 7);
-
-  return {
-    ytd: round(
-      dividends
-        .filter((dividend) => dividend.paymentDate.slice(0, 4) === currentYear)
-        .reduce((total, dividend) => total + dividend.netAmountPln, 0)
-    ),
-    month: round(
-      dividends
-        .filter((dividend) => dividend.paymentDate.slice(0, 7) === currentMonth)
-        .reduce((total, dividend) => total + dividend.netAmountPln, 0)
-    ),
-    taxes: round(
-      dividends.reduce(
-        (total, dividend) => total + dividend.grossAmountPln - dividend.netAmountPln,
-        0
-      )
-    ),
-    gross: round(dividends.reduce((total, dividend) => total + dividend.grossAmountPln, 0)),
-    net: round(dividends.reduce((total, dividend) => total + dividend.netAmountPln, 0)),
-  };
-};
-
-const getReportLabel = (label: string, portfolio: InvestmentPortfolio) =>
-  label === portfolio.id ? portfolio.name : label;
-
 export default function DividendCashWorkspace({
   activeView,
   portfolio: initialPortfolio,
@@ -271,8 +225,12 @@ export default function DividendCashWorkspace({
   );
   const [dividendDraft, setDividendDraft] = useState(() => getDefaultDividendDraft());
   const [cashDraft, setCashDraft] = useState(() => getDefaultCashDraft(portfolio));
-  const [dividendReportBucket, setDividendReportBucket] =
-    useState<DividendReportBucket>("monthly");
+  const [dividendHistoryQuery, setDividendHistoryQuery] = useState("");
+  const [dividendHistoryCurrency, setDividendHistoryCurrency] = useState("ALL");
+  const [dividendHistoryStartDate, setDividendHistoryStartDate] = useState("");
+  const [dividendHistoryEndDate, setDividendHistoryEndDate] = useState("");
+  const [dividendHistorySort, setDividendHistorySort] = useState<"date-desc" | "date-asc" | "amount-desc">("date-desc");
+  const [dividendHistoryLimit, setDividendHistoryLimit] = useState(50);
   const [dividendError, setDividendError] = useState<string | null>(null);
   const [dividendSuccess, setDividendSuccess] = useState<string | null>(null);
   const [cashError, setCashError] = useState<string | null>(null);
@@ -345,28 +303,29 @@ export default function DividendCashWorkspace({
     () => getPortfolioDividends(portfolio, fxRates),
     [fxRates, portfolio]
   );
-  const dividendSummary = useMemo(() => getDividendSummary(dividends), [dividends]);
-  const dividendReports = useMemo(
-    () => buildDividendReport(dividends, dividendReportBucket),
-    [dividendReportBucket, dividends]
+  const dividendHistoryCurrencies = useMemo(
+    () => Array.from(new Set(dividends.map((dividend) => dividend.currency))).sort(),
+    [dividends]
   );
-  const dividendCalendar = useMemo(() => buildDividendCalendar(dividends), [dividends]);
-  const dividendForecast = useMemo(() => buildDividendForecast(dividends), [dividends]);
+  const filteredDividendHistory = useMemo(() => {
+    const query = dividendHistoryQuery.trim().toLocaleLowerCase("pl-PL");
+    if (dividendHistoryStartDate && dividendHistoryEndDate && dividendHistoryStartDate > dividendHistoryEndDate) return [];
+    return dividends
+      .filter((dividend) => dividendHistoryCurrency === "ALL" || dividend.currency === dividendHistoryCurrency)
+      .filter((dividend) => !dividendHistoryStartDate || dividend.paymentDate >= dividendHistoryStartDate)
+      .filter((dividend) => !dividendHistoryEndDate || dividend.paymentDate <= dividendHistoryEndDate)
+      .filter((dividend) => !query || `${dividend.symbol} ${dividend.instrumentName} ${dividend.accountName}`.toLocaleLowerCase("pl-PL").includes(query))
+      .sort((left, right) => dividendHistorySort === "amount-desc"
+        ? right.netAmountPln - left.netAmountPln
+        : dividendHistorySort === "date-asc"
+          ? left.paymentDate.localeCompare(right.paymentDate)
+          : right.paymentDate.localeCompare(left.paymentDate));
+  }, [dividendHistoryCurrency, dividendHistoryEndDate, dividendHistoryQuery, dividendHistorySort, dividendHistoryStartDate, dividends]);
   const cashBalances = useMemo(
     () => calculateCashBalances(portfolio.operations ?? [], portfolio.accounts ?? []),
     [portfolio.accounts, portfolio.operations]
   );
   const cashHistory = useMemo(() => buildCashHistory(portfolio), [portfolio]);
-  const dividendSummaryInBase = useMemo(
-    () => ({
-      ytd: convertFromPln(dividendSummary.ytd, baseCurrency, fxRates),
-      month: convertFromPln(dividendSummary.month, baseCurrency, fxRates),
-      taxes: convertFromPln(dividendSummary.taxes, baseCurrency, fxRates),
-      gross: convertFromPln(dividendSummary.gross, baseCurrency, fxRates),
-      net: convertFromPln(dividendSummary.net, baseCurrency, fxRates),
-    }),
-    [baseCurrency, dividendSummary, fxRates]
-  );
   const selectedDividendInstrument =
     instruments.find((instrument) => instrument.id === dividendDraft.instrumentId) ?? null;
   const selectedDividendCurrency = toCurrencyCode(
@@ -796,53 +755,14 @@ export default function DividendCashWorkspace({
 
   return (
     <>
-      {!entryOnly ? <section className="panel panel-compact">
-        <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
-          <div>
-            <p className="eyebrow">Sprint 2</p>
-            <h2 className="section-title">Dywidendy</h2>
-          </div>
-          <p className="section-copy">
-            Widok operacyjny aktywnego portfela oparty o operacje Portfolio Engine V2.
-          </p>
-        </div>
-
-        <div className="metric-grid mt-6">
-          <article className="metric-card">
-            <span>Dywidendy YTD</span>
-            <strong>{formatCurrency(dividendSummaryInBase.ytd, baseCurrency)}</strong>
-          </article>
-          <article className="metric-card">
-            <span>Dywidendy w tym miesiacu</span>
-            <strong>{formatCurrency(dividendSummaryInBase.month, baseCurrency)}</strong>
-          </article>
-          <article className="metric-card">
-            <span>Roczny dochod z dywidend</span>
-            <strong>
-              {formatCurrency(
-                convertFromPln(dividendForecast.annualIncomePln, baseCurrency, fxRates),
-                baseCurrency
-              )}
-            </strong>
-          </article>
-          <article className="metric-card metric-card-muted">
-            <span>Najblizsza wyplata</span>
-            <strong>
-              {dividendForecast.nextPayment
-                ? formatCurrency(
-                    dividendForecast.nextPayment.netAmount,
-                    dividendForecast.nextPayment.currency
-                  )
-                : "Brak"}
-            </strong>
-            <p className="metric-copy">
-              {dividendForecast.nextPayment
-                ? `${formatDate(dividendForecast.nextPayment.paymentDate)} / ${dividendForecast.nextPayment.symbol}`
-                : dividendForecast.message ?? "Brak przyszlych dywidend."}
-            </p>
-          </article>
-        </div>
-      </section> : null}
+      {!entryOnly && activeView === "dividends" ? <DividendIncomeDashboard
+        dividends={dividends}
+        portfolios={[portfolio]}
+        fxRates={fxRates}
+        currency={baseCurrency}
+        mode="single"
+      /> : null}
+      {!entryOnly && !isAggregateMode && activeView === "dividends" ? <UpcomingDividendsPanel key={`upcoming:${portfolio.id}`} portfolioId={portfolio.id} /> : null}
 
       {activeView === "dividends" ? (
         <section className={entryOnly ? "sprint-two-grid dividend-workspace-grid dividend-entry-only-grid" : "sprint-two-grid dividend-workspace-grid"}>
@@ -1198,142 +1118,44 @@ export default function DividendCashWorkspace({
             </div>
           </article>
 
-          {!entryOnly ? <article className="panel sprint-wide-panel dividend-summary-panel">
-            <div className="sprint-panel-head">
-              <div>
-                <p className="eyebrow">Raporty dywidend</p>
-                <h2 className="section-title">Podsumowania i prognozy</h2>
-              </div>
-              <span className="tag">
-                {formatCurrency(dividendSummaryInBase.net, baseCurrency)} netto
-              </span>
-            </div>
-
-            <div className="metric-grid mt-6">
-              <article className="metric-card">
-                <span>Suma brutto</span>
-                <strong>{formatCurrency(dividendSummaryInBase.gross, baseCurrency)}</strong>
-              </article>
-              <article className="metric-card">
-                <span>Suma netto</span>
-                <strong>{formatCurrency(dividendSummaryInBase.net, baseCurrency)}</strong>
-              </article>
-              <article className="metric-card">
-                <span>Podatki</span>
-                <strong>{formatCurrency(dividendSummaryInBase.taxes, baseCurrency)}</strong>
-              </article>
-              <article className="metric-card">
-                <span>Liczba wyplat</span>
-                <strong>{dividends.length}</strong>
-              </article>
-            </div>
-
-            <div className="line-chart-range-tabs mt-6">
-              {DIVIDEND_REPORT_OPTIONS.map((option) => (
-                <button
-                  key={option.value}
-                  type="button"
-                  className={
-                    dividendReportBucket === option.value
-                      ? "line-chart-range-tab is-active"
-                      : "line-chart-range-tab"
-                  }
-                  onClick={() => setDividendReportBucket(option.value)}
-                >
-                  {option.label}
-                </button>
-              ))}
-            </div>
-
-            <div className="report-list mt-5">
-              {dividendReports.map((row) => (
-                <div key={row.key} className="report-row">
-                  <span>{getReportLabel(row.label, portfolio)}</span>
-                  <strong>
-                    {formatCurrency(
-                      convertFromPln(row.netAmountPln, baseCurrency, fxRates),
-                      baseCurrency
-                    )}
-                  </strong>
-                  <em>
-                    brutto {formatCurrency(
-                      convertFromPln(row.grossAmountPln, baseCurrency, fxRates),
-                      baseCurrency
-                    )} / podatki{" "}
-                    {formatCurrency(
-                      convertFromPln(row.taxPln, baseCurrency, fxRates),
-                      baseCurrency
-                    )} / {row.paymentsCount} wyplat
-                  </em>
-                </div>
-              ))}
-              {dividendReports.length === 0 ? (
-                <p className="field-note">Brak dywidend do raportu.</p>
-              ) : null}
-            </div>
-
-            <div className="dividend-forecast mt-6">
-              <article>
-                <span>Prognoza miesieczna</span>
-                <strong>
-                  {formatCurrency(
-                    convertFromPln(dividendForecast.monthlyIncomePln, baseCurrency, fxRates),
-                    baseCurrency
-                  )}
-                </strong>
-              </article>
-              <article>
-                <span>Prognoza roczna</span>
-                <strong>
-                  {formatCurrency(
-                    convertFromPln(dividendForecast.annualIncomePln, baseCurrency, fxRates),
-                    baseCurrency
-                  )}
-                </strong>
-              </article>
-              <article>
-                <span>Nastepna wyplata</span>
-                <strong>
-                  {dividendForecast.nextPayment
-                    ? dividendForecast.nextPayment.symbol
-                    : "Brak"}
-                </strong>
-                <small>
-                  {dividendForecast.nextPayment
-                    ? formatDate(dividendForecast.nextPayment.paymentDate)
-                    : dividendForecast.message ?? "Nie ma zaplanowanej wyplaty."}
-                </small>
-              </article>
-            </div>
-          </article> : null}
-
           {!entryOnly ? <>
-          <article className="panel sprint-wide-panel">
-            <div className="sprint-panel-head">
-              <div>
-                <p className="eyebrow">Kalendarz dywidend</p>
-                <h2 className="section-title">Dzis, tydzien, miesiac, przyszlosc i historia</h2>
-              </div>
-            </div>
-
-            <div className="dividend-calendar-grid mt-6">
-              {dividendCalendar.map((group) => (
-                <CalendarGroup
-                  key={group.bucket}
-                  group={group}
-                  baseCurrency={baseCurrency}
-                  fxRates={fxRates}
-                />
-              ))}
-            </div>
-          </article>
-
           <article className="panel sprint-wide-panel">
             <div className="sprint-panel-head">
               <div>
                 <p className="eyebrow">Historia dywidend</p>
                 <h2 className="section-title">Wszystkie wyplaty</h2>
               </div>
+              <span className="tag">{filteredDividendHistory.length} wyników</span>
+            </div>
+
+            <div className="income-history-filters mt-5" aria-label="Filtry historii dywidend">
+              <label className="field income-history-search">
+                <span>Szukaj spółki, tickera lub konta</span>
+                <input value={dividendHistoryQuery} onChange={(event) => { setDividendHistoryQuery(event.target.value); setDividendHistoryLimit(50); }} placeholder="np. PKO, PZU" />
+              </label>
+              <label className="field">
+                <span>Waluta źródłowa</span>
+                <select value={dividendHistoryCurrency} onChange={(event) => { setDividendHistoryCurrency(event.target.value); setDividendHistoryLimit(50); }}>
+                  <option value="ALL">Wszystkie waluty</option>
+                  {dividendHistoryCurrencies.map((currency) => <option value={currency} key={currency}>{currency}</option>)}
+                </select>
+              </label>
+              <label className="field">
+                <span>Sortowanie</span>
+                <select value={dividendHistorySort} onChange={(event) => { setDividendHistorySort(event.target.value as typeof dividendHistorySort); setDividendHistoryLimit(50); }}>
+                  <option value="date-desc">Najnowsze wypłaty</option>
+                  <option value="date-asc">Najstarsze wypłaty</option>
+                  <option value="amount-desc">Najwyższa kwota netto</option>
+                </select>
+              </label>
+              <label className="field">
+                <span>Wypłata od</span>
+                <input type="date" value={dividendHistoryStartDate} onChange={(event) => { setDividendHistoryStartDate(event.target.value); setDividendHistoryLimit(50); }} />
+              </label>
+              <label className="field">
+                <span>Wypłata do</span>
+                <input type="date" value={dividendHistoryEndDate} onChange={(event) => { setDividendHistoryEndDate(event.target.value); setDividendHistoryLimit(50); }} />
+              </label>
             </div>
 
             <div className="sprint-table-wrap mt-5 dividend-payments-table-wrap">
@@ -1359,7 +1181,7 @@ export default function DividendCashWorkspace({
                   </tr>
                 </thead>
                 <tbody>
-                  {dividends.map((dividend) => (
+                  {filteredDividendHistory.slice(0, dividendHistoryLimit).map((dividend) => (
                     <tr key={dividend.id}>
                       <td>
                         <strong>{dividend.symbol}</strong>
@@ -1421,10 +1243,10 @@ export default function DividendCashWorkspace({
                       </td>
                     </tr>
                   ))}
-                  {dividends.length === 0 ? (
+                  {filteredDividendHistory.length === 0 ? (
                     <tr>
                       <td colSpan={7}>
-                        <p className="empty-row">Brak dywidend w aktywnym portfelu.</p>
+                        <p className="empty-row">{dividends.length === 0 ? "Brak zapisanych wypłat w tym portfelu." : "Brak wypłat pasujących do filtrów."}</p>
                       </td>
                     </tr>
                   ) : null}
@@ -1432,7 +1254,7 @@ export default function DividendCashWorkspace({
               </table>
             </div>
             <div className="dividend-payment-cards mt-5">
-              {dividends.map((dividend) => (
+              {filteredDividendHistory.slice(0, dividendHistoryLimit).map((dividend) => (
                 <article className="dividend-payment-card" key={dividend.id}>
                   <div className="dividend-payment-card-head">
                     <span><strong>{dividend.symbol}</strong><TruncatedText as="span" text={dividend.instrumentName} /></span>
@@ -1459,6 +1281,7 @@ export default function DividendCashWorkspace({
                 </article>
               ))}
             </div>
+            {filteredDividendHistory.length > dividendHistoryLimit ? <div className="income-history-more"><span>Wyświetlono {Math.min(dividendHistoryLimit, filteredDividendHistory.length)} z {filteredDividendHistory.length}</span><button className="ghost-button" type="button" onClick={() => setDividendHistoryLimit((limit) => limit + 50)}>Pokaż kolejne</button></div> : null}
           </article>
           </> : null}
         </section>
@@ -1694,40 +1517,5 @@ export default function DividendCashWorkspace({
         </section>
       ) : null}
     </>
-  );
-}
-
-function CalendarGroup({
-  group,
-  baseCurrency,
-  fxRates,
-}: {
-  group: DividendCalendarGroup;
-  baseCurrency: CurrencyCode;
-  fxRates: FxRates;
-}) {
-  return (
-    <article className="calendar-card">
-      <div className="calendar-card-head">
-        <strong>{group.label}</strong>
-        <span>{group.dividends.length}</span>
-      </div>
-      <p className="table-note">
-        netto {formatCurrency(convertFromPln(group.netAmountPln, baseCurrency, fxRates), baseCurrency)} / brutto{" "}
-        {formatCurrency(convertFromPln(group.grossAmountPln, baseCurrency, fxRates), baseCurrency)}
-      </p>
-      <div className="calendar-list">
-        {group.dividends.slice(0, 4).map((dividend) => (
-          <div key={`${group.bucket}:${dividend.id}`} className="calendar-row">
-            <span>{formatDate(dividend.paymentDate)}</span>
-            <strong>{dividend.symbol}</strong>
-            <em>{formatCurrency(dividend.netAmount, dividend.currency)}</em>
-          </div>
-        ))}
-        {group.dividends.length === 0 ? (
-          <p className="field-note">Brak wpisow.</p>
-        ) : null}
-      </div>
-    </article>
   );
 }

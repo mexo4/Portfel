@@ -86,6 +86,15 @@ const projectTrackedEvents = ({
 }) => {
   const heldKeys = new Set(heldInputs.map(getGpwCorporateEventCanonicalKey));
   const watchedKeys = new Set(watchlistInputs.map(getGpwCorporateEventCanonicalKey));
+  const heldPortfolioNamesByKey = new Map<string, string[]>();
+  portfolios.forEach((portfolio) => {
+    getHeldGpwInstruments([portfolio]).forEach((instrument) => {
+      const key = getGpwCorporateEventCanonicalKey(instrument);
+      const names = heldPortfolioNamesByKey.get(key) ?? [];
+      if (!names.includes(portfolio.name)) names.push(portfolio.name);
+      heldPortfolioNamesByKey.set(key, names);
+    });
+  });
   const heldEvents = projectDividendEventsForPortfolios({
     events: events.filter((event) => heldKeys.has(getTrackedEventKey(event))),
     portfolios,
@@ -96,8 +105,10 @@ const projectTrackedEvents = ({
   return events.map((event) => {
     const key = getTrackedEventKey(event);
     const projected = projectedById.get(event.id) ?? event;
+    const heldPortfolioNames = heldPortfolioNamesByKey.get(key);
     return {
       ...projected,
+      ...(heldPortfolioNames?.length ? { heldPortfolioNames } : {}),
       trackingSource: heldKeys.has(key)
         ? watchedKeys.has(key)
           ? "HELD_AND_WATCHLIST"

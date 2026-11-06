@@ -225,6 +225,11 @@ export default function CashWorkspace({
   totalPortfolioValue = 0,
   onPortfolioChange,
 }: Props) {
+  const [historyQuery, setHistoryQuery] = useState("");
+  const [historyCurrency, setHistoryCurrency] = useState("ALL");
+  const [historyPortfolioId, setHistoryPortfolioId] = useState("ALL");
+  const [historySort, setHistorySort] = useState<"default" | "date-desc" | "date-asc" | "amount-desc">("default");
+  const [historyLimit, setHistoryLimit] = useState(50);
   const [targetPortfolioId, setTargetPortfolioId] = useState(isAllPortfoliosSelected ? "" : activePortfolioId);
   const [draft, setDraft] = useState<Draft>(() => createDraft(
     normalizePortfolioAccountType(portfolio?.accountType),
@@ -280,6 +285,18 @@ export default function CashWorkspace({
     ? portfolios.reduce((count, item) => count + getDisplayCashAccounts(item).length, 0)
     : displayActiveCashAccounts.length;
   const cashValue = balances.reduce((sum, balance) => sum + convertCurrency(balance.amount, balance.currency, baseCurrency, fxRates), 0);
+  const cashByCurrency = useMemo(() => {
+    const totals = new Map<CurrencyCode, number>();
+    balances.forEach((balance) => totals.set(balance.currency, (totals.get(balance.currency) ?? 0) + balance.amount));
+    return Array.from(totals.entries()).sort(([left], [right]) => left.localeCompare(right));
+  }, [balances]);
+  const portfolioCashDistribution = useMemo(() => aggregate
+    ? portfolios.map((item) => ({
+        id: item.id,
+        name: item.name,
+        value: getCurrentCashAccountRows(item).reduce((sum, balance) => sum + convertCurrency(balance.amount, balance.currency, baseCurrency, fxRates), 0),
+      })).sort((left, right) => right.value - left.value)
+    : [], [aggregate, baseCurrency, fxRates, portfolios]);
   const portfolioValue = totalPortfolioValue;
   const cashShare = portfolioValue > 0 ? (cashValue / portfolioValue) * 100 : 0;
   const history = useMemo(() => {
@@ -287,9 +304,23 @@ export default function CashWorkspace({
       ...entry,
       operationType: (historyLabels[entry.operationType] ?? entry.operationType) as typeof entry.operationType,
     });
-    if (!aggregate) return selectedPortfolio ? buildCashHistory(selectedPortfolio).map(readable) : [];
-    return portfolios.flatMap((item) => buildCashHistory(item).map((entry) => ({ ...readable(entry), accountName: `${item.name} · ${entry.accountName}`, notes: entry.notes }))).sort((left, right) => right.date.localeCompare(left.date));
+    if (!aggregate) return selectedPortfolio ? buildCashHistory(selectedPortfolio).map((entry) => ({ ...readable(entry), sourcePortfolioId: selectedPortfolio.id, sourcePortfolioName: selectedPortfolio.name })) : [];
+    return portfolios.flatMap((item) => buildCashHistory(item).map((entry) => ({ ...readable(entry), sourcePortfolioId: item.id, sourcePortfolioName: item.name, accountName: `${item.name} · ${entry.accountName}`, notes: entry.notes }))).sort((left, right) => right.date.localeCompare(left.date));
   }, [aggregate, portfolios, selectedPortfolio]);
+  const historyCurrencies = useMemo(() => Array.from(new Set(history.map((entry) => entry.currency))).sort(), [history]);
+  const effectiveHistoryCurrency = historyCurrency === "ALL" || historyCurrencies.includes(historyCurrency) ? historyCurrency : "ALL";
+  const effectiveHistoryPortfolioId = historyPortfolioId === "ALL" || portfolios.some((item) => item.id === historyPortfolioId) ? historyPortfolioId : "ALL";
+  const effectiveHistorySort = historySort === "amount-desc" && effectiveHistoryCurrency === "ALL" ? "date-desc" : historySort;
+  const filteredHistory = useMemo(() => {
+    const query = historyQuery.trim().toLocaleLowerCase("pl-PL");
+    const filtered = history.filter((entry) => effectiveHistoryCurrency === "ALL" || entry.currency === effectiveHistoryCurrency)
+      .filter((entry) => !aggregate || effectiveHistoryPortfolioId === "ALL" || entry.sourcePortfolioId === effectiveHistoryPortfolioId)
+      .filter((entry) => !query || `${entry.operationType} ${entry.accountName} ${entry.notes}`.toLocaleLowerCase("pl-PL").includes(query));
+    if (effectiveHistorySort === "date-desc") return filtered.sort((left, right) => right.date.localeCompare(left.date));
+    if (effectiveHistorySort === "date-asc") return filtered.sort((left, right) => left.date.localeCompare(right.date));
+    if (effectiveHistorySort === "amount-desc") return filtered.sort((left, right) => right.amount - left.amount);
+    return filtered;
+  }, [aggregate, effectiveHistoryCurrency, effectiveHistoryPortfolioId, effectiveHistorySort, history, historyQuery]);
   const accounts = useMemo(() => selectedPortfolio?.accounts ?? [], [selectedPortfolio]);
   const currencyOptions = useMemo(() => Array.from(new Set([
     ...SUPPORTED_CURRENCIES,
@@ -518,6 +549,8 @@ export default function CashWorkspace({
       <div className="panel cash-summary-panel">
         <div className="sprint-panel-head"><div><p className="eyebrow">Gotówka</p><h2 className="section-title">Saldo gotówkowe</h2><p className="section-copy">Środki są liczone z tego samego dziennika operacji co portfel.</p></div>{aggregate ? <span className="tag">Widok łączny</span> : <span className="account-type-badge account-type-badge-strong">{PORTFOLIO_ACCOUNT_TYPE_LABELS[selectedAccountType]}</span>}</div>
         <div className="workspace-performance-metric-grid cash-summary-grid mt-6"><article><span>Łączna gotówka</span><strong>{formatCurrency(cashValue, baseCurrency)}</strong></article><article><span>Udział w portfelu</span><strong>{cashShare.toFixed(1)}%</strong></article><article><span>Aktywne konta</span><strong>{activeAccountCount}</strong></article></div>
+        <div className="income-cash-currency-breakdown mt-5" aria-label="Saldo według waluty źródłowej"><div className="income-cash-section-heading"><strong>Saldo według waluty</strong><small>Kwoty źródłowe nie są sumowane między walutami</small></div><div className="income-cash-currency-grid">{cashByCurrency.length ? cashByCurrency.map(([currency, amount]) => <article key={currency}><span>{currency}</span><strong>{formatCurrency(amount, currency)}</strong><small>{formatCurrency(convertCurrency(amount, currency, baseCurrency, fxRates), baseCurrency)} w walucie prezentacji</small></article>) : <p className="field-note">Brak sald gotówkowych.</p>}</div></div>
+        {aggregate ? <div className="income-cash-portfolio-breakdown mt-5"><div className="income-cash-section-heading"><strong>Gotówka według portfela</strong><small>Przeliczono do {baseCurrency}</small></div>{portfolioCashDistribution.map((item) => <div className="income-cash-portfolio-row" key={item.id}><span>{item.name}</span><strong>{formatCurrency(item.value, baseCurrency)}</strong></div>)}</div> : null}
         {balances.some((item) => item.amount < 0) ? <p className="field-note field-note-error mt-4">Saldo ujemne jest dozwolone, ale wymaga weryfikacji.</p> : null}
         <div className="cash-balance-list mt-6">{balances.map((balance) => <article key={`${balance.accountId}:${balance.currency}`}><span>{balance.accountName}</span><strong className={balance.amount < 0 ? "tone-negative" : ""}>{formatCurrency(balance.amount, balance.currency)}</strong><small>{balance.currency} · {formatCurrency(convertCurrency(balance.amount, balance.currency, baseCurrency, fxRates), baseCurrency)}</small>{!aggregate ? <button type="button" className="ghost-button" onClick={() => { const account = displayActiveCashAccounts.find((candidate) => candidate.id === balance.accountId); if (account) void updateAccountArchiveState(account, true); }} disabled={pending}>Archiwizuj</button> : null}</article>)}{balances.length === 0 ? <p className="field-note">Brak aktywnych rachunków gotówkowych.</p> : null}</div>
         {!aggregate && archivedCashAccounts.length > 0 ? <div className="mt-6"><div className="sprint-panel-head"><div><p className="eyebrow">Archiwum</p><h3 className="section-title">Zamknięte rachunki</h3></div><span className="tag">{archivedCashAccounts.length}</span></div><div className="cash-balance-list mt-4">{archivedCashAccounts.map((account) => <article key={account.id}><span>{account.name}</span><strong>{account.currency}</strong><small>Historia operacji pozostaje dostępna poniżej.</small><button type="button" className="ghost-button" onClick={() => void updateAccountArchiveState(account, false)} disabled={pending}>Przywróć</button></article>)}</div></div> : null}
@@ -552,7 +585,72 @@ export default function CashWorkspace({
         <div className="sprint-action-row mt-5"><button type="button" className="primary-button" onClick={submit} disabled={pending || isPortfolioMutationPending || !selectedPortfolio || (aggregate && !targetPortfolioId)}>{pending ? "Zapisywanie…" : isPortfolioMutationPending ? "Zmiana portfela…" : editingId ? "Zapisz zmiany" : "Dodaj operację"}</button></div>
       </article>
 
-      <article className="panel sprint-wide-panel mt-6"><div className="sprint-panel-head"><div><p className="eyebrow">Historia gotówki</p><h2 className="section-title">Operacje i saldo po operacji</h2></div><span className="tag">{history.length} wpisów</span></div><div className="sprint-table-wrap mt-5"><table className="portfolio-table sprint-table"><thead><tr><th>Data</th><th>Typ</th><th>Konto</th><th>Kwota</th><th>Saldo</th><th>Opis</th><th>Akcje</th></tr></thead><tbody>{history.map((entry) => { const op = selectedPortfolio?.operations?.find((item) => item.id === entry.operationId); return <tr key={entry.id}><td>{formatDate(entry.date)}</td><td>{op ? operationLabel(op) : entry.operationType}</td><td>{entry.accountName}</td><td className={entry.amount < 0 ? "tone-negative" : "tone-positive"}>{formatCurrency(entry.amount, entry.currency)}</td><td>{formatCurrency(entry.balanceAfter, entry.currency)}</td><td><span className="table-note">{entry.notes || "—"}</span></td><td>{op && !aggregate && isEditableCashOperation(op) ? <span className="inline-actions"><button type="button" className="ghost-button" onClick={() => edit(op)}>Edytuj</button><button type="button" className="ghost-button" onClick={() => void remove(op)} disabled={pending}>Usuń</button></span> : <span className="table-note">—</span>}</td></tr>; })}{history.length === 0 ? <tr><td colSpan={7}><p className="empty-row">Brak historii gotówki.</p></td></tr> : null}</tbody></table></div><div className="cash-mobile-history">{history.map((entry) => { const op = selectedPortfolio?.operations?.find((item) => item.id === entry.operationId); return <article key={`mobile-${entry.id}`} className="cash-mobile-row"><div><strong>{op ? operationLabel(op) : entry.operationType}</strong><span>{formatDate(entry.date)} · {entry.accountName}</span></div><strong className={entry.amount < 0 ? "tone-negative" : "tone-positive"}>{formatCurrency(entry.amount, entry.currency)}</strong>{op && !aggregate && isEditableCashOperation(op) ? <div className="inline-actions"><button type="button" className="ghost-button" onClick={() => edit(op)}>Edytuj</button><button type="button" className="ghost-button" onClick={() => void remove(op)} disabled={pending}>Usuń</button></div> : null}</article>; })}</div></article>
+      <article className="panel sprint-wide-panel mt-6">
+        <div className="sprint-panel-head">
+          <div><p className="eyebrow">Historia gotówki</p><h2 className="section-title">Operacje i saldo po operacji</h2></div>
+          <span className="tag">{filteredHistory.length} wpisów</span>
+        </div>
+        <div className="income-history-filters mt-5" aria-label="Filtry historii gotówki">
+          <label className="field income-history-search">
+            <span>Szukaj operacji, konta lub opisu</span>
+            <input value={historyQuery} onChange={(event) => { setHistoryQuery(event.target.value); setHistoryLimit(50); }} placeholder="np. wpłata, XTB" />
+          </label>
+          <label className="field">
+            <span>Waluta źródłowa</span>
+            <select value={effectiveHistoryCurrency} onChange={(event) => { setHistoryCurrency(event.target.value); setHistoryLimit(50); }}>
+              <option value="ALL">Wszystkie waluty</option>
+              {historyCurrencies.map((currency) => <option key={currency} value={currency}>{currency}</option>)}
+            </select>
+          </label>
+          {aggregate ? <label className="field">
+            <span>Portfel źródłowy</span>
+            <select value={effectiveHistoryPortfolioId} onChange={(event) => { setHistoryPortfolioId(event.target.value); setHistoryLimit(50); }}>
+              <option value="ALL">Wszystkie portfele</option>
+              {portfolios.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+            </select>
+          </label> : null}
+          <label className="field">
+            <span>Sortowanie</span>
+            <select value={effectiveHistorySort} onChange={(event) => { setHistorySort(event.target.value as typeof historySort); setHistoryLimit(50); }}>
+              <option value="default">Domyślna kolejność</option>
+              <option value="date-desc">Najnowsze operacje</option>
+              <option value="date-asc">Najstarsze operacje</option>
+              <option value="amount-desc" disabled={effectiveHistoryCurrency === "ALL"}>Najwyższa kwota w wybranej walucie</option>
+            </select>
+          </label>
+        </div>
+        <div className="sprint-table-wrap mt-5">
+          <table className="portfolio-table sprint-table">
+            <thead><tr><th>Data</th><th>Typ</th><th>Konto</th><th>Kwota</th><th>Saldo</th><th>Opis</th><th>Akcje</th></tr></thead>
+            <tbody>
+              {filteredHistory.slice(0, historyLimit).map((entry) => {
+                const op = selectedPortfolio?.operations?.find((item) => item.id === entry.operationId);
+                return <tr key={`${entry.sourcePortfolioId}:${entry.id}`}>
+                  <td>{formatDate(entry.date)}</td>
+                  <td>{op ? operationLabel(op) : entry.operationType}</td>
+                  <td>{entry.accountName}</td>
+                  <td className={entry.amount < 0 ? "tone-negative" : "tone-positive"}>{formatCurrency(entry.amount, entry.currency)}</td>
+                  <td>{formatCurrency(entry.balanceAfter, entry.currency)}</td>
+                  <td><span className="table-note">{entry.notes || "—"}</span></td>
+                  <td>{op && !aggregate && isEditableCashOperation(op) ? <span className="inline-actions"><button type="button" className="ghost-button" onClick={() => edit(op)}>Edytuj</button><button type="button" className="ghost-button" onClick={() => void remove(op)} disabled={pending}>Usuń</button></span> : <span className="table-note">—</span>}</td>
+                </tr>;
+              })}
+              {filteredHistory.length === 0 ? <tr><td colSpan={7}><p className="empty-row">{history.length ? "Brak operacji pasujących do filtrów." : "Brak historii gotówki."}</p></td></tr> : null}
+            </tbody>
+          </table>
+        </div>
+        <div className="cash-mobile-history">
+          {filteredHistory.slice(0, historyLimit).map((entry) => {
+            const op = selectedPortfolio?.operations?.find((item) => item.id === entry.operationId);
+            return <article key={`mobile-${entry.sourcePortfolioId}-${entry.id}`} className="cash-mobile-row">
+              <div><strong>{op ? operationLabel(op) : entry.operationType}</strong><span>{formatDate(entry.date)} · {entry.accountName}</span></div>
+              <strong className={entry.amount < 0 ? "tone-negative" : "tone-positive"}>{formatCurrency(entry.amount, entry.currency)}</strong>
+              {op && !aggregate && isEditableCashOperation(op) ? <div className="inline-actions"><button type="button" className="ghost-button" onClick={() => edit(op)}>Edytuj</button><button type="button" className="ghost-button" onClick={() => void remove(op)} disabled={pending}>Usuń</button></div> : null}
+            </article>;
+          })}
+        </div>
+        {filteredHistory.length > historyLimit ? <div className="income-history-more"><span>Wyświetlono {Math.min(historyLimit, filteredHistory.length)} z {filteredHistory.length}</span><button type="button" className="ghost-button" onClick={() => setHistoryLimit((limit) => limit + 50)}>Pokaż kolejne</button></div> : null}
+      </article>
     </section>
   );
 }

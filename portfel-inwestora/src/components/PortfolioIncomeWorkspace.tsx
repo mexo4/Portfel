@@ -32,6 +32,10 @@ export default function PortfolioIncomeWorkspace(props: Props) {
 
   return (
     <section className="workspace-income">
+      <header className="income-workspace-heading">
+        <div><p className="eyebrow">Portfel · {props.portfolio.name}</p><h2 className="section-title">Dywidendy i gotówka</h2><p className="section-copy">Historia i salda pozostają przypisane do tego rachunku.</p></div>
+        <span className="income-currency-tag">Waluta prezentacji <strong>{props.baseCurrency}</strong></span>
+      </header>
       <nav className="workspace-subnav" aria-label="Dywidendy i gotowka">
         <button type="button" className={activeView === "dividends" ? "is-active" : ""} onClick={() => setView("dividends")}>Dywidendy</button>
         <button type="button" className={activeView === "cash" ? "is-active" : ""} onClick={() => setView("cash")}>Gotowka</button>

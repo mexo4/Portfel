@@ -12,6 +12,7 @@ type Props = {
   isAllPortfoliosSelected?: boolean;
   isPortfolioMutationPending?: boolean;
   fxRates: FxRates;
+  verifiedFxCurrencies: CurrencyCode[];
   baseCurrency: CurrencyCode;
   totalPortfolioValue?: number;
   isAdmin: boolean;

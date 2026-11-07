@@ -8,6 +8,7 @@ import ConfigurableDashboard from "@/components/ConfigurableDashboard";
 import CorporateEventsPanel from "@/components/CorporateEventsPanel";
 import DividendIncomeDashboard from "@/components/DividendIncomeDashboard";
 import GpwEventsWorkspace from "@/components/GpwEventsWorkspace";
+import IncomeCurrencyAmount from "@/components/IncomeCurrencyAmount";
 import UpcomingDividendsPanel from "@/components/UpcomingDividendsPanel";
 import WatchlistWorkspace from "@/components/WatchlistWorkspace";
 import PortfolioCharts from "@/components/PortfolioCharts";
@@ -122,11 +123,12 @@ export function WorkspaceDividendsPage() {
             dividends={aggregateDividends}
             portfolios={workspace.selectedPortfolios}
             fxRates={workspace.fxRates}
+            verifiedFxCurrencies={workspace.verifiedFxCurrencies}
             currency={workspace.presentationCurrency}
             mode="aggregate"
           />
           {workspace.aggregateDividendWorkspace}
-          <UpcomingDividendsPanel key={`${workspace.portfolioScopeLabel}:${workspace.selectedPortfolioIds.join(",")}`} {...eventScopeProps} />
+          <UpcomingDividendsPanel key={`${workspace.portfolioScopeLabel}:${workspace.selectedPortfolioIds.join(",")}`} {...eventScopeProps} presentationCurrency={workspace.presentationCurrency} fxRates={workspace.fxRates} verifiedFxCurrencies={workspace.verifiedFxCurrencies} />
           <AggregateDividendHistory />
         </>
       ) : null}
@@ -262,7 +264,11 @@ function AggregateDividendHistory() {
     </div>
     {filtered.length ? <ul className="workspace-aggregate-dividend-list">{filtered.slice(0, limit).map(({ portfolio, dividend }) => <li key={`${portfolio.id}:${dividend.id}`}>
       <span className="income-aggregate-dividend-source"><strong>{dividend.symbol} · {dividend.instrumentName}</strong><small>{portfolio.name} · wypłata {formatDate(dividend.paymentDate)} · {dividend.currency} · {dividend.isAutomatic ? "Automatycznie" : "Ręcznie"}</small></span>
-      <span className="income-aggregate-dividend-values"><strong>{formatCurrency(dividend.netAmount, dividend.currency)} netto</strong><small>Brutto {formatCurrency(dividend.grossAmount, dividend.currency)} · podatek {formatCurrency(dividend.withholdingTax + dividend.domesticTax, dividend.currency)}</small><small>{formatCurrency(convertFromPln(dividend.netAmountPln, workspace.presentationCurrency, workspace.fxRates), workspace.presentationCurrency)} w walucie prezentacji</small></span>
+      <span className="income-aggregate-dividend-values">
+        <IncomeCurrencyAmount amount={dividend.netAmount} sourceCurrency={dividend.currency} presentationCurrency={workspace.presentationCurrency} fxRates={workspace.fxRates} verifiedCurrencies={workspace.verifiedFxCurrencies} amountInPln={dividend.netAmountPln} suffix="netto" />
+        <span className="income-aggregate-dividend-detail"><small>Brutto</small><IncomeCurrencyAmount amount={dividend.grossAmount} sourceCurrency={dividend.currency} presentationCurrency={workspace.presentationCurrency} fxRates={workspace.fxRates} verifiedCurrencies={workspace.verifiedFxCurrencies} amountInPln={dividend.grossAmountPln} /></span>
+        <span className="income-aggregate-dividend-detail"><small>Podatek</small><IncomeCurrencyAmount amount={dividend.withholdingTax + dividend.domesticTax} sourceCurrency={dividend.currency} presentationCurrency={workspace.presentationCurrency} fxRates={workspace.fxRates} verifiedCurrencies={workspace.verifiedFxCurrencies} amountInPln={dividend.grossAmountPln - dividend.netAmountPln} /></span>
+      </span>
     </li>)}</ul> : <p className="workspace-empty-state">{dividends.length ? "Brak zapisanych wypłat pasujących do filtrów." : "Brak zapisanych wypłat w wybranym zakresie."}</p>}
     {filtered.length > limit ? <div className="income-history-more"><span>Wyświetlono {Math.min(limit, filtered.length)} z {filtered.length}</span><button type="button" className="ghost-button" onClick={() => setLimit((current) => current + 50)}>Pokaż kolejne</button></div> : null}
   </section>;

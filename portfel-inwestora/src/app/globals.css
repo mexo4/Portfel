@@ -6347,6 +6347,92 @@ textarea {
   gap: 9px;
 }
 
+.income-currency-pair {
+  display: inline-flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  line-height: 1.3;
+  vertical-align: top;
+}
+
+.income-currency-primary {
+  overflow: visible;
+  color: var(--text);
+  font-size: 0.9rem;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.income-currency-secondary,
+.income-currency-unavailable {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 550;
+  line-height: 1.3;
+  font-variant-numeric: tabular-nums;
+}
+
+.income-currency-unavailable {
+  color: var(--warning, #8a510b);
+}
+
+.dividend-payment-card-amount {
+  flex: 0 0 auto;
+  align-items: flex-end;
+  text-align: right;
+}
+
+.upcoming-dividend-rate .income-currency-pair {
+  gap: 3px;
+}
+
+.upcoming-dividend-rate-breakdown {
+  display: block;
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.55;
+}
+
+.upcoming-dividend-rate-breakdown .income-currency-pair {
+  display: inline-flex;
+  margin: 2px 0;
+  vertical-align: middle;
+}
+
+.upcoming-dividend-estimate {
+  display: grid;
+  gap: 2px;
+  padding-top: 4px;
+}
+
+.upcoming-dividend-estimate > span:first-child {
+  color: var(--muted);
+  font-size: 0.7rem;
+  line-height: 1.3;
+}
+
+.income-aggregate-dividend-values .income-currency-pair {
+  margin-bottom: 3px;
+}
+
+.income-aggregate-dividend-detail {
+  display: grid;
+  justify-items: start;
+  gap: 2px;
+}
+
+.income-aggregate-dividend-detail > small {
+  color: var(--muted);
+  font-size: 0.68rem;
+}
+
+.income-aggregate-dividend-values .income-currency-primary {
+  white-space: normal;
+}
+
 .upcoming-dividend-row {
   display: grid;
   grid-template-columns: minmax(156px, 1.2fr) minmax(150px, 1fr) minmax(210px, 1.3fr) minmax(208px, 1.25fr) auto;
@@ -10722,6 +10808,11 @@ textarea {
 @media (max-width: 640px) {
   .income-workspace-heading { align-items: flex-start; }
   .income-currency-tag { padding: 7px 9px; font-size: .64rem; }
+  .dividend-payment-card-head { align-items: flex-start; }
+  .dividend-payment-card-amount { flex: 1 1 0; min-width: 0; max-width: 48%; }
+  .dividend-payment-card-amount .income-currency-primary,
+  .upcoming-dividend-rate .income-currency-primary { white-space: normal; overflow-wrap: anywhere; }
+  .upcoming-dividend-rate .income-currency-pair { max-width: 100%; }
   .income-dividend-kpis { gap: 7px; }
   .income-dividend-kpi { min-height: 86px; padding: 11px; }
   .income-dividend-kpi > strong { font-size: .98rem; }
@@ -10734,6 +10825,7 @@ textarea {
   .income-history-filters .field { font-size: .76rem; }
   .income-aggregate-dividend-source strong { white-space: normal; }
   .income-aggregate-dividend-values { max-width: 48%; text-align: right; }
+  .income-aggregate-dividend-values .income-currency-pair { align-items: flex-end; }
   .income-aggregate-dividend-values strong { white-space: normal; }
   .income-cash-section-heading { align-items: flex-start; flex-direction: column; }
 }

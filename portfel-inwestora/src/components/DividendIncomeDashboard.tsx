@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import IncomeCurrencyAmount from "@/components/IncomeCurrencyAmount";
 import {
   Bar,
   BarChart,
@@ -22,6 +23,7 @@ type Props = {
   dividends: PortfolioDividend[];
   portfolios: InvestmentPortfolio[];
   fxRates: FxRates;
+  verifiedFxCurrencies: CurrencyCode[];
   currency: CurrencyCode;
   mode: "single" | "aggregate";
 };
@@ -57,7 +59,7 @@ const getPortfolioColor = (portfolioId: string) => {
   return `hsl(${hue} 62% 48%)`;
 };
 
-export default function DividendIncomeDashboard({ dividends, portfolios, fxRates, currency, mode }: Props) {
+export default function DividendIncomeDashboard({ dividends, portfolios, fxRates, verifiedFxCurrencies, currency, mode }: Props) {
   const [range, setRange] = useState<RangeKey>("1Y");
   const [amountMode, setAmountMode] = useState<AmountMode>("net");
   const today = getTodayDateInputValue();
@@ -175,7 +177,7 @@ export default function DividendIncomeDashboard({ dividends, portfolios, fxRates
           <article className="income-dividend-kpi"><span>Netto · łącznie</span><strong>{formatCurrency(totals.maxNet, currency)}</strong><small>{totals.receivedCount} zaksięgowanych wypłat</small></article>
           <article className="income-dividend-kpi"><span>Podatki · łącznie</span><strong>{formatCurrency(totals.taxes, currency)}</strong><small>Brutto minus netto</small></article>
           <article className="income-dividend-kpi income-dividend-kpi-next"><span>Najbliższa znana wypłata</span>
-            {forecast.nextPayment ? <><strong>{formatCurrency(forecast.nextPayment.netAmount, forecast.nextPayment.currency)}</strong><small>{formatDate(forecast.nextPayment.paymentDate)} · {forecast.nextPayment.symbol}</small></> : <><strong>Brak</strong><small>{forecast.message ?? "Brak zapisanej przyszłej wypłaty."}</small></>}
+            {forecast.nextPayment ? <><IncomeCurrencyAmount amount={forecast.nextPayment.netAmount} sourceCurrency={forecast.nextPayment.currency} presentationCurrency={currency} fxRates={fxRates} verifiedCurrencies={verifiedFxCurrencies} amountInPln={forecast.nextPayment.netAmountPln} /><small>{formatDate(forecast.nextPayment.paymentDate)} · {forecast.nextPayment.symbol}</small></> : <><strong>Brak</strong><small>{forecast.message ?? "Brak zapisanej przyszłej wypłaty."}</small></>}
           </article>
         </div>
       </section>

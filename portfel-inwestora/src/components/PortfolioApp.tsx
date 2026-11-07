@@ -384,12 +384,14 @@ const getTrackedCurrencies = (
   portfolios: InvestmentPortfolio[],
   draft: AssetDraft,
   realizedAdjustmentDraft: RealizedAdjustmentDraft,
-  wealthItems: WealthItem[]
+  wealthItems: WealthItem[],
+  presentationCurrency: CurrencyCode
 ) =>
   Array.from(
     new Set(
       [
         "PLN",
+        presentationCurrency,
         draft.purchaseCurrency,
         draft.marketCurrency,
         realizedAdjustmentDraft.currency,
@@ -1089,6 +1091,7 @@ export default function PortfolioApp({
   const [assetSortMode, setAssetSortMode] = useState<AssetTableSortMode>("manual");
   const [hasLoadedSortMode, setHasLoadedSortMode] = useState(false);
   const [fxRates, setFxRates] = useState<FxRates>(FALLBACK_FX_RATES);
+  const [verifiedFxCurrencies, setVerifiedFxCurrencies] = useState<CurrencyCode[]>(["PLN"]);
   const [isSearching, setIsSearching] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isSavingPortfolio, setIsSavingPortfolio] = useState(false);
@@ -1341,9 +1344,10 @@ export default function PortfolioApp({
         selectedPortfolios,
         draft,
         realizedAdjustmentDraft,
-        profile.wealthItems
+        profile.wealthItems,
+        presentationCurrency
       ),
-    [displayedAssets, draft, profile.wealthItems, realizedAdjustmentDraft, selectedPortfolios]
+    [displayedAssets, draft, presentationCurrency, profile.wealthItems, realizedAdjustmentDraft, selectedPortfolios]
   );
   const trackedCurrenciesKey = trackedCurrencies.join("|");
   const trackedCurrenciesForRefresh = useMemo(
@@ -2743,6 +2747,12 @@ export default function PortfolioApp({
       fxRatesRef.current = nextRates;
       setFxRates(nextRates);
       setFxUpdatedAt(response.fetchedAt);
+      setVerifiedFxCurrencies(Array.from(new Set([
+        "PLN",
+        ...Object.entries(response.rates)
+          .filter(([, rate]) => typeof rate === "number" && Number.isFinite(rate) && rate > 0)
+          .map(([currency]) => currency as CurrencyCode),
+      ])));
     } catch {
       nextRates = {
         ...FALLBACK_FX_RATES,
@@ -2750,6 +2760,7 @@ export default function PortfolioApp({
       };
       fxRatesRef.current = nextRates;
       setFxRates(nextRates);
+      setVerifiedFxCurrencies(["PLN"]);
     }
 
     const missingCurrencies = Array.from(
@@ -5703,7 +5714,7 @@ export default function PortfolioApp({
   const incomePortfolio = isAllPortfoliosSelected ? selectedPortfolios[0] : activePortfolioForEngine;
   const incomePortfolios = isAllPortfoliosSelected ? selectedPortfolios : portfolios;
   const incomeScopeKey = `${portfolioScope.mode}:${portfolioScope.mode === "CUSTOM" ? portfolioScope.portfolioIds.join(",") : portfolioScope.mode === "SINGLE" ? portfolioScope.portfolioId : "all"}:active:${activePortfolioId}`;
-  const incomeWorkspace = incomePortfolio ? <PortfolioIncomeWorkspace key={incomeScopeKey} portfolio={ensurePortfolioCoreModel(incomePortfolio)} portfolios={incomePortfolios} activePortfolioId={isAllPortfoliosSelected ? incomePortfolio.id : activePortfolioId} isAllPortfoliosSelected={isAllPortfoliosSelected} isPortfolioMutationPending={isPortfolioMutationPending} fxRates={fxRates} baseCurrency={activeBaseCurrency} totalPortfolioValue={summary.totalValue} isAdmin={isAdmin} onPortfolioChange={(nextPortfolio: InvestmentPortfolio) => persistPortfolioWithinCurrentScope(nextPortfolio, operationScopeKey)} /> : null;
+  const incomeWorkspace = incomePortfolio ? <PortfolioIncomeWorkspace key={incomeScopeKey} portfolio={ensurePortfolioCoreModel(incomePortfolio)} portfolios={incomePortfolios} activePortfolioId={isAllPortfoliosSelected ? incomePortfolio.id : activePortfolioId} isAllPortfoliosSelected={isAllPortfoliosSelected} isPortfolioMutationPending={isPortfolioMutationPending} fxRates={fxRates} verifiedFxCurrencies={verifiedFxCurrencies} baseCurrency={activeBaseCurrency} totalPortfolioValue={summary.totalValue} isAdmin={isAdmin} onPortfolioChange={(nextPortfolio: InvestmentPortfolio) => persistPortfolioWithinCurrentScope(nextPortfolio, operationScopeKey)} /> : null;
   const aggregateDividendWorkspace = isAllPortfoliosSelected && selectedPortfolios[0] ? (
     <DividendCashWorkspace
       key={`${incomeScopeKey}:aggregate-dividend-entry`}
@@ -5716,6 +5727,7 @@ export default function PortfolioApp({
       entryOnly
       isPortfolioMutationPending={isPortfolioMutationPending}
       fxRates={fxRates}
+      verifiedFxCurrencies={verifiedFxCurrencies}
       baseCurrency={activeBaseCurrency}
       onPortfolioChange={(nextPortfolio: InvestmentPortfolio) => persistPortfolioWithinCurrentScope(nextPortfolio, operationScopeKey)}
     />
@@ -5741,7 +5753,7 @@ export default function PortfolioApp({
     onQuickAdd: () => { router.push("/portfolio/positions?add=asset"); },
     resetAssetEntryForm,
     onLogout: () => { void handleLogout(); },
-    displayedSyncError, assets: displayedAssets, sales: displayedSales, realizedAdjustments: displayedRealizedAdjustments, effectiveRealizedAdjustments, fxRates, groupedAssets,
+    displayedSyncError, assets: displayedAssets, sales: displayedSales, realizedAdjustments: displayedRealizedAdjustments, effectiveRealizedAdjustments, fxRates, verifiedFxCurrencies, groupedAssets,
     watchlistItems, isWatchlistLoading, watchlistReadError,
     onToggleWatchlistItem: handleToggleWatchlist,
     isWatchlistTogglePending,

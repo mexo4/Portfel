@@ -59,6 +59,7 @@ export type PortfolioWorkspaceValue = {
   realizedAdjustments: PortfolioRealizedAdjustment[];
   effectiveRealizedAdjustments: PortfolioRealizedAdjustment[];
   fxRates: FxRates;
+  verifiedFxCurrencies: CurrencyCode[];
   groupedAssets: PortfolioAssetGroup[];
   watchlistItems: WatchlistItem[];
   isWatchlistLoading: boolean;

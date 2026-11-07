@@ -3,6 +3,7 @@
 import { useMemo, useRef, useState } from "react";
 import FormattedNumberInput from "@/components/FormattedNumberInput";
 import DividendIncomeDashboard from "@/components/DividendIncomeDashboard";
+import IncomeCurrencyAmount from "@/components/IncomeCurrencyAmount";
 import UpcomingDividendsPanel from "@/components/UpcomingDividendsPanel";
 import PortfolioTargetSelector from "@/components/PortfolioTargetSelector";
 import TruncatedText from "@/components/TruncatedText";
@@ -49,6 +50,7 @@ type DividendCashWorkspaceProps = {
   entryOnly?: boolean;
   isPortfolioMutationPending?: boolean;
   fxRates: FxRates;
+  verifiedFxCurrencies: CurrencyCode[];
   baseCurrency: CurrencyCode;
   onPortfolioChange: (portfolio: InvestmentPortfolio) => void | Promise<void>;
 };
@@ -202,6 +204,7 @@ export default function DividendCashWorkspace({
   entryOnly = false,
   isPortfolioMutationPending = false,
   fxRates,
+  verifiedFxCurrencies,
   baseCurrency,
   onPortfolioChange,
 }: DividendCashWorkspaceProps) {
@@ -759,10 +762,11 @@ export default function DividendCashWorkspace({
         dividends={dividends}
         portfolios={[portfolio]}
         fxRates={fxRates}
+        verifiedFxCurrencies={verifiedFxCurrencies}
         currency={baseCurrency}
         mode="single"
       /> : null}
-      {!entryOnly && !isAggregateMode && activeView === "dividends" ? <UpcomingDividendsPanel key={`upcoming:${portfolio.id}`} portfolioId={portfolio.id} /> : null}
+      {!entryOnly && !isAggregateMode && activeView === "dividends" ? <UpcomingDividendsPanel key={`upcoming:${portfolio.id}`} portfolioId={portfolio.id} presentationCurrency={baseCurrency} fxRates={fxRates} verifiedFxCurrencies={verifiedFxCurrencies} /> : null}
 
       {activeView === "dividends" ? (
         <section className={entryOnly ? "sprint-two-grid dividend-workspace-grid dividend-entry-only-grid" : "sprint-two-grid dividend-workspace-grid"}>
@@ -1202,21 +1206,12 @@ export default function DividendCashWorkspace({
                           {formatDate(dividend.recordDate)}
                         </p>
                       </td>
-                      <td>{formatCurrency(dividend.grossAmount, dividend.currency)}</td>
+                      <td><IncomeCurrencyAmount amount={dividend.grossAmount} sourceCurrency={dividend.currency} presentationCurrency={baseCurrency} fxRates={fxRates} verifiedCurrencies={verifiedFxCurrencies} amountInPln={dividend.grossAmountPln} /></td>
                       <td>
-                        {formatCurrency(
-                          dividend.withholdingTax + dividend.domesticTax,
-                          dividend.currency
-                        )}
+                        <IncomeCurrencyAmount amount={dividend.withholdingTax + dividend.domesticTax} sourceCurrency={dividend.currency} presentationCurrency={baseCurrency} fxRates={fxRates} verifiedCurrencies={verifiedFxCurrencies} amountInPln={dividend.grossAmountPln - dividend.netAmountPln} />
                       </td>
                       <td>
-                        <strong>{formatCurrency(dividend.netAmount, dividend.currency)}</strong>
-                        <p className="table-note">
-                          {formatCurrency(
-                            convertFromPln(dividend.netAmountPln, baseCurrency, fxRates),
-                            baseCurrency
-                          )}
-                        </p>
+                        <IncomeCurrencyAmount amount={dividend.netAmount} sourceCurrency={dividend.currency} presentationCurrency={baseCurrency} fxRates={fxRates} verifiedCurrencies={verifiedFxCurrencies} amountInPln={dividend.netAmountPln} />
                       </td>
                       <td>
                         <div className="sprint-inline-actions">
@@ -1258,7 +1253,7 @@ export default function DividendCashWorkspace({
                 <article className="dividend-payment-card" key={dividend.id}>
                   <div className="dividend-payment-card-head">
                     <span><strong>{dividend.symbol}</strong><TruncatedText as="span" text={dividend.instrumentName} /></span>
-                    <strong>{formatCurrency(dividend.netAmount, dividend.currency)}</strong>
+                    <IncomeCurrencyAmount amount={dividend.netAmount} sourceCurrency={dividend.currency} presentationCurrency={baseCurrency} fxRates={fxRates} verifiedCurrencies={verifiedFxCurrencies} amountInPln={dividend.netAmountPln} className="dividend-payment-card-amount" />
                   </div>
                   <span className={dividend.isAutomatic ? "dividend-origin is-automatic" : "dividend-origin"}>
                     {dividend.isAutomatic ? "Dodano automatycznie przez Mexo" : "Dodano ręcznie"}
@@ -1266,8 +1261,8 @@ export default function DividendCashWorkspace({
                   <dl>
                     <div><dt>Konto</dt><dd title={dividend.accountName}>{dividend.accountName}</dd></div>
                     <div><dt>Wypłata</dt><dd>{formatDate(dividend.paymentDate)}</dd></div>
-                    <div><dt>Brutto</dt><dd>{formatCurrency(dividend.grossAmount, dividend.currency)}</dd></div>
-                    <div><dt>Podatki</dt><dd>{formatCurrency(dividend.withholdingTax + dividend.domesticTax, dividend.currency)}</dd></div>
+                    <div><dt>Brutto</dt><dd><IncomeCurrencyAmount amount={dividend.grossAmount} sourceCurrency={dividend.currency} presentationCurrency={baseCurrency} fxRates={fxRates} verifiedCurrencies={verifiedFxCurrencies} amountInPln={dividend.grossAmountPln} /></dd></div>
+                    <div><dt>Podatki</dt><dd><IncomeCurrencyAmount amount={dividend.withholdingTax + dividend.domesticTax} sourceCurrency={dividend.currency} presentationCurrency={baseCurrency} fxRates={fxRates} verifiedCurrencies={verifiedFxCurrencies} amountInPln={dividend.grossAmountPln - dividend.netAmountPln} /></dd></div>
                   </dl>
                   <div className="sprint-inline-actions">
                     <span>{formatNumber(dividend.quantity)} szt.</span>

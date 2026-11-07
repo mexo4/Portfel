@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import IncomeCurrencyAmount from "@/components/IncomeCurrencyAmount";
 import {
   getUpcomingDividendDatesForDisplay,
   getUpcomingDividendRelevantDate,
@@ -9,11 +10,15 @@ import {
   type CorporateEventsResponse,
 } from "@/lib/corporate-events";
 import { fetchCorporateEvents } from "@/lib/api";
-import { formatCurrency, formatDate, formatNumber } from "@/lib/utils";
+import { formatDate, formatNumber } from "@/lib/utils";
+import type { CurrencyCode, FxRates } from "@/types/portfolio";
 
 type UpcomingDividendsPanelProps = {
   portfolioId: string;
   portfolioIds?: string[];
+  presentationCurrency: CurrencyCode;
+  fxRates: FxRates;
+  verifiedFxCurrencies: CurrencyCode[];
 };
 
 const getStatusLabel = (event: CorporateEvent) => {
@@ -29,7 +34,7 @@ const getStatusClassName = (event: CorporateEvent) =>
       ? "upcoming-dividend-status is-proposed"
       : "upcoming-dividend-status";
 
-export default function UpcomingDividendsPanel({ portfolioId, portfolioIds }: UpcomingDividendsPanelProps) {
+export default function UpcomingDividendsPanel({ portfolioId, portfolioIds, presentationCurrency, fxRates, verifiedFxCurrencies }: UpcomingDividendsPanelProps) {
   const [data, setData] = useState<CorporateEventsResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [hasError, setHasError] = useState(false);
@@ -134,8 +139,8 @@ export default function UpcomingDividendsPanel({ portfolioId, portfolioIds }: Up
                   <span>{event.ticker}</span>
                 </div>
                 <div className="upcoming-dividend-rate">
-                  <strong>{formatCurrency(event.dividendPerShare ?? 0, currency)} / akcję</strong>
-                  {event.dividendTotalPerShare !== undefined && event.dividendAdvancePerShare !== undefined ? <small>Łącznie: {formatCurrency(event.dividendTotalPerShare, currency)} · wypłacona zaliczka: {formatCurrency(event.dividendAdvancePerShare, currency)} · pozostało: {formatCurrency(event.dividendPerShare ?? 0, currency)}</small> : null}
+                  <IncomeCurrencyAmount amount={event.dividendPerShare ?? 0} sourceCurrency={currency} presentationCurrency={presentationCurrency} fxRates={fxRates} verifiedCurrencies={verifiedFxCurrencies} suffix="/ akcję" />
+                  {event.dividendTotalPerShare !== undefined && event.dividendAdvancePerShare !== undefined ? <small className="upcoming-dividend-rate-breakdown">Łącznie: <IncomeCurrencyAmount amount={event.dividendTotalPerShare} sourceCurrency={currency} presentationCurrency={presentationCurrency} fxRates={fxRates} verifiedCurrencies={verifiedFxCurrencies} /> · wypłacona zaliczka: <IncomeCurrencyAmount amount={event.dividendAdvancePerShare} sourceCurrency={currency} presentationCurrency={presentationCurrency} fxRates={fxRates} verifiedCurrencies={verifiedFxCurrencies} /> · pozostało: <IncomeCurrencyAmount amount={event.dividendPerShare ?? 0} sourceCurrency={currency} presentationCurrency={presentationCurrency} fxRates={fxRates} verifiedCurrencies={verifiedFxCurrencies} /></small> : null}
                   <span className={getStatusClassName(event)}>{getStatusLabel(event)}</span>
                 </div>
                 <div className="upcoming-dividend-position">
@@ -158,15 +163,9 @@ export default function UpcomingDividendsPanel({ portfolioId, portfolioIds }: Up
                   )}
                   {!isWatchlistOnly && event.estimatedGrossAmount !== undefined ? (
                     <>
-                      <strong>
-                        Szacowana dywidenda brutto: {formatCurrency(event.estimatedGrossAmount, currency)}
-                      </strong>
-                      <span>
-                        Szacowany podatek: {formatCurrency(event.estimatedTaxAmount ?? 0, currency)}
-                      </span>
-                      <strong>
-                        Szacowana dywidenda netto: {formatCurrency(event.estimatedNetAmount ?? 0, currency)}
-                      </strong>
+                      <div className="upcoming-dividend-estimate"><span>Szacowana dywidenda brutto</span><IncomeCurrencyAmount amount={event.estimatedGrossAmount} sourceCurrency={currency} presentationCurrency={presentationCurrency} fxRates={fxRates} verifiedCurrencies={verifiedFxCurrencies} /></div>
+                      <div className="upcoming-dividend-estimate"><span>Szacowany podatek</span><IncomeCurrencyAmount amount={event.estimatedTaxAmount ?? 0} sourceCurrency={currency} presentationCurrency={presentationCurrency} fxRates={fxRates} verifiedCurrencies={verifiedFxCurrencies} /></div>
+                      <div className="upcoming-dividend-estimate"><span>Szacowana dywidenda netto</span><IncomeCurrencyAmount amount={event.estimatedNetAmount ?? 0} sourceCurrency={currency} presentationCurrency={presentationCurrency} fxRates={fxRates} verifiedCurrencies={verifiedFxCurrencies} /></div>
                     </>
                   ) : null}
                 </div>

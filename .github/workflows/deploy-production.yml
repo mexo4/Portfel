@@ -385,6 +385,46 @@ jobs:
           }
 
           mkdir -p "$RELEASES"
+          # Keep the active build and the newest complete rollback build intact.
+          # Older release sources and their compiled .next output remain available;
+          # only their reinstallable workspace node_modules are pruned to prevent
+          # repeated isolated deployments from exhausting the Oracle disk.
+          RELEASES_REAL="$(realpath "$RELEASES")"
+          if [ -L "$APP/.next" ]; then
+            ACTIVE_BUILD_REAL="$(realpath "$APP/.next")"
+            case "$ACTIVE_BUILD_REAL" in
+              "$RELEASES_REAL"/*/source/portfel-inwestora/.next) ;;
+              *) echo "ERROR: active Next.js build is outside managed releases; refusing release cleanup."; exit 1 ;;
+            esac
+            ACTIVE_RELEASE_DIR="$(dirname "$(dirname "$(dirname "$ACTIVE_BUILD_REAL")")")"
+            ROLLBACK_RELEASE_DIR=""
+            while IFS= read -r candidate; do
+              [ "$candidate" = "$ACTIVE_RELEASE_DIR" ] && continue
+              [ ! -L "$candidate" ] || continue
+              if [ -f "$candidate/source/portfel-inwestora/.next/BUILD_ID" ]; then
+                ROLLBACK_RELEASE_DIR="$candidate"
+                break
+              fi
+            done < <(find "$RELEASES_REAL" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' | sort -nr | cut -d' ' -f2-)
+
+            while IFS= read -r candidate; do
+              [ "$candidate" = "$ACTIVE_RELEASE_DIR" ] && continue
+              [ -n "$ROLLBACK_RELEASE_DIR" ] && [ "$candidate" = "$ROLLBACK_RELEASE_DIR" ] && continue
+              [ ! -L "$candidate" ] || continue
+              candidate_real="$(realpath "$candidate")"
+              case "$candidate_real" in "$RELEASES_REAL"/*) ;; *) echo "ERROR: release cleanup target escaped the managed release directory."; exit 1 ;; esac
+              [ -f "$candidate_real/source/package-lock.json" ] || continue
+              [ -f "$candidate_real/source/portfel-inwestora/.next/BUILD_ID" ] || continue
+              workspace_modules="$candidate_real/source/node_modules"
+              if [ -d "$workspace_modules" ] && [ ! -L "$workspace_modules" ]; then
+                [ "$(realpath "$workspace_modules")" = "$candidate_real/source/node_modules" ] || { echo "ERROR: release dependency path is not a real directory; refusing cleanup."; exit 1; }
+                rm -r -- "$workspace_modules"
+                echo "Pruned reinstallable workspace dependencies from inactive release $(basename "$candidate_real"); preserved its source and rollback build."
+              fi
+            done < <(find "$RELEASES_REAL" -mindepth 1 -maxdepth 1 -type d -printf '%p\n')
+          else
+            echo "Current build is not a managed symlink; skipping historical dependency cleanup."
+          fi
           if [[ ! "$RELEASE_TARGET" =~ ^\.mexo-releases/[a-f0-9]{40}-[0-9]{8}T[0-9]{6}Z-[0-9]+$ ]]; then echo "Invalid release directory"; exit 1; fi
           if [ -e "$APP/$RELEASE_TARGET" ]; then echo "Release directory already exists; refusing to overwrite it."; exit 1; fi
           mkdir -p "$RELEASE_SOURCE"

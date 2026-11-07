@@ -91,7 +91,7 @@ export default function AggregateOperationsHistory({
               {operationTypeOptions.map((label) => <option value={label} key={label}>{label}</option>)}
             </select>
           </label>
-          <label className="field">
+          <label className="field aggregate-operations-instrument">
             <span>Instrument</span>
             <select value={instrument} onChange={(event) => { setInstrument(event.target.value); resetPage(); }}>
               <option value="all">Wszystkie instrumenty</option>

@@ -10925,8 +10925,9 @@ textarea {
 @media (max-width: 420px) {
   .aggregate-operations-header { flex-direction: column; }
   .aggregate-operations-count { align-self: flex-start; }
-  .aggregate-operations-filters { grid-template-columns: minmax(0, 1fr); }
-  .aggregate-operations-search { grid-column: auto; }
+  .aggregate-operations-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .aggregate-operations-search,
+  .aggregate-operations-instrument { grid-column: 1 / -1; }
   .aggregate-operation-values > strong { white-space: normal; }
   .aggregate-operation-detail-grid { grid-template-columns: minmax(0, 1fr); }
   .aggregate-operation-detail-grid > .aggregate-operation-note { grid-column: auto; }

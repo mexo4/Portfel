@@ -96,8 +96,8 @@ test("single and aggregate income views render source-first pairs and keep watch
   ]);
 
   assert.match(cash, /dividend-payment-card-amount/);
-  assert.match(cash, /amountInPln=\{dividend\.netAmountPln\}/);
-  assert.match(dashboard, /amountInPln=\{forecast\.nextPayment\.netAmountPln\}/);
+  assert.match(cash, /amountInPln=\{dividend\.hasReliablePlnAnchor \? dividend\.netAmountPln : undefined\}/);
+  assert.match(dashboard, /amountInPln=\{forecast\.nextPayment\.hasReliablePlnAnchor \? forecast\.nextPayment\.netAmountPln : undefined\}/);
   assert.match(route, /presentationCurrency=\{workspace\.presentationCurrency\} fxRates=\{workspace\.fxRates\}/);
   assert.match(route, /suffix="netto"/);
   assert.match(upcoming, /!isWatchlistOnly && event\.estimatedGrossAmount !== undefined/);

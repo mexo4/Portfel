@@ -757,6 +757,7 @@ export type PortfolioDividend = {
   exchangeRate: number | null;
   grossAmountPln: number;
   netAmountPln: number;
+  hasReliablePlnAnchor: boolean;
   exDividendDate: string;
   recordDate: string;
   paymentDate: string;

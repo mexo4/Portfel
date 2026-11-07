@@ -161,13 +161,27 @@ export const operationToDividend = ({
     getMetadataNumber(operation.metadata, "netAmount") ||
     round(grossAmount - withholdingTax - domesticTax, 6);
   const currency = toCurrencyCode(operation.currency, instrument.marketCurrency);
-  const fxRate =
-    operation.exchangeRate ??
-    (currency === BASE_CURRENCY ? 1 : fxRates[currency] ?? null);
-  const grossAmountPln =
-    fxRate && fxRate > 0 ? round(grossAmount * fxRate) : convertToPln(grossAmount, currency, fxRates);
-  const netAmountPln =
-    fxRate && fxRate > 0 ? round(netAmount * fxRate) : convertToPln(netAmount, currency, fxRates);
+  // Imported broker records can use exchangeRate=1 to mean "no conversion".
+  // For a foreign-currency dividend, that identity rate is not a PLN FX rate.
+  // Only an explicit non-parity foreign rate is a usable historical PLN anchor;
+  // otherwise derive the PLN equivalent from current FX and don't present it
+  // as a historical conversion in the currency-pair UI.
+  const hasReliablePlnAnchor = currency === BASE_CURRENCY || (
+    operation.exchangeRate !== null &&
+    operation.exchangeRate > 0 &&
+    Math.abs(operation.exchangeRate - 1) > 0.0005
+  );
+  const plnRate = currency === BASE_CURRENCY
+    ? 1
+    : hasReliablePlnAnchor
+      ? operation.exchangeRate
+      : fxRates[currency] ?? null;
+  const grossAmountPln = plnRate && plnRate > 0
+    ? round(grossAmount * plnRate)
+    : convertToPln(grossAmount, currency, fxRates);
+  const netAmountPln = plnRate && plnRate > 0
+    ? round(netAmount * plnRate)
+    : convertToPln(netAmount, currency, fxRates);
 
   return {
     id: operation.id,
@@ -184,9 +198,10 @@ export const operationToDividend = ({
     domesticTax: round(domesticTax, 6),
     netAmount: round(netAmount, 6),
     currency,
-    exchangeRate: fxRate,
+    exchangeRate: operation.exchangeRate,
     grossAmountPln,
     netAmountPln,
+    hasReliablePlnAnchor,
     exDividendDate: getMetadataString(operation.metadata, "exDividendDate", operation.date),
     recordDate: getMetadataString(operation.metadata, "recordDate", operation.date),
     paymentDate: getMetadataString(operation.metadata, "paymentDate", operation.date),

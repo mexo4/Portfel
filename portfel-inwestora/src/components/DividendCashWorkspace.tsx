@@ -1206,12 +1206,12 @@ export default function DividendCashWorkspace({
                           {formatDate(dividend.recordDate)}
                         </p>
                       </td>
-                      <td><IncomeCurrencyAmount amount={dividend.grossAmount} sourceCurrency={dividend.currency} presentationCurrency={baseCurrency} fxRates={fxRates} verifiedCurrencies={verifiedFxCurrencies} amountInPln={dividend.grossAmountPln} /></td>
+                      <td><IncomeCurrencyAmount amount={dividend.grossAmount} sourceCurrency={dividend.currency} presentationCurrency={baseCurrency} fxRates={fxRates} verifiedCurrencies={verifiedFxCurrencies} amountInPln={dividend.hasReliablePlnAnchor ? dividend.grossAmountPln : undefined} /></td>
                       <td>
-                        <IncomeCurrencyAmount amount={dividend.withholdingTax + dividend.domesticTax} sourceCurrency={dividend.currency} presentationCurrency={baseCurrency} fxRates={fxRates} verifiedCurrencies={verifiedFxCurrencies} amountInPln={dividend.grossAmountPln - dividend.netAmountPln} />
+                        <IncomeCurrencyAmount amount={dividend.withholdingTax + dividend.domesticTax} sourceCurrency={dividend.currency} presentationCurrency={baseCurrency} fxRates={fxRates} verifiedCurrencies={verifiedFxCurrencies} amountInPln={dividend.hasReliablePlnAnchor ? dividend.grossAmountPln - dividend.netAmountPln : undefined} />
                       </td>
                       <td>
-                        <IncomeCurrencyAmount amount={dividend.netAmount} sourceCurrency={dividend.currency} presentationCurrency={baseCurrency} fxRates={fxRates} verifiedCurrencies={verifiedFxCurrencies} amountInPln={dividend.netAmountPln} />
+                        <IncomeCurrencyAmount amount={dividend.netAmount} sourceCurrency={dividend.currency} presentationCurrency={baseCurrency} fxRates={fxRates} verifiedCurrencies={verifiedFxCurrencies} amountInPln={dividend.hasReliablePlnAnchor ? dividend.netAmountPln : undefined} />
                       </td>
                       <td>
                         <div className="sprint-inline-actions">
@@ -1253,7 +1253,7 @@ export default function DividendCashWorkspace({
                 <article className="dividend-payment-card" key={dividend.id}>
                   <div className="dividend-payment-card-head">
                     <span><strong>{dividend.symbol}</strong><TruncatedText as="span" text={dividend.instrumentName} /></span>
-                    <IncomeCurrencyAmount amount={dividend.netAmount} sourceCurrency={dividend.currency} presentationCurrency={baseCurrency} fxRates={fxRates} verifiedCurrencies={verifiedFxCurrencies} amountInPln={dividend.netAmountPln} className="dividend-payment-card-amount" />
+                    <IncomeCurrencyAmount amount={dividend.netAmount} sourceCurrency={dividend.currency} presentationCurrency={baseCurrency} fxRates={fxRates} verifiedCurrencies={verifiedFxCurrencies} amountInPln={dividend.hasReliablePlnAnchor ? dividend.netAmountPln : undefined} className="dividend-payment-card-amount" />
                   </div>
                   <span className={dividend.isAutomatic ? "dividend-origin is-automatic" : "dividend-origin"}>
                     {dividend.isAutomatic ? "Dodano automatycznie przez Mexo" : "Dodano ręcznie"}
@@ -1261,8 +1261,8 @@ export default function DividendCashWorkspace({
                   <dl>
                     <div><dt>Konto</dt><dd title={dividend.accountName}>{dividend.accountName}</dd></div>
                     <div><dt>Wypłata</dt><dd>{formatDate(dividend.paymentDate)}</dd></div>
-                    <div><dt>Brutto</dt><dd><IncomeCurrencyAmount amount={dividend.grossAmount} sourceCurrency={dividend.currency} presentationCurrency={baseCurrency} fxRates={fxRates} verifiedCurrencies={verifiedFxCurrencies} amountInPln={dividend.grossAmountPln} /></dd></div>
-                    <div><dt>Podatki</dt><dd><IncomeCurrencyAmount amount={dividend.withholdingTax + dividend.domesticTax} sourceCurrency={dividend.currency} presentationCurrency={baseCurrency} fxRates={fxRates} verifiedCurrencies={verifiedFxCurrencies} amountInPln={dividend.grossAmountPln - dividend.netAmountPln} /></dd></div>
+                    <div><dt>Brutto</dt><dd><IncomeCurrencyAmount amount={dividend.grossAmount} sourceCurrency={dividend.currency} presentationCurrency={baseCurrency} fxRates={fxRates} verifiedCurrencies={verifiedFxCurrencies} amountInPln={dividend.hasReliablePlnAnchor ? dividend.grossAmountPln : undefined} /></dd></div>
+                    <div><dt>Podatki</dt><dd><IncomeCurrencyAmount amount={dividend.withholdingTax + dividend.domesticTax} sourceCurrency={dividend.currency} presentationCurrency={baseCurrency} fxRates={fxRates} verifiedCurrencies={verifiedFxCurrencies} amountInPln={dividend.hasReliablePlnAnchor ? dividend.grossAmountPln - dividend.netAmountPln : undefined} /></dd></div>
                   </dl>
                   <div className="sprint-inline-actions">
                     <span>{formatNumber(dividend.quantity)} szt.</span>

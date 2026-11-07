@@ -177,7 +177,7 @@ export default function DividendIncomeDashboard({ dividends, portfolios, fxRates
           <article className="income-dividend-kpi"><span>Netto · łącznie</span><strong>{formatCurrency(totals.maxNet, currency)}</strong><small>{totals.receivedCount} zaksięgowanych wypłat</small></article>
           <article className="income-dividend-kpi"><span>Podatki · łącznie</span><strong>{formatCurrency(totals.taxes, currency)}</strong><small>Brutto minus netto</small></article>
           <article className="income-dividend-kpi income-dividend-kpi-next"><span>Najbliższa znana wypłata</span>
-            {forecast.nextPayment ? <><IncomeCurrencyAmount amount={forecast.nextPayment.netAmount} sourceCurrency={forecast.nextPayment.currency} presentationCurrency={currency} fxRates={fxRates} verifiedCurrencies={verifiedFxCurrencies} amountInPln={forecast.nextPayment.netAmountPln} /><small>{formatDate(forecast.nextPayment.paymentDate)} · {forecast.nextPayment.symbol}</small></> : <><strong>Brak</strong><small>{forecast.message ?? "Brak zapisanej przyszłej wypłaty."}</small></>}
+            {forecast.nextPayment ? <><IncomeCurrencyAmount amount={forecast.nextPayment.netAmount} sourceCurrency={forecast.nextPayment.currency} presentationCurrency={currency} fxRates={fxRates} verifiedCurrencies={verifiedFxCurrencies} amountInPln={forecast.nextPayment.hasReliablePlnAnchor ? forecast.nextPayment.netAmountPln : undefined} /><small>{formatDate(forecast.nextPayment.paymentDate)} · {forecast.nextPayment.symbol}</small></> : <><strong>Brak</strong><small>{forecast.message ?? "Brak zapisanej przyszłej wypłaty."}</small></>}
           </article>
         </div>
       </section>

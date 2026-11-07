@@ -200,6 +200,46 @@ test("does not post before payment and posts exactly once on payment date", () =
   assert.equal(dividend.grossAmount, 11.8);
   assert.equal(dividend.domesticTax, 2.24);
   assert.equal(dividend.netAmount, 9.56);
+  assert.equal(dividend.hasReliablePlnAnchor, true);
+});
+
+test("USD account parity is not mistaken for a USD-to-PLN historical conversion", () => {
+  const portfolio = buildPortfolio();
+  const account = portfolio.accounts[0];
+  const instrument = portfolio.instruments[0];
+  account.currency = "USD";
+  instrument.marketCurrency = "USD";
+  portfolio.operations.push({
+    id: "xtb-usd-dividend",
+    portfolioId: portfolio.id,
+    accountId: account.id,
+    assetId: instrument.id,
+    operationType: "DIVIDEND",
+    quantity: 10,
+    price: 1,
+    currency: "USD",
+    exchangeRate: 1,
+    fee: 0,
+    tax: 2,
+    amount: 8,
+    date: "2026-10-15",
+    notes: "",
+    metadata: { kind: "dividend", grossAmount: 10, netAmount: 8, withholdingTax: 2 },
+    createdAt: "2026-10-15T00:00:00.000Z",
+    updatedAt: "2026-10-15T00:00:00.000Z",
+  });
+
+  const [dividend] = getPortfolioDividends(portfolio, { PLN: 1, USD: 4 });
+  assert.equal(dividend.currency, "USD");
+  assert.equal(dividend.exchangeRate, 1, "persisted account-parity metadata remains unchanged");
+  assert.equal(dividend.grossAmountPln, 40);
+  assert.equal(dividend.netAmountPln, 32);
+  assert.equal(dividend.hasReliablePlnAnchor, false);
+
+  portfolio.operations.at(-1).exchangeRate = 4.25;
+  const [explicitRateDividend] = getPortfolioDividends(portfolio, { PLN: 1, USD: 4 });
+  assert.equal(explicitRateDividend.grossAmountPln, 42.5);
+  assert.equal(explicitRateDividend.hasReliablePlnAnchor, true);
 });
 
 test("an existing matching manual payment prevents an automatic duplicate", () => {

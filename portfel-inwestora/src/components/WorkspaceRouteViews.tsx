@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import AssetTable from "@/components/AssetTable";
+import AggregateOperationsHistory from "@/components/AggregateOperationsHistory";
 import ConfigurableDashboard from "@/components/ConfigurableDashboard";
 import CorporateEventsPanel from "@/components/CorporateEventsPanel";
 import DividendIncomeDashboard from "@/components/DividendIncomeDashboard";
@@ -80,8 +81,21 @@ export function WorkspacePositionsPage() {
 
 export function WorkspaceOperationsPage() {
   const workspace = usePortfolioWorkspace();
-  const operations = workspace.selectedPortfolios.flatMap((portfolio) => (portfolio.operations ?? []).map((operation) => ({ operation, portfolio }))).sort((left, right) => right.operation.date.localeCompare(left.operation.date));
-  return <div className="workspace-page workspace-operation-page"><section className="workspace-page-actions"><p>{workspace.isAllPortfoliosSelected ? `Historia operacji dla zakresu: ${workspace.portfolioScopeLabel}. Każdy wpis zachowuje źródłowy portfel.` : "Historia sprzedaży i ręczne korekty wyniku aktywnego portfela."}</p>{workspace.isAllPortfoliosSelected ? <Link href={workspace.getReadHref("/portfolios")} className="primary-button">Wybierz portfel do zmian</Link> : <Link href={workspace.getReadHref("/portfolio/positions?add=asset")} className="primary-button">Dodaj operację</Link>}</section>{workspace.isAllPortfoliosSelected ? <section className="panel workspace-aggregate-operation-list"><p className="eyebrow">{workspace.portfolioScopeLabel}</p><h2 className="section-title">Operacje</h2>{operations.length ? operations.slice(0, 100).map(({ operation, portfolio }) => <div key={`${portfolio.id}:${operation.id}`}><span><strong>{portfolio.name}</strong><small>{operation.operationType} · {formatDate(operation.date)}</small></span><strong>{typeof operation.metadata.symbol === "string" ? operation.metadata.symbol : "Operacja"}</strong></div>) : <p className="workspace-empty-state">Nie ma jeszcze operacji.</p>}</section> : workspace.operationsWorkspace}</div>;
+  return (
+    <div className="workspace-page workspace-operation-page">
+      <section className="workspace-page-actions">
+        <p>{workspace.isAllPortfoliosSelected
+          ? `Przeglądaj operacje dla zakresu: ${workspace.portfolioScopeLabel}. Każdy wpis zachowuje swój portfel i walutę źródłową.`
+          : "Historia sprzedaży i ręczne korekty wyniku aktywnego portfela."}</p>
+        {workspace.isAllPortfoliosSelected
+          ? <Link href={workspace.getReadHref("/portfolios")} className="primary-button">Wybierz portfel do zmian</Link>
+          : <Link href={workspace.getReadHref("/portfolio/positions?add=asset")} className="primary-button">Dodaj operację</Link>}
+      </section>
+      {workspace.isAllPortfoliosSelected
+        ? <AggregateOperationsHistory portfolios={workspace.selectedPortfolios} scopeLabel={workspace.portfolioScopeLabel} />
+        : workspace.operationsWorkspace}
+    </div>
+  );
 }
 
 export function WorkspaceDividendsPage() {

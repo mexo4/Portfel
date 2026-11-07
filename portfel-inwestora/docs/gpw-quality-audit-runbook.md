@@ -132,6 +132,89 @@ independent source coverage. `npm run gpw:quality:gate` exits nonzero while its
 strict independent-evidence requirements are unmet; that is an expected NO-GO,
 not a reason to weaken the gate.
 
+### Read-only snapshot and isolated replay
+
+The historical decision manifest is a bounded, source-reviewed set of 43
+proposals, **not** a generic parser rule. Its event IDs are preconditions for a
+specific Aiven snapshot, while `gpw-reprojection-replay.mjs` is the reusable
+transactional executor. The snapshot SHA-256 and manifest SHA-256 must match.
+Never reconstruct expected source decisions from the same parser under test.
+
+1. Run `node scripts/run-gpw-reprojection-manifest.mjs` against the existing
+   ignored projection audit artifacts. Examine all `REVIEW` actions.
+2. Set `MEXO_GPW_AUDIT_READONLY_DATABASE_URL` in the current shell from the
+   local, untracked Aiven configuration. Do **not** print it. Run
+   `node scripts/gpw-reprojection-snapshot.mjs`. This command has no `DATABASE_URL`
+   fallback and verifies a `REPEATABLE READ READ ONLY` transaction. It copies
+   only public GPW market rows, not users or portfolios, into an ignored
+   artifact. An expiring snapshot must be regenerated before any future use.
+3. Build locally. Point `MEXO_GPW_TEST_DATABASE_URL` only to a dedicated
+   loopback PostgreSQL database **and role** named `mexo_gpw_test`; run
+   `npm run gpw:reprojection:replay`. The replay rejects all other hosts, roles
+   and database names. Run `node --experimental-strip-types --import ./tests/register-alias-loader.mjs scripts/run-gpw-reprojection-replay.mjs`.
+   It seeds public market rows into that isolated DB,
+   tests drift, source priority, identity collision, interruption, rollback,
+   resume and idempotency (including rejection of an altered post-state), then
+   verifies local API, page and ICS. The script
+   deletes only its own isolated fixtures. It cannot write Aiven.
+4. Run `npm run gpw:readiness`. A 42/43 local replay remains `NOT_READY`
+   for a production reprojection while the remaining `REVIEW` is unresolved.
+
+Artifacts `reprojection-snapshot.{json,md}` and
+`reprojection-replay.{json,md}` are ignored by Git. Treat them as operational
+evidence, not release authorization. Do not publish a snapshot containing
+market row IDs or source bodies without reviewing its contents.
+
+### Independent holdout annotation (30 documents)
+
+Run `node scripts/gpw-holdout-intake.mjs` after a bounded official-source
+audit. The resulting ignored `holdout-intake.json` freezes 30 issuer-diverse
+candidates, their URLs, body hashes and seed. Two different reviewers must
+read the official body and accessible attachments **independently**. Each
+submits a JSON file with `reviewerId`, `reviewedAt`, `intakeSeed` and one entry
+per document: `id`, `sourceBodyHash`, a source-based `reviewNote`, and
+`expectedEvents`. An event label needs `eventType`, `eventDate`, optional
+fiscal/status/correction fields and `sourceEvidence` quoting or precisely
+locating the relevant official passage. An empty array explicitly means no
+calendar event. These review files are not generated from `sources.json` and
+are not committed until disclosure/rights are checked.
+
+Run `node scripts/run-gpw-holdout-validation.mjs --review-a=<path> --review-b=<path>`.
+Missing reviewers yield `ANNOTATION_PENDING`; different conclusions yield
+`ANNOTATION_DISAGREEMENT` with no precision/recall. Only exact consensus is
+scored against parser output by event type. A disagreement requires a separate
+documented adjudication. The current 30-document intake contains ten
+`attachmentReadIncomplete` records; even after two reviews it must remain
+`SOURCE_PARTIAL_HOLDOUT_BLOCKED` until complete official documents are
+obtained and a new frozen intake is prepared. Preserve `PARTIAL` for inaccessible attachments and
+report availability failures separately from extraction errors. The short
+source-publication window never proves 365-day market completeness.
+
+### Future operator-only production repair plan — not activated here
+
+Even after every review is resolved, no script in this branch applies the
+manifest to Aiven. An operator must separately authorize the exact snapshot,
+decisions, maintenance window and write procedure. Before a future repair:
+
+1. Take and verify a recoverable Aiven backup, with restore instructions and
+   a test restore in an isolated database. Record the production revision and
+   pause competing GPW sync jobs only for the approved maintenance window.
+2. Re-read affected rows under a consistent transaction and compare every
+   event, source, history and projection-change precondition to the approved
+   fingerprint. Any new source, changed row, missing event, duplicate identity
+   or unresolved review means **abort**, regenerate the manifest and repeat
+   human review. Never force a stale snapshot through.
+3. If a separate apply tool is later approved, use one bounded `SERIALIZABLE`
+   transaction with row locks/advisory coordination, official source-priority
+   checks, stable IDs and provenance records. Recheck uniqueness and API/ICS
+   results before commit. Do not delete old events or rewrite unrelated rows.
+4. Retain before/after row images and a targeted inverse plan. If validation
+   fails before commit, roll back the transaction. If a later defect is found,
+   use the verified backup or reviewed inverse plan after checking for newer
+   source updates; a blind restore could erase legitimate subsequent data.
+5. Re-enable sync only after verification and observation. A full-calendar
+   quality claim still requires independent holdout and broad source coverage.
+
 ## Prepared post-deployment check — not activated
 
 The repository also contains a read-only public-calendar audit script.  It is

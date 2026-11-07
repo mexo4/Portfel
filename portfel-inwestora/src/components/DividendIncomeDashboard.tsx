@@ -116,15 +116,22 @@ function DividendChartTooltip({
             {sourceLines.length !== 1 ? <strong>{sourceLines.length ? `Razem · ${formatCurrency(value, currency)}` : formatCurrency(value, currency)}</strong> : null}
           </div>
           {sourceLines.map((line) => <div className="income-dividend-chart-tooltip-source" key={line.sourceCurrency}>
-            <span>Kwota źródłowa</span>
-            {line.hasReliablePlnAnchor ? <IncomeCurrencyAmount
-              amount={line.amount}
-              sourceCurrency={line.sourceCurrency}
-              presentationCurrency={currency}
-              fxRates={fxRates}
-              verifiedCurrencies={verifiedFxCurrencies}
-              amountInPln={line.amountInPln}
-            /> : <strong>{formatCurrency(line.amount, line.sourceCurrency)} · brak potwierdzonego przeliczenia</strong>}
+            <div className="income-dividend-chart-tooltip-currency-row">
+              <span>Kwota źródłowa</span>
+              <strong>{formatCurrency(line.amount, line.sourceCurrency)}</strong>
+            </div>
+            {line.secondaryCurrency ? <div className="income-dividend-chart-tooltip-currency-row">
+              <span>{line.sourceCurrency === "PLN"
+                ? `Ekwiwalent · ${line.secondaryCurrency}`
+                : line.secondaryBasis === "historical-fx"
+                  ? "W PLN · kurs historyczny"
+                  : line.secondaryBasis === "current-fx"
+                    ? "W PLN · bieżący kurs"
+                    : "W PLN"}</span>
+              {line.secondaryAmount !== null
+                ? <strong>{line.secondaryBasis === "current-fx" ? "≈ " : ""}{formatCurrency(line.secondaryAmount, line.secondaryCurrency)}{line.secondaryBasis === "current-fx" ? " · orientacyjnie" : ""}</strong>
+                : <strong>Brak potwierdzonego kursu</strong>}
+            </div> : null}
           </div>)}
         </section>;
       })}
@@ -272,7 +279,7 @@ export default function DividendIncomeDashboard({ dividends, portfolios, fxRates
           <div className="income-range-tabs" role="group" aria-label="Zakres historii dywidend">
             {ranges.map((item) => <button key={item.key} type="button" className={range === item.key ? "is-active" : ""} aria-pressed={range === item.key} onClick={() => setRange(item.key)}>{item.label}</button>)}
           </div>
-          <p className="income-chart-currency-note">Skala wykresu: {currency}. Po wskazaniu słupka zobaczysz też kwotę źródłową i jej ekwiwalent.</p>
+          <p className="income-chart-currency-note">Skala wykresu: {currency}. Tooltip pokazuje kwotę źródłową i PLN; wypłaty w PLN pokazują ekwiwalent w walucie prezentacji. Bez historycznego FX równowartość PLN jest orientacyjna, według bieżącego kursu.</p>
           {mode === "aggregate" && chartModel.portfolioIds.length ? <div className="income-chart-legend" aria-label="Portfele na wykresie">
             {chartModel.portfolioIds.map((portfolioId) => <span key={portfolioId}><i style={{ backgroundColor: getPortfolioColor(portfolioId) }} aria-hidden="true" />{portfolioById.get(portfolioId)?.name ?? "Portfel"}</span>)}
           </div> : null}

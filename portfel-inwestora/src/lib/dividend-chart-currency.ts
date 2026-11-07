@@ -1,3 +1,4 @@
+import { getCurrencyConversionRate } from "@/lib/portfolio-engine";
 import { getIncomePresentationEquivalent } from "@/lib/income-currency";
 import type { CurrencyCode, FxRates, PortfolioDividend } from "@/types/portfolio";
 
@@ -17,10 +18,20 @@ export type DividendChartSourceBreakdown = Record<
 export type DividendChartCurrencyLine = {
   sourceCurrency: CurrencyCode;
   amount: number;
-  amountInPln: number;
-  hasReliablePlnAnchor: boolean;
-  presentationEquivalent: number | null;
+  secondaryCurrency: CurrencyCode | null;
+  secondaryAmount: number | null;
+  secondaryBasis: "historical-fx" | "current-fx" | "presentation-fx" | "unavailable";
 };
+
+const hasVerifiedRate = (
+  currency: CurrencyCode,
+  fxRates: FxRates,
+  verifiedCurrencies: readonly CurrencyCode[],
+) => currency === "PLN" || (
+  verifiedCurrencies.includes(currency) &&
+  Number.isFinite(fxRates[currency]) &&
+  fxRates[currency] > 0
+);
 
 /** Groups source-currency amounts by payment month and chart series without adding unlike currencies. */
 export const buildDividendChartSourceBreakdown = (
@@ -59,22 +70,52 @@ export const getDividendChartCurrencyLines = (
 ): DividendChartCurrencyLine[] =>
   Object.entries(sourceAmounts ?? {}).map(([rawCurrency, source]) => {
     const sourceCurrency = rawCurrency as CurrencyCode;
-    const presentationEquivalent = source.hasReliablePlnAnchor
-      ? getIncomePresentationEquivalent({
+    if (sourceCurrency === "PLN") {
+      if (presentationCurrency === "PLN") {
+        return {
+          sourceCurrency,
+          amount: source.amount,
+          secondaryCurrency: null,
+          secondaryAmount: null,
+          secondaryBasis: "unavailable" as const,
+        };
+      }
+
+      const presentationEquivalent = getIncomePresentationEquivalent({
           amount: source.amount,
           sourceCurrency,
           presentationCurrency,
           fxRates,
           amountInPln: source.amountPln,
           verifiedCurrencies,
-        })
-      : null;
+        });
+
+      return {
+        sourceCurrency,
+        amount: source.amount,
+        secondaryCurrency: presentationCurrency,
+        secondaryAmount: presentationEquivalent,
+        secondaryBasis: presentationEquivalent === null ? "unavailable" as const : "presentation-fx" as const,
+      };
+    }
+
+    const hasHistoricalAnchor = source.hasReliablePlnAnchor && Number.isFinite(source.amountPln);
+    const canUseCurrentFx = hasVerifiedRate(sourceCurrency, fxRates, verifiedCurrencies);
+    const plnEquivalent = hasHistoricalAnchor
+      ? source.amountPln
+      : canUseCurrentFx
+        ? source.amount * getCurrencyConversionRate(sourceCurrency, "PLN", fxRates)
+        : null;
 
     return {
       sourceCurrency,
       amount: source.amount,
-      amountInPln: source.amountPln,
-      hasReliablePlnAnchor: source.hasReliablePlnAnchor,
-      presentationEquivalent,
+      secondaryCurrency: "PLN",
+      secondaryAmount: plnEquivalent,
+      secondaryBasis: hasHistoricalAnchor
+        ? "historical-fx" as const
+        : plnEquivalent !== null
+          ? "current-fx" as const
+          : "unavailable" as const,
     };
   }).sort((left, right) => left.sourceCurrency.localeCompare(right.sourceCurrency));

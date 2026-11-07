@@ -34,7 +34,9 @@ test("chart keeps USD source dividend and its PLN anchor separate for a USD port
   );
   assert.equal(line.sourceCurrency, "USD");
   assert.equal(line.amount, 12.5);
-  assert.equal(line.presentationEquivalent, 50);
+  assert.equal(line.secondaryCurrency, "PLN");
+  assert.equal(line.secondaryAmount, 50);
+  assert.equal(line.secondaryBasis, "historical-fx");
 });
 
 test("chart exposes PLN source first with verified USD presentation equivalent", () => {
@@ -50,7 +52,9 @@ test("chart exposes PLN source first with verified USD presentation equivalent",
 
   assert.equal(line.sourceCurrency, "PLN");
   assert.equal(line.amount, 240);
-  assert.equal(line.presentationEquivalent, 60);
+  assert.equal(line.secondaryCurrency, "USD");
+  assert.equal(line.secondaryAmount, 60);
+  assert.equal(line.secondaryBasis, "presentation-fx");
 });
 
 test("different source currencies stay in separate chart tooltip rows", () => {
@@ -70,17 +74,36 @@ test("different source currencies stay in separate chart tooltip rows", () => {
   assert.equal(lines[1].amount, 12.5);
 });
 
-test("chart does not claim a secondary currency conversion without a reliable historical anchor", () => {
+test("USD chart tooltip still shows a PLN equivalent when the historical anchor is missing", () => {
   const breakdown = buildDividendChartSourceBreakdown([
     dividend({ hasReliablePlnAnchor: false }),
   ], "net", (item) => item.portfolioId);
   const [line] = getDividendChartCurrencyLines(
     breakdown["2026-09"]["usd-account"],
-    "PLN",
+    "USD",
     { PLN: 1, USD: 4 },
     ["PLN", "USD"],
   );
 
   assert.equal(line.amount, 12.5);
-  assert.equal(line.presentationEquivalent, null);
+  assert.equal(line.secondaryCurrency, "PLN");
+  assert.equal(line.secondaryAmount, 50);
+  assert.equal(line.secondaryBasis, "current-fx");
+});
+
+test("chart never invents a PLN equivalent when neither historical nor verified FX is available", () => {
+  const breakdown = buildDividendChartSourceBreakdown([
+    dividend({ hasReliablePlnAnchor: false }),
+  ], "net", (item) => item.portfolioId);
+  const [line] = getDividendChartCurrencyLines(
+    breakdown["2026-09"]["usd-account"],
+    "USD",
+    { PLN: 1, USD: 4 },
+    ["PLN"],
+  );
+
+  assert.equal(line.amount, 12.5);
+  assert.equal(line.secondaryCurrency, "PLN");
+  assert.equal(line.secondaryAmount, null);
+  assert.equal(line.secondaryBasis, "unavailable");
 });

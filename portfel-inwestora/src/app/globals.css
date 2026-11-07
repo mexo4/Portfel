@@ -10892,6 +10892,11 @@ textarea {
 .aggregate-operations-empty > p { max-width: 450px; margin: 0; font-size: .74rem; line-height: 1.5; }
 .aggregate-operations-empty-filtered { padding: 25px 18px; }
 
+@media (max-width: 1500px) {
+  .aggregate-operations-filters { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .aggregate-operations-search { grid-column: span 2; }
+  .aggregate-operations-reset { justify-self: start; }
+}
 @media (max-width: 1280px) {
   .aggregate-operations-filters { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .aggregate-operations-search { grid-column: span 2; }

@@ -12,12 +12,28 @@ import {
   YAxis,
 } from "recharts";
 import { buildDividendForecast } from "@/lib/dividend-engine";
+import {
+  buildDividendChartSourceBreakdown,
+  getDividendChartCurrencyLines,
+  type DividendChartSourceBreakdown,
+} from "@/lib/dividend-chart-currency";
 import { convertFromPln } from "@/lib/pricing";
 import { formatCurrency, formatDate, getTodayDateInputValue } from "@/lib/utils";
 import type { CurrencyCode, FxRates, InvestmentPortfolio, PortfolioDividend } from "@/types/portfolio";
+import type { TooltipContentProps } from "recharts";
 
 type RangeKey = "YTD" | "1Y" | "3Y" | "5Y" | "MAX";
 type AmountMode = "net" | "gross";
+
+type DividendChartTooltipProps = TooltipContentProps & {
+  amountMode: AmountMode;
+  currency: CurrencyCode;
+  fxRates: FxRates;
+  mode: "single" | "aggregate";
+  portfolioById: Map<string, InvestmentPortfolio>;
+  sourceBreakdown: DividendChartSourceBreakdown;
+  verifiedFxCurrencies: CurrencyCode[];
+};
 
 type Props = {
   dividends: PortfolioDividend[];
@@ -59,6 +75,63 @@ const getPortfolioColor = (portfolioId: string) => {
   return `hsl(${hue} 62% 48%)`;
 };
 
+function DividendChartTooltip({
+  active,
+  label,
+  payload,
+  amountMode,
+  currency,
+  fxRates,
+  mode,
+  portfolioById,
+  sourceBreakdown,
+  verifiedFxCurrencies,
+}: DividendChartTooltipProps) {
+  if (!active || !payload?.length) return null;
+
+  const month = String((payload[0]?.payload as { month?: string } | undefined)?.month ?? "");
+  const entries = payload.filter((entry) => entry.value !== null && entry.value !== undefined);
+  if (!entries.length) return null;
+
+  return <div className="line-chart-tooltip income-dividend-chart-tooltip">
+    <p className="table-title">{String(label ?? "")}</p>
+    <div className="income-dividend-chart-tooltip-list">
+      {entries.map((entry) => {
+        const seriesKey = String(entry.dataKey ?? "__total");
+        const value = Number(entry.value);
+        if (!Number.isFinite(value)) return null;
+        const seriesName = mode === "aggregate"
+          ? portfolioById.get(seriesKey)?.name ?? "Portfel"
+          : amountMode === "net" ? "Netto" : "Brutto";
+        const sourceLines = getDividendChartCurrencyLines(
+          sourceBreakdown[month]?.[seriesKey],
+          currency,
+          fxRates,
+          verifiedFxCurrencies,
+        );
+
+        return <section className="income-dividend-chart-tooltip-series" key={seriesKey}>
+          <div className="income-dividend-chart-tooltip-heading">
+            <span><i style={{ backgroundColor: entry.color }} aria-hidden="true" />{seriesName}</span>
+            {sourceLines.length !== 1 ? <strong>{sourceLines.length ? `Razem · ${formatCurrency(value, currency)}` : formatCurrency(value, currency)}</strong> : null}
+          </div>
+          {sourceLines.map((line) => <div className="income-dividend-chart-tooltip-source" key={line.sourceCurrency}>
+            <span>Kwota źródłowa</span>
+            {line.hasReliablePlnAnchor ? <IncomeCurrencyAmount
+              amount={line.amount}
+              sourceCurrency={line.sourceCurrency}
+              presentationCurrency={currency}
+              fxRates={fxRates}
+              verifiedCurrencies={verifiedFxCurrencies}
+              amountInPln={line.amountInPln}
+            /> : <strong>{formatCurrency(line.amount, line.sourceCurrency)} · brak potwierdzonego przeliczenia</strong>}
+          </div>)}
+        </section>;
+      })}
+    </div>
+  </div>;
+}
+
 export default function DividendIncomeDashboard({ dividends, portfolios, fxRates, verifiedFxCurrencies, currency, mode }: Props) {
   const [range, setRange] = useState<RangeKey>("1Y");
   const [amountMode, setAmountMode] = useState<AmountMode>("net");
@@ -88,7 +161,12 @@ export default function DividendIncomeDashboard({ dividends, portfolios, fxRates
     const portfolioIds = mode === "aggregate"
       ? portfolios.map((portfolio) => portfolio.id)
       : portfolios.slice(0, 1).map((portfolio) => portfolio.id);
-    if (sourceRows.length === 0) return { data: [], portfolioIds };
+    const sourceBreakdown = buildDividendChartSourceBreakdown(
+      sourceRows,
+      amountMode,
+      (dividend) => mode === "aggregate" ? dividend.portfolioId : "__total",
+    );
+    if (sourceRows.length === 0) return { data: [], portfolioIds, sourceBreakdown };
     const monthMap = new Map<string, Record<string, string | number>>();
     sourceRows.forEach((dividend) => {
       const month = dividend.paymentDate.slice(0, 7);
@@ -122,7 +200,7 @@ export default function DividendIncomeDashboard({ dividends, portfolios, fxRates
         cursor.setMonth(cursor.getMonth() + 1);
       }
     }
-    return { data, portfolioIds };
+    return { data, portfolioIds, sourceBreakdown };
   }, [amountMode, currency, fxRates, mode, portfolios, range, received, today]);
 
   const rankings = useMemo(() => {
@@ -194,6 +272,7 @@ export default function DividendIncomeDashboard({ dividends, portfolios, fxRates
           <div className="income-range-tabs" role="group" aria-label="Zakres historii dywidend">
             {ranges.map((item) => <button key={item.key} type="button" className={range === item.key ? "is-active" : ""} aria-pressed={range === item.key} onClick={() => setRange(item.key)}>{item.label}</button>)}
           </div>
+          <p className="income-chart-currency-note">Skala wykresu: {currency}. Po wskazaniu słupka zobaczysz też kwotę źródłową i jej ekwiwalent.</p>
           {mode === "aggregate" && chartModel.portfolioIds.length ? <div className="income-chart-legend" aria-label="Portfele na wykresie">
             {chartModel.portfolioIds.map((portfolioId) => <span key={portfolioId}><i style={{ backgroundColor: getPortfolioColor(portfolioId) }} aria-hidden="true" />{portfolioById.get(portfolioId)?.name ?? "Portfel"}</span>)}
           </div> : null}
@@ -203,7 +282,7 @@ export default function DividendIncomeDashboard({ dividends, portfolios, fxRates
                 <CartesianGrid vertical={false} stroke="var(--line)" strokeDasharray="3 5" />
                 <XAxis dataKey="monthLabel" axisLine={false} tickLine={false} minTickGap={18} tick={{ fill: "var(--muted)", fontSize: 11 }} />
                 <YAxis axisLine={false} tickLine={false} width={48} tick={{ fill: "var(--muted)", fontSize: 11 }} tickFormatter={(value: number) => new Intl.NumberFormat("pl-PL", { notation: value >= 10000 ? "compact" : "standard", maximumFractionDigits: 0 }).format(value)} />
-                <Tooltip formatter={(value, name) => [formatCurrency(Number(value ?? 0), currency), mode === "aggregate" ? String(name) : amountMode === "net" ? "Netto" : "Brutto"]} labelStyle={{ color: "var(--text)" }} contentStyle={{ borderRadius: 12, borderColor: "var(--line-strong)", background: "var(--surface-strong)", color: "var(--text)" }} />
+                <Tooltip content={(tooltipProps) => <DividendChartTooltip {...tooltipProps} amountMode={amountMode} currency={currency} fxRates={fxRates} mode={mode} portfolioById={portfolioById} sourceBreakdown={chartModel.sourceBreakdown} verifiedFxCurrencies={verifiedFxCurrencies} />} />
                 {mode === "aggregate" ? chartModel.portfolioIds.map((portfolioId, index) => <Bar key={portfolioId} dataKey={portfolioId} name={portfolioById.get(portfolioId)?.name ?? "Portfel"} stackId="income" fill={getPortfolioColor(portfolioId)} maxBarSize={30} radius={index === chartModel.portfolioIds.length - 1 ? [4, 4, 0, 0] : undefined} />) : <Bar dataKey="__total" name={amountMode === "net" ? "Netto" : "Brutto"} fill="var(--accent)" maxBarSize={34} radius={[5, 5, 0, 0]} />}
               </BarChart>
             </ResponsiveContainer>

@@ -74,8 +74,12 @@ test("aggregate income view separates dividends from cash and preserves scope co
   assert.match(dividendDashboard, /convertFromPln\(amountPln, currency, fxRates\)/);
   assert.match(dividendDashboard, /detail: `\$\{periodRows\.filter/);
   assert.match(dividendDashboard, /while \(cursor <= end\)/);
-  assert.match(dividendDashboard, /if \(sourceRows\.length === 0\) return \{ data: \[\], portfolioIds \}/);
-  assert.match(dividendDashboard, /mode === "aggregate" \? String\(name\)/);
+  assert.match(dividendDashboard, /if \(sourceRows\.length === 0\) return \{ data: \[\], portfolioIds, sourceBreakdown \}/);
+  assert.match(dividendDashboard, /<Tooltip content=\{\(tooltipProps\) => <DividendChartTooltip/);
+  assert.match(dividendDashboard, /formatCurrency\(value, currency\)/);
+  assert.match(dividendDashboard, /getDividendChartCurrencyLines\(/);
+  assert.match(dividendDashboard, /Kwota źródłowa/);
+  assert.match(dividendDashboard, /Skala wykresu: \{currency\}/);
   assert.match(dividendDashboard, /getPortfolioColor\(portfolioId\)/);
   assert.doesNotMatch(styles, /\.income-dividend-kpi > strong \{[^}]*text-overflow: ellipsis/);
   assert.match(dividendWorkspace, /Wypłata od/);

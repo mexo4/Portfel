@@ -4,7 +4,6 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import AssetTable from "@/components/AssetTable";
-import AggregateOperationsHistory from "@/components/AggregateOperationsHistory";
 import ConfigurableDashboard from "@/components/ConfigurableDashboard";
 import CorporateEventsPanel from "@/components/CorporateEventsPanel";
 import DividendIncomeDashboard from "@/components/DividendIncomeDashboard";
@@ -81,21 +80,7 @@ export function WorkspacePositionsPage() {
 
 export function WorkspaceOperationsPage() {
   const workspace = usePortfolioWorkspace();
-  return (
-    <div className="workspace-page workspace-operation-page">
-      <section className="workspace-page-actions">
-        <p>{workspace.isAllPortfoliosSelected
-          ? `Przeglądaj operacje dla zakresu: ${workspace.portfolioScopeLabel}. Każdy wpis zachowuje swój portfel i walutę źródłową.`
-          : "Historia sprzedaży i ręczne korekty wyniku aktywnego portfela."}</p>
-        {workspace.isAllPortfoliosSelected
-          ? <Link href={workspace.getReadHref("/portfolios")} className="primary-button">Wybierz portfel do zmian</Link>
-          : <Link href={workspace.getReadHref("/portfolio/positions?add=asset")} className="primary-button">Dodaj operację</Link>}
-      </section>
-      {workspace.isAllPortfoliosSelected
-        ? <AggregateOperationsHistory portfolios={workspace.selectedPortfolios} scopeLabel={workspace.portfolioScopeLabel} />
-        : workspace.operationsWorkspace}
-    </div>
-  );
+  return <div className="workspace-page workspace-operation-page">{workspace.operationsWorkspace}</div>;
 }
 
 export function WorkspaceDividendsPage() {

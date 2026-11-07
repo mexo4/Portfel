@@ -14,6 +14,7 @@ type RealizedAdjustmentsPanelProps = {
   onChange: (draft: RealizedAdjustmentDraft) => void;
   onSubmit: () => void;
   onRemove: (adjustmentId: string) => void;
+  showHistory?: boolean;
 };
 
 const parseNumericInput = (value: string) => {
@@ -37,6 +38,7 @@ export default function RealizedAdjustmentsPanel({
   onChange,
   onSubmit,
   onRemove,
+  showHistory = true,
 }: RealizedAdjustmentsPanelProps) {
   const currencyOptions = getCurrencyOptions(draft.currency);
 
@@ -126,7 +128,7 @@ export default function RealizedAdjustmentsPanel({
 
       {error ? <p className="field-note field-note-error mt-4">{error}</p> : null}
 
-      {adjustments.length === 0 ? (
+      {!showHistory ? null : adjustments.length === 0 ? (
         <p className="field-note mt-5">Brak dodanego wyniku historycznego.</p>
       ) : (
         <div className="mt-6 grid gap-4">

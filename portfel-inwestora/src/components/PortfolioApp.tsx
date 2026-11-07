@@ -194,7 +194,7 @@ const RealizedAdjustmentsPanel = dynamic<ComponentProps<typeof import("@/compone
   () => import("@/components/RealizedAdjustmentsPanel")
 );
 const PortfolioSummary = dynamic(() => import("@/components/PortfolioSummary"));
-const SalesHistoryPanel = dynamic<ComponentProps<typeof import("@/components/SalesHistoryPanel").default>>(() => import("@/components/SalesHistoryPanel"));
+const OperationsHistory = dynamic<ComponentProps<typeof import("@/components/OperationsHistory").default>>(() => import("@/components/OperationsHistory"));
 const TreasuryBondForm = dynamic<ComponentProps<typeof import("@/components/TreasuryBondForm").default>>(() => import("@/components/TreasuryBondForm"));
 const UserProfilePanel = dynamic<ComponentProps<typeof import("@/components/UserProfilePanel").default>>(() => import("@/components/UserProfilePanel"));
 const WealthWorkspace = dynamic(() => import("@/components/WealthWorkspace"));
@@ -5828,7 +5828,49 @@ export default function PortfolioApp({
 
   const portfolioManagement = <PortfolioAccountManagement portfolios={portfolios} activePortfolio={activePortfolio} activePortfolioId={activePortfolioId} isAllPortfoliosSelected={isAllPortfoliosSelected} summaries={portfolioSummaries} isPending={isSavingPortfolio || isPortfolioMutationPending} onSelect={(portfolioId: string) => { void handleSelectPortfolio(portfolioId); }} onRename={() => { void handleRenamePortfolio(); }} onDelete={() => { void handleDeletePortfolio(); }} onCreate={handleCreatePortfolio} onUpdateAccount={(input: Parameters<ComponentProps<typeof PortfolioAccountManagement>["onUpdateAccount"]>[0]) => { void handleUpdatePortfolioAccount(input); }} />;
 
-  const operationsWorkspace = isAllPortfoliosSelected ? <section className="panel"><p className="eyebrow">Operacje</p><h2 className="section-title">Wybierz konkretny portfel</h2><p className="section-copy">Historia i korekty operacji pozostają rozdzielone według portfela w widoku łącznym.</p></section> : <><SalesHistoryPanel sales={sales} baseCurrency={activeBaseCurrency} fxRates={fxRates} canUndoSale={(saleId: string) => canUndoPortfolioSale(sales, saleId)} onUndoSale={handleUndoSale} /><RealizedAdjustmentsPanel draft={realizedAdjustmentDraft} adjustments={effectiveRealizedAdjustments} error={realizedAdjustmentError} onChange={(nextDraft: RealizedAdjustmentDraft) => { setRealizedAdjustmentDraft(nextDraft); setRealizedAdjustmentError(null); }} onSubmit={() => { void handleAddRealizedAdjustment(); }} onRemove={handleRemoveRealizedAdjustment} /></>;
+  const operationsWorkspace = (
+    <OperationsHistory
+      key={`${operationScopeKey}:operations`}
+      portfolios={isAllPortfoliosSelected
+        ? selectedPortfolios
+        : activePortfolioForEngine
+          ? [activePortfolioForEngine]
+          : []}
+      scopeLabel={isAllPortfoliosSelected ? portfolioScopeLabel : activePortfolio?.name ?? ""}
+      isAggregate={isAllPortfoliosSelected}
+      baseCurrency={activeBaseCurrency}
+      fxRates={fxRates}
+      headerAction={(
+        <button
+          className="primary-button"
+          type="button"
+          onClick={() => router.push(getWorkspaceReadHref(
+            isAllPortfoliosSelected ? "/portfolios" : "/portfolio/positions?add=asset",
+            selectedPortfolioId,
+            activeBaseCurrency,
+            portfolioScope
+          ))}
+        >
+          {isAllPortfoliosSelected ? "Wybierz portfel do zmian" : "Dodaj operację"}
+        </button>
+      )}
+      canUndoSale={!isAllPortfoliosSelected ? (saleId: string) => canUndoPortfolioSale(sales, saleId) : undefined}
+      onUndoSale={!isAllPortfoliosSelected ? handleUndoSale : undefined}
+      onRemoveRealizedAdjustment={!isAllPortfoliosSelected ? handleRemoveRealizedAdjustment : undefined}
+    >
+      {!isAllPortfoliosSelected ? (
+        <RealizedAdjustmentsPanel
+          draft={realizedAdjustmentDraft}
+          adjustments={effectiveRealizedAdjustments}
+          error={realizedAdjustmentError}
+          onChange={(nextDraft: RealizedAdjustmentDraft) => { setRealizedAdjustmentDraft(nextDraft); setRealizedAdjustmentError(null); }}
+          onSubmit={() => { void handleAddRealizedAdjustment(); }}
+          onRemove={handleRemoveRealizedAdjustment}
+          showHistory={false}
+        />
+      ) : null}
+    </OperationsHistory>
+  );
   const incomePortfolio = isAllPortfoliosSelected ? selectedPortfolios[0] : activePortfolioForEngine;
   const incomePortfolios = isAllPortfoliosSelected ? selectedPortfolios : portfolios;
   const incomeScopeKey = `${portfolioScope.mode}:${portfolioScope.mode === "CUSTOM" ? portfolioScope.portfolioIds.join(",") : portfolioScope.mode === "SINGLE" ? portfolioScope.portfolioId : "all"}:active:${activePortfolioId}`;

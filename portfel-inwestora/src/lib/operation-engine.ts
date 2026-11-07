@@ -651,7 +651,7 @@ const buildBuyOperation = (
     portfolioId,
     accountId: getDefaultCashAccountId(portfolioId, settlementCurrency),
     assetId: getPortfolioInstrumentId(portfolioId, asset),
-    operationType: "BUY",
+    operationType: asset.positionDirection === "SHORT" ? "SELL" : "BUY",
     quantity: originalQuantity,
     price: asset.purchasePrice,
     currency: settlementCurrency,
@@ -675,6 +675,10 @@ const buildBuyOperation = (
       provider: asset.provider,
       providerId: asset.providerId,
       groupOrder: asset.groupOrder,
+      instrumentType: asset.instrumentType,
+      positionDirection: asset.positionDirection ?? "LONG",
+      positionEffect: "OPEN",
+      contractMultiplier: asset.contractMultiplier,
     }),
     createdAt: asset.createdAt,
     updatedAt: asset.createdAt,
@@ -702,7 +706,7 @@ const buildSellOperation = (portfolioId: string, sale: PortfolioSale) => {
     portfolioId,
     accountId: getDefaultCashAccountId(portfolioId, settlementCurrency),
     assetId: getPortfolioInstrumentId(portfolioId, sale),
-    operationType: "SELL",
+    operationType: sale.positionDirection === "SHORT" ? "BUY" : "SELL",
     quantity: sale.quantity,
     price: sale.salePrice,
     currency: settlementCurrency,
@@ -728,6 +732,10 @@ const buildSellOperation = (portfolioId: string, sale: PortfolioSale) => {
       cashAmount: settlementAmount,
       cashSettlementDirect: true,
       cashAmountIsNet: hasRecordedSettlementAmount,
+      instrumentType: sale.instrumentType,
+      positionDirection: sale.positionDirection ?? "LONG",
+      positionEffect: "CLOSE",
+      contractMultiplier: sale.contractMultiplier,
     }),
     createdAt: sale.createdAt,
     updatedAt: sale.createdAt,
@@ -1170,6 +1178,8 @@ const normalizeAutomaticBrokerFxOperations = (operations: PortfolioOperation[]) 
     if (
       !isTrade ||
       operation.metadata.autoFxConversion !== true ||
+      operation.metadata.instrumentType === "CFD" ||
+      operation.metadata.positionDirection === "SHORT" ||
       isAlreadyNormalized ||
       !marketCurrency ||
       !cashCurrency ||

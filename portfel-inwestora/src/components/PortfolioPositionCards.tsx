@@ -66,7 +66,9 @@ const formatSignedPercent = (value: number) =>
 const getPositionTypeLabel = (group: PortfolioAssetGroup) => {
   const instrumentClass = getPortfolioInstrumentClass(group);
   const label = instrumentClass === "stock" ? "Akcje" : getInstrumentClassLabel(instrumentClass);
-  return instrumentClass === "cfd" ? `${label} ${group.positionDirection}` : label;
+  return group.positionDirection === "SHORT" || instrumentClass === "cfd"
+    ? `${label} ${group.positionDirection ?? "LONG"}`
+    : label;
 };
 
 export default function PortfolioPositionCards({
@@ -119,6 +121,7 @@ export default function PortfolioPositionCards({
       {sortedGroups.length === 0 ? <p className="workspace-empty-state">Nie ma pozycji pasujących do tego widoku.</p> : null}
       {sortedGroups.map((group) => {
         const isManualPrice = hasManualAssetPrice(group);
+        const isCashSettledPosition = group.instrumentType === "CFD" || group.positionDirection === "SHORT";
         const manualPriceUpdatedAt = isManualPrice ? getManualAssetPriceUpdatedAt(group) : undefined;
 
         return (
@@ -136,7 +139,7 @@ export default function PortfolioPositionCards({
               <div><dt>Ilość</dt><dd className="portfolio-number">{formatNumber(group.quantity, group.kind === "crypto" ? 12 : 6)}</dd></div>
               <div><dt>Kurs jednostkowy</dt><dd className="portfolio-number">{group.currentUnitPrice !== undefined ? formatCurrency(group.currentUnitPrice, group.marketCurrency) : "Brak kursu"}{isManualPrice ? <small className="block text-xs font-normal text-slate-500">Ręczna{manualPriceUpdatedAt ? ` · ${formatDateTime(manualPriceUpdatedAt)}` : ""}</small> : null}</dd></div>
               <div><dt>Zysk %</dt><dd className={`portfolio-number ${getValueTone(group.hasBaseValuation ? group.profitLossPercent : undefined) ?? ""}`}>{group.hasBaseValuation ? formatSignedPercent(group.profitLossPercent) : group.hasCompleteQuote ? "Brak przeliczenia FX" : "Brak kursu"}</dd></div>
-              <div><dt>Wartość</dt><dd className="portfolio-number">{group.hasBaseValuation ? formatCurrency(group.marketValueBase, baseCurrency) : group.hasCompleteQuote ? "Brak przeliczenia FX" : "Brak kursu"}</dd></div>
+              <div><dt>{isCashSettledPosition ? "Wynik netto" : "Wartość"}</dt><dd className="portfolio-number">{group.hasBaseValuation ? formatCurrency(isCashSettledPosition ? group.profitLossBase : group.marketValueBase, baseCurrency) : group.hasCompleteQuote ? "Brak przeliczenia FX" : "Brak kursu"}</dd></div>
               <div><dt>Wynik dzienny</dt><dd className={`portfolio-number ${getValueTone(group.dailyChangeBase) ?? ""}`}>{group.dailyChangeBase === undefined ? "—" : formatSignedCurrency(group.dailyChangeBase, baseCurrency)}</dd></div>
               <div><dt>Zmiana dzienna %</dt><dd className={`portfolio-number ${getValueTone(group.dailyChangePercent) ?? ""}`}>{group.dailyChangePercent === undefined ? "—" : formatSignedPercent(group.dailyChangePercent)}</dd></div>
               <div><dt>Notowanie</dt><dd>{group.latestPriceDate ? formatDate(group.latestPriceDate) : "Do odświeżenia"}</dd></div>

@@ -114,7 +114,10 @@ const formatSignedPercent = (value: number) =>
 
 const getGroupTypeLabel = (group: PortfolioAssetGroup) => {
   const instrumentClass = getPortfolioInstrumentClass(group);
-  return instrumentClass === "stock" ? KIND_LABELS.stock : getInstrumentClassLabel(instrumentClass);
+  const label = instrumentClass === "stock" ? KIND_LABELS.stock : getInstrumentClassLabel(instrumentClass);
+  return group.positionDirection === "SHORT" || instrumentClass === "cfd"
+    ? `${label} ${group.positionDirection ?? "LONG"}`
+    : label;
 };
 
 const GroupDragOverlayCard = ({ group }: { group: PortfolioAssetGroup }) => {
@@ -172,8 +175,9 @@ const SortableGroupSection = ({
     group.currentUnitPrice !== undefined
       ? formatCurrency(group.currentUnitPrice, group.marketCurrency)
       : "brak kursu";
+  const isCashSettledPosition = group.instrumentType === "CFD" || group.positionDirection === "SHORT";
   const marketValueBaseLabel = group.hasBaseValuation
-    ? formatCurrency(group.marketValueBase, baseCurrency)
+    ? formatCurrency(isCashSettledPosition ? group.profitLossBase : group.marketValueBase, baseCurrency)
     : group.hasCompleteQuote ? "brak przeliczenia FX" : "brak kursu";
   const isManualPrice = hasManualAssetPrice(group);
   const manualPriceUpdatedAt = isManualPrice ? getManualAssetPriceUpdatedAt(group) : undefined;
@@ -284,7 +288,7 @@ const SortableGroupSection = ({
                   Cena ręczna{manualPriceUpdatedAt ? ` · ${formatDateTime(manualPriceUpdatedAt)}` : ""}
                 </div>
               ) : null}
-              <div className="table-note">Wartość: <span className="financial-value portfolio-number">{marketValueBaseLabel}</span></div>
+              <div className="table-note">{isCashSettledPosition ? "Wynik netto" : "Wartość"}: <span className="financial-value portfolio-number">{marketValueBaseLabel}</span></div>
             </>
           )}
         </td>

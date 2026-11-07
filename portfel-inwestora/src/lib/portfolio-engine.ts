@@ -236,35 +236,37 @@ export const getAssetMarketValuePln = (asset: PortfolioAsset, fxRates: FxRates) 
     return 0;
   }
 
-  return getPositionDirection(asset) === "SHORT"
-    ? round(
-        getAssetPurchaseValuePln(asset, fxRates) +
-          convertToPln(
-            (asset.purchasePrice - (asset.latestPrice ?? 0)) *
-              asset.quantity *
-              getContractMultiplier(asset),
-            asset.marketCurrency,
-            fxRates
-          )
-      )
-    : convertToPln(
-        (asset.latestPrice ?? 0) * asset.quantity * getContractMultiplier(asset),
-        asset.marketCurrency,
-        fxRates
-      );
+  const isNonCashPosition =
+    asset.instrumentType === "CFD" || getPositionDirection(asset) === "SHORT";
+
+  // CFDs and shorts do not transfer the underlying notional into the cash
+  // ledger. Their contribution to portfolio equity is therefore the marked
+  // P/L, not an imaginary ownership of the full underlying notional. Exposure
+  // remains available separately through marketValueQuote.
+  if (isNonCashPosition) {
+    const direction = getPositionDirection(asset) === "SHORT" ? -1 : 1;
+    return convertToPln(
+      ((asset.latestPrice ?? 0) - asset.purchasePrice) *
+        asset.quantity *
+        getContractMultiplier(asset) *
+        direction,
+      asset.marketCurrency,
+      fxRates
+    );
+  }
+
+  return convertToPln(
+    (asset.latestPrice ?? 0) * asset.quantity * getContractMultiplier(asset),
+    asset.marketCurrency,
+    fxRates
+  );
 };
 
 export const getAssetProfitLossPln = (asset: PortfolioAsset, fxRates: FxRates) =>
   hasAssetBaseCurrencyValuation(asset, fxRates)
-    ? getPositionDirection(asset) === "SHORT"
+    ? asset.instrumentType === "CFD" || getPositionDirection(asset) === "SHORT"
       ? round(
-          convertToPln(
-            (asset.purchasePrice - (asset.latestPrice ?? 0)) *
-              asset.quantity *
-              getContractMultiplier(asset),
-            asset.marketCurrency,
-            fxRates
-          ) - asset.feePln
+          getAssetMarketValuePln(asset, fxRates) - asset.feePln
         )
       : round(getAssetMarketValuePln(asset, fxRates) - getAssetInvestedPln(asset, fxRates))
     : 0;

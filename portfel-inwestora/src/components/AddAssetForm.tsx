@@ -127,6 +127,9 @@ export default function AddAssetForm({
     !hasActiveSearchText && !isSearching && !searchError && Boolean(lastAddedResult);
   const currencyOptions = getCurrencyOptions(draft.purchaseCurrency, draft.marketCurrency);
   const priceCurrency = draft.marketCurrency || "PLN";
+  const isCfd = draft.instrumentType === "CFD";
+  const isShort = draft.positionDirection === "SHORT";
+  const isCashSettledPosition = isCfd || isShort;
 
   const getListingLabel = (listing: EtfListing) =>
     [
@@ -186,6 +189,74 @@ export default function AddAssetForm({
             </button>
           ))}
         </div>
+      ) : null}
+
+      <div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <label className="field">
+          <span>Typ pozycji</span>
+          <select
+            value={isCfd ? "CFD" : "ASSET"}
+            onChange={(event) =>
+              onDraftChange({
+                ...draft,
+                instrumentType: event.target.value === "CFD" ? "CFD" : undefined,
+                contractMultiplier: undefined,
+                contractMultiplierInput: "",
+              })
+            }
+          >
+            <option value="ASSET">Instrument bazowy</option>
+            <option value="CFD">CFD</option>
+          </select>
+        </label>
+
+        <label className="field">
+          <span>Kierunek</span>
+          <select
+            value={isShort ? "SHORT" : "LONG"}
+            onChange={(event) =>
+              onDraftChange({
+                ...draft,
+                positionDirection: event.target.value === "SHORT" ? "SHORT" : "LONG",
+              })
+            }
+          >
+            <option value="LONG">Long</option>
+            <option value="SHORT">Short</option>
+          </select>
+        </label>
+
+        {isCfd ? (
+          <label className="field">
+            <span>Mnożnik kontraktu</span>
+            <input
+              type="number"
+              min="0.00000001"
+              step="any"
+              value={draft.contractMultiplierInput ?? ""}
+              onChange={(event) =>
+                onDraftChange({
+                  ...draft,
+                  contractMultiplierInput: event.target.value,
+                  contractMultiplier: parseNumericInput(event.target.value),
+                })
+              }
+              placeholder="Zgodnie ze specyfikacją brokera"
+              required
+            />
+          </label>
+        ) : null}
+      </div>
+
+      {isCfd ? (
+        <p className="field-note mt-2">
+          Podaj mnożnik z umowy/specyfikacji brokera — Mexo nie zgaduje wielkości kontraktu ani depozytu zabezpieczającego.
+          P/L uwzględnia kierunek, mnożnik i prowizje; finansowanie overnight nie jest tu automatycznie naliczane.
+        </p>
+      ) : isShort ? (
+        <p className="field-note mt-2">
+          Short jest osobną pozycją i nie zmienia liczby jednostek pozycji long. Wartość zabezpieczenia/depozytu nie jest wyliczana przez Mexo.
+        </p>
       ) : null}
 
       <div className="mt-6 grid gap-4 xl:grid-cols-6">
@@ -547,18 +618,25 @@ export default function AddAssetForm({
           className="transaction-button transaction-button-compact transaction-button-buy self-end"
           type="button"
           onClick={onBuySubmit}
-          disabled={isQuoteLoading || isBuyPending}
+          disabled={(!isCashSettledPosition && isQuoteLoading) || isBuyPending}
           aria-busy={isBuyPending}
         >
-          {isBuyPending ? "Dodaję…" : isQuoteLoading ? "Pobieram kurs..." : "Kup"}
+          {isBuyPending
+            ? "Zapisuję…"
+            : isQuoteLoading && !isCashSettledPosition
+              ? "Pobieram kurs..."
+              : isShort
+                ? isCfd ? "Otwórz CFD short" : "Otwórz short"
+                : isCfd ? "Otwórz CFD long" : "Kup"}
         </button>
 
         <button
           className="transaction-button transaction-button-compact transaction-button-sell self-end"
           type="button"
           onClick={onSellSubmit}
+          disabled={isBuyPending || isTargetPortfolioPending}
         >
-          Sprzedaj
+          {isShort || isCfd ? "Zamknij pozycję" : "Sprzedaj"}
         </button>
 
         {isBuyPending ? (

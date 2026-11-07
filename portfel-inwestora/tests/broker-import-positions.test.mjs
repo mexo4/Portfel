@@ -9,9 +9,17 @@ import {
   normalizeStoredPortfolioAssets,
 } from "../src/lib/portfolio-state.ts";
 import {
+  getAssetMarketValuePln,
   getAssetProfitLossPln,
   getGroupedPortfolioAssets,
+  getPortfolioSummary,
 } from "../src/lib/portfolio-engine.ts";
+import { buildCashOperation } from "../src/lib/cash-engine.ts";
+import {
+  buildOperationsFromLegacyState,
+  calculateCashBalances,
+} from "../src/lib/operation-engine.ts";
+import { getPortfolioAssetGroupKey } from "../src/lib/ticker.ts";
 
 const NOW = "2026-09-08T10:00:00.000Z";
 const FX = { PLN: 1, USD: 4 };
@@ -226,6 +234,204 @@ test("open CFD short marks a falling underlying as a profit", () => {
   );
 
   assert.equal(getAssetProfitLossPln(asset, FX), 1_200);
+  assert.equal(getAssetMarketValuePln(asset, FX), 1_200);
+});
+
+test("manual short and CFD positions use marked P/L as portfolio value and settle once through cash", () => {
+  const cashAccountId = "portfolio:account:cash:PLN";
+  const account = {
+    id: cashAccountId,
+    portfolioId: "portfolio",
+    name: "Gotówka PLN",
+    kind: "cash",
+    broker: "CASH",
+    currency: "PLN",
+    isDefault: true,
+    metadata: {},
+    createdAt: NOW,
+    updatedAt: NOW,
+  };
+  const deposit = buildCashOperation({
+    id: "seed-cash",
+    portfolioId: "portfolio",
+    accountId: cashAccountId,
+    operationType: "DEPOSIT",
+    amount: 10_000,
+    currency: "PLN",
+    date: "2026-09-01",
+    notes: "Test capital",
+    createdAt: NOW,
+  });
+  const short = {
+    id: "manual-short",
+    name: "Test short",
+    symbol: "TEST",
+    kind: "stock",
+    instrumentType: "STOCK",
+    positionDirection: "SHORT",
+    purchaseDate: "2026-09-01",
+    quantity: 1,
+    purchasePrice: 350,
+    purchaseCurrency: "PLN",
+    purchasePriceCurrency: "PLN",
+    purchaseFxRateToPln: 1,
+    feePln: 4,
+    marketCurrency: "PLN",
+    provider: "catalog",
+    latestPrice: 320,
+    latestPriceDate: "2026-09-03",
+    createdAt: NOW,
+  };
+  const openingTrade = buildOperationsFromLegacyState("portfolio", {
+    assets: [short],
+    sales: [],
+    realizedAdjustments: [],
+  })[0];
+  assert.equal(openingTrade.operationType, "SELL");
+  assert.equal(openingTrade.metadata.cashImpact, false);
+  assert.equal(openingTrade.metadata.positionEffect, "OPEN");
+  assert.equal(getAssetProfitLossPln(short, { PLN: 1 }), 26);
+  assert.equal(getAssetMarketValuePln(short, { PLN: 1 }), 30);
+
+  const openFee = buildCashOperation({
+    id: "open-fee",
+    portfolioId: "portfolio",
+    accountId: cashAccountId,
+    operationType: "FEE",
+    amount: 4,
+    currency: "PLN",
+    date: "2026-09-01",
+    notes: "Opening commission",
+    createdAt: NOW,
+  });
+  const openBalances = calculateCashBalances([deposit, openFee, openingTrade], [account]);
+  const openSummary = getPortfolioSummary([short], [], [], { PLN: 1 }, "PLN", openBalances);
+  assert.equal(openSummary.totalValuePln, 10_026);
+
+  const group = getGroupedPortfolioAssets([short], { PLN: 1 })[0];
+  const closed = applySaleToPortfolio({
+    assets: [short],
+    group,
+    draft: {
+      groupKey: group.key,
+      name: group.name,
+      symbol: group.symbol,
+      kind: group.kind,
+      purchaseCurrency: "PLN",
+      marketCurrency: "PLN",
+      provider: "catalog",
+      maxQuantity: 1,
+      quantity: 1,
+      quantityInput: "1",
+      salePrice: 320,
+      salePriceInput: "320",
+      saleDate: "2026-09-03",
+      feePln: 2,
+    },
+    fxRates: { PLN: 1 },
+  });
+  assert.equal(closed.sale.realizedProfitLossPln, 24);
+  const closingTrade = buildOperationsFromLegacyState("portfolio", {
+    assets: closed.assets,
+    sales: [closed.sale],
+    realizedAdjustments: [],
+  }).find((operation) => operation.operationType === "BUY");
+  assert.ok(closingTrade);
+  assert.equal(closingTrade.metadata.cashImpact, false);
+  assert.equal(closingTrade.metadata.positionEffect, "CLOSE");
+  const realizedGrossPnl = closed.sale.realizedProfitLossPln +
+    closed.sale.allocations.reduce((total, allocation) => total + allocation.allocatedBuyFeePln, 0) +
+    closed.sale.feePln;
+  assert.equal(realizedGrossPnl, 30);
+  const realizedPnl = buildCashOperation({
+    id: "close-pnl",
+    portfolioId: "portfolio",
+    accountId: cashAccountId,
+    operationType: "CUSTOM",
+    amount: realizedGrossPnl,
+    currency: "PLN",
+    date: "2026-09-03",
+    notes: "Realized short result",
+    createdAt: NOW,
+  });
+  const closeFee = buildCashOperation({
+    id: "close-fee",
+    portfolioId: "portfolio",
+    accountId: cashAccountId,
+    operationType: "FEE",
+    amount: 2,
+    currency: "PLN",
+    date: "2026-09-03",
+    notes: "Closing commission",
+    createdAt: NOW,
+  });
+  const finalBalances = calculateCashBalances(
+    [deposit, openFee, openingTrade, closingTrade, realizedPnl, closeFee],
+    [account]
+  );
+  const finalSummary = getPortfolioSummary([], [closed.sale], [], { PLN: 1 }, "PLN", finalBalances);
+  assert.equal(finalSummary.totalValuePln, 10_024);
+  assert.equal(finalSummary.realizedProfitLossPln, 24);
+});
+
+test("CFD long applies signed mark-to-market with contract multiplier and commission", () => {
+  const cfd = assetFromOperation(
+    {
+      rowNumber: 1,
+      name: "Oil CFD",
+      symbol: "OIL",
+      kind: "stock",
+      instrumentType: "CFD",
+      positionDirection: "LONG",
+      contractMultiplier: 10,
+      date: "2026-09-01",
+      quantity: 2,
+      price: 70,
+      currency: "USD",
+      feePln: 8,
+      provider: "catalog",
+    },
+    { latestPrice: 75 }
+  );
+
+  assert.equal(getAssetMarketValuePln(cfd, FX), 400);
+  assert.equal(getAssetProfitLossPln(cfd, FX), 392);
+});
+
+test("manual CFD and short lots stay separate from the underlying long and from each other", () => {
+  const identity = {
+    ticker: "VWCE",
+    provider: "eodhd",
+    exchange: "XETRA",
+    exchangeCode: "GR",
+    currency: "EUR",
+    instrumentType: "ETF",
+  };
+  const regularEtfKey = getPortfolioAssetGroupKey({
+    kind: "etf",
+    symbol: "VWCE.DE",
+    instrumentIdentity: identity,
+    instrumentType: "ETF",
+    positionDirection: "LONG",
+  });
+  const etfCfdKey = getPortfolioAssetGroupKey({
+    kind: "etf",
+    symbol: "VWCE.DE",
+    instrumentIdentity: identity,
+    instrumentType: "CFD",
+    positionDirection: "LONG",
+  });
+  const shortKey = getPortfolioAssetGroupKey({
+    kind: "etf",
+    symbol: "VWCE.DE",
+    instrumentIdentity: identity,
+    instrumentType: "ETF",
+    positionDirection: "SHORT",
+  });
+
+  assert.notEqual(regularEtfKey, etfCfdKey);
+  assert.notEqual(regularEtfKey, shortKey);
+  assert.notEqual(etfCfdKey, shortKey);
 });
 
 test("CFD long applies the contract multiplier and fees", () => {
@@ -246,4 +452,50 @@ test("CFD long applies the contract multiplier and fees", () => {
   assert.equal(closed.sale.instrumentType, "CFD");
   assert.equal(closed.sale.positionDirection, "LONG");
   assert.equal(closed.sale.realizedProfitLossPln, 392);
+});
+
+test("short close can realize a loss larger than the opening notional", () => {
+  const openingAsset = {
+    id: "short-loss-lot",
+    name: "Short loss test",
+    symbol: "LOSS",
+    kind: "stock",
+    positionDirection: "SHORT",
+    purchaseDate: "2026-09-01",
+    quantity: 2,
+    purchasePrice: 100,
+    purchaseCurrency: "PLN",
+    purchasePriceCurrency: "PLN",
+    purchaseFxRateToPln: 1,
+    feePln: 0,
+    marketCurrency: "PLN",
+    provider: "catalog",
+    createdAt: NOW,
+  };
+  const group = getGroupedPortfolioAssets([openingAsset], { PLN: 1 })[0];
+
+  const result = applySaleToPortfolio({
+    assets: [openingAsset],
+    group,
+    draft: {
+      groupKey: group.key,
+      name: group.name,
+      symbol: group.symbol,
+      kind: group.kind,
+      purchaseCurrency: "PLN",
+      marketCurrency: "PLN",
+      provider: "catalog",
+      maxQuantity: 2,
+      quantity: 2,
+      quantityInput: "2",
+      salePrice: 210,
+      salePriceInput: "210",
+      saleDate: "2026-09-03",
+      feePln: 5,
+    },
+    fxRates: { PLN: 1 },
+  });
+
+  assert.equal(result.assets.length, 0);
+  assert.equal(result.sale.realizedProfitLossPln, -225);
 });

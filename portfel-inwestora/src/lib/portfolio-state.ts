@@ -1433,7 +1433,10 @@ export const applySaleToPortfolio = ({
           ) - saleFeePln
         );
 
-  if (realizedProceedsPln < 0) {
+  const isCashSettledPosition =
+    group.lots[0]?.instrumentType === "CFD" || positionDirection === "SHORT";
+
+  if (realizedProceedsPln < 0 && !isCashSettledPosition) {
     throw new Error("Prowizja nie moze byc wyzsza niz wartosc sprzedazy.");
   }
 

@@ -56,7 +56,7 @@ test("transaction entry explains that Mexo records rather than places orders", a
   assert.match(form, /Dodaj transakcj\u0119 do portfela/);
   assert.match(form, /Mexo nie sk\u0142ada zlece\u0144 gie\u0142dowych/);
   assert.match(form, /:\s*"Kup"\}/);
-  assert.match(form, />\s*Sprzedaj\s*</);
+  assert.match(form, /isShort \|\| isCfd \? "Zamknij pozycję" : "Sprzedaj"/);
   assert.match(shell, /Dodaj transakcj\u0119/);
   assert.match(positions, /Dodaj transakcj\u0119/);
 });

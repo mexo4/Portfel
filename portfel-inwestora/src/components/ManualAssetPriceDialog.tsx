@@ -18,7 +18,11 @@ type ManualAssetPriceDialogProps = {
 };
 
 export const isManualAssetPriceGroup = (group: PortfolioAssetGroup) =>
-  group.instrumentType === "OTHER" || group.instrumentType === "CRYPTO" || group.kind === "crypto";
+  group.instrumentType === "OTHER" ||
+  group.instrumentType === "CRYPTO" ||
+  group.instrumentType === "CFD" ||
+  group.positionDirection === "SHORT" ||
+  group.kind === "crypto";
 
 export const hasManualAssetPrice = (group: PortfolioAssetGroup) =>
   group.lots.some((lot) => lot.priceSource === "MANUAL");

@@ -33,7 +33,10 @@ test("asset submission has a synchronous single-flight guard and immediate acces
   assert.ok(guardIndex >= 0);
   assert.ok(claimIndex > guardIndex);
   assert.ok(releaseIndex > claimIndex);
-  assert.match(addAssetFormSource, /disabled=\{isQuoteLoading \|\| isBuyPending\}/);
+  assert.match(
+    addAssetFormSource,
+    /disabled=\{\(!isCashSettledPosition && isQuoteLoading\) \|\| isBuyPending\}/
+  );
   assert.match(addAssetFormSource, /aria-busy=\{isBuyPending\}/);
   assert.match(addAssetFormSource, /Dodaję pozycję do portfela…/);
 });

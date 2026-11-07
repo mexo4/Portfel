@@ -327,6 +327,11 @@ export type PortfolioAsset = {
 
 export type AssetDraft = {
   kind: AssetKind;
+  /** Optional explicit derivative classification for a manually entered underlying. */
+  instrumentType?: InstrumentType;
+  positionDirection?: PositionDirection;
+  contractMultiplierInput?: string;
+  contractMultiplier?: number;
   query: string;
   name: string;
   symbol: string;

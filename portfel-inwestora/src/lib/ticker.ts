@@ -54,6 +54,10 @@ export const getPortfolioAssetGroupKey = (
   >
 ) => {
   const normalizedSymbol = normalizeSymbol(asset.symbol);
+  const positionIdentity =
+    asset.instrumentType === "CFD" || asset.positionDirection === "SHORT"
+      ? `:${asset.instrumentType ?? "ASSET"}:${asset.positionDirection ?? "LONG"}`
+      : "";
 
   if (asset.kind === "etf" && asset.instrumentIdentity) {
     const identity: InstrumentIdentity = asset.instrumentIdentity;
@@ -69,14 +73,9 @@ export const getPortfolioAssetGroupKey = (
         .join(":");
 
     if (listingIdentity) {
-      return `etf:${listingIdentity}`;
+      return `etf:${listingIdentity}${positionIdentity}`;
     }
   }
-
-  const positionIdentity =
-    asset.instrumentType === "CFD" || asset.positionDirection === "SHORT"
-      ? `:${asset.instrumentType ?? "ASSET"}:${asset.positionDirection ?? "LONG"}`
-      : "";
 
   if (asset.kind === "stock" && isGpwSymbol(normalizedSymbol)) {
     return `${asset.kind}:${getGpwTickerCore(normalizedSymbol)}${positionIdentity}`;

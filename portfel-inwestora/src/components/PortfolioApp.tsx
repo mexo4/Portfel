@@ -64,6 +64,7 @@ import {
   getPortfolioSummary,
   type PortfolioAssetGroup,
 } from "@/lib/pricing";
+import { buildCashOperation } from "@/lib/cash-engine";
 import {
   clearPortfolioHistoryRequestCache,
   createPortfolioHistoryRequestDescriptor,
@@ -270,6 +271,8 @@ const createDraftFromMode = (mode: AssetSearchMode): AssetDraft => {
     provider: config.provider,
     purchaseCurrency: config.purchaseCurrency,
     marketCurrency: config.marketCurrency,
+    positionDirection: "LONG",
+    contractMultiplierInput: "",
   };
 };
 
@@ -789,6 +792,8 @@ const buildImportedPortfolioOperation = ({
   const cashAmount = operation.cashAmount ?? operation.amount ?? operation.transactionValue ?? 0;
   const hasAutomaticBrokerConversion =
     isTrade &&
+    operation.positionDirection !== "SHORT" &&
+    operation.instrumentType !== "CFD" &&
     operation.autoFxConversion === true &&
     marketCurrency !== cashCurrency &&
     marketAmount > 0 &&
@@ -836,7 +841,10 @@ const buildImportedPortfolioOperation = ({
     metadata: {
       ...getImportedOperationMetadata(operation, targetAccountId),
       autoFxTradeNormalized: hasAutomaticBrokerConversion,
-      cashImpact: operation.instrumentType === "CFD" ? false : true,
+      cashImpact:
+        operation.instrumentType === "CFD" || operation.positionDirection === "SHORT"
+          ? false
+          : true,
     },
     createdAt,
     updatedAt: createdAt,
@@ -850,7 +858,8 @@ const buildAutomaticBrokerConversionOperation = (
   if (
     (tradeOperation.operationType !== "BUY" && tradeOperation.operationType !== "SELL") ||
     sourceOperation.autoFxConversion !== true ||
-    sourceOperation.instrumentType === "CFD"
+    sourceOperation.instrumentType === "CFD" ||
+    sourceOperation.positionDirection === "SHORT"
   ) {
     return null;
   }
@@ -4025,6 +4034,10 @@ export default function PortfolioApp({
     const name = draft.name.trim() || draft.query.trim();
     const symbol = normalizeSymbolForMode(draft.symbol, searchMode);
     const purchaseDate = toDateInputValue(draft.purchaseDate);
+    const isCfdPosition = draft.instrumentType === "CFD";
+    const positionDirection = draft.positionDirection === "SHORT" ? "SHORT" : "LONG";
+    const contractMultiplier = isCfdPosition ? draft.contractMultiplier : undefined;
+    const isNonCashPosition = isCfdPosition || positionDirection === "SHORT";
 
     setSearchError(null);
     setQuoteError(null);
@@ -4039,9 +4052,11 @@ export default function PortfolioApp({
       !symbol ||
       !purchaseDate ||
       draft.quantity <= 0 ||
-      draft.purchasePrice <= 0
+      draft.purchasePrice <= 0 ||
+      !Number.isFinite(draft.feePln) ||
+      draft.feePln < 0
     ) {
-      setSearchError("Uzupelnij nazwe, ticker, date transakcji, ilosc i cene.");
+      setSearchError("Uzupełnij nazwę, ticker, datę, dodatnią ilość i cenę oraz nieujemną prowizję.");
       return;
     }
 
@@ -4055,7 +4070,15 @@ export default function PortfolioApp({
       return;
     }
 
-    if (isQuoteLoading && draft.kind !== "etf") {
+    if (
+      isCfdPosition &&
+      (!Number.isFinite(contractMultiplier) || (contractMultiplier ?? 0) <= 0)
+    ) {
+      setSearchError("Podaj dodatni mnożnik kontraktu zgodny ze specyfikacją brokera.");
+      return;
+    }
+
+    if (isQuoteLoading && draft.kind !== "etf" && !isNonCashPosition) {
       setQuoteError("Poczekaj na pobranie kursu przed dodaniem pozycji.");
       return;
     }
@@ -4065,6 +4088,8 @@ export default function PortfolioApp({
       kind: draft.kind,
       symbol,
       instrumentIdentity: draft.instrumentIdentity,
+      instrumentType: isCfdPosition ? "CFD" : undefined,
+      positionDirection,
     });
     const targetAssetGroups = new Set(targetAssets.map(getPortfolioAssetGroupKey));
     const planLimitError = getFreePlanAssetLimitError(
@@ -4103,6 +4128,9 @@ export default function PortfolioApp({
       const [quote, prefetchedFxRates] = await Promise.all([
         resolveDraftQuote(symbol, {
           allowRetry: shouldRetryQuoteRequest(searchMode),
+        }).catch((error) => {
+          if (isNonCashPosition) return null;
+          throw error;
         }),
         fetchHistoricalFxRates(
           [purchaseCurrency, expectedPriceCurrency],
@@ -4111,7 +4139,7 @@ export default function PortfolioApp({
         ),
       ]);
 
-      if (!quote && draft.kind !== "etf") {
+      if (!quote && draft.kind !== "etf" && !isNonCashPosition) {
         return;
       }
 
@@ -4150,6 +4178,8 @@ export default function PortfolioApp({
         kind: draft.kind,
         symbol: storedSymbol,
         instrumentIdentity: draft.instrumentIdentity,
+        instrumentType: isCfdPosition ? "CFD" : quote?.instrumentType,
+        positionDirection,
       });
       const currentAssetGroups = new Set(currentAssets.map(getPortfolioAssetGroupKey));
       const currentPlanLimitError = getFreePlanAssetLimitError(
@@ -4157,6 +4187,19 @@ export default function PortfolioApp({
       );
       if (currentPlanLimitError) {
         setSearchError(currentPlanLimitError);
+        return;
+      }
+      if (
+        isCfdPosition &&
+        currentAssets.some(
+          (asset) =>
+            getPortfolioAssetGroupKey(asset) === nextAssetGroupKey &&
+            (asset.contractMultiplier ?? 1) !== contractMultiplier
+        )
+      ) {
+        setSearchError(
+          "Ta pozycja CFD ma już inny mnożnik kontraktu. Nie połączę kontraktów o różnej wielkości w jedną pozycję."
+        );
         return;
       }
       const existingGroupOrder = currentAssets.find(
@@ -4168,11 +4211,14 @@ export default function PortfolioApp({
         name: storedName,
         symbol: storedSymbol,
         kind: draft.kind,
-        instrumentType:
-          quote?.instrumentType ??
-          (draft.kind === "etf" && draft.instrumentIdentity?.instrumentType === "ETF"
-            ? "ETF"
-            : undefined),
+        instrumentType: isCfdPosition
+          ? "CFD"
+          : quote?.instrumentType ??
+            (draft.kind === "etf" && draft.instrumentIdentity?.instrumentType === "ETF"
+              ? "ETF"
+              : getInstrumentTypeForAssetKind(draft.kind)),
+        positionDirection,
+        contractMultiplier,
         purchaseDate,
         quantity: draft.quantity,
         purchasePrice: draft.purchasePrice,
@@ -4209,32 +4255,50 @@ export default function PortfolioApp({
       });
       let nextAccounts = portfolioWithInstrument.accounts ?? [];
 
+      // Keep the linked account available for the core trade record. CFD and
+      // short notional is not booked as an ordinary cash purchase; only their
+      // commission is posted to cash.
       nextAccounts = ensurePortfolioCashAccount(
         nextAccounts,
         portfolioWithInstrument.id,
         purchaseCurrency
       ).accounts;
-      if (draft.feePln > 0) {
-        nextAccounts = ensurePortfolioCashAccount(
+      let positionFeeAccountId = `${portfolioWithInstrument.id}:account:cash:PLN`;
+      if (draft.feePln > 0 || isNonCashPosition) {
+        const ensuredFeeAccount = ensurePortfolioCashAccount(
           nextAccounts,
           portfolioWithInstrument.id,
           "PLN"
-        ).accounts;
+        );
+        nextAccounts = ensuredFeeAccount.accounts;
+        positionFeeAccountId = ensuredFeeAccount.account.id;
       }
 
-      const cashOperation = buildCashImpactBuyOperation(
-        portfolioWithInstrument.id,
-        nextAsset
-      );
+      const manualFeeOperation = isNonCashPosition && draft.feePln > 0
+        ? buildCashOperation({
+            id: `op-manual-position-open-fee-${nextAsset.id}`,
+            portfolioId: portfolioWithInstrument.id,
+            accountId: positionFeeAccountId,
+            operationType: "FEE",
+            amount: draft.feePln,
+            currency: "PLN",
+            date: purchaseDate,
+            notes: `Prowizja otwarcia ${isCfdPosition ? "CFD" : "short"} ${storedSymbol}`,
+          })
+        : null;
+      const cashOperation = isNonCashPosition
+        ? null
+        : buildCashImpactBuyOperation(portfolioWithInstrument.id, nextAsset);
       const nextPortfolio = ensurePortfolioCoreModel({
         ...portfolioWithInstrument,
         assets: nextAssets,
         accounts: nextAccounts,
         operations: [
           ...(portfolioWithInstrument.operations ?? []).filter(
-            (operation) => operation.id !== cashOperation.id
+            (operation) => operation.id !== cashOperation?.id && operation.id !== manualFeeOperation?.id
           ),
-          cashOperation,
+          ...(cashOperation ? [cashOperation] : []),
+          ...(manualFeeOperation ? [manualFeeOperation] : []),
         ],
       });
 
@@ -4267,8 +4331,15 @@ export default function PortfolioApp({
     setSearchError(null);
     setQuoteError(null);
 
-    if (!symbol || !saleDate || draft.quantity <= 0 || draft.purchasePrice <= 0) {
-      setSearchError("Uzupelnij ticker, date transakcji, ilosc i cene sprzedazy.");
+    if (
+      !symbol ||
+      !saleDate ||
+      draft.quantity <= 0 ||
+      draft.purchasePrice <= 0 ||
+      !Number.isFinite(draft.feePln) ||
+      draft.feePln < 0
+    ) {
+      setSearchError("Uzupełnij ticker, datę, dodatnią ilość i cenę oraz nieujemną prowizję.");
       return;
     }
 
@@ -4276,6 +4347,8 @@ export default function PortfolioApp({
       kind: draft.kind,
       symbol,
       instrumentIdentity: draft.instrumentIdentity,
+      instrumentType: draft.instrumentType === "CFD" ? "CFD" : undefined,
+      positionDirection: draft.positionDirection === "SHORT" ? "SHORT" : "LONG",
     });
     const targetGroup = getGroupedPortfolioAssets(
       targetPortfolio.assets,
@@ -4389,8 +4462,52 @@ export default function PortfolioApp({
         portfolioWithSale.id,
         settlementCurrency
       ).accounts;
+      const isNonCashPosition =
+        currentGroup.instrumentType === "CFD" || currentGroup.positionDirection === "SHORT";
+      let nonCashCloseOperations: import("@/types/portfolio").PortfolioOperation[] = [];
 
-      if (result.sale.feePln > 0 || (result.sale.taxTotalPln ?? 0) > 0) {
+      if (isNonCashPosition) {
+        const ensuredPlnAccount = ensurePortfolioCashAccount(
+          nextAccounts,
+          portfolioWithSale.id,
+          "PLN"
+        );
+        nextAccounts = ensuredPlnAccount.accounts;
+        const allocatedOpenFeesPln = result.sale.allocations.reduce(
+          (total, allocation) => total + allocation.allocatedBuyFeePln,
+          0
+        );
+        // The position lots hold the unrealized mark-to-market P/L. On close,
+        // move only gross realized P/L to cash; commissions are separate FEE
+        // entries, avoiding both notional cash movements and double-counting.
+        const grossRealizedPnlPln = round(
+          result.sale.realizedProfitLossPln + allocatedOpenFeesPln + result.sale.feePln,
+          2
+        );
+        const realizedPnlOperation = buildCashOperation({
+          id: `op-manual-position-close-pnl-${result.sale.id}`,
+          portfolioId: portfolioWithSale.id,
+          accountId: ensuredPlnAccount.account.id,
+          operationType: "CUSTOM",
+          amount: grossRealizedPnlPln,
+          currency: "PLN",
+          date: saleDate,
+          notes: `Zrealizowany wynik ${currentGroup.instrumentType === "CFD" ? "CFD" : "short"} ${symbol}`,
+        });
+        const closeFeeOperation = result.sale.feePln > 0
+          ? buildCashOperation({
+              id: `op-manual-position-close-fee-${result.sale.id}`,
+              portfolioId: portfolioWithSale.id,
+              accountId: ensuredPlnAccount.account.id,
+              operationType: "FEE",
+              amount: result.sale.feePln,
+              currency: "PLN",
+              date: saleDate,
+              notes: `Prowizja zamknięcia ${currentGroup.instrumentType === "CFD" ? "CFD" : "short"} ${symbol}`,
+            })
+          : null;
+        nonCashCloseOperations = [realizedPnlOperation, ...(closeFeeOperation ? [closeFeeOperation] : [])];
+      } else if (result.sale.feePln > 0 || (result.sale.taxTotalPln ?? 0) > 0) {
         nextAccounts = ensurePortfolioCashAccount(
           nextAccounts,
           portfolioWithSale.id,
@@ -4398,18 +4515,19 @@ export default function PortfolioApp({
         ).accounts;
       }
 
-      const cashOperation = buildCashImpactSellOperation(
-        portfolioWithSale.id,
-        result.sale
-      );
+      const cashOperation = isNonCashPosition
+        ? null
+        : buildCashImpactSellOperation(portfolioWithSale.id, result.sale);
       const nextPortfolio = ensurePortfolioCoreModel({
         ...portfolioWithSale,
         accounts: nextAccounts,
         operations: [
           ...(portfolioWithSale.operations ?? []).filter(
-            (operation) => operation.id !== cashOperation.id
+            (operation) => operation.id !== cashOperation?.id &&
+              !nonCashCloseOperations.some((nextOperation) => nextOperation.id === operation.id)
           ),
-          cashOperation,
+          ...(cashOperation ? [cashOperation] : []),
+          ...nonCashCloseOperations,
         ],
       });
 

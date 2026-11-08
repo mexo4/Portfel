@@ -80,7 +80,8 @@ test("privacy export and account deletion use isolated PostgreSQL with owned-dat
 
     const archive = await createAccountDataExport("privacy-user");
     assert.ok(archive instanceof Uint8Array);
-    const files = Object.fromEntries(Object.entries(unzipSync(archive)).map(([name, bytes]) => [name, strFromU8(bytes)]));
+    const archiveEntries = unzipSync(archive);
+    const files = Object.fromEntries(Object.entries(archiveEntries).map(([name, bytes]) => [name, strFromU8(bytes)]));
     const operations = JSON.parse(files["operations.json"]);
     const portfolioJson = JSON.parse(files["portfolios.json"]);
     const calendar = JSON.parse(files["calendar-subscriptions.json"]);
@@ -105,7 +106,7 @@ test("privacy export and account deletion use isolated PostgreSQL with owned-dat
     assert.equal(manifest.files.find((entry) => entry.path === "operations.json").records, 3);
     assert.equal(manifest.files.find((entry) => entry.path === "operations.json").bytes > 0, true);
     for (const entry of manifest.files) {
-      assert.equal(entry.bytes, Buffer.byteLength(files[entry.path], "utf8"), `manifest byte count for ${entry.path}`);
+      assert.equal(entry.bytes, archiveEntries[entry.path].byteLength, `manifest byte count for ${entry.path}`);
     }
     assert.equal(legacyBook.portfolios[0].assets[0].latestPrice, undefined);
     assert.equal(legacyBook.portfolios[0].assets[0].quantity, 2);

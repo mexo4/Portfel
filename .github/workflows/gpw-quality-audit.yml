@@ -141,14 +141,25 @@ jobs:
         run: npm --workspace portfel-inwestora run build -- --webpack
         env:
           DATABASE_URL: ${{ env.MEXO_GPW_TEST_DATABASE_URL }}
+          NEXT_PUBLIC_ESPI_PUBLIC_READ_ACCESS: "true"
           POSTGRES_CA_CERT_BASE64: ""
           POSTGRES_CA_CERT_PATH: ""
+
+      - name: Configure isolated auth rate-limit identity for HTTP E2E
+        shell: bash
+        run: |
+          set -euo pipefail
+          test_secret="$(openssl rand -hex 32)"
+          echo "::add-mask::$test_secret"
+          echo "MEXO_RATE_LIMIT_HMAC_KEY=$test_secret" >> "$GITHUB_ENV"
+          echo "MEXO_TRUSTED_CLIENT_IP_HEADER=x-real-ip" >> "$GITHUB_ENV"
 
       - name: Exercise real local HTTP calendar, API and ICS reads
         run: |
           npm --workspace portfel-inwestora run gpw:http:e2e -- --date-case=same-month
           npm --workspace portfel-inwestora run gpw:http:e2e -- --date-case=cross-month
         env:
+          NEXT_PUBLIC_ESPI_PUBLIC_READ_ACCESS: "true"
           POSTGRES_CA_CERT_BASE64: ""
           POSTGRES_CA_CERT_PATH: ""
 

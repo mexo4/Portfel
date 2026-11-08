@@ -105,6 +105,8 @@ function ReportCard({ report }: { report: EspiReportSummary }) {
       </div>
       <div className="espi-report-meta">
         <span>{reportLabel}{report.reportNumber ? ` ${report.reportNumber}` : ""}</span>
+        <span className="espi-report-meta-separator" aria-hidden="true">·</span>
+        <span>Źródło: {report.sourceLabel}</span>
         {report.attachmentsCount > 0 ? (
           <>
             <span className="espi-report-meta-separator" aria-hidden="true">·</span>

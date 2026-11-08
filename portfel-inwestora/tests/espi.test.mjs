@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   classifyEspiCategory,
   classifyEspiReportType,
+  getEspiSourceLabel,
   parsePapEspiList,
   parsePapEspiReport,
   parseGpwEspiList,
@@ -16,6 +17,12 @@ import {
   isPotentialGpwReportScheduleCandidate,
   validateEspiFeedFilters,
 } from "../src/lib/server/espi.ts";
+
+test("ESPI source attribution follows the stored canonical publication channel", () => {
+  assert.equal(getEspiSourceLabel("gpw:498439"), "GPW / ESPI");
+  assert.equal(getEspiSourceLabel("newconnect:498490"), "NewConnect / ESPI");
+  assert.equal(getEspiSourceLabel("pap:607780"), "PAP MediaRoom / ESPI");
+});
 
 test("official report schedule discovery is generic and excludes unrelated reports", () => {
   for (const title of [
@@ -305,17 +312,20 @@ test("source failures and pagination filters are normalized without unbounded li
   assert.equal(validateEspiFeedFilters(new URLSearchParams("scope=portfolio")).scope, "portfolio");
 });
 
-test("ESPI uses per-user entitlements and remains an optional, non-default Dashboard 2.0 widget", async () => {
-  const [shell, layout, detail, defaultLayout, apiRoute, db] = await Promise.all([
+test("authenticated users can read ESPI while sync remains operator-only and widget stays optional", async () => {
+  const [shell, layout, detail, defaultLayout, apiRoute, db, adminUsers] = await Promise.all([
     readFile(new URL("../src/components/AppWorkspaceShell.tsx", import.meta.url), "utf8"),
     readFile(new URL("../src/components/ConfigurableDashboard.tsx", import.meta.url), "utf8"),
     readFile(new URL("../src/components/EspiReportDetail.tsx", import.meta.url), "utf8"),
     import("../src/lib/dashboard-layout.ts"),
     readFile(new URL("../src/app/api/espi/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../src/lib/server/db.ts", import.meta.url), "utf8"),
+    readFile(new URL("../src/components/AdminUsersPanel.tsx", import.meta.url), "utf8"),
   ]);
   assert.match(shell, /Raporty ESPI/);
-  assert.match(shell, /canAccessFeature\(account, "espi"\)/);
+  assert.match(shell, /featureGate: "espi"/);
+  assert.match(shell, /canAccessFeature\(account, item\.featureGate\)/);
+  assert.doesNotMatch(shell, /testerOnly/);
   assert.match(layout, /LatestEspiWidget/);
   assert.ok(defaultLayout.DASHBOARD_WIDGET_DEFINITIONS.some((item) => item.id === "latest-espi"));
   assert.equal(defaultLayout.DEFAULT_DASHBOARD_LAYOUT.widgets.some((item) => item.id === "latest-espi"), false);
@@ -323,6 +333,12 @@ test("ESPI uses per-user entitlements and remains an optional, non-default Dashb
   assert.match(detail, /correctionOfReportId/);
   assert.match(apiRoute, /after\(async \(\) =>/);
   assert.match(apiRoute, /canAccessFeature\(user, "espi"\)/);
+  assert.match(apiRoute, /hasAdminRole\(user\)/);
+  assert.ok(apiRoute.indexOf("hasAdminRole(user)") < apiRoute.indexOf("synchronizePapEspi({ force: true"),
+    "server-side admin authorization must guard forced synchronization before it runs");
+  assert.match(adminUsers, /Raporty ESPI są dostępne dla każdego zalogowanego użytkownika/);
+  assert.doesNotMatch(adminUsers, /Dostęp ESPI/,
+    "the obsolete per-user switch must not imply that it gates feed access");
   assert.match(db, /UNIQUE \(source, source_id\)/);
   assert.match(db, /market TEXT NOT NULL DEFAULT 'UNKNOWN'/);
   assert.match(db, /idx_espi_reports_market_published/);

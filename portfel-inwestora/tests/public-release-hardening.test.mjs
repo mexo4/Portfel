@@ -61,9 +61,39 @@ test("role, Tester, ESPI entitlement, and paid plan are separate controls", () =
   assert.equal(hasAdminRole(user({ testerAccess: true })), false);
   assert.equal(canAccessFeature(user({ role: "admin" }), "advancedAnalytics"), false);
   assert.equal(canAccessFeature(user({ subscriptionPlan: "expert", subscriptionStatus: "active", subscriptionExpiresAt: "2027-01-01T00:00:00.000Z" }), "advancedAnalytics"), false);
-  assert.equal(canAccessFeature(user({ espiAccess: true }), "espi"), true);
-  assert.equal(canAccessFeature(user({ testerAccess: true }), "espi"), false);
-  assert.equal(canAccessFeature(user(), "espi"), false);
+  const oldPublicEspiRead = process.env.NEXT_PUBLIC_ESPI_PUBLIC_READ_ACCESS;
+  try {
+    process.env.NEXT_PUBLIC_ESPI_PUBLIC_READ_ACCESS = "true";
+    for (const plan of ["free", "basic", "standard", "pro", "expert"]) {
+      const account = user({
+        subscriptionPlan: plan,
+        subscriptionStatus: "active",
+        subscriptionExpiresAt: plan === "free" ? null : "2027-01-01T00:00:00.000Z",
+      });
+      assert.equal(PLAN_DEFINITIONS[plan].features.espi, "included");
+      assert.equal(canAccessFeature(account, "espi"), true, `${plan} may read ESPI when legal rollout is enabled`);
+    }
+    assert.equal(canAccessFeature(user({ testerAccess: true }), "espi"), true);
+  } finally {
+    if (oldPublicEspiRead === undefined) delete process.env.NEXT_PUBLIC_ESPI_PUBLIC_READ_ACCESS;
+    else process.env.NEXT_PUBLIC_ESPI_PUBLIC_READ_ACCESS = oldPublicEspiRead;
+  }
+  process.env.NEXT_PUBLIC_ESPI_PUBLIC_READ_ACCESS = "false";
+  try {
+    assert.equal(canAccessFeature(user({ role: "admin" }), "espi"), true,
+      "admins retain internal feed access while public rollout is closed");
+    assert.equal(canAccessFeature(user({ testerAccess: true, espiAccess: false }), "espi"), false,
+      "Tester is not a source-rights bypass before the legal rollout flag is enabled");
+    assert.equal(canAccessFeature(user({ espiAccess: false }), "espi"), false,
+      "public read remains closed by default while source rights are pending");
+    assert.equal(canAccessFeature(user({ espiAccess: true }), "espi"), true,
+      "an explicitly assigned legacy ESPI grant remains compatible");
+    assert.equal(hasAdminRole(user({ espiAccess: true })), false,
+      "the legacy ESPI flag cannot grant administrative authority");
+  } finally {
+    if (oldPublicEspiRead === undefined) delete process.env.NEXT_PUBLIC_ESPI_PUBLIC_READ_ACCESS;
+    else process.env.NEXT_PUBLIC_ESPI_PUBLIC_READ_ACCESS = oldPublicEspiRead;
+  }
   assert.equal(canCreatePortfolio(user({ testerAccess: true }), 20), true);
 });
 

@@ -17,17 +17,20 @@ const dateCase = process.argv.find((arg) => arg.startsWith("--date-case="))?.spl
 assert.ok(["same-month", "cross-month"].includes(dateCase), "Unsupported --date-case");
 const outputPath = path.join(outputDir, `http-e2e-${dateCase}.json`);
 const databaseUrl = process.env.MEXO_GPW_TEST_DATABASE_URL;
+const rateLimitTestSecret = process.env.MEXO_RATE_LIMIT_HMAC_KEY;
+const trustedClientIpHeader = process.env.MEXO_TRUSTED_CLIENT_IP_HEADER;
+const publicEspiReadTestFlag = process.env.NEXT_PUBLIC_ESPI_PUBLIC_READ_ACCESS;
 const holdOpenMs = Number(process.argv.find((arg) => arg.startsWith("--hold-open-ms="))?.split("=")[1] ?? 0);
 assert.ok(Number.isInteger(holdOpenMs) && holdOpenMs >= 0 && holdOpenMs <= 120_000,
   "--hold-open-ms must be between 0 and 120000");
 const checks = [];
-const sourceLanes = ["GPW_REPORT_SCHEDULES", "GPW_WZA", "GPW_DIVIDENDS"];
+const sourceLanes = ["PAP_ESPI", "GPW_REPORT_SCHEDULES", "GPW_WZA", "GPW_DIVIDENDS"];
 const runId = randomUUID();
 const prefix = `gpw-http-${runId}`;
 let server;
 let pool;
 let originalSourceStates;
-let userId;
+const userIds = [];
 let instrumentId;
 let listenerPort;
 let status = "HTTP_E2E_FAIL";
@@ -40,6 +43,18 @@ const assertIsolatedDatabase = (value) => {
   assert.ok(["127.0.0.1", "localhost", "::1"].includes(parsed.hostname));
   assert.equal(decodeURIComponent(parsed.username), "mexo_gpw_test");
   assert.equal(decodeURIComponent(parsed.pathname.slice(1)), "mexo_gpw_test");
+};
+
+const assertIsolatedRateLimitConfig = () => {
+  assert.ok(typeof rateLimitTestSecret === "string" && Buffer.byteLength(rateLimitTestSecret, "utf8") >= 32,
+    "MEXO_RATE_LIMIT_HMAC_KEY must be a dedicated non-production secret for isolated HTTP E2E");
+  assert.equal(trustedClientIpHeader, "x-real-ip",
+    "HTTP E2E must explicitly model the trusted Nginx client-IP header");
+};
+
+const assertIsolatedEspiAccessConfig = () => {
+  assert.equal(publicEspiReadTestFlag, "true",
+    "the isolated HTTP E2E build must explicitly enable the public-read code path for synthetic fixtures");
 };
 
 const addDays = (value, days) => {
@@ -148,18 +163,42 @@ const addFixture = async (client) => {
   const correctedDate = addDays(eventDate, 1);
   const paymentDate = addDays(eventDate, 5);
   const registrationDate = addDays(eventDate, -16);
-  userId = `${prefix}-user`;
   instrumentId = `${prefix}-instrument`;
-  const email = `${prefix}@example.invalid`;
-  const password = randomUUID();
-  const passwordHash = await bcrypt.hash(password, 4);
-  await client.query(`INSERT INTO users
-    (id, email, password_hash, display_name, email_verified_at, subscription_plan,
-     subscription_status, profile_json, portfolio_json, portfolio_revision,
-     portfolio_core_revision, created_at, updated_at)
-    VALUES ($1, $2, $3, 'GPW HTTP fixture', $4, 'tester', 'active', $5, $6, 0, 0, $4, $4)`,
-    [userId, email, passwordHash, now, JSON.stringify({ displayName: "GPW HTTP fixture", email }),
-      JSON.stringify({ assets: [], sales: [], realizedAdjustments: [] })]);
+  const accountSpecs = [
+    { key: "free", plan: "free" },
+    { key: "basic", plan: "basic" },
+    { key: "standard", plan: "standard" },
+    { key: "pro", plan: "pro" },
+    { key: "expert", plan: "expert" },
+    { key: "tester", plan: "free", testerAccess: true },
+    { key: "admin", plan: "free", role: "admin" },
+    { key: "portfolio-owner", plan: "free", privatePortfolio: true },
+    { key: "portfolio-other", plan: "free" },
+  ];
+  const accounts = [];
+  for (const spec of accountSpecs) {
+    const id = `${prefix}-${spec.key}`;
+    const email = `${id}@example.invalid`;
+    const password = randomUUID();
+    const passwordHash = await bcrypt.hash(password, 4);
+    const privatePortfolioId = `${prefix}-private-portfolio`;
+    const portfolioBook = spec.privatePortfolio
+      ? { schemaVersion: 2, activePortfolioId: privatePortfolioId, portfolios: [{
+          id: privatePortfolioId, name: "Private test portfolio", accountType: "STANDARD",
+          baseCurrency: "PLN", assets: [], sales: [], realizedAdjustments: [],
+          createdAt: now, updatedAt: now,
+        }] }
+      : { assets: [], sales: [], realizedAdjustments: [] };
+    await client.query(`INSERT INTO users
+      (id, email, password_hash, display_name, email_verified_at, subscription_plan,
+       subscription_status, user_role, tester_access, espi_access, profile_json, portfolio_json,
+       portfolio_revision, portfolio_core_revision, created_at, updated_at)
+      VALUES ($1, $2, $3, 'GPW HTTP fixture', $4, $5, 'active', $6, $7, FALSE, $8, $9, 0, -1, $4, $4)`,
+      [id, email, passwordHash, now, spec.plan, spec.role ?? "user", spec.testerAccess ?? false,
+        JSON.stringify({ displayName: "GPW HTTP fixture", email }), JSON.stringify(portfolioBook)]);
+    userIds.push(id);
+    accounts.push({ ...spec, id, email, password, privatePortfolioId });
+  }
   await client.query(`INSERT INTO corporate_event_instruments
     (id, canonical_key, market, ticker, company_name, created_at, updated_at)
     VALUES ($1, $2, 'GPW', $3, 'GPW HTTP Fixture', $4, $4)`,
@@ -205,7 +244,17 @@ const addFixture = async (client) => {
         status = EXCLUDED.status, backfill_complete = TRUE, updated_at = EXCLUDED.updated_at`,
       [source, now]);
   }
-  return { ticker, eventDate, correctedDate, paymentDate, fiscalYear, email, password,
+  const espiReportId = randomUUID();
+  await client.query(`INSERT INTO espi_reports
+    (id, source, source_id, issuer_id, issuer_name, market, source_ticker,
+     report_number, report_type, published_at, source_title, title, body_text,
+     category, source_url, discovered_at, updated_at)
+    VALUES ($1, 'PAP_ESPI', $2, $3, 'GPW HTTP Fixture', 'GPW', $4,
+      '1/2026', 'CURRENT', $5, $6, $6, $7, 'OTHER', $8, $5, $5)`,
+    [espiReportId, `gpw:http-fixture:${runId}`, instrumentId, ticker, now,
+      "Raport bieżący 1/2026 — test dostępu ESPI", "Treść syntetycznego raportu testowego.",
+      `https://example.invalid/${prefix}/espi-report`]);
+  return { ticker, eventDate, correctedDate, paymentDate, fiscalYear, accounts, espiReportId,
     reportEventId: `${prefix}-report` };
 };
 
@@ -226,6 +275,8 @@ const addCorrectedSource = async (client, fixture) => {
 
 try {
   assertIsolatedDatabase(databaseUrl);
+  assertIsolatedRateLimitConfig();
+  assertIsolatedEspiAccessConfig();
   assert.ok(existsSync(path.join(appRoot, ".next", "BUILD_ID")), "Run a production build before HTTP E2E");
   process.env.DATABASE_URL = databaseUrl;
   delete process.env.POSTGRES_CA_CERT_BASE64;
@@ -241,14 +292,77 @@ try {
   await startServer(base);
   checks.push({ name: "isolated-next-ready", status: "PASS" });
 
-  const login = await request(base, "/api/auth/login", {
-    method: "POST", headers: { "content-type": "application/json" },
-    body: JSON.stringify({ email: fixture.email, password: fixture.password }),
+  const cookies = new Map();
+  for (const [index, account] of fixture.accounts.entries()) {
+    const login = await request(base, "/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-real-ip": `192.0.2.${20 + index}` },
+      body: JSON.stringify({ email: account.email, password: account.password }),
+    });
+    assert.equal(login.status, 200, `${account.key} test user must log in through the real API`);
+    const cookie = login.headers.get("set-cookie")?.split(";")[0];
+    assert.ok(cookie?.startsWith("portfel_inwestora_session="));
+    cookies.set(account.key, cookie);
+  }
+  checks.push({ name: "real-login-free-basic-standard-pro-expert-tester-admin", status: "PASS" });
+
+  const anonymousEspi = await request(base, "/api/espi?scope=all");
+  assert.equal(anonymousEspi.status, 401, "anonymous ESPI policy remains authenticated-only");
+  const anonymousSync = await request(base, "/api/espi", { method: "POST" });
+  assert.equal(anonymousSync.status, 401);
+  checks.push({ name: "anonymous-espi-and-sync-denied", status: "PASS" });
+
+  for (const account of fixture.accounts.slice(0, 7)) {
+    const cookie = cookies.get(account.key);
+    const feedResponse = await request(base, "/api/espi?scope=all&market=GPW&limit=10", { headers: { cookie } });
+    assert.equal(feedResponse.status, 200, `${account.key} must read the authenticated ESPI feed`);
+    const feed = await feedResponse.json();
+    const fixtureSummary = feed.items.find((item) => item.id === fixture.espiReportId);
+    assert.ok(fixtureSummary, `${account.key} receives the stored ESPI report`);
+    assert.equal(fixtureSummary.sourceLabel, "GPW / ESPI", "the report is attributed to its actual canonical source");
+    const reportResponse = await request(base, `/api/espi/${fixture.espiReportId}`, { headers: { cookie } });
+    assert.equal(reportResponse.status, 200, `${account.key} must read an ESPI report detail`);
+    assert.equal((await reportResponse.json()).report.sourceLabel, "GPW / ESPI");
+    const pageResponse = await request(base, "/market/espi", { headers: { cookie } });
+    assert.equal(pageResponse.status, 200);
+    assert.ok((await pageResponse.text()).includes("Raporty ESPI"), `${account.key} sees ESPI navigation/page`);
+  }
+  checks.push({ name: "espi-read-api-and-ui-all-five-plans-tester-admin", status: "PASS" });
+
+  for (const account of fixture.accounts.filter((entry) => entry.key !== "admin")) {
+    const response = await request(base, "/api/espi", {
+      method: "POST", headers: { cookie: cookies.get(account.key), "content-type": "application/json" },
+      body: JSON.stringify({ backfillPages: 4 }),
+    });
+    assert.equal(response.status, 403, `${account.key} cannot force a costly ESPI synchronization`);
+  }
+  checks.push({ name: "espi-forced-sync-admin-only", status: "PASS" });
+
+  const freeCookie = cookies.get("free");
+  const selfUpgrade = await request(base, "/api/subscription", {
+    method: "PUT", headers: { cookie: freeCookie, "content-type": "application/json" },
+    body: JSON.stringify({ plan: "expert" }),
   });
-  assert.equal(login.status, 200, "test user must log in through the real API");
-  const cookie = login.headers.get("set-cookie")?.split(";")[0];
-  assert.ok(cookie?.startsWith("portfel_inwestora_session="));
-  checks.push({ name: "real-login", status: "PASS" });
+  assert.equal(selfUpgrade.status, 409, "Free cannot self-activate Expert");
+  const roleEscalation = await request(base, `/api/admin/users/${fixture.accounts.find((entry) => entry.key === "admin").id}`, {
+    method: "PATCH", headers: { cookie: freeCookie, "content-type": "application/json" },
+    body: JSON.stringify({ role: "admin" }),
+  });
+  assert.equal(roleEscalation.status, 403, "ordinary users cannot grant themselves an admin role");
+  checks.push({ name: "subscription-role-espi-admin-boundaries", status: "PASS" });
+
+  const ownerCookie = cookies.get("portfolio-owner");
+  const ownerPortfolio = await request(base, "/api/portfolio", { headers: { cookie: ownerCookie } });
+  assert.equal(ownerPortfolio.status, 200);
+  assert.ok((await ownerPortfolio.json()).portfolios.some((portfolio) =>
+    portfolio.id === fixture.accounts.find((entry) => entry.key === "portfolio-owner").privatePortfolioId));
+  const otherPortfolio = await request(base, "/api/portfolio", { headers: { cookie: cookies.get("portfolio-other") } });
+  assert.equal(otherPortfolio.status, 200);
+  assert.ok((await otherPortfolio.json()).portfolios.every((portfolio) =>
+    portfolio.id !== fixture.accounts.find((entry) => entry.key === "portfolio-owner").privatePortfolioId));
+  checks.push({ name: "private-portfolio-cross-user-isolation", status: "PASS" });
+
+  const cookie = cookies.get("free");
 
   const report = await request(base, "/api/gpw-reports?scope=all", { headers: { cookie } });
   assert.equal(report.status, 200);
@@ -354,8 +468,11 @@ try {
   await stopServer();
   if (pool) {
     try {
-      await pool.query("DELETE FROM espi_reports WHERE id = $1", [`${prefix}-corrected-source`]);
-      if (userId) await pool.query("DELETE FROM users WHERE id = $1", [userId]);
+      await pool.query(
+        "DELETE FROM espi_reports WHERE source_id = ANY($1::text[]) OR id = $2",
+        [[`gpw:http-fixture:${runId}`, `gpw:fixture:${runId}`], `${prefix}-corrected-source`]
+      );
+      if (userIds.length) await pool.query("DELETE FROM users WHERE id = ANY($1::text[])", [userIds]);
       if (instrumentId) await pool.query("DELETE FROM corporate_event_instruments WHERE id = $1", [instrumentId]);
       if (originalSourceStates) {
         await pool.query("DELETE FROM espi_sync_state WHERE source = ANY($1::text[])", [sourceLanes]);
@@ -383,7 +500,7 @@ try {
       fixture: "synthetic GPW report, WZA and dividend; not a live-source truth test",
       readOnlyEndpoints: ["/api/system/revision", "/api/calendar/gpw.ics"],
       sideEffectEndpoints: ["/api/gpw-reports", "/api/general-meetings", "/kalendarz-gpw"],
-      isolatedWrites: ["synthetic fixture", "login test session", "ESPI correction projection"],
+      isolatedWrites: ["synthetic fixture users and reports", "login test sessions", "ESPI correction projection"],
       cacheInvalidation: checks.some((check) => check.name === "corrected-date-public-calendar-cache")
         && checks.some((check) => check.name === "corrected-date-ics-cache-old-entry-absent")
         ? "PASS_AFTER_PROJECTION" : "NOT_TESTED",

@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { usePortfolioWorkspace } from "@/components/PortfolioWorkspaceContext";
 import { fetchEspiReport } from "@/lib/api";
-import { ESPI_CATEGORY_LABELS, ESPI_REPORT_TYPE_LABELS, type EspiReport } from "@/lib/espi";
+import { ESPI_CATEGORY_LABELS, ESPI_REPORT_TYPE_LABELS, getEspiSourceLabel, type EspiReport } from "@/lib/espi";
 
 const formatDateTime = (value: string) => new Intl.DateTimeFormat("pl-PL", {
   timeZone: "Europe/Warsaw",
@@ -57,7 +57,7 @@ export default function EspiReportDetail({ reportId }: { reportId: string }) {
         </header>
         <div className="espi-report-body">{report.body.split(/\n{2,}/).filter(Boolean).map((paragraph, index) => <p key={`${index}:${paragraph.slice(0, 24)}`}>{paragraph}</p>)}</div>
         {report.attachments.length ? <section className="espi-attachments"><p className="eyebrow">Załączniki</p><div>{report.attachments.map((attachment) => <a key={attachment.id} href={attachment.sourceUrl} target="_blank" rel="noreferrer"><span aria-hidden="true">↧</span><strong>{attachment.name}</strong><small>{[attachment.mediaType, attachment.sizeLabel].filter(Boolean).join(" · ")}</small></a>)}</div></section> : null}
-        <footer><span>Źródło: PAP MediaRoom / ESPI</span><a href={report.sourceUrl} target="_blank" rel="noreferrer">Otwórz źródło →</a></footer>
+        <footer><span>Źródło: {getEspiSourceLabel(report.sourceId)}</span><a href={report.sourceUrl} target="_blank" rel="noreferrer">Otwórz źródło →</a></footer>
       </article>
     </div>
   );

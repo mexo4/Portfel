@@ -37,6 +37,7 @@ import {
 } from "@/lib/corporate-events";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { ESPI_CATEGORY_LABELS, type EspiReportSummary } from "@/lib/espi";
+import { canAccessFeature } from "@/lib/entitlements";
 import { isCurrentWarsawDayGpwSession } from "@/lib/gpw-market-calendar";
 import type { PortfolioHistoryResponse, PortfolioOperation } from "@/types/portfolio";
 
@@ -512,6 +513,7 @@ function EventsWidget({ mode }: { mode: "reports" | "dividends" | "timeline" | "
 
 function LatestEspiWidget() {
   const workspace = usePortfolioWorkspace();
+  const canReadEspi = canAccessFeature(workspace.account, "espi");
   const [items, setItems] = useState<EspiReportSummary[]>([]);
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
   const trackedSignature = JSON.stringify({
@@ -523,6 +525,7 @@ function LatestEspiWidget() {
   });
 
   useEffect(() => {
+    if (!canReadEspi) return;
     const controller = new AbortController();
     void fetchEspiFeed({ scope: "mine", limit: 5, signal: controller.signal })
       .then((response) => {
@@ -537,12 +540,14 @@ function LatestEspiWidget() {
         }
       });
     return () => controller.abort();
-  }, [trackedSignature]);
+  }, [canReadEspi, trackedSignature]);
+
+  if (!canReadEspi) return null;
 
   return <WidgetShell eyebrow="Rynek" title="Najnowsze ESPI" href={workspace.getReadHref("/market/espi")}>
     {state === "loading" ? <EmptyState>Wczytywanie raportów ESPI…</EmptyState>
       : state === "error" ? <EmptyState>Raporty ESPI są chwilowo niedostępne.</EmptyState>
-      : items.length ? <div className="dashboard-espi-list">{items.map((report) => <Link key={report.id} href={workspace.getReadHref(`/market/espi/${report.id}`)} prefetch={false}><span><strong>{report.issuerName}</strong><small>{new Intl.DateTimeFormat("pl-PL", { timeZone: "Europe/Warsaw", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }).format(new Date(report.publishedAt))}</small></span><b>{report.title}</b><em>{ESPI_CATEGORY_LABELS[report.category]}</em></Link>)}</div>
+      : items.length ? <div className="dashboard-espi-list">{items.map((report) => <Link key={report.id} href={workspace.getReadHref(`/market/espi/${report.id}`)} prefetch={false}><span><strong>{report.issuerName}</strong><small>{new Intl.DateTimeFormat("pl-PL", { timeZone: "Europe/Warsaw", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }).format(new Date(report.publishedAt))}</small></span><b>{report.title}</b><em>{ESPI_CATEGORY_LABELS[report.category]}</em><small>Źródło: {report.sourceLabel}</small></Link>)}</div>
           : <EmptyState>Brak nowych raportów posiadanych lub obserwowanych spółek.</EmptyState>}
   </WidgetShell>;
 }

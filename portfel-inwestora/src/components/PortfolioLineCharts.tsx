@@ -3,9 +3,11 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type PointerEvent as ReactPointerEvent,
   type WheelEvent as ReactWheelEvent,
 } from "react";
@@ -215,6 +217,26 @@ type ManualChartViewport = ChartViewport | "full" | null;
 
 const DEFAULT_BENCHMARK_SEARCH_MODE: AssetSearchMode = "etf";
 const RANGE_PRESET_STORAGE_KEY = "mexo.lineCharts.rangePreset";
+const RANGE_PRESET_EVENT = "mexo:chart-range-change";
+let rangePresetMemory: RangePreset = "1M";
+const subscribeRangePreset = (listener: () => void) => {
+  window.addEventListener("storage", listener);
+  window.addEventListener(RANGE_PRESET_EVENT, listener);
+  return () => {
+    window.removeEventListener("storage", listener);
+    window.removeEventListener(RANGE_PRESET_EVENT, listener);
+  };
+};
+const getRangePresetSnapshot = (): RangePreset => {
+  try {
+    const stored = normalizeChartRangePreset(window.localStorage.getItem(RANGE_PRESET_STORAGE_KEY));
+    if (stored) rangePresetMemory = stored;
+  } catch {
+    // Keep the chart usable when browser storage is disabled.
+  }
+  return rangePresetMemory;
+};
+const getRangePresetServerSnapshot = (): RangePreset => "1M";
 
 const MODE_OPTIONS: Array<{
   value: ChartMode;
@@ -845,27 +867,66 @@ export default function PortfolioLineCharts({
   initialMode = "value",
 }: PortfolioLineChartsProps) {
   const [mode, setMode] = useState<ChartMode>(initialMode);
-  const [rangePreset, setRangePreset] = useState<RangePreset>("1M");
-  const [hasLoadedStoredRange, setHasLoadedStoredRange] = useState(false);
-  const [manualViewport, setManualViewport] = useState<ManualChartViewport>(null);
+  const rangePreset = useSyncExternalStore(
+    subscribeRangePreset,
+    getRangePresetSnapshot,
+    getRangePresetServerSnapshot
+  );
+  const setRangePreset = useCallback((nextPreset: RangePreset) => {
+    rangePresetMemory = nextPreset;
+    try {
+      window.localStorage.setItem(RANGE_PRESET_STORAGE_KEY, nextPreset);
+    } catch {
+      // The chosen range still works for this page session without persistence.
+    }
+    window.dispatchEvent(new Event(RANGE_PRESET_EVENT));
+  }, []);
+  const [manualViewportState, setManualViewportState] = useState<{
+    signature: string;
+    viewport: ManualChartViewport;
+  }>({ signature: "", viewport: null });
   const [isRangePickerOpen, setIsRangePickerOpen] = useState(false);
   const [isChartInteracting, setIsChartInteracting] = useState(false);
-  const [hiddenSeriesKeys, setHiddenSeriesKeys] = useState<string[]>([]);
+  const [hiddenSeriesState, setHiddenSeriesState] = useState<{ signature: string; keys: string[] }>({ signature: "", keys: [] });
   const [isChartModalOpen, setIsChartModalOpen] = useState(false);
-  const [selectedBenchmarks, setSelectedBenchmarks] = useState<PortfolioBenchmarkDefinition[]>(benchmarks);
-  const [visibleBenchmarkIds, setVisibleBenchmarkIds] = useState<string[]>([]);
+  const benchmarkPropSignature = JSON.stringify(benchmarks);
+  const [selectedBenchmarkOverride, setSelectedBenchmarkOverride] = useState<{
+    sourceSignature: string;
+    values: PortfolioBenchmarkDefinition[];
+  } | null>(null);
+  const selectedBenchmarks = selectedBenchmarkOverride?.sourceSignature === benchmarkPropSignature
+    ? selectedBenchmarkOverride.values
+    : benchmarks;
+  const selectedBenchmarkIdsSignature = selectedBenchmarks.map((benchmark) => benchmark.id).join("|");
+  const [visibleBenchmarkOverride, setVisibleBenchmarkOverride] = useState<{
+    selectionSignature: string;
+    ids: string[];
+  } | null>(null);
+  const visibleBenchmarkIds = visibleBenchmarkOverride?.selectionSignature === selectedBenchmarkIdsSignature
+    ? visibleBenchmarkOverride.ids
+    : selectedBenchmarks.map((benchmark) => benchmark.id);
+  const setVisibleBenchmarkIds = (
+    update: string[] | ((current: string[]) => string[]),
+    selectionSignature = selectedBenchmarkIdsSignature,
+    current = visibleBenchmarkIds
+  ) => {
+    const next = typeof update === "function" ? update(current) : update;
+    setVisibleBenchmarkOverride({ selectionSignature, ids: next });
+  };
   const [benchmarkSearchMode, setBenchmarkSearchMode] = useState<AssetSearchMode>(
     DEFAULT_BENCHMARK_SEARCH_MODE
   );
   const [benchmarkQuery, setBenchmarkQuery] = useState("");
-  const [benchmarkResults, setBenchmarkResults] = useState<AssetSearchResult[]>([]);
-  const [isSearchingBenchmarks, setIsSearchingBenchmarks] = useState(false);
-  const [benchmarkSearchError, setBenchmarkSearchError] = useState<string | null>(null);
+  const [benchmarkSearchState, setBenchmarkSearchState] = useState<{
+    identity: string;
+    results: AssetSearchResult[];
+    error: string | null;
+    loading: boolean;
+  } | null>(null);
   const [serverHistory, setServerHistory] = useState<PortfolioHistoryResponse>(EMPTY_HISTORY);
   const [serverHistorySignature, setServerHistorySignature] = useState("");
-  const [warnings, setWarnings] = useState<string[]>([]);
-  const [error, setError] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
+  const [historyWarningsState, setHistoryWarningsState] = useState<{ signature: string; values: string[] }>({ signature: "", values: [] });
+  const [historyErrorState, setHistoryErrorState] = useState<{ signature: string; message: string } | null>(null);
   const [historyProgressState, setHistoryProgressState] = useState<{
     signature: string;
     progress: PortfolioHistoryProgress | null;
@@ -876,6 +937,7 @@ export default function PortfolioLineCharts({
   const touchPointersRef = useRef(new Map<number, { x: number; y: number }>());
   const pinchStateRef = useRef<ChartPinchState | null>(null);
   const manualViewportRef = useRef<ManualChartViewport>(null);
+  const viewportSignatureRef = useRef("");
   const pendingViewportRef = useRef<ManualChartViewport>(null);
   const viewportFrameRef = useRef<number | null>(null);
   const pendingCrosshairRef = useRef<{
@@ -887,15 +949,6 @@ export default function PortfolioLineCharts({
   const crosshairFrameRef = useRef<number | null>(null);
   const nativeFullscreenActiveRef = useRef(false);
   const didDragChartRef = useRef(false);
-
-  useEffect(() => {
-    setSelectedBenchmarks(benchmarks);
-    setVisibleBenchmarkIds((currentIds) => {
-      const availableIds = new Set(benchmarks.map((benchmark) => benchmark.id));
-      const retained = currentIds.filter((id) => availableIds.has(id));
-      return retained.length ? retained : benchmarks.map((benchmark) => benchmark.id);
-    });
-  }, [benchmarks]);
 
   const cancelScheduledViewport = useCallback(() => {
     if (viewportFrameRef.current !== null) {
@@ -910,7 +963,7 @@ export default function PortfolioLineCharts({
     (nextViewport: ManualChartViewport) => {
       cancelScheduledViewport();
       manualViewportRef.current = nextViewport;
-      setManualViewport(nextViewport);
+      setManualViewportState({ signature: viewportSignatureRef.current, viewport: nextViewport });
     },
     [cancelScheduledViewport]
   );
@@ -929,7 +982,10 @@ export default function PortfolioLineCharts({
       viewportFrameRef.current = null;
       const scheduledViewport = pendingViewportRef.current;
       pendingViewportRef.current = null;
-      setManualViewport((currentViewport) => {
+      setManualViewportState((currentState) => {
+        const currentViewport = currentState.signature === viewportSignatureRef.current
+          ? currentState.viewport
+          : null;
         if (
           currentViewport === scheduledViewport ||
           (currentViewport !== null &&
@@ -939,10 +995,10 @@ export default function PortfolioLineCharts({
             currentViewport.startIndex === scheduledViewport.startIndex &&
             currentViewport.endIndex === scheduledViewport.endIndex)
         ) {
-          return currentViewport;
+          return currentState;
         }
 
-        return scheduledViewport;
+        return { signature: viewportSignatureRef.current, viewport: scheduledViewport };
       });
     });
   }, []);
@@ -1008,26 +1064,6 @@ export default function PortfolioLineCharts({
       void document.exitFullscreen?.().catch(() => undefined);
     }
   }, []);
-
-  useEffect(() => {
-    const storedRange = normalizeChartRangePreset(
-      window.localStorage.getItem(RANGE_PRESET_STORAGE_KEY)
-    );
-
-    if (storedRange) {
-      setRangePreset(storedRange);
-    }
-
-    setHasLoadedStoredRange(true);
-  }, []);
-
-  useEffect(() => {
-    if (!hasLoadedStoredRange) {
-      return;
-    }
-
-    window.localStorage.setItem(RANGE_PRESET_STORAGE_KEY, rangePreset);
-  }, [hasLoadedStoredRange, rangePreset]);
 
   useEffect(() => {
     if (!isChartModalOpen) {
@@ -1127,24 +1163,16 @@ export default function PortfolioLineCharts({
     [accountType, accounts, assets, baseCurrency, historyUserId, operations, portfolioScopes, realizedAdjustments, refreshRevision, sales, selectedBenchmarks]
   );
   const historyRequestSignature = historyRequestDescriptor.key;
+  const historyRequest = useMemo(
+    () => JSON.parse(historyRequestSignature).request as PortfolioHistoryRequest,
+    [historyRequestSignature]
+  );
+  const hasHistoryInputs = hasPortfolioHistoryInputs(historyRequest);
+  const error = historyErrorState?.signature === historyRequestSignature ? historyErrorState.message : null;
 
   useEffect(() => {
     let isCancelled = false;
-    const historyRequest = JSON.parse(historyRequestSignature).request as PortfolioHistoryRequest;
-
-    if (!hasPortfolioHistoryInputs(historyRequest)) {
-      setServerHistory(EMPTY_HISTORY);
-      setServerHistorySignature(historyRequestSignature);
-      setWarnings([]);
-      setError(null);
-      setIsLoading(false);
-
-      return;
-    }
-
-    setIsLoading(true);
-    setError(null);
-    setWarnings([]);
+    if (!hasPortfolioHistoryInputs(historyRequest)) return;
 
     void (async () => {
       try {
@@ -1164,39 +1192,37 @@ export default function PortfolioLineCharts({
 
         setServerHistory(response);
         setServerHistorySignature(historyRequestSignature);
-        setWarnings(response.warnings);
+        setHistoryWarningsState({ signature: historyRequestSignature, values: response.warnings });
+        setHistoryErrorState(null);
       } catch (fetchError) {
         if (isCancelled) {
           return;
         }
 
-        setError(
-          fetchError instanceof Error
+        setHistoryErrorState({
+          signature: historyRequestSignature,
+          message: fetchError instanceof Error
             ? fetchError.message
-            : "Nie udalo sie pobrac historii portfela."
-        );
+            : "Nie udalo sie pobrac historii portfela.",
+        });
         setServerHistory(EMPTY_HISTORY);
         setServerHistorySignature(historyRequestSignature);
-        setWarnings([]);
-      } finally {
-        if (!isCancelled) {
-          setIsLoading(false);
-        }
+        setHistoryWarningsState({ signature: historyRequestSignature, values: [] });
       }
     })();
 
     return () => {
       isCancelled = true;
     };
-  }, [baseCurrency, historyRequestSignature]);
+  }, [baseCurrency, historyRequest, historyRequestSignature]);
 
-  const isHistoryPending =
-    isLoading || serverHistorySignature !== historyRequestSignature;
+  const isHistoryPending = hasHistoryInputs && serverHistorySignature !== historyRequestSignature;
   const historyProgress = historyProgressState.signature === historyRequestSignature
     ? historyProgressState.progress
     : null;
-  const effectiveServerHistory =
-    serverHistorySignature === historyRequestSignature ? serverHistory : EMPTY_HISTORY;
+  const effectiveServerHistory = hasHistoryInputs && serverHistorySignature === historyRequestSignature
+    ? serverHistory
+    : EMPTY_HISTORY;
   const historyPoints = useMemo(
     () => isHistoryPending
       ? []
@@ -1213,17 +1239,45 @@ export default function PortfolioLineCharts({
     () => convertBenchmarkSeriesToBase(effectiveServerHistory.benchmarkSeries, baseCurrency, fxRates, effectiveServerHistory.presentationCurrency),
     [baseCurrency, effectiveServerHistory.benchmarkSeries, effectiveServerHistory.presentationCurrency, fxRates]
   );
-  const displayWarnings = useMemo(
-    () => isHistoryPending ? [] : getUserFacingHistoryWarnings(warnings),
-    [isHistoryPending, warnings]
-  );
+  const displayWarnings = useMemo(() => {
+    const warnings = historyWarningsState.signature === historyRequestSignature
+      ? historyWarningsState.values
+      : [];
+    return isHistoryPending ? [] : getUserFacingHistoryWarnings(warnings);
+  }, [historyRequestSignature, historyWarningsState, isHistoryPending]);
   const benchmarkSearchKind = VISIBLE_SEARCH_MODE_OPTIONS.find(
     (option) => option.value === benchmarkSearchMode
   )?.kind;
   const benchmarkSearchMinimumLength = getMinimumSearchLength(benchmarkSearchMode);
-  const hasActiveBenchmarkQuery = benchmarkQuery.trim().length > 0;
-  const hasReachedBenchmarkMinimumLength =
-    benchmarkQuery.trim().length >= benchmarkSearchMinimumLength;
+  const trimmedBenchmarkQuery = benchmarkQuery.trim();
+  const hasActiveBenchmarkQuery = trimmedBenchmarkQuery.length > 0;
+  const hasReachedBenchmarkMinimumLength = trimmedBenchmarkQuery.length >= benchmarkSearchMinimumLength;
+  const benchmarkSearchIdentity = JSON.stringify({
+    mode,
+    benchmarkSearchMode,
+    query: trimmedBenchmarkQuery,
+    kind: benchmarkSearchKind ?? null,
+  });
+  const benchmarkCoreResults = useMemo(
+    () => rankBenchmarkSearchResults(trimmedBenchmarkQuery),
+    [trimmedBenchmarkQuery]
+  );
+  const hasBenchmarkCoreExactMatch = hasExactCoreBenchmarkMatch(trimmedBenchmarkQuery);
+  const shouldSearchBenchmarks = Boolean(
+    benchmarkSearchKind &&
+    mode === "portfolio-vs-benchmark" &&
+    hasReachedBenchmarkMinimumLength
+  );
+  const benchmarkSearchMatches = benchmarkSearchState?.identity === benchmarkSearchIdentity;
+  const benchmarkResults = !shouldSearchBenchmarks
+    ? []
+    : hasBenchmarkCoreExactMatch
+      ? benchmarkCoreResults
+      : benchmarkSearchMatches ? benchmarkSearchState.results : [];
+  const benchmarkSearchError = benchmarkSearchMatches ? benchmarkSearchState.error : null;
+  const isSearchingBenchmarks = shouldSearchBenchmarks && !hasBenchmarkCoreExactMatch && (
+    !benchmarkSearchMatches || benchmarkSearchState.loading
+  );
   const visibleBenchmarkIdSet = useMemo(
     () => new Set(visibleBenchmarkIds),
     [visibleBenchmarkIds]
@@ -1238,44 +1292,20 @@ export default function PortfolioLineCharts({
   );
 
   useEffect(() => {
-    const selectedBenchmarkIds = new Set(selectedBenchmarks.map((benchmark) => benchmark.id));
-
-    setVisibleBenchmarkIds((currentIds) =>
-      currentIds.filter((benchmarkId) => selectedBenchmarkIds.has(benchmarkId))
-    );
-  }, [selectedBenchmarks]);
-
-  useEffect(() => {
-    const trimmedQuery = benchmarkQuery.trim();
-
-    if (
-      !benchmarkSearchKind ||
-      mode !== "portfolio-vs-benchmark" ||
-      trimmedQuery.length < benchmarkSearchMinimumLength
-    ) {
-      setBenchmarkResults([]);
-      setBenchmarkSearchError(null);
-      setIsSearchingBenchmarks(false);
-      return;
-    }
-
-    const coreResults = rankBenchmarkSearchResults(trimmedQuery);
+    if (!shouldSearchBenchmarks || hasBenchmarkCoreExactMatch || !benchmarkSearchKind) return;
 
     // A complete match for a known index is already a stable benchmark
     // definition. Avoid asking an ETF provider for dozens of listing variants
     // merely to offer the user the plain S&P 500 index.
-    if (hasExactCoreBenchmarkMatch(trimmedQuery)) {
-      setBenchmarkResults(coreResults);
-      setBenchmarkSearchError(null);
-      setIsSearchingBenchmarks(false);
-      return;
-    }
-
     let isCancelled = false;
     const controller = new AbortController();
     const timeoutId = window.setTimeout(async () => {
-      setIsSearchingBenchmarks(true);
-      setBenchmarkSearchError(null);
+      setBenchmarkSearchState({
+        identity: benchmarkSearchIdentity,
+        results: benchmarkCoreResults,
+        error: null,
+        loading: true,
+      });
 
       try {
         // ETF discovery is intentionally isolated from `/api/search`. The
@@ -1284,18 +1314,23 @@ export default function PortfolioLineCharts({
         const nextResults: AssetSearchResult[] =
           benchmarkSearchMode === "etf"
             ? (await searchEtfInstruments({
-                query: trimmedQuery,
+                query: trimmedBenchmarkQuery,
                 signal: controller.signal,
               })).flatMap((group) => group.listings)
             : await searchAssets({
-                query: trimmedQuery,
+              query: trimmedBenchmarkQuery,
                 kind: benchmarkSearchKind,
                 mode: benchmarkSearchMode,
                 signal: controller.signal,
               });
 
         if (!isCancelled) {
-          setBenchmarkResults(rankBenchmarkSearchResults(trimmedQuery, nextResults));
+          setBenchmarkSearchState({
+            identity: benchmarkSearchIdentity,
+            results: rankBenchmarkSearchResults(trimmedBenchmarkQuery, nextResults),
+            error: null,
+            loading: false,
+          });
         }
       } catch (searchError) {
         if (isCancelled) {
@@ -1304,18 +1339,16 @@ export default function PortfolioLineCharts({
 
         // A local index result remains usable even when the optional provider
         // search for additional benchmarks has a transient failure.
-        setBenchmarkResults(coreResults);
-        setBenchmarkSearchError(
-          coreResults.length > 0
+        setBenchmarkSearchState({
+          identity: benchmarkSearchIdentity,
+          results: benchmarkCoreResults,
+          error: benchmarkCoreResults.length > 0
             ? null
             : searchError instanceof Error
               ? searchError.message
-              : "Nie udalo sie pobrac benchmarkow."
-        );
-      } finally {
-        if (!isCancelled) {
-          setIsSearchingBenchmarks(false);
-        }
+              : "Nie udalo sie pobrac benchmarkow.",
+          loading: false,
+        });
       }
     }, SEARCH_DEBOUNCE_MS);
 
@@ -1325,24 +1358,22 @@ export default function PortfolioLineCharts({
       window.clearTimeout(timeoutId);
     };
   }, [
-    benchmarkQuery,
+    benchmarkCoreResults,
+    benchmarkSearchIdentity,
     benchmarkSearchKind,
-    benchmarkSearchMinimumLength,
     benchmarkSearchMode,
-    mode,
+    hasBenchmarkCoreExactMatch,
+    shouldSearchBenchmarks,
+    trimmedBenchmarkQuery,
   ]);
 
   const availableRangePresets = useMemo(
     () => getSupportedChartRangePresets(displayPoints),
     [displayPoints]
   );
-  const availableRangePresetSignature = availableRangePresets.join("|");
-
-  useEffect(() => {
-    if (availableRangePresets.length > 0 && !availableRangePresets.includes(rangePreset)) {
-      setRangePreset(availableRangePresets.at(-1) ?? "MAX");
-    }
-  }, [availableRangePresetSignature, availableRangePresets, rangePreset]);
+  const effectiveRangePreset = availableRangePresets.length > 0 && !availableRangePresets.includes(rangePreset)
+    ? availableRangePresets.at(-1) ?? "MAX"
+    : rangePreset;
 
   // The selected range is a rendering viewport only. Keep models and percentage
   // baselines on the full history so panning never recalculates performance.
@@ -1371,33 +1402,33 @@ export default function PortfolioLineCharts({
 
   const handleAddBenchmark = (result: AssetSearchResult) => {
     const benchmark = createPortfolioBenchmarkDefinition(result, benchmarkSearchMode);
-
-    setSelectedBenchmarks((currentBenchmarks) => {
-      if (currentBenchmarks.some((currentBenchmark) => currentBenchmark.id === benchmark.id)) {
-        return currentBenchmarks;
-      }
-      const nextBenchmarks = [...currentBenchmarks, benchmark];
+    const nextBenchmarks = selectedBenchmarks.some((item) => item.id === benchmark.id)
+      ? selectedBenchmarks
+      : [...selectedBenchmarks, benchmark];
+    if (nextBenchmarks !== selectedBenchmarks) {
+      setSelectedBenchmarkOverride({ sourceSignature: benchmarkPropSignature, values: nextBenchmarks });
       void onBenchmarksChange?.(nextBenchmarks).catch(() => undefined);
-      return nextBenchmarks;
-    });
-    setVisibleBenchmarkIds((currentIds) =>
-      currentIds.includes(benchmark.id) ? currentIds : [...currentIds, benchmark.id]
-    );
+    }
+    const nextSelectionSignature = nextBenchmarks.map((item) => item.id).join("|");
+    const visible = visibleBenchmarkIds.includes(benchmark.id)
+      ? visibleBenchmarkIds
+      : [...visibleBenchmarkIds, benchmark.id];
+    setVisibleBenchmarkOverride({ selectionSignature: nextSelectionSignature, ids: visible });
     setBenchmarkQuery("");
-    setBenchmarkResults([]);
-    setBenchmarkSearchError(null);
     setMode("portfolio-vs-benchmark");
   };
 
   const handleRemoveBenchmark = (benchmarkId: string) => {
-    setSelectedBenchmarks((currentBenchmarks) => {
-      const nextBenchmarks = currentBenchmarks.filter((benchmark) => benchmark.id !== benchmarkId);
+    const nextBenchmarks = selectedBenchmarks.filter((benchmark) => benchmark.id !== benchmarkId);
+    if (nextBenchmarks.length !== selectedBenchmarks.length) {
+      setSelectedBenchmarkOverride({ sourceSignature: benchmarkPropSignature, values: nextBenchmarks });
       void onBenchmarksChange?.(nextBenchmarks).catch(() => undefined);
-      return nextBenchmarks;
+    }
+    const nextSelectionSignature = nextBenchmarks.map((item) => item.id).join("|");
+    setVisibleBenchmarkOverride({
+      selectionSignature: nextSelectionSignature,
+      ids: visibleBenchmarkIds.filter((visibleBenchmarkId) => visibleBenchmarkId !== benchmarkId),
     });
-    setVisibleBenchmarkIds((currentIds) =>
-      currentIds.filter((visibleBenchmarkId) => visibleBenchmarkId !== benchmarkId)
-    );
   };
 
   const handleToggleBenchmarkVisibility = (benchmarkId: string) => {
@@ -2037,29 +2068,34 @@ export default function PortfolioLineCharts({
 
   const chartViewportDataSignature = [
     mode,
-    rangePreset,
+    effectiveRangePreset,
     chartModel.data.length,
     chartModel.data[0]?.date ?? "",
     chartModel.data.at(-1)?.date ?? "",
   ].join("|");
+  const manualViewport = manualViewportState.signature === chartViewportDataSignature
+    ? manualViewportState.viewport
+    : null;
 
-  useEffect(() => {
-    setViewportImmediately(null);
+  useLayoutEffect(() => {
+    viewportSignatureRef.current = chartViewportDataSignature;
+    cancelScheduledViewport();
+    manualViewportRef.current = null;
     chartFrameRef.current
       ?.querySelector<HTMLElement>("[data-chart-crosshair]")
       ?.setAttribute("data-visible", "false");
     modalChartFrameRef.current
       ?.querySelector<HTMLElement>("[data-chart-crosshair]")
       ?.setAttribute("data-visible", "false");
-  }, [chartViewportDataSignature, setViewportImmediately]);
+  }, [cancelScheduledViewport, chartViewportDataSignature]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     manualViewportRef.current = manualViewport;
   }, [manualViewport]);
 
   const baseChartViewport = useMemo(
-    () => getChartRangeViewport(chartModel.data, rangePreset),
-    [chartModel.data, rangePreset]
+    () => getChartRangeViewport(chartModel.data, effectiveRangePreset),
+    [chartModel.data, effectiveRangePreset]
   );
 
   const effectiveChartViewport = useMemo(() => {
@@ -2163,9 +2199,9 @@ export default function PortfolioLineCharts({
         dailyInvestmentResultPoints,
         (point) => Math.abs(point.investmentResult) < 0.005,
       ),
-      rangePreset,
+      effectiveRangePreset,
     ),
-    [dailyInvestmentResultPoints, rangePreset]
+    [dailyInvestmentResultPoints, effectiveRangePreset]
   );
   const hasDailyInvestmentResultData = renderedDailyInvestmentResultPoints.length > 0;
   const dailyInvestmentResultDomain = useMemo(
@@ -2186,25 +2222,22 @@ export default function PortfolioLineCharts({
   );
 
   const chartLineKeySignature = chartModel.lines.map((line) => line.dataKey).join("|");
-
-  useEffect(() => {
-    const chartLineKeys = new Set(
-      chartLineKeySignature ? chartLineKeySignature.split("|") : []
-    );
-
-    setHiddenSeriesKeys((currentKeys) => {
-      const nextKeys = currentKeys.filter((dataKey) => chartLineKeys.has(dataKey));
-
-      if (
-        nextKeys.length === currentKeys.length &&
-        nextKeys.every((dataKey, index) => dataKey === currentKeys[index])
-      ) {
-        return currentKeys;
-      }
-
-      return nextKeys;
-    });
-  }, [chartLineKeySignature]);
+  const chartLineKeys = useMemo(
+    () => new Set(chartLineKeySignature ? chartLineKeySignature.split("|") : []),
+    [chartLineKeySignature]
+  );
+  const hiddenSeriesKeys = hiddenSeriesState.signature === chartLineKeySignature
+    ? hiddenSeriesState.keys
+    : hiddenSeriesState.keys.filter((key) => chartLineKeys.has(key));
+  const setHiddenSeriesKeys = (
+    update: string[] | ((current: string[]) => string[])
+  ) => {
+    const current = hiddenSeriesState.signature === chartLineKeySignature
+      ? hiddenSeriesState.keys
+      : hiddenSeriesState.keys.filter((key) => chartLineKeys.has(key));
+    const next = typeof update === "function" ? update(current) : update;
+    setHiddenSeriesState({ signature: chartLineKeySignature, keys: next });
+  };
 
   const hiddenSeriesKeySet = useMemo(
     () => new Set(hiddenSeriesKeys),
@@ -2277,7 +2310,7 @@ export default function PortfolioLineCharts({
 
     downloadBlob(
       new Blob([svgExport.source], { type: "image/svg+xml;charset=utf-8" }),
-      `${getChartExportBaseName(mode, rangePreset)}.svg`
+      `${getChartExportBaseName(mode, effectiveRangePreset)}.svg`
     );
   };
 
@@ -2314,7 +2347,7 @@ export default function PortfolioLineCharts({
 
       canvas.toBlob((blob) => {
         if (blob) {
-          downloadBlob(blob, `${getChartExportBaseName(mode, rangePreset)}.png`);
+          downloadBlob(blob, `${getChartExportBaseName(mode, effectiveRangePreset)}.png`);
         }
       }, "image/png");
     };
@@ -2343,7 +2376,7 @@ export default function PortfolioLineCharts({
       new Blob([`\uFEFF${[header.map(toCsvCell).join(","), ...rows].join("\n")}`], {
         type: "text/csv;charset=utf-8",
       }),
-      `${getChartExportBaseName(mode, rangePreset)}.csv`
+      `${getChartExportBaseName(mode, effectiveRangePreset)}.csv`
     );
   };
 
@@ -2395,7 +2428,7 @@ export default function PortfolioLineCharts({
   const handleSelectRange = (preset: RangePreset) => {
     setIsRangePickerOpen(false);
 
-    if (preset === rangePreset) {
+    if (preset === effectiveRangePreset) {
       handleResetViewport();
       return;
     }
@@ -2605,7 +2638,7 @@ export default function PortfolioLineCharts({
           aria-haspopup="dialog"
           onClick={() => setIsRangePickerOpen((isOpen) => !isOpen)}
         >
-          Zakres: <strong>{rangePreset}</strong>
+          Zakres: <strong>{effectiveRangePreset}</strong>
           <span aria-hidden="true">⌄</span>
         </button>
         {isRangePickerOpen ? (
@@ -2633,9 +2666,9 @@ export default function PortfolioLineCharts({
                 <button
                   key={preset}
                   type="button"
-                  aria-pressed={rangePreset === preset}
+                  aria-pressed={effectiveRangePreset === preset}
                   className={
-                    rangePreset === preset
+                    effectiveRangePreset === preset
                       ? "line-visual-range-option is-active"
                       : "line-visual-range-option"
                   }
@@ -3084,7 +3117,7 @@ export default function PortfolioLineCharts({
         </div>
         <div className="line-visual-chart-side">
           {renderDailyResultActions()}
-          <span className="line-visual-daily-result-range">Zakres: {rangePreset}</span>
+          <span className="line-visual-daily-result-range">Zakres: {effectiveRangePreset}</span>
         </div>
       </div>
       {!isChartModalOpen ? renderDailyInvestmentResultChart() : null}

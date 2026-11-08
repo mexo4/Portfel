@@ -3,7 +3,8 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { PLAN_DEFINITIONS, canAccessFeature, canAddAsset, canCreatePortfolio, resolveEffectiveEntitlements, isSubscriptionPlan } from "../src/lib/entitlements.ts";
 import { classifyFxRateQuality, getVerifiedHistoricalFxRate, MAX_HISTORICAL_FX_CARRY_DAYS, shouldTrustHistoricalFxRate } from "../src/lib/fx-quality.ts";
-import { createRateLimitBucketHash, AUTH_RATE_LIMIT_POLICIES, resolveTrustedClientAddress } from "../src/lib/server/auth-rate-limit.ts";
+import { createRateLimitBucketHash, AUTH_RATE_LIMIT_POLICIES, enforceDistributedRateLimit, resolveTrustedClientAddress } from "../src/lib/server/auth-rate-limit.ts";
+import { applyAuthRateLimit } from "../src/lib/server/auth-rate-limit-response.ts";
 import { hasAdminRole } from "../src/lib/server/access.ts";
 import { getSecurityHeaders } from "../src/lib/security-headers.ts";
 
@@ -70,22 +71,65 @@ test("auth limiter uses trusted proxy identity, HMAC buckets, and multi-instance
   assert.equal(AUTH_RATE_LIMIT_POLICIES.register.limit, 5);
   assert.equal(AUTH_RATE_LIMIT_POLICIES.login.limit, 10);
   assert.equal(AUTH_RATE_LIMIT_POLICIES.login.identityLimit, 30);
-  const headers = new Headers({ "x-real-ip": "203.0.113.10", "x-forwarded-for": "198.51.100.22" });
-  assert.equal(resolveTrustedClientAddress(headers, true), "203.0.113.10");
-  assert.equal(resolveTrustedClientAddress(new Headers({ "x-forwarded-for": "198.51.100.22" }), true), null);
-  assert.equal(resolveTrustedClientAddress(new Headers(), false), "127.0.0.1");
+  const savedTrustedHeader = process.env.MEXO_TRUSTED_CLIENT_IP_HEADER;
+  try {
+    delete process.env.MEXO_TRUSTED_CLIENT_IP_HEADER;
+    const headers = new Headers({ "x-real-ip": "203.0.113.10", "x-forwarded-for": "198.51.100.22" });
+    assert.equal(resolveTrustedClientAddress(headers, true), null, "production must not infer trust from a default header");
+    assert.equal(resolveTrustedClientAddress(new Headers(), false), "127.0.0.1");
+
+    process.env.MEXO_TRUSTED_CLIENT_IP_HEADER = "x-real-ip";
+    assert.equal(resolveTrustedClientAddress(headers, true), "203.0.113.10");
+    assert.equal(resolveTrustedClientAddress(new Headers({ "x-forwarded-for": "198.51.100.22" }), true), null);
+    assert.equal(resolveTrustedClientAddress(new Headers({ "x-real-ip": "not-an-ip" }), true), null);
+
+    process.env.MEXO_TRUSTED_CLIENT_IP_HEADER = "x-forwarded-for";
+    assert.equal(resolveTrustedClientAddress(headers, true), null, "unsupported client-controlled headers must be rejected");
+
+    process.env.MEXO_TRUSTED_CLIENT_IP_HEADER = "cf-connecting-ip";
+    assert.equal(resolveTrustedClientAddress(new Headers({ "cf-connecting-ip": "192.0.2.8" }), true), "192.0.2.8");
+  } finally {
+    if (savedTrustedHeader === undefined) delete process.env.MEXO_TRUSTED_CLIENT_IP_HEADER;
+    else process.env.MEXO_TRUSTED_CLIENT_IP_HEADER = savedTrustedHeader;
+  }
   const a = createRateLimitBucketHash("secret", "login", "203.0.113.10");
   assert.equal(a, createRateLimitBucketHash("secret", "login", "203.0.113.10"));
   assert.notEqual(a, createRateLimitBucketHash("other-secret", "login", "203.0.113.10"));
-  const [limiter, db, routes] = await Promise.all([
+  const previousNodeEnv = process.env.NODE_ENV;
+  const previousSecret = process.env.MEXO_RATE_LIMIT_HMAC_KEY;
+  const previousHeader = process.env.MEXO_TRUSTED_CLIENT_IP_HEADER;
+  try {
+    process.env.NODE_ENV = "production";
+    process.env.MEXO_TRUSTED_CLIENT_IP_HEADER = "x-real-ip";
+    delete process.env.MEXO_RATE_LIMIT_HMAC_KEY;
+    const headers = new Headers({ "x-real-ip": "203.0.113.10" });
+    await assert.rejects(enforceDistributedRateLimit(headers, "login"), /not configured/);
+    const unavailable = await applyAuthRateLimit(new Request("https://mexo.invalid/api/auth/login", { headers }), "login");
+    assert.equal(unavailable?.status, 503, "missing trusted limiter configuration fails closed over HTTP");
+
+    process.env.MEXO_RATE_LIMIT_HMAC_KEY = "short";
+    await assert.rejects(enforceDistributedRateLimit(headers, "login"), /not configured/);
+  } finally {
+    if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = previousNodeEnv;
+    if (previousSecret === undefined) delete process.env.MEXO_RATE_LIMIT_HMAC_KEY;
+    else process.env.MEXO_RATE_LIMIT_HMAC_KEY = previousSecret;
+    if (previousHeader === undefined) delete process.env.MEXO_TRUSTED_CLIENT_IP_HEADER;
+    else process.env.MEXO_TRUSTED_CLIENT_IP_HEADER = previousHeader;
+  }
+  const [limiter, db, routes, limiterResponse] = await Promise.all([
     readFile(new URL("../src/lib/server/auth-rate-limit.ts", import.meta.url), "utf8"),
     readFile(new URL("../src/lib/server/db.ts", import.meta.url), "utf8"),
     readFile(new URL("../src/app/api/auth/login/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../src/lib/server/auth-rate-limit-response.ts", import.meta.url), "utf8"),
   ]);
   assert.match(limiter, /ON CONFLICT \(bucket_hash, window_started_at\)/);
   assert.match(limiter, /createRateLimitBucketHash\(secret, `\$\{scope\}:identity`, identityPart\)/);
+  assert.doesNotMatch(limiter, /MEXO_RATE_LIMIT_HMAC_KEY[^\n]*DATABASE_URL|configuredSecret[^\n]*DATABASE_URL/);
+  assert.match(limiter, /Buffer\.byteLength\(secret, "utf8"\) < 32/);
   assert.match(db, /CREATE TABLE IF NOT EXISTS auth_rate_limit_buckets/);
   assert.match(routes, /applyAuthRateLimit\(request, "login"/);
+  assert.match(limiterResponse, /status: 503/);
   assert.match(routes, /Niepoprawny email lub hasło/);
   assert.doesNotMatch(routes, /requiresVerification: true|verificationSent:/);
 });

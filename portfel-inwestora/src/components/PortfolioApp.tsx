@@ -2,7 +2,7 @@
 
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import dynamic from "next/dynamic";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type ComponentProps } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type ComponentProps } from "react";
 import AppWorkspaceShell from "@/components/AppWorkspaceShell";
 import AssetModeSelector from "@/components/AssetModeSelector";
 import { PortfolioWorkspaceProvider, type PortfolioWorkspaceValue } from "@/components/PortfolioWorkspaceContext";
@@ -228,6 +228,26 @@ type PendingPortfolioSave = {
 
 const SAVE_DEBOUNCE_MS = 250;
 const ASSET_SORT_MODE_STORAGE_KEY = "portfolio.assetTableSortMode";
+const ASSET_SORT_MODE_EVENT = "mexo:asset-sort-mode-change";
+let assetSortModeMemory: AssetTableSortMode = "manual";
+const subscribeAssetSortMode = (listener: () => void) => {
+  window.addEventListener("storage", listener);
+  window.addEventListener(ASSET_SORT_MODE_EVENT, listener);
+  return () => {
+    window.removeEventListener("storage", listener);
+    window.removeEventListener(ASSET_SORT_MODE_EVENT, listener);
+  };
+};
+const getAssetSortModeSnapshot = (): AssetTableSortMode => {
+  try {
+    const stored = window.localStorage.getItem(ASSET_SORT_MODE_STORAGE_KEY);
+    if (isAssetTableSortMode(stored)) assetSortModeMemory = stored;
+  } catch {
+    // Storage can be disabled in private/restricted browser contexts.
+  }
+  return assetSortModeMemory;
+};
+const getAssetSortModeServerSnapshot = (): AssetTableSortMode => "manual";
 const getPortfolioSaveFingerprint = (book: PortfolioBook) =>
   JSON.stringify(book, (key, value) => (key === "updatedAt" ? undefined : value));
 
@@ -1082,8 +1102,20 @@ export default function PortfolioApp({
   const [lastAddedResult, setLastAddedResult] = useState<AssetSearchResult | null>(null);
   const [watchlistItems, setWatchlistItems] = useState<WatchlistItem[]>([]);
   const [filter, setFilter] = useState("");
-  const [assetSortMode, setAssetSortMode] = useState<AssetTableSortMode>("manual");
-  const [hasLoadedSortMode, setHasLoadedSortMode] = useState(false);
+  const assetSortMode = useSyncExternalStore(
+    subscribeAssetSortMode,
+    getAssetSortModeSnapshot,
+    getAssetSortModeServerSnapshot
+  );
+  const setAssetSortMode = useCallback((nextMode: AssetTableSortMode) => {
+    assetSortModeMemory = nextMode;
+    try {
+      window.localStorage.setItem(ASSET_SORT_MODE_STORAGE_KEY, nextMode);
+    } catch {
+      // Keep the selection for this page session even if persistent storage is unavailable.
+    }
+    window.dispatchEvent(new Event(ASSET_SORT_MODE_EVENT));
+  }, []);
   const [fxRates, setFxRates] = useState<FxRates>(FALLBACK_FX_RATES);
   const [verifiedFxCurrencies, setVerifiedFxCurrencies] = useState<CurrencyCode[]>(["PLN"]);
   const [fxQualityNote, setFxQualityNote] = useState<string | null>(null);
@@ -2291,32 +2323,7 @@ export default function PortfolioApp({
   }, [assets, realizedAdjustments, sales]);
 
   useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-
-    const storedSortMode = window.localStorage.getItem(ASSET_SORT_MODE_STORAGE_KEY);
-
-    if (isAssetTableSortMode(storedSortMode)) {
-      setAssetSortMode(storedSortMode);
-    }
-
-    setHasLoadedSortMode(true);
-  }, []);
-
-  useEffect(() => {
-    if (typeof window === "undefined" || !hasLoadedSortMode) {
-      return;
-    }
-
-    window.localStorage.setItem(ASSET_SORT_MODE_STORAGE_KEY, assetSortMode);
-  }, [assetSortMode, hasLoadedSortMode]);
-
-  useEffect(() => {
     const controller = new AbortController();
-
-    setIsWatchlistLoading(true);
-    setWatchlistReadError(false);
 
     void fetchWatchlist(controller.signal)
       .then(({ items }) => {
@@ -2340,22 +2347,11 @@ export default function PortfolioApp({
   useEffect(() => {
     const normalizedCode = normalizeTreasuryBondCode(bondDraft.code);
 
-    setBondRedemptionPreview(null);
-    setBondRedemptionError(null);
-
     if (!normalizedCode) {
-      setBondSeries(null);
-      setBondQuote(null);
-      setBondError(null);
-      setIsBondLoading(false);
       return;
     }
 
     if (normalizedCode.length < 7) {
-      setBondSeries(null);
-      setBondQuote(null);
-      setBondError(null);
-      setIsBondLoading(false);
       return;
     }
 
@@ -2433,10 +2429,6 @@ export default function PortfolioApp({
     const minimumSearchLength = getMinimumSearchLength(searchMode);
 
     if (trimmedQuery.length < minimumSearchLength) {
-      setResults([]);
-      setEtfResultGroups([]);
-      setSearchError(null);
-      setIsSearching(false);
       return;
     }
 
@@ -5657,7 +5649,7 @@ export default function PortfolioApp({
     try {
       await logoutUser();
       clearPortfolioHistoryRequestCache();
-      window.location.href = "/login";
+      router.replace("/login");
     } catch (error) {
       setSyncError(toErrorMessage(error, "Nie udalo sie wylogowac."));
       setIsLoggingOut(false);
@@ -5807,7 +5799,7 @@ export default function PortfolioApp({
 
   const assetEntryWorkspace = <>
     <section className="panel panel-compact workspace-entry-head"><div><p className="eyebrow">Nowa operacja</p><h2 className="section-title">Dodaj instrument</h2><p className="section-copy">Wybierz klasę aktywa i dodaj zakup lub sprzedaż {isAllPortfoliosSelected ? "do wybranego portfela docelowego z bieżącego zakresu" : "do aktywnego portfela"}.</p></div><AssetModeSelector value={entryMode} onChange={handleEntryModeChange} /></section>
-    {entryMode === "bond" ? <TreasuryBondForm draft={bondDraft} series={bondSeries} quote={bondQuote} redemptionPreview={bondRedemptionPreview} swapPreview={bondSwapPreview} isLoadingSeries={isBondLoading} isLoadingRedemption={isBondRedemptionLoading} isLoadingSwap={isBondSwapLoading} error={bondError} redemptionError={bondRedemptionError} swapError={bondSwapError} successMessage={bondSuccess} targetPortfolios={isAllPortfoliosSelected ? selectedPortfolios : undefined} targetPortfolioId={operationTargetPortfolioId} onTargetPortfolioChange={isAllPortfoliosSelected ? handleOperationTargetChange : undefined} isTargetPortfolioPending={isPortfolioMutationPending || isBondRedemptionLoading || isBondSwapLoading} onChange={(nextDraft: TreasuryBondDraft) => { setBondDraft(nextDraft); setBondSuccess(null); resetBondInteractionState(); }} onCodeChange={(code: string) => { setBondDraft((currentDraft) => ({ ...currentDraft, code: normalizeTreasuryBondCode(code) })); setBondError(null); setBondSuccess(null); resetBondInteractionState(); }} onBuySubmit={() => { void handleAddBondAsset(); }} onSellSubmit={() => { void handleSellBondAsset(); }} onRedeemSubmit={() => { void handleRedeemBondAsset(); }} onSwapSubmit={() => { void handleSwapBondAsset(); }} /> : <AddAssetForm showModeSelector={false} searchMode={searchMode} draft={draft} results={results} etfResultGroups={etfResultGroups} lastAddedResult={lastAddedResult} isSearching={isSearching} isQuoteLoading={isQuoteLoading} isBuyPending={isAssetAddPending} searchError={searchError} quoteError={quoteError} successMessage={assetSuccess} targetPortfolios={isAllPortfoliosSelected ? selectedPortfolios : undefined} targetPortfolioId={operationTargetPortfolioId} onTargetPortfolioChange={isAllPortfoliosSelected ? handleOperationTargetChange : undefined} isTargetPortfolioPending={isPortfolioMutationPending} watchlistKeys={watchlistKeys} isWatchlistTogglePending={isWatchlistTogglePending} watchlistError={watchlistError} onToggleWatchlist={(result: AssetSearchResult) => { void handleToggleWatchlist(result); }} onDraftChange={setDraft} onSearchModeChange={handleSearchModeChange} onQueryChange={(query: string) => { const trimmedQuery = query.trim(); const minimumSearchLength = getMinimumSearchLength(searchMode); quoteRequestSeqRef.current += 1; lastPreviewRequestKeyRef.current = ""; isManualSymbolRef.current = false; setIsSearching(trimmedQuery.length >= minimumSearchLength); setIsQuoteLoading(false); setResults([]); setEtfResultGroups([]); setSearchError(null); setAssetSuccess(null); setQuoteError(null); setWatchlistError(null); setDraft((currentDraft) => ({ ...currentDraft, query, name: query, symbol: "", providerId: undefined, priceScale: undefined, issuerCountry: undefined, instrumentIdentity: undefined, marketCurrencyConfirmed: undefined, latestPrice: undefined, latestPriceDate: undefined, previousClose: undefined })); }} onSymbolChange={(symbol: string) => { quoteRequestSeqRef.current += 1; lastPreviewRequestKeyRef.current = ""; isManualSymbolRef.current = true; setIsSearching(false); setIsQuoteLoading(false); setResults([]); setEtfResultGroups([]); setSearchError(null); setAssetSuccess(null); setQuoteError(null); setWatchlistError(null); setDraft((currentDraft) => ({ ...currentDraft, symbol: symbol.toUpperCase(), query: "", name: "", providerId: undefined, priceScale: undefined, issuerCountry: undefined, instrumentIdentity: undefined, marketCurrencyConfirmed: undefined, latestPrice: undefined, latestPriceDate: undefined, previousClose: undefined })); }} onPickResult={(result: AssetSearchResult) => { void handlePickResult(result); }} onReuseLastAddedResult={(result: AssetSearchResult) => { void handlePickResult(result); }} onBuySubmit={() => { void handleAddAsset(); }} onSellSubmit={() => { void handleSellAsset(); }} />}
+    {entryMode === "bond" ? <TreasuryBondForm draft={bondDraft} series={bondSeries} quote={bondQuote} redemptionPreview={bondRedemptionPreview} swapPreview={bondSwapPreview} isLoadingSeries={isBondLoading} isLoadingRedemption={isBondRedemptionLoading} isLoadingSwap={isBondSwapLoading} error={bondError} redemptionError={bondRedemptionError} swapError={bondSwapError} successMessage={bondSuccess} targetPortfolios={isAllPortfoliosSelected ? selectedPortfolios : undefined} targetPortfolioId={operationTargetPortfolioId} onTargetPortfolioChange={isAllPortfoliosSelected ? handleOperationTargetChange : undefined} isTargetPortfolioPending={isPortfolioMutationPending || isBondRedemptionLoading || isBondSwapLoading} onChange={(nextDraft: TreasuryBondDraft) => { if (nextDraft.code !== bondDraft.code || nextDraft.purchaseDate !== bondDraft.purchaseDate) { setBondSeries(null); setBondQuote(null); setBondError(null); setIsBondLoading(false); } setBondDraft(nextDraft); setBondSuccess(null); resetBondInteractionState(); }} onCodeChange={(code: string) => { setBondDraft((currentDraft) => ({ ...currentDraft, code: normalizeTreasuryBondCode(code) })); setBondSeries(null); setBondQuote(null); setIsBondLoading(false); setBondError(null); setBondSuccess(null); resetBondInteractionState(); }} onBuySubmit={() => { void handleAddBondAsset(); }} onSellSubmit={() => { void handleSellBondAsset(); }} onRedeemSubmit={() => { void handleRedeemBondAsset(); }} onSwapSubmit={() => { void handleSwapBondAsset(); }} /> : <AddAssetForm showModeSelector={false} searchMode={searchMode} draft={draft} results={results} etfResultGroups={etfResultGroups} lastAddedResult={lastAddedResult} isSearching={isSearching} isQuoteLoading={isQuoteLoading} isBuyPending={isAssetAddPending} searchError={searchError} quoteError={quoteError} successMessage={assetSuccess} targetPortfolios={isAllPortfoliosSelected ? selectedPortfolios : undefined} targetPortfolioId={operationTargetPortfolioId} onTargetPortfolioChange={isAllPortfoliosSelected ? handleOperationTargetChange : undefined} isTargetPortfolioPending={isPortfolioMutationPending} watchlistKeys={watchlistKeys} isWatchlistTogglePending={isWatchlistTogglePending} watchlistError={watchlistError} onToggleWatchlist={(result: AssetSearchResult) => { void handleToggleWatchlist(result); }} onDraftChange={setDraft} onSearchModeChange={handleSearchModeChange} onQueryChange={(query: string) => { const trimmedQuery = query.trim(); const minimumSearchLength = getMinimumSearchLength(searchMode); quoteRequestSeqRef.current += 1; lastPreviewRequestKeyRef.current = ""; isManualSymbolRef.current = false; setIsSearching(trimmedQuery.length >= minimumSearchLength); setIsQuoteLoading(false); setResults([]); setEtfResultGroups([]); setSearchError(null); setAssetSuccess(null); setQuoteError(null); setWatchlistError(null); setDraft((currentDraft) => ({ ...currentDraft, query, name: query, symbol: "", providerId: undefined, priceScale: undefined, issuerCountry: undefined, instrumentIdentity: undefined, marketCurrencyConfirmed: undefined, latestPrice: undefined, latestPriceDate: undefined, previousClose: undefined })); }} onSymbolChange={(symbol: string) => { quoteRequestSeqRef.current += 1; lastPreviewRequestKeyRef.current = ""; isManualSymbolRef.current = true; setIsSearching(false); setIsQuoteLoading(false); setResults([]); setEtfResultGroups([]); setSearchError(null); setAssetSuccess(null); setQuoteError(null); setWatchlistError(null); setDraft((currentDraft) => ({ ...currentDraft, symbol: symbol.toUpperCase(), query: "", name: "", providerId: undefined, priceScale: undefined, issuerCountry: undefined, instrumentIdentity: undefined, marketCurrencyConfirmed: undefined, latestPrice: undefined, latestPriceDate: undefined, previousClose: undefined })); }} onPickResult={(result: AssetSearchResult) => { void handlePickResult(result); }} onReuseLastAddedResult={(result: AssetSearchResult) => { void handlePickResult(result); }} onBuySubmit={() => { void handleAddAsset(); }} onSellSubmit={() => { void handleSellAsset(); }} />}
   </>;
 
   const portfolioManagement = <PortfolioAccountManagement portfolios={portfolios} activePortfolio={activePortfolio} activePortfolioId={activePortfolioId} isAllPortfoliosSelected={isAllPortfoliosSelected} canCreateAnotherPortfolio={canCreatePortfolio(account, portfolios.length)} summaries={portfolioSummaries} isPending={isSavingPortfolio || isPortfolioMutationPending} onSelect={(portfolioId: string) => { void handleSelectPortfolio(portfolioId); }} onRename={() => { void handleRenamePortfolio(); }} onDelete={() => { void handleDeletePortfolio(); }} onCreate={handleCreatePortfolio} onUpdateAccount={(input: Parameters<ComponentProps<typeof PortfolioAccountManagement>["onUpdateAccount"]>[0]) => { void handleUpdatePortfolioAccount(input); }} />;

@@ -131,25 +131,32 @@ export default function EspiWorkspace() {
   const [scope, setScope] = useState<FeedScope>("all");
   const [draftFilters, setDraftFilters] = useState<FilterState>(EMPTY_FILTERS);
   const [filters, setFilters] = useState<FilterState>(EMPTY_FILTERS);
-  const [feed, setFeed] = useState<EspiFeedResponse | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [feedState, setFeedState] = useState<{
+    identity: string;
+    feed: EspiFeedResponse | null;
+    error: string | null;
+  } | null>(null);
+  const [loadingMoreIdentity, setLoadingMoreIdentity] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [applicationError, setApplicationError] = useState<string | null>(null);
+  const [refreshError, setRefreshError] = useState<{ identity: string; message: string } | null>(null);
   const generation = useRef(0);
   const requestController = useRef<AbortController | null>(null);
   const requestIdentity = useMemo(() => JSON.stringify({ market, scope, filters }), [filters, market, scope]);
+  const requestIdentityRef = useRef(requestIdentity);
+  requestIdentityRef.current = requestIdentity;
+  const feed = feedState?.identity === requestIdentity ? feedState.feed : null;
+  const applicationError = feedState?.identity === requestIdentity
+    ? feedState.error
+    : refreshError?.identity === requestIdentity ? refreshError.message : null;
+  const isLoading = feedState?.identity !== requestIdentity;
+  const isLoadingMore = loadingMoreIdentity === requestIdentity;
 
   const load = useCallback(async ({ cursor, append = false }: { cursor?: string; append?: boolean } = {}) => {
     const currentGeneration = ++generation.current;
     requestController.current?.abort();
     const controller = new AbortController();
     requestController.current = controller;
-    if (append) setIsLoadingMore(true);
-    else {
-      setIsLoading(true);
-      setApplicationError(null);
-    }
+    setLoadingMoreIdentity(append ? requestIdentity : null);
     try {
       const value = await fetchEspiFeed({
         scope,
@@ -165,39 +172,47 @@ export default function EspiWorkspace() {
         signal: controller.signal,
       });
       if (generation.current !== currentGeneration) return;
-      setFeed((current) => append && current
-        ? { ...value, items: [...current.items, ...value.items] }
-        : value);
+      setFeedState((current) => {
+        const previous = append && current?.identity === requestIdentity ? current.feed : null;
+        return {
+          identity: requestIdentity,
+          feed: previous ? { ...value, items: [...previous.items, ...value.items] } : value,
+          error: null,
+        };
+      });
     } catch (error) {
       if (!controller.signal.aborted && generation.current === currentGeneration) {
-        setApplicationError(error instanceof Error ? error.message : "Nie udało się odczytać raportów ESPI.");
+        setFeedState((current) => ({
+          identity: requestIdentity,
+          feed: current?.identity === requestIdentity ? current.feed : null,
+          error: error instanceof Error ? error.message : "Nie udało się odczytać raportów ESPI.",
+        }));
       }
     } finally {
       if (generation.current === currentGeneration) {
-        setIsLoading(false);
-        setIsLoadingMore(false);
+        setLoadingMoreIdentity((current) => current === requestIdentity ? null : current);
       }
     }
-  }, [filters, market, scope]);
+  }, [filters, market, requestIdentity, scope]);
 
   useEffect(() => {
     void load();
-  // requestIdentity represents the complete applied query and prevents
-  // draft typing from issuing a database request on every key stroke.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [requestIdentity]);
+  }, [load]);
 
   useEffect(() => () => requestController.current?.abort(), []);
 
   const handleRefresh = async () => {
     if (isRefreshing) return;
     setIsRefreshing(true);
-    setApplicationError(null);
+    setRefreshError(null);
     try {
       await refreshEspi(1);
-      await load();
+      if (requestIdentityRef.current === requestIdentity) await load();
     } catch (error) {
-      setApplicationError(error instanceof Error ? error.message : "Nie udało się odświeżyć źródła ESPI.");
+      setRefreshError({
+        identity: requestIdentity,
+        message: error instanceof Error ? error.message : "Nie udało się odświeżyć źródła ESPI.",
+      });
     } finally {
       setIsRefreshing(false);
     }

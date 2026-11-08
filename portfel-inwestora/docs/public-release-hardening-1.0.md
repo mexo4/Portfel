@@ -89,10 +89,14 @@ Sensitive auth routes use fixed-window counters in PostgreSQL, shared among
 application processes. IP and normalized account identity are HMACed; raw IPs,
 emails, passwords, and tokens are not saved by the limiter. Exceeded policies
 return 429 with `Retry-After`; missing database/proxy identity fails closed with
-503. Configure a strong, private `MEXO_RATE_LIMIT_HMAC_KEY` consistently across
-instances. `MEXO_TRUSTED_CLIENT_IP_HEADER` accepts only `x-real-ip` or
-`cf-connecting-ip`; the selected edge proxy must overwrite that header and block
-direct untrusted ingress. Never trust a client-supplied `x-forwarded-for` chain.
+503. Configure a private `MEXO_RATE_LIMIT_HMAC_KEY` of at least 32 UTF-8 bytes
+consistently across instances. It is independent of `DATABASE_URL`; production
+does not fall back to a database credential or a development key. Configure
+`MEXO_TRUSTED_CLIENT_IP_HEADER` as only `x-real-ip` or `cf-connecting-ip`; the
+selected edge proxy must overwrite that header and block direct untrusted
+ingress. The value is validated as an IPv4/IPv6 address. Never trust a
+client-supplied `x-forwarded-for` chain. Missing/short secret, unsupported proxy
+header, or missing/invalid address fails closed as HTTP 503 before a DB query.
 The policy values live in `src/lib/server/auth-rate-limit.ts` and should be
 reviewed against observed staging traffic before public rollout.
 
@@ -156,3 +160,59 @@ landing/pricing copy no longer advertises the disabled workflow as available.
 The detailed paid feature/limit matrix, whether Cash is admin-only, initial
 admin identity, and final CSP allowlist remain explicit operator/product
 decisions. No payment processor or automatic entitlement webhook is included.
+
+## Validation status for the hardening branch
+
+The automated PostgreSQL integration test is
+`tests/public-release-hardening-postgres.integration.test.mjs`. It refuses every
+connection except loopback PostgreSQL using the dedicated
+`mexo_hardening_test` role and database. It creates a random temporary schema,
+places legacy Free/Pro rows in that schema, runs the real idempotent schema
+initializer twice, checks the migrated defaults and new-account defaults, then
+starts two separate Node processes to contend on the same PostgreSQL rate-limit
+bucket. The schema is dropped in cleanup. The test is skipped unless
+`MEXO_HARDENING_TEST_DATABASE_URL` is explicitly set.
+
+For an isolated local run, from `portfel-inwestora`:
+
+```powershell
+docker compose -f compose.public-release-test.yml up -d --wait
+$env:MEXO_HARDENING_TEST_DATABASE_URL = 'postgresql://mexo_hardening_test:mexo_hardening_local_only@127.0.0.1:55440/mexo_hardening_test'
+npm run test:public-release:postgres
+Remove-Item Env:MEXO_HARDENING_TEST_DATABASE_URL
+docker compose -f compose.public-release-test.yml down
+```
+
+This container is local-only test infrastructure, unrelated to production. If
+Docker is unavailable, these database checks remain unexecuted; do not point
+the test variable at Aiven or any shared database. Current workspace validation
+found Docker CLI installed but its Docker Desktop daemon unavailable, and no
+local PostgreSQL client/service. Therefore PostgreSQL migration, real multi-
+process counter atomicity, and DB-failure integration scenarios have not been
+run in this environment. The opt-in integration test additionally checks
+admin-only role grants, Tester/ESPI persistence, 30-day entitlement metadata,
+expiry back to effective Free without portfolio changes, rejected self-service
+paid-plan escalation, HTTP 429 plus `Retry-After`, and HTTP 503 on a database
+failure. The normal unit suite separately checks fail-closed HTTP 503 behavior
+without connecting to a database. Full local validation: `npm test` — 820 total,
+818 passed, 0 failed, 2 skipped; `npm run lint`, `npx tsc --noEmit`, and
+`npm run build` passed. The opt-in PostgreSQL test was skipped because no local
+database endpoint was available; it is ready for local/staging execution.
+
+Entitlement audit: the `pending` feature decision only gates features explicitly
+checked through `canAccessFeature` (advanced analytics, benchmarks, investment
+tools, and separately ESPI); portfolio/asset viewing and normal operation
+flows do not use that feature gate. Pending plan quotas conservatively resolve
+to the existing Free create limits; existing data is retained and remains
+readable. ESPI menu and API use the persisted `espi_access` flag, not Tester.
+No cash-specific UI or server entitlement gate exists today: dividend/cash
+screens and their authenticated portfolio APIs are accessible under the same
+base account/ownership checks. The historical admin-only Cash note needs a
+product decision before changing public behavior. Admin account-management API
+requires persisted `user_role=admin`; self-service subscription rejects paid
+tiers; admin entitlement updates reject changing the actor's own access.
+
+Not executed in this workspace: browser UI flows, Google OAuth through the
+production-like proxy, and CSP Report-Only collection. Those require a running
+staging app plus configured OAuth and trusted proxy. No production settings,
+database, Cloudflare rules, or deployment were changed.

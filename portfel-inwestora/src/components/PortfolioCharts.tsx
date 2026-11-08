@@ -81,9 +81,11 @@ export default function PortfolioCharts({
   cashValue = 0,
   view = "all",
 }: PortfolioChartsProps) {
-  const [benchmarkComparisons, setBenchmarkComparisons] = useState<BenchmarkComparison[]>([]);
-  const [benchmarkError, setBenchmarkError] = useState<string | null>(null);
-  const [isLoadingBenchmarks, setIsLoadingBenchmarks] = useState(false);
+  const [benchmarkState, setBenchmarkState] = useState<{
+    signature: string;
+    comparisons: BenchmarkComparison[];
+    error: string | null;
+  } | null>(null);
 
   const groupedAssets = useMemo(
     () => getGroupedPortfolioAssets(assets, fxRates, baseCurrency),
@@ -98,6 +100,11 @@ export default function PortfolioCharts({
     () => buildPortfolioBenchmarkInvestments(assets, sales, fxRates),
     [assets, sales, fxRates]
   );
+  const benchmarkSignature = JSON.stringify(benchmarkInvestments);
+  const benchmarkStateMatches = benchmarkState?.signature === benchmarkSignature;
+  const benchmarkComparisons = benchmarkStateMatches ? benchmarkState.comparisons : [];
+  const benchmarkError = benchmarkStateMatches ? benchmarkState.error : null;
+  const isLoadingBenchmarks = benchmarkInvestments.length > 0 && !benchmarkStateMatches;
   const comparisonInvested = useMemo(
     () =>
       convertFromPln(
@@ -109,33 +116,25 @@ export default function PortfolioCharts({
   );
   useEffect(() => {
     if (benchmarkInvestments.length === 0) {
-      setBenchmarkComparisons([]);
-      setBenchmarkError(null);
       return;
     }
 
     let isCancelled = false;
-    setIsLoadingBenchmarks(true);
-    setBenchmarkError(null);
 
     void (async () => {
       try {
         const comparisons = await fetchBenchmarkComparisons(benchmarkInvestments);
 
         if (!isCancelled) {
-          setBenchmarkComparisons(comparisons);
+          setBenchmarkState({ signature: benchmarkSignature, comparisons, error: null });
         }
       } catch (error) {
         if (!isCancelled) {
-          setBenchmarkError(
-            error instanceof Error
-              ? error.message
-              : "Nie udalo sie pobrac benchmarkow."
-          );
-        }
-      } finally {
-        if (!isCancelled) {
-          setIsLoadingBenchmarks(false);
+          setBenchmarkState({
+            signature: benchmarkSignature,
+            comparisons: [],
+            error: error instanceof Error ? error.message : "Nie udalo sie pobrac benchmarkow.",
+          });
         }
       }
     })();
@@ -143,7 +142,7 @@ export default function PortfolioCharts({
     return () => {
       isCancelled = true;
     };
-  }, [benchmarkInvestments]);
+  }, [benchmarkInvestments, benchmarkSignature]);
 
   if (groupedAssets.length === 0 && benchmarkInvestments.length === 0 && cashValue === 0) {
     return (

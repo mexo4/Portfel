@@ -125,21 +125,20 @@ function DashboardDataProvider({ children, scopeKey }: { children: ReactNode; sc
     history: PortfolioHistoryResponse | null;
     error: boolean;
   } | null>(null);
-  const [events, setEvents] = useState<CorporateEventsResponse | null>(null);
-  const [status, setStatus] = useState({ history: true, events: true });
-  const [errors, setErrors] = useState({ history: false, events: false });
+  const [eventState, setEventState] = useState<{
+    signature: string;
+    events: CorporateEventsResponse | null;
+    error: boolean;
+  } | null>(null);
   const requestGenerationRef = useRef(0);
   const historySignature = getHistorySignature(workspace);
+  const requestSignature = `${historySignature}:${scopeKey}`;
 
   useEffect(() => {
     const controller = new AbortController();
     const generation = ++requestGenerationRef.current;
     const parsed = JSON.parse(historySignature) as ReturnType<typeof JSON.parse>;
     const isCurrent = () => !controller.signal.aborted && generation === requestGenerationRef.current;
-    setEvents(null);
-    setStatus({ history: true, events: true });
-    setErrors({ history: false, events: false });
-
     const hasHistoryInput = parsed.assets.length || parsed.sales.length || parsed.adjustments.length || parsed.operations.length ||
       parsed.scopes?.some((item: { assets: unknown[]; sales: unknown[]; realizedAdjustments: unknown[]; operations?: unknown[] }) =>
         item.assets.length || item.sales.length || item.realizedAdjustments.length || (item.operations?.length ?? 0));
@@ -170,27 +169,28 @@ function DashboardDataProvider({ children, scopeKey }: { children: ReactNode; sc
       .catch(() => {
         if (isCurrent()) {
           setHistoryState({ signature: historySignature, history: null, error: true });
-          setErrors((current) => ({ ...current, history: true }));
         }
-      })
-      .finally(() => { if (isCurrent()) setStatus((current) => ({ ...current, history: false })); });
+      });
 
     const portfolioId = workspace.portfolioScope.mode === "CUSTOM" ? "custom" : workspace.isAllRealPortfoliosSelected ? "all" : workspace.activePortfolioId;
     void fetchCorporateEvents({ portfolioId, portfolioIds: workspace.portfolioScope.mode === "CUSTOM" ? workspace.selectedPortfolioIds : undefined, days: 183, signal: controller.signal })
-      .then((value) => { if (isCurrent()) setEvents(value); })
-      .catch(() => { if (isCurrent()) setErrors((current) => ({ ...current, events: true })); })
-      .finally(() => { if (isCurrent()) setStatus((current) => ({ ...current, events: false })); });
+      .then((value) => { if (isCurrent()) setEventState({ signature: requestSignature, events: value, error: false }); })
+      .catch(() => { if (isCurrent()) setEventState({ signature: requestSignature, events: null, error: true }); });
 
     return () => controller.abort();
   // historySignature is the normalized request identity. The workspace object
   // itself intentionally is not a dependency, avoiding duplicate requests.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [historySignature, scopeKey]);
+  }, [historySignature, requestSignature, scopeKey]);
 
   const historyMatchesScope = historyState?.signature === historySignature;
   const history = historyMatchesScope ? historyState?.history ?? null : null;
-  const isHistoryLoading = !historyMatchesScope || status.history;
+  const isHistoryLoading = !historyMatchesScope;
   const historyError = historyMatchesScope && historyState?.error === true;
+  const eventMatchesScope = eventState?.signature === requestSignature;
+  const events = eventMatchesScope ? eventState.events : null;
+  const isEventsLoading = !eventMatchesScope;
+  const eventsError = eventMatchesScope && eventState.error;
 
   const model = useMemo(() => buildDashboardReadModel({
     history,
@@ -219,12 +219,12 @@ function DashboardDataProvider({ children, scopeKey }: { children: ReactNode; sc
     history,
     model,
     isHistoryLoading,
-    isEventsLoading: status.events,
+    isEventsLoading,
     isWatchlistLoading: workspace.isWatchlistLoading,
     historyError,
-    eventsError: errors.events,
+    eventsError,
     watchlistError: workspace.watchlistReadError,
-  }), [errors.events, history, historyError, isHistoryLoading, model, status.events, workspace.isWatchlistLoading, workspace.watchlistReadError]);
+  }), [eventsError, history, historyError, isHistoryLoading, isEventsLoading, model, workspace.isWatchlistLoading, workspace.watchlistReadError]);
   return <DashboardDataContext.Provider value={value}>{children}</DashboardDataContext.Provider>;
 }
 
@@ -688,8 +688,6 @@ export default function ConfigurableDashboard() {
     copyAbortRef.current = null;
     const controller = new AbortController();
     const generation = ++loadGenerationRef.current;
-    setIsLoading(true); setError(null); setIsEditing(false); setIsLibraryOpen(false);
-    setIsSaving(false); setIsCopying(false); setCopySource("");
     void fetchDashboardLayout(layoutScopeKey, controller.signal).then((response) => {
       if (controller.signal.aborted || generation !== loadGenerationRef.current || response.scopeKey !== layoutScopeKey) return;
       const normalized = normalizeDashboardScopeLayouts(response.layouts);

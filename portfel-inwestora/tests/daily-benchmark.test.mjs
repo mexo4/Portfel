@@ -471,8 +471,8 @@ test("selected chart range drives the summary and value-axis scale, and weekend 
 test("benchmark UI has a core-index short circuit, abortable provider search, and no global search rewrite", async () => {
   const source = await readSource("src/components/PortfolioLineCharts.tsx");
 
-  assert.match(source, /hasExactCoreBenchmarkMatch\(trimmedQuery\)/);
-  assert.match(source, /rankBenchmarkSearchResults\(trimmedQuery, nextResults\)/);
+  assert.match(source, /hasExactCoreBenchmarkMatch\(trimmedBenchmarkQuery\)/);
+  assert.match(source, /rankBenchmarkSearchResults\(trimmedBenchmarkQuery, nextResults\)/);
   assert.match(source, /controller\.abort\(\)/);
   assert.match(source, /searchEtfInstruments\(/);
 });

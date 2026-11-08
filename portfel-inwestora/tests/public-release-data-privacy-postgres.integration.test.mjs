@@ -139,8 +139,9 @@ test("privacy export and account deletion use isolated PostgreSQL with owned-dat
     });
     assert.equal(limited.allowed, false);
     const concurrentIdentity = `parallel-${randomUUID()}`;
+    const concurrentHeaders = new Headers({ "x-real-ip": "127.0.0.2" });
     const concurrentLimitResults = await Promise.all(Array.from({ length: 8 }, () => enforceDistributedRateLimit(
-      limiterHeaders,
+      concurrentHeaders,
       "accountExport",
       concurrentIdentity,
       { secret: "isolated-test-hmac-secret-12345678901234567890", isProduction: false },

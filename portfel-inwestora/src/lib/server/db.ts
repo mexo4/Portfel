@@ -180,6 +180,16 @@ const schemaStatements = [
     )
   `,
   `
+    CREATE TABLE IF NOT EXISTS account_deletion_challenges (
+      user_id TEXT PRIMARY KEY,
+      token_hash TEXT NOT NULL UNIQUE,
+      created_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+  `,
+  "CREATE INDEX IF NOT EXISTS idx_account_deletion_challenges_expiry ON account_deletion_challenges(expires_at)",
+  `
     CREATE INDEX IF NOT EXISTS idx_email_verification_tokens_user_id
       ON email_verification_tokens(user_id)
   `,

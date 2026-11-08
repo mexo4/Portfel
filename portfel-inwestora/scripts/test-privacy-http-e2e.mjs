@@ -23,6 +23,11 @@ const emails = Object.fromEntries(Object.entries(ids).map(([key, id]) => [key, `
 const password = "privacy-e2e-only-password";
 const pool = new Pool({ connectionString: databaseUrl });
 let server;
+let serverOutput = "";
+
+const rememberServerOutput = (chunk) => {
+  serverOutput = `${serverOutput}${chunk.toString("utf8")}`.slice(-8_000);
+};
 
 const getCookie = (response, name) => {
   const values = typeof response.headers.getSetCookie === "function"
@@ -47,7 +52,13 @@ const jsonRequest = (path, { method = "GET", cookie, body, headers = {} } = {}) 
 const waitForServer = async () => {
   const deadline = Date.now() + 60_000;
   while (Date.now() < deadline) {
-    if (server?.exitCode !== null && server?.exitCode !== undefined) throw new Error("Next.js E2E server exited before readiness.");
+    if (server?.exitCode !== null && server?.exitCode !== undefined) {
+      const safeOutput = serverOutput
+        .replace(/postgres(?:ql)?:\/\/[^\s"'`]+/gi, "[redacted database URL]")
+        .replace(/(?:password|secret|token)=\S+/gi, "$1=[redacted]")
+        .slice(-2_000);
+      throw new Error(`Next.js E2E server exited before readiness (exit ${server.exitCode}).${safeOutput ? `\n${safeOutput}` : ""}`);
+    }
     try {
       const response = await fetch(new URL("/privacy", origin), { signal: AbortSignal.timeout(2_000) });
       if (response.ok) return;
@@ -93,7 +104,7 @@ try {
   server = spawn(process.execPath, ["--use-system-ca", nextCli, "start", "--hostname", "127.0.0.1", "--port", "3100"], {
     cwd: appDir,
     windowsHide: true,
-    stdio: "ignore",
+    stdio: ["ignore", "pipe", "pipe"],
     env: {
       ...process.env,
       NODE_ENV: "production",
@@ -105,6 +116,8 @@ try {
       MEXO_TRUSTED_CLIENT_IP_HEADER: "x-real-ip",
     },
   });
+  server.stdout?.on("data", rememberServerOutput);
+  server.stderr?.on("data", rememberServerOutput);
   await waitForServer();
 
   const draftPrivacy = await fetch(new URL("/privacy", origin));

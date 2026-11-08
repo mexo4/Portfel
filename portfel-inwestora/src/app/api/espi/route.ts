@@ -1,6 +1,7 @@
 import { after, NextResponse } from "next/server";
 import { getCurrentAuthenticatedUser } from "@/lib/server/auth";
 import { canAccessFeature } from "@/lib/entitlements";
+import { hasAdminRole } from "@/lib/server/access";
 import { applyAuthRateLimit } from "@/lib/server/auth-rate-limit-response";
 import {
   getEspiFeed,
@@ -43,7 +44,9 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   const user = await getCurrentAuthenticatedUser();
   if (!user) return NextResponse.json({ error: "Brak autoryzacji." }, { status: 401 });
-  if (!canAccessFeature(user, "espi")) return unavailable();
+  if (!hasAdminRole(user)) {
+    return NextResponse.json({ error: "Synchronizację ESPI może uruchomić wyłącznie administrator." }, { status: 403 });
+  }
   const limited = await applyAuthRateLimit(request, "espiSync", user.id);
   if (limited) return limited;
 

@@ -35,14 +35,18 @@ test("results distinguish loading, errors and empty data and persist preferences
 
 test("global Tester bypass is removed and access flags are per account", async () => {
   const [shell, client, server, constants, entitlements] = await Promise.all([readFile(new URL("../src/components/AppWorkspaceShell.tsx", import.meta.url), "utf8"), readFile(new URL("../src/components/PortfolioApp.tsx", import.meta.url), "utf8"), readFile(new URL("../src/lib/server/auth.ts", import.meta.url), "utf8"), readFile(new URL("../src/lib/constants.ts", import.meta.url), "utf8"), readFile(new URL("../src/lib/entitlements.ts", import.meta.url), "utf8")]);
-  assert.match(shell, /canAccessFeature\(account, "espi"\)/);
+  assert.match(shell, /Raporty ESPI/);
+  assert.match(shell, /featureGate: "espi"/);
+  assert.match(shell, /canAccessFeature\(account, item\.featureGate\)/);
+  assert.doesNotMatch(shell, /testerOnly/);
   assert.match(client, /canCreatePortfolio\(account, portfolios\.length\)/);
   assert.match(server, /canAddAsset\(account, previousAssetCount\)/);
   assert.doesNotMatch(constants, /MEXO_TESTER_MODE/);
   assert.doesNotMatch(client, /MEXO_TESTER_MODE/);
   assert.doesNotMatch(server, /MEXO_TESTER_MODE|withForcedProSubscription|isForcedProEmail/);
   assert.match(entitlements, /testerAccess/);
-  assert.match(entitlements, /espiAccess/);
+  assert.match(entitlements, /espi: "included"/);
+  assert.match(entitlements, /NEXT_PUBLIC_ESPI_PUBLIC_READ_ACCESS/);
 });
 
 test("watchlist page reuses GPW stock search and canonical toggle", async () => {

@@ -27,7 +27,9 @@ const undecidedFeatures = (): Record<EntitlementFeature, EntitlementDecision> =>
   advancedAnalytics: "pending",
   benchmarks: "pending",
   investmentTools: "pending",
-  espi: "pending",
+  // The ESPI source policy permits reuse with attribution; reading this
+  // public-market information is available to every authenticated account.
+  espi: "included",
 });
 
 const confirmedLimit = (value: number | null): LimitDecision => ({ status: "confirmed", value });
@@ -48,7 +50,7 @@ export const PLAN_DEFINITIONS: Record<SubscriptionPlan, PlanDefinition> = {
       portfolios: confirmedLimit(FREE_PLAN_PORTFOLIO_LIMIT),
       assetsPerPortfolio: confirmedLimit(FREE_PLAN_ASSET_LIMIT),
     },
-    features: { ...undecidedFeatures(), espi: "pending" },
+    features: undecidedFeatures(),
   },
   basic: {
     id: "basic",
@@ -94,6 +96,13 @@ export const PLAN_DEFINITIONS: Record<SubscriptionPlan, PlanDefinition> = {
 };
 
 export const SUBSCRIPTION_PLAN_IDS = Object.keys(PLAN_DEFINITIONS) as SubscriptionPlan[];
+
+/**
+ * Source-rights rollout gate. Public read access must remain off until the
+ * operator confirms reuse terms for every canonical ESPI source in use.
+ */
+export const isPublicEspiReadEnabled = () =>
+  process.env.NEXT_PUBLIC_ESPI_PUBLIC_READ_ACCESS === "true";
 
 export type EntitlementSubject = Pick<
   AuthenticatedUser,
@@ -162,9 +171,9 @@ export const canAccessFeature = (
   feature: EntitlementFeature,
   now = Date.now()
 ) => {
-  // ESPI is deliberately a separate entitlement: a Tester flag is not an
-  // implicit grant to the public-market feed.
-  if (feature === "espi") return subject.espiAccess;
+  if (feature === "espi") {
+    return subject.role === "admin" || subject.espiAccess || isPublicEspiReadEnabled();
+  }
   if (subject.testerAccess) return true;
   return resolveEffectiveEntitlements(subject, now).features[feature] === "included";
 };

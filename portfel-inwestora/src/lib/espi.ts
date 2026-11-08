@@ -53,12 +53,19 @@ export type EspiReportSummary = {
   excerpt: string;
   category: EspiCategory;
   source: "PAP_ESPI";
+  sourceLabel: string;
   sourceUrl: string;
   attachmentsCount: number;
   isCorrection: boolean;
   correctionTargetReportNumber?: string;
   correctionOfReportId?: string;
   trackingSource?: EspiTrackingSource;
+};
+
+export const getEspiSourceLabel = (sourceId: string) => {
+  if (sourceId.startsWith("gpw:")) return "GPW / ESPI";
+  if (sourceId.startsWith("newconnect:")) return "NewConnect / ESPI";
+  return "PAP MediaRoom / ESPI";
 };
 
 export type EspiReport = EspiReportSummary & {

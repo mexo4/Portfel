@@ -8,7 +8,7 @@ import { getWorkspaceRoute, type WorkspaceRouteKey } from "@/lib/workspace-route
 import { getWorkspaceReadHref, type PortfolioScopeSelection } from "@/lib/portfolio-selection";
 import PortfolioScopePicker from "@/components/PortfolioScopePicker";
 import type { AuthenticatedUser, CurrencyCode, InvestmentPortfolio } from "@/types/portfolio";
-import { canAccessFeature } from "@/lib/entitlements";
+import { canAccessFeature, type EntitlementFeature } from "@/lib/entitlements";
 
 export type { WorkspaceRouteKey } from "@/lib/workspace-routes";
 
@@ -77,7 +77,7 @@ export function WorkspaceIcon({ name }: { name: WorkspaceIconName }) {
   return <svg aria-hidden="true" className="workspace-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8">{WORKSPACE_ICON_DRAWINGS[name]}</svg>;
 }
 
-type NavigationItem = { key: WorkspaceRouteKey; href: string; label: string; icon: WorkspaceIconName; keywords?: string; testerOnly?: boolean };
+type NavigationItem = { key: WorkspaceRouteKey; href: string; label: string; icon: WorkspaceIconName; keywords?: string; featureGate?: EntitlementFeature };
 type NavigationGroupId = "portfolio" | "analysis" | "market" | "tools";
 type NavigationGroup = { id: NavigationGroupId; label: string; items: NavigationItem[] };
 
@@ -126,7 +126,7 @@ const navigationGroups: NavigationGroup[] = [
     { key: "watchlist", href: "/market/watchlist", label: "Obserwowane", icon: "watchlist", keywords: "watchlista spółki" },
     { key: "events", href: "/market/events", label: "Wydarzenia GPW", icon: "events", keywords: "kalendarz raporty dywidendy" },
     { key: "meetings", href: "/market/general-meetings", label: "WZA — Walne zgromadzenia", icon: "meetings", keywords: "WZA ZWZ NWZ akcjonariusze walne zgromadzenie" },
-    { key: "espi", href: "/market/espi", label: "Raporty ESPI", icon: "espi", keywords: "komunikaty emitentów", testerOnly: true },
+    { key: "espi", href: "/market/espi", label: "Raporty ESPI", icon: "espi", keywords: "komunikaty emitentów", featureGate: "espi" },
     { key: "instruments", href: "/market/instruments", label: "Instrumenty", icon: "instruments", keywords: "wyszukaj akcje etf" },
   ] },
   { id: "tools", label: "Narzędzia", items: [
@@ -186,7 +186,7 @@ export default function AppWorkspaceShell({ account, portfolios, selectedPortfol
   const hasAllPortfoliosSelected = portfolioScope.mode !== "SINGLE";
   const visibleNavigationGroups = navigationGroups.map((group) => ({
     ...group,
-    items: group.items.filter((item) => !item.testerOnly || canAccessFeature(account, "espi")),
+    items: group.items.filter((item) => !item.featureGate || canAccessFeature(account, item.featureGate)),
   }));
   const currentNavigationGroup = visibleNavigationGroups.find((group) => isGroupActive(route, group));
   const showSectionTabs = currentNavigationGroup && currentNavigationGroup.id !== "tools";

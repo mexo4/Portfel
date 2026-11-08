@@ -5,6 +5,7 @@ import { useMemo, useState } from "react";
 import TruncatedText from "@/components/TruncatedText";
 import { deleteAdminUser } from "@/lib/api";
 import { getAssetPurchasePriceCurrency } from "@/lib/pricing";
+import { isPublicEspiReadEnabled } from "@/lib/entitlements";
 import { formatDate, formatDateTime, formatNumber } from "@/lib/utils";
 import type { AdminDashboardData, AdminUserOverview } from "@/lib/server/admin";
 import type { SubscriptionPlan } from "@/types/portfolio";
@@ -90,6 +91,7 @@ const buildTransactions = (user: AdminUserOverview) => {
 };
 
 export default function AdminUsersPanel({ users, currentUserId }: AdminUsersPanelProps) {
+  const publicEspiReadEnabled = isPublicEspiReadEnabled();
   const router = useRouter();
   const [expandedUsers, setExpandedUsers] = useState<Record<string, boolean>>({});
   const [pendingDeleteUserId, setPendingDeleteUserId] = useState<string | null>(null);
@@ -202,7 +204,7 @@ export default function AdminUsersPanel({ users, currentUserId }: AdminUsersPane
                     <span>Plan zmieniony: {formatDateTime(user.subscriptionUpdatedAt ?? undefined)}</span>
                     <span>Dostęp do: {formatDateTime(user.subscriptionExpiresAt ?? undefined)}</span>
                     <span>Źródło nadania: {user.subscriptionGrantSource ?? "brak"}</span>
-                    <span>Rola: {user.role} · Tester: {user.testerAccess ? "tak" : "nie"} · ESPI: {user.espiAccess ? "tak" : "nie"}</span>
+                    <span>Rola: {user.role} · Tester: {user.testerAccess ? "tak" : "nie"}</span>
                   </div>
 
                   <div className="admin-profile-actions">
@@ -219,7 +221,6 @@ export default function AdminUsersPanel({ users, currentUserId }: AdminUsersPane
                       </select>
                     </label>
                     <label><input type="checkbox" checked={user.testerAccess} disabled={pendingAccessUserId === user.id || user.id === currentUserId} onChange={(event) => void updateAccess(user, { testerAccess: event.target.checked })} /> Dostęp Tester</label>
-                    <label><input type="checkbox" checked={user.espiAccess} disabled={pendingAccessUserId === user.id || user.id === currentUserId} onChange={(event) => void updateAccess(user, { espiAccess: event.target.checked })} /> Dostęp ESPI</label>
                     <button
                       className="ghost-button admin-danger-button"
                       type="button"
@@ -231,6 +232,9 @@ export default function AdminUsersPanel({ users, currentUserId }: AdminUsersPane
                   </div>
                   {pendingAccessUserId === user.id ? <p className="field-note">Zapisuję zmianę dostępu…</p> : null}
                   {accessError ? <p className="field-note field-note-error">{accessError}</p> : null}
+                  <p className="field-note">{publicEspiReadEnabled
+                    ? "Raporty ESPI są dostępne dla każdego zalogowanego użytkownika."
+                    : "Publiczny dostęp ESPI jest wyłączony do czasu potwierdzenia praw do wszystkich źródeł; administratorzy i konta z zachowanym indywidualnym dostępem nadal mogą czytać feed."}</p>
                   <p className="field-note">Płatny plan nadany przez administratora działa 30 dni. Nie skonfigurowano płatności automatycznych. Nie możesz zmienić własnego dostępu.</p>
 
                   <div className="admin-transaction-head">

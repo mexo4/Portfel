@@ -1,4 +1,5 @@
 import { createHmac } from "node:crypto";
+import { isIP } from "node:net";
 import { query } from "@/lib/server/db";
 
 export type AuthRateLimitPolicy = {
@@ -20,13 +21,18 @@ export type RateLimitResult = { allowed: true } | { allowed: false; retryAfterSe
 type RateLimitBucketRow = { bucket_hash: string; hit_count: number; reset_at: string };
 
 export const resolveTrustedClientAddress = (headers: Headers, isProduction: boolean) => {
-  const trustedHeader = process.env.MEXO_TRUSTED_CLIENT_IP_HEADER?.trim().toLowerCase() || "x-real-ip";
+  const configuredHeader = process.env.MEXO_TRUSTED_CLIENT_IP_HEADER?.trim().toLowerCase();
+  const trustedHeader = configuredHeader ?? (isProduction ? "" : "x-real-ip");
+  if (configuredHeader && trustedHeader !== "x-real-ip" && trustedHeader !== "cf-connecting-ip") {
+    return null;
+  }
+  if (isProduction && !configuredHeader) return null;
   const candidate = trustedHeader === "cf-connecting-ip"
     ? headers.get("cf-connecting-ip")?.trim()
     : trustedHeader === "x-real-ip"
       ? headers.get("x-real-ip")?.trim()
       : null;
-  if (candidate && candidate.length <= 64 && !/[\s,]/.test(candidate)) return candidate;
+  if (candidate && candidate.length <= 64 && isIP(candidate) !== 0) return candidate;
   return isProduction ? null : "127.0.0.1";
 };
 
@@ -46,10 +52,13 @@ export const enforceDistributedRateLimit = async (
   options: { now?: number; secret?: string; isProduction?: boolean } = {}
 ): Promise<RateLimitResult> => {
   const policy: AuthRateLimitPolicy = AUTH_RATE_LIMIT_POLICIES[scope];
-  const secret = options.secret ?? process.env.MEXO_RATE_LIMIT_HMAC_KEY?.trim() ?? process.env.DATABASE_URL;
   const isProduction = options.isProduction ?? process.env.NODE_ENV === "production";
+  const configuredSecret = options.secret ?? process.env.MEXO_RATE_LIMIT_HMAC_KEY?.trim();
+  const secret = configuredSecret || (!isProduction ? "mexo-development-only-rate-limit-key" : undefined);
   const address = resolveTrustedClientAddress(headers, isProduction);
-  if (!secret || !address) throw new Error("Rate limit identity is not configured.");
+  if (!secret || (isProduction && Buffer.byteLength(secret, "utf8") < 32) || !address) {
+    throw new Error("Rate limit identity is not configured.");
+  }
 
   const identityPart = typeof identity === "string" ? identity.trim().toLowerCase().slice(0, 320) : "";
   const buckets = [

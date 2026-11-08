@@ -9,10 +9,12 @@ const readReport = async (name) => {
   try { return JSON.parse(await readFile(path.join(outputDir, `${name}.json`), "utf8")); }
   catch { return undefined; }
 };
-const [audit, sources, projections, e2e, manifest, httpE2e] = await Promise.all(
-  ["audit", "sources", "projections", "e2e", "reprojection-manifest", "http-e2e"].map(readReport));
+const [audit, sources, projections, e2e, manifest, httpE2e, isolatedReplay, holdoutValidation] = await Promise.all(
+  ["audit", "sources", "projections", "e2e", "reprojection-manifest", "http-e2e",
+    "reprojection-replay", "holdout-validation"].map(readReport));
 const strictGate = assessGpwQualityGate({ audit, sources, projections, e2e });
-const readiness = assessGpwReadiness({ audit, sources, projections, e2e, manifest, httpE2e, strictGate });
+const readiness = assessGpwReadiness({ audit, sources, projections, e2e, manifest, httpE2e,
+  isolatedReplay, holdoutValidation, strictGate });
 const report = { schemaVersion: 1, evaluatedAt: new Date().toISOString(),
   scope: { productionWrites: false, deploys: false,
     note: "Independent evidence dimensions; producing this report does not authorize a database mutation or deploy." },

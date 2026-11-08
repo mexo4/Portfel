@@ -14,6 +14,7 @@ const focusedTests = [
   "tests/gpw-comprehensive-regression.test.mjs",
   "tests/gpw-direct-correction-regression.test.mjs",
   "tests/gpw-final-calendar-parser.test.mjs",
+  "tests/gpw-independent-source-check.test.mjs",
   "tests/gpw-ical-filters.test.mjs",
   "tests/gpw-ical.test.mjs",
   "tests/gpw-metamorphic.test.mjs",
@@ -29,12 +30,17 @@ const focusedTests = [
   "tests/gpw-report-date-role.test.mjs",
   "tests/report-schedule-publication.test.mjs",
   "tests/gpw-reprojection-action-plan.test.mjs",
+  "tests/gpw-reprojection-manifest.test.mjs",
+  "tests/gpw-reprojection-replay.test.mjs",
+  "tests/gpw-repair-role-preflight.test.mjs",
+  "tests/gpw-scoped-repair-proposal.test.mjs",
   "tests/gpw-sync-health.test.mjs",
   "tests/gpw-calendar-sync-launcher.test.mjs",
   "tests/gpw-calendar-upgrade.test.mjs",
   "tests/general-meeting-backend.test.mjs",
   "tests/general-meeting-parser.test.mjs",
   "tests/public-gpw-calendar.test.mjs",
+  "tests/report-schedule-reprojection.test.mjs",
 ];
 const nodeArgs = ["--experimental-strip-types", "--import", "./tests/register-alias-loader.mjs", "--test", ...focusedTests];
 const unit = spawnSync(process.execPath, nodeArgs, { cwd: appRoot, encoding: "utf8", timeout: 180_000 });

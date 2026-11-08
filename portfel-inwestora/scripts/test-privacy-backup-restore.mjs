@@ -131,6 +131,15 @@ try {
 
   runPgTool("createdb", ["--no-password", targetDatabase], sourceDatabase);
   targetCreated = true;
+  // pg_restore's --schema option filters the archive to the selected schema's
+  // objects; it does not guarantee that the schema namespace itself is emitted.
+  // Create it explicitly in this brand-new isolated restore database first.
+  runPgTool("psql", [
+    "--no-password",
+    "--set", "ON_ERROR_STOP=1",
+    "--dbname", targetDatabase,
+    "--command", `CREATE SCHEMA "${schema}"`,
+  ], sourceDatabase);
   runPgTool("pg_restore", ["--exit-on-error", "--no-owner", "--no-acl", "--schema", schema, "--dbname", targetDatabase, dumpPath], sourceDatabase);
   const targetUrl = new URL(sourceUrlText);
   targetUrl.pathname = `/${targetDatabase}`;

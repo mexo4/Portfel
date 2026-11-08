@@ -386,6 +386,33 @@ textarea {
   padding: 22px 18px 44px;
 }
 
+.marketing-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 14px;
+  padding: 28px 0 18px;
+  color: #73858a;
+  font-size: .76rem;
+}
+.public-legal-links { display: flex; flex-wrap: wrap; gap: 16px; color: #63777b; font-size: .78rem; }
+.public-legal-links a { color: inherit; text-decoration: underline; text-decoration-color: #b9c9c7; text-underline-offset: 3px; }
+.public-legal-links a:hover { color: #08766d; }
+.auth-legal-links { justify-content: center; margin-top: 18px; }
+.legal-page { width: min(960px, calc(100% - 28px)); }
+.legal-document { margin: 30px auto 60px; padding: clamp(22px, 5vw, 48px); }
+.legal-document > h1 { margin: 0 0 22px; color: #193238; font-size: clamp(1.8rem, 4vw, 2.75rem); letter-spacing: -.035em; }
+.legal-document section { margin-top: 28px; }
+.legal-document section h2 { margin: 0 0 10px; color: #203a3e; font-size: 1.12rem; }
+.legal-document section p { margin: 8px 0; color: #5d7176; font-size: .94rem; line-height: 1.75; }
+.legal-draft-notice { margin: 0 0 24px; border: 1px solid #efd49c; border-radius: 14px; padding: 16px 18px; color: #725219; background: #fff8e8; }
+.legal-draft-notice strong { font-size: .85rem; letter-spacing: .035em; }
+.legal-draft-notice p { margin: 7px 0 0; font-size: .88rem; line-height: 1.6; }
+.legal-approved-meta { color: #08766d; font-size: .84rem; }
+.legal-document footer { display: flex; flex-wrap: wrap; gap: 16px; border-top: 1px solid #e6ecea; margin-top: 32px; padding-top: 18px; }
+.legal-document footer a { color: #08766d; }
+
 .marketing-nav {
   display: flex;
   align-items: center;
@@ -409,6 +436,11 @@ textarea {
   align-items: center;
   gap: 10px;
 }
+
+.marketing-nav-actions { min-width: 0; justify-content: flex-end; }
+.marketing-nav-legal { color: var(--muted); font-size: .78rem; font-weight: 600; text-decoration: none; white-space: nowrap; }
+.marketing-nav-legal:hover, .marketing-nav-legal[aria-current="page"] { color: #08766d; text-decoration: underline; text-underline-offset: 3px; }
+.marketing-nav-legal:focus-visible { outline: 2px solid #08766d; outline-offset: 3px; }
 
 .marketing-hero {
   display: grid;

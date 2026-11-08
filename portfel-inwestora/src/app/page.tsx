@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { getCurrentAccountData } from "@/lib/server/auth";
+import PublicLegalLinks from "@/components/PublicLegalLinks";
 
 const featureItems = [
   "Akcje, ETF-y i obligacje skarbowe w jednym portfelu",
@@ -18,6 +19,8 @@ export default async function HomePage() {
           Portfel Inwestora
         </Link>
         <div className="marketing-nav-actions">
+          <Link href="/privacy" className="marketing-nav-legal">Prywatność</Link>
+          <Link href="/terms" className="marketing-nav-legal">Regulamin</Link>
           <Link href="/pricing" className="ghost-button">
             Cennik
           </Link>
@@ -84,6 +87,7 @@ export default async function HomePage() {
           ))}
         </div>
       </section>
+      <footer className="marketing-footer"><span>© Mexo · Informacje inwestycyjne mają charakter informacyjny.</span><PublicLegalLinks /></footer>
     </main>
   );
 }

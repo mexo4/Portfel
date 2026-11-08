@@ -15,6 +15,8 @@ export const AUTH_RATE_LIMIT_POLICIES = {
   verification: { limit: 4, identityLimit: 6, windowMs: 60 * 60_000 },
   resetToken: { limit: 8, identityLimit: 12, windowMs: 15 * 60_000 },
   espiSync: { limit: 3, windowMs: 15 * 60_000 },
+  accountExport: { limit: 4, identityLimit: 2, windowMs: 60 * 60_000 },
+  accountDeletion: { limit: 8, identityLimit: 8, windowMs: 60 * 60_000 },
 } satisfies Record<string, AuthRateLimitPolicy>;
 
 export type RateLimitResult = { allowed: true } | { allowed: false; retryAfterSeconds: number };

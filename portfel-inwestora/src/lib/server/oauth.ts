@@ -12,6 +12,7 @@ const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const GOOGLE_JWKS_URL = "https://www.googleapis.com/oauth2/v3/certs";
 const GOOGLE_ISSUERS = new Set(["https://accounts.google.com", "accounts.google.com"]);
 const OAUTH_MAX_AGE_SECONDS = 10 * 60;
+const GOOGLE_STEP_UP_MAX_AGE_SECONDS = 5 * 60;
 
 export const GOOGLE_OAUTH_STATE_COOKIE_NAME = "mexo_google_oauth";
 
@@ -30,6 +31,7 @@ type GoogleTokenClaims = {
   azp?: unknown;
   exp?: unknown;
   iat?: unknown;
+  auth_time?: unknown;
   nonce?: unknown;
   sub?: unknown;
   email?: unknown;
@@ -49,6 +51,8 @@ export type GoogleOAuthPending = {
   codeVerifier: string;
   nonce: string;
   issuedAt: number;
+  purpose: "login" | "account-deletion";
+  userId?: string;
 };
 
 export type GoogleIdentity = {
@@ -113,12 +117,14 @@ const encodePending = (pending: GoogleOAuthPending) => {
   return `${payload}.${signature}`;
 };
 
-export const createGoogleOAuthPending = () => {
+export const createGoogleOAuthPending = (options: { purpose?: "login" | "account-deletion"; userId?: string } = {}) => {
   const pending: GoogleOAuthPending = {
     state: randomUrlSafeValue(),
     codeVerifier: randomUrlSafeValue(),
     nonce: randomUrlSafeValue(),
     issuedAt: Date.now(),
+    purpose: options.purpose ?? "login",
+    ...(options.userId ? { userId: options.userId } : {}),
   };
 
   return {
@@ -164,6 +170,8 @@ export const readGoogleOAuthPending = (cookieValue: string | undefined): GoogleO
       !parsed.state ||
       !parsed.codeVerifier ||
       !parsed.nonce ||
+      (parsed.purpose !== undefined && parsed.purpose !== "login" && parsed.purpose !== "account-deletion") ||
+      (parsed.purpose === "account-deletion" && (typeof parsed.userId !== "string" || !parsed.userId)) ||
       parsed.state.length < 32 ||
       parsed.codeVerifier.length < 43 ||
       parsed.nonce.length < 32
@@ -176,6 +184,8 @@ export const readGoogleOAuthPending = (cookieValue: string | undefined): GoogleO
       codeVerifier: parsed.codeVerifier,
       nonce: parsed.nonce,
       issuedAt,
+      purpose: parsed.purpose === "account-deletion" ? "account-deletion" : "login",
+      ...(parsed.purpose === "account-deletion" && typeof parsed.userId === "string" ? { userId: parsed.userId } : {}),
     };
   } catch {
     return null;
@@ -208,8 +218,26 @@ export const getGoogleAuthorizationUrl = (pending: GoogleOAuthPending) => {
   authorizationUrl.searchParams.set("code_challenge", codeChallenge);
   authorizationUrl.searchParams.set("code_challenge_method", "S256");
   authorizationUrl.searchParams.set("prompt", "select_account");
+  if (pending.purpose === "account-deletion") {
+    // Google only includes auth_time when requested. The callback verifies it
+    // is recent; selecting an already-authenticated account alone is not proof
+    // of a fresh step-up.
+    authorizationUrl.searchParams.set("claims", JSON.stringify({ id_token: { auth_time: { essential: true } } }));
+  }
 
   return authorizationUrl;
+};
+
+export const isRecentGoogleAuthentication = (
+  authTimeSeconds: unknown,
+  initiatedAtMs: number,
+  nowSeconds = Math.floor(Date.now() / 1_000)
+) => {
+  if (typeof authTimeSeconds !== "number" || !Number.isInteger(authTimeSeconds)) return false;
+  const initiatedAtSeconds = Math.floor(initiatedAtMs / 1_000);
+  return authTimeSeconds >= initiatedAtSeconds - 30 &&
+    authTimeSeconds <= nowSeconds + 30 &&
+    nowSeconds - authTimeSeconds <= GOOGLE_STEP_UP_MAX_AGE_SECONDS;
 };
 
 const decodeJsonSegment = <T>(segment: string) => {
@@ -255,10 +283,12 @@ const getGoogleJwks = async () => {
 const verifyGoogleIdToken = async ({
   idToken,
   nonce,
+  requireAuthTimeSince,
   clientId,
 }: {
   idToken: string;
   nonce: string;
+  requireAuthTimeSince: number | null;
   clientId: string;
 }): Promise<GoogleIdentity> => {
   const parts = idToken.split(".");
@@ -305,6 +335,7 @@ const verifyGoogleIdToken = async ({
       signaturePart,
       key: refreshedKey,
       nonce,
+      requireAuthTimeSince,
       clientId,
     });
   }
@@ -315,6 +346,7 @@ const verifyGoogleIdToken = async ({
     signaturePart,
     key,
     nonce,
+    requireAuthTimeSince,
     clientId,
   });
 };
@@ -325,6 +357,7 @@ const verifyGoogleIdTokenWithKey = ({
   signaturePart,
   key,
   nonce,
+  requireAuthTimeSince,
   clientId,
 }: {
   headerPart: string;
@@ -332,6 +365,7 @@ const verifyGoogleIdTokenWithKey = ({
   signaturePart: string;
   key: GoogleJwk;
   nonce: string;
+  requireAuthTimeSince: number | null;
   clientId: string;
 }): GoogleIdentity => {
   let signatureIsValid = false;
@@ -377,6 +411,11 @@ const verifyGoogleIdTokenWithKey = ({
     !claims.email ||
     claims.email_verified !== true
   ) {
+    throw new GoogleOAuthError();
+  }
+
+  if (requireAuthTimeSince !== null &&
+    !isRecentGoogleAuthentication(claims.auth_time, requireAuthTimeSince)) {
     throw new GoogleOAuthError();
   }
 
@@ -434,6 +473,7 @@ export const exchangeGoogleOAuthCode = async ({
   return verifyGoogleIdToken({
     idToken: payload.id_token,
     nonce: pending.nonce,
+    requireAuthTimeSince: pending.purpose === "account-deletion" ? pending.issuedAt : null,
     clientId,
   });
 };

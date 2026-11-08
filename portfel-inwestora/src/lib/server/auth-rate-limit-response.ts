@@ -2,7 +2,7 @@ import { enforceDistributedRateLimit } from "@/lib/server/auth-rate-limit";
 
 export const applyAuthRateLimit = async (
   request: Request,
-  scope: "login" | "register" | "passwordReset" | "verification" | "resetToken" | "espiSync",
+  scope: "login" | "register" | "passwordReset" | "verification" | "resetToken" | "espiSync" | "accountExport" | "accountDeletion",
   identity = ""
 ) => {
   try {

@@ -286,6 +286,10 @@ export default function AuthCard({
               {isRegister ? "Zaloguj sie" : "Utworz konto"}
             </Link>
           </p>
+          <nav className="public-legal-links auth-legal-links" aria-label="Dokumenty Mexo">
+            <Link href="/privacy">Prywatność</Link>
+            <Link href="/terms">Regulamin</Link>
+          </nav>
         </section>
       </div>
     </main>

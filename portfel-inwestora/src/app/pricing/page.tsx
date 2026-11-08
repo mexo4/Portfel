@@ -1,6 +1,7 @@
 import Link from "next/link";
 import PricingPlans from "@/components/PricingPlans";
 import { FREE_PLAN_ASSET_LIMIT } from "@/lib/constants";
+import PublicLegalLinks from "@/components/PublicLegalLinks";
 import { getCurrentAccountData } from "@/lib/server/auth";
 
 export default async function PricingPage() {
@@ -13,6 +14,8 @@ export default async function PricingPage() {
           Portfel Inwestora
         </Link>
         <div className="marketing-nav-actions">
+          <Link href="/privacy" className="marketing-nav-legal">Prywatność</Link>
+          <Link href="/terms" className="marketing-nav-legal">Regulamin</Link>
           <Link href={accountData ? "/app" : "/login"} className="ghost-button">
             {accountData ? "Aplikacja" : "Logowanie"}
           </Link>
@@ -29,6 +32,7 @@ export default async function PricingPage() {
       </section>
 
       <PricingPlans account={accountData?.user ?? null} freeLimit={FREE_PLAN_ASSET_LIMIT} />
+      <footer className="marketing-footer"><PublicLegalLinks /></footer>
     </main>
   );
 }

@@ -1,0 +1,98 @@
+name: Privacy data release checks
+
+on:
+  pull_request:
+    branches: [najlepsza-wersja]
+    paths:
+      - "portfel-inwestora/src/app/api/account/**"
+      - "portfel-inwestora/src/lib/server/account-privacy.ts"
+      - "portfel-inwestora/src/lib/server/account-deletion-http.ts"
+      - "portfel-inwestora/src/lib/legal-documents.ts"
+      - "portfel-inwestora/src/lib/privacy-export.ts"
+      - "portfel-inwestora/src/lib/account-lifecycle.ts"
+      - "portfel-inwestora/tests/public-release-data-privacy*"
+      - "portfel-inwestora/src/components/PrivacyDataPanel*"
+      - "portfel-inwestora/src/components/PublicLegalPage.tsx"
+      - "portfel-inwestora/src/components/PortfolioApp.tsx"
+      - "portfel-inwestora/src/lib/server/auth.ts"
+      - "portfel-inwestora/src/lib/server/db.ts"
+      - "portfel-inwestora/src/lib/server/oauth.ts"
+      - "portfel-inwestora/src/lib/server/auth-rate-limit.ts"
+      - "portfel-inwestora/src/lib/server/auth-rate-limit-response.ts"
+      - "portfel-inwestora/src/app/api/auth/oauth/google/callback/route.ts"
+      - "portfel-inwestora/src/app/api/account/export/route.ts"
+      - "portfel-inwestora/scripts/test-privacy-backup-restore.mjs"
+      - "portfel-inwestora/scripts/test-privacy-http-e2e.mjs"
+      - "portfel-inwestora/src/app/privacy/**"
+      - "portfel-inwestora/src/app/terms/**"
+      - "portfel-inwestora/src/components/PublicLegalLinks.tsx"
+      - "portfel-inwestora/src/components/PrivacyDataPanel.module.css"
+      - "docs/privacy-data-inventory.md"
+      - "docs/operations/privacy-backup-restore-readiness.md"
+      - "docs/public-release-data-privacy-2.0.md"
+      - "package-lock.json"
+      - "portfel-inwestora/package.json"
+      - ".github/workflows/privacy-data-release.yml"
+  push:
+    branches: [feat/public-release-data-privacy-2-0]
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: Tests, PostgreSQL, lint, typecheck and build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: mexo_privacy_test
+          POSTGRES_PASSWORD: mexo-privacy-ci-only
+          POSTGRES_DB: mexo_privacy_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mexo_privacy_test -d mexo_privacy_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Run all application tests including isolated PostgreSQL privacy integration
+        run: npm --workspace portfel-inwestora test
+        env:
+          MEXO_PRIVACY_TEST_DATABASE_URL: postgresql://mexo_privacy_test:mexo-privacy-ci-only@127.0.0.1:5432/mexo_privacy_test
+          POSTGRES_CA_CERT_BASE64: ""
+          POSTGRES_CA_CERT_PATH: ""
+      - name: Install PostgreSQL client tools for isolated dump/restore drill
+        run: sudo apt-get update && sudo apt-get install --yes postgresql-client-16
+      - name: Run isolated backup and restore drill
+        run: npm --workspace portfel-inwestora run test:privacy:backup-restore
+        env:
+          MEXO_PRIVACY_TEST_DATABASE_URL: postgresql://mexo_privacy_test:mexo-privacy-ci-only@127.0.0.1:5432/mexo_privacy_test
+      - name: Run ESLint
+        run: npm --workspace portfel-inwestora run lint
+      - name: Run TypeScript check
+        run: npm --workspace portfel-inwestora exec tsc -- --noEmit
+      - name: Build production app
+        run: npm --workspace portfel-inwestora run build
+        env:
+          DATABASE_URL: postgresql://mexo_privacy_test:mexo-privacy-ci-only@127.0.0.1:5432/mexo_privacy_test
+          POSTGRES_CA_CERT_BASE64: ""
+          POSTGRES_CA_CERT_PATH: ""
+      - name: Exercise privacy endpoints over HTTP against isolated PostgreSQL
+        run: npm --workspace portfel-inwestora run test:privacy:http:e2e
+        env:
+          MEXO_PRIVACY_TEST_DATABASE_URL: postgresql://mexo_privacy_test:mexo-privacy-ci-only@127.0.0.1:5432/mexo_privacy_test
+          DATABASE_URL: postgresql://mexo_privacy_test:mexo-privacy-ci-only@127.0.0.1:5432/mexo_privacy_test
+          POSTGRES_CA_CERT_BASE64: ""
+          POSTGRES_CA_CERT_PATH: ""

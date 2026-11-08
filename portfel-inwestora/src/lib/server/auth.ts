@@ -411,6 +411,15 @@ export const getCurrentAuthenticatedUser = async () => {
   return sessionUser ? toAuthenticatedUser(sessionUser) : null;
 };
 
+export const isGoogleAccountLinkedToUser = async (userId: string, providerAccountId: string) => {
+  const linked = await queryOne<{ user_id: string }>(
+    `SELECT user_id FROM auth_accounts
+     WHERE user_id = $1 AND provider = 'google' AND provider_account_id = $2`,
+    [userId, providerAccountId]
+  );
+  return Boolean(linked);
+};
+
 const purgeTokensForUser = (
   tableName: "email_verification_tokens" | "password_reset_tokens",
   userId: string
@@ -1120,6 +1129,9 @@ export const updateUserAccessByAdmin = async (
   }
 
   await withTransaction(async (transaction) => {
+    // Serialize admin role changes with account deletion to preserve at least
+    // one administrator under concurrent requests.
+    await transaction.query("SELECT pg_advisory_xact_lock($1::bigint)", ["734219806541"]);
     const adminRows = await transaction.query<{ user_role: string }>(
       "SELECT user_role FROM users WHERE id = $1 FOR UPDATE",
       [adminUserId]
@@ -1155,6 +1167,16 @@ export const updateUserAccessByAdmin = async (
       ? normalizeSubscriptionStatus(targetUser.subscription_status)
       : "active";
 
+    const nextRole = update.role ?? normalizeUserRole(targetUser.user_role);
+    if (targetUser.user_role === "admin" && nextRole !== "admin") {
+      const adminCount = await transaction.query<{ count: string }>(
+        "SELECT count(*)::text AS count FROM users WHERE user_role = 'admin'"
+      );
+      if (Number(adminCount[0]?.count ?? 0) <= 1) {
+        throw new Error("Najpierw nadaj rolę administratora innemu kontu.");
+      }
+    }
+
     await transaction.execute(
       `UPDATE users SET user_role = $1, tester_access = $2, espi_access = $3,
         subscription_plan = $4, subscription_status = $5,
@@ -1162,7 +1184,7 @@ export const updateUserAccessByAdmin = async (
         subscription_grant_source = $8, subscription_updated_at = $9, updated_at = $9
        WHERE id = $10`,
       [
-        update.role ?? normalizeUserRole(targetUser.user_role),
+        nextRole,
         update.testerAccess ?? targetUser.tester_access,
         update.espiAccess ?? targetUser.espi_access,
         plan,
@@ -1184,6 +1206,7 @@ export const updateUserAccessByAdmin = async (
 export const deleteUserByAdmin = async (adminUserId: string, targetUserId: string) => {
   if (adminUserId === targetUserId) throw new Error("Nie mozesz usunac wlasnego konta admina.");
   await withTransaction(async (transaction) => {
+    await transaction.query("SELECT pg_advisory_xact_lock($1::bigint)", ["734219806541"]);
     const adminRows = await transaction.query<{ user_role: string }>(
       "SELECT user_role FROM users WHERE id = $1 FOR UPDATE",
       [adminUserId]
@@ -1194,6 +1217,10 @@ export const deleteUserByAdmin = async (adminUserId: string, targetUserId: strin
       [targetUserId]
     );
     if (!targetRows[0]) throw new Error("Nie znaleziono uzytkownika.");
+    await transaction.execute(
+      `DELETE FROM portfolio_engine_cache WHERE portfolio_id IN
+       (SELECT id FROM core_portfolios WHERE user_id = $1)`, [targetUserId]
+    );
     await transaction.execute("DELETE FROM users WHERE id = $1", [targetUserId]);
   });
 };

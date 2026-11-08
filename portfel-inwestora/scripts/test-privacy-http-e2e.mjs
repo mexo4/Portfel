@@ -100,7 +100,7 @@ try {
   [`${ids.owner}-operation`, `${ids.owner}-pln`, `${ids.owner}-account`, `${ids.owner}-instrument`, now,
     `${ids.other}-operation`, `${ids.other}-usd`, `${ids.other}-account`]);
   const appDir = process.cwd();
-  const nextCli = fileURLToPath(new URL("../node_modules/next/dist/bin/next", import.meta.url));
+  const nextCli = fileURLToPath(new URL("../../node_modules/next/dist/bin/next", import.meta.url));
   server = spawn(process.execPath, ["--use-system-ca", nextCli, "start", "--hostname", "127.0.0.1", "--port", "3100"], {
     cwd: appDir,
     windowsHide: true,

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { requestPasswordResetForEmail } from "@/lib/server/auth";
+import { applyAuthRateLimit } from "@/lib/server/auth-rate-limit-response";
 
 export const runtime = "nodejs";
 
@@ -8,6 +9,9 @@ export async function POST(request: Request) {
     const payload = (await request.json()) as {
       email?: string;
     };
+
+    const limited = await applyAuthRateLimit(request, "passwordReset", payload.email ?? "");
+    if (limited) return limited;
 
     const baseUrl = request.headers.get("origin") ?? new URL(request.url).origin;
     const result = await requestPasswordResetForEmail(payload.email ?? "", baseUrl);

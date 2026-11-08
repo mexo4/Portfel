@@ -11,6 +11,7 @@ import { normalizeYahooMoneyUnit } from "@/lib/server/yahoo";
 import { isGpwTradingDay, shiftCalendarDate } from "@/lib/gpw-market-calendar";
 import { isXetraTradingDay } from "@/lib/market-session-calendar";
 import { FALLBACK_FX_RATES } from "@/lib/constants";
+import { shouldTrustHistoricalFxRate } from "@/lib/fx-quality";
 import {
   getOperationCashDeltas,
   getPortfolioAccountArchivedDate,
@@ -1101,6 +1102,7 @@ const buildFxSeries = async (
       const historicalDailyRates = new Map<string, number | null>();
       let pointIndex = 0;
       let lastKnownRate: number | undefined;
+      let lastKnownDate: string | undefined;
       let usedFallback = false;
       let missingRate = false;
       let firstUnavailableDate: string | null = null;
@@ -1109,10 +1111,11 @@ const buildFxSeries = async (
       for (const date of dates) {
         while (pointIndex < points.length && points[pointIndex]!.date <= date) {
           lastKnownRate = points[pointIndex]!.rate;
+          lastKnownDate = points[pointIndex]!.date;
           pointIndex += 1;
         }
 
-        if (typeof lastKnownRate === "number" && lastKnownRate > 0) {
+        if (typeof lastKnownRate === "number" && shouldTrustHistoricalFxRate(lastKnownRate, lastKnownDate, date)) {
           dailyRates.set(date, lastKnownRate);
           historicalDailyRates.set(date, lastKnownRate);
           continue;
@@ -1124,6 +1127,7 @@ const buildFxSeries = async (
         historicalDailyRates.set(date, null);
         firstUnavailableDate ??= date;
         lastUnavailableDate = date;
+        if (lastKnownDate) missingRate = true;
 
         if (typeof fallbackRate === "number" && Number.isFinite(fallbackRate) && fallbackRate > 0) {
           dailyRates.set(date, fallbackRate);

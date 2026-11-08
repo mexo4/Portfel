@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { PLAN_DEFINITIONS } from "@/lib/entitlements";
 import { FREE_PLAN_PORTFOLIO_LIMIT } from "@/lib/constants";
 import { updateSubscriptionPlan } from "@/lib/api";
 import type { AuthenticatedUser, SubscriptionPlan } from "@/types/portfolio";
@@ -12,103 +13,88 @@ type PricingPlansProps = {
   freeLimit: number;
 };
 
-const plans: Array<{
-  id: SubscriptionPlan;
-  name: string;
-  price: string;
-  note: string;
-  getFeatures: (freeLimit: number) => string[];
-}> = [
-  {
-    id: "free",
-    name: "Free",
-    price: "0 zl",
-    note: "Na start i mniejsze portfele.",
-    getFeatures: (freeLimit) => [
-      `Do ${freeLimit} pozycji`,
-      `${FREE_PLAN_PORTFOLIO_LIMIT} portfel`,
-      "Logowanie i zapis konta",
-      "Wyceny i historia transakcji",
-    ],
-  },
-  {
-    id: "pro",
-    name: "Pro",
-    price: "29 zl / mies.",
-    note: "Dla aktywnego inwestora.",
-    getFeatures: () => ["Bez limitu pozycji", "Wiecej portfeli", "Benchmarki i wykresy", "Priorytet dla nowych modulow"],
-  },
-];
+const plans = Object.values(PLAN_DEFINITIONS);
+
+const formatPrice = (price: number) => new Intl.NumberFormat("pl-PL", {
+  style: "currency", currency: "PLN", minimumFractionDigits: 2,
+}).format(price);
+
+const getConfirmedFeatures = (planId: SubscriptionPlan, freeLimit: number) => {
+  if (planId === "free") return [
+    `Do ${freeLimit} pozycji na portfel`,
+    `${FREE_PLAN_PORTFOLIO_LIMIT} portfel`,
+    "Zapisywanie wycen i historii transakcji",
+  ];
+  if (planId === "pro") return [
+    "Dotychczasowe konto Pro zachowuje zapisane dane",
+    "Brak limitu pozycji znanego z dawnej obsługi Pro",
+    "Zakres funkcji nowego planu wymaga decyzji produktowej",
+  ];
+  return ["Szczegółowy zakres funkcji i limity oczekują na zatwierdzenie produktu"];
+};
 
 export default function PricingPlans({ account, freeLimit }: PricingPlansProps) {
   const router = useRouter();
-  const [pendingPlan, setPendingPlan] = useState<SubscriptionPlan | null>(null);
+  const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const handlePlanChange = async (plan: SubscriptionPlan) => {
+  const selectFreePlan = async () => {
     if (!account) {
       router.push("/register");
       return;
     }
-
-    setPendingPlan(plan);
+    setPending(true);
     setError(null);
-
     try {
-      await updateSubscriptionPlan(plan);
+      await updateSubscriptionPlan("free");
       router.refresh();
     } catch (planError) {
-      setError(planError instanceof Error ? planError.message : "Nie udalo sie zapisac planu.");
+      setError(planError instanceof Error ? planError.message : "Nie udało się zmienić planu.");
     } finally {
-      setPendingPlan(null);
+      setPending(false);
     }
   };
 
   return (
-    <section className="pricing-grid" aria-label="Plany">
+    <section className="pricing-grid" aria-label="Plany abonamentowe">
       {plans.map((plan) => {
         const isCurrent = account?.subscriptionPlan === plan.id;
-        const isPending = pendingPlan === plan.id;
-
+        const paid = plan.pricePln > 0;
         return (
           <article key={plan.id} className={plan.id === "pro" ? "pricing-card is-featured" : "pricing-card"}>
             <div>
-              <p className="eyebrow">{isCurrent ? "Aktywny plan" : "Plan"}</p>
+              <p className="eyebrow">{isCurrent ? "Plan przypisany do konta" : "Plan"}</p>
               <h2 className="pricing-title">{plan.name}</h2>
-              <p className="pricing-price">{plan.id === "free" ? `0 zl / ${freeLimit} pozycji` : plan.price}</p>
-              <p className="section-copy">{plan.note}</p>
+              <p className="pricing-price">{formatPrice(plan.pricePln)}{paid ? " / 30 dni" : ""}</p>
+              <p className="section-copy">{paid ? "Cena docelowa. Samodzielny zakup nie jest jeszcze dostępny." : "Aktualnie dostępny plan bezpłatny."}</p>
             </div>
-
             <ul className="pricing-feature-list">
-              {plan.getFeatures(freeLimit).map((feature) => (
-                <li key={feature}>{feature}</li>
-              ))}
+              {getConfirmedFeatures(plan.id, freeLimit).map((feature) => <li key={feature}>{feature}</li>)}
+              {paid ? <li>Funkcje i limity: decyzja produktowa w toku</li> : null}
             </ul>
-
-            <button
-              className={plan.id === "pro" ? "primary-button" : "ghost-button"}
-              type="button"
-              onClick={() => {
-                void handlePlanChange(plan.id);
-              }}
-              disabled={isPending || isCurrent}
-            >
-              {isCurrent ? "Wybrany" : isPending ? "Zapisuje..." : account ? "Wybierz plan" : "Zacznij"}
-            </button>
+            {paid ? (
+              <button className="ghost-button" type="button" disabled aria-disabled="true">
+                Niedostępny do zakupu
+              </button>
+            ) : (
+              <button
+                className="primary-button"
+                type="button"
+                onClick={() => void selectFreePlan()}
+                disabled={pending || isCurrent}
+              >
+                {isCurrent ? "Aktywny plan" : pending ? "Zapisuję…" : account ? "Wybierz Free" : "Załóż darmowe konto"}
+              </button>
+            )}
           </article>
         );
       })}
-
       {error ? <p className="field-note field-note-error pricing-error">{error}</p> : null}
       <p className="field-note pricing-disclaimer">
-        Platnosci online sa przygotowane jako warstwa planow. Integracja operatora platnosci
-        moze podmienic ten przycisk na checkout.
+        Ceny planów płatnych są konfiguracją docelową. Zakres Basic, Standard i Expert wymaga zatwierdzenia,
+        a płatności nie są wdrożone. Administrator może nadać dostęp czasowo; użytkownik nie może sam aktywować planu.
       </p>
-      {account ? (
-        <Link href="/app" className="auth-link pricing-back-link">
-          Wroc do aplikacji
-        </Link>
-      ) : null}
+      {account ? <Link href="/app" className="auth-link pricing-back-link">Wróć do aplikacji</Link> : null}
     </section>
   );
 }

@@ -33,13 +33,16 @@ test("results distinguish loading, errors and empty data and persist preferences
   assert.match(route, /getCurrentAuthenticatedUser/); assert.match(store, /ON CONFLICT \(user_id\)/); assert.match(db, /CREATE TABLE IF NOT EXISTS user_performance_preferences/);
 });
 
-test("cash is available to Tester and Admin while Tester bypass remains centralized", async () => {
-  const [income, client, server, constants] = await Promise.all([readFile(new URL("../src/components/PortfolioIncomeWorkspace.tsx", import.meta.url), "utf8"), readFile(new URL("../src/components/PortfolioApp.tsx", import.meta.url), "utf8"), readFile(new URL("../src/lib/server/auth.ts", import.meta.url), "utf8"), readFile(new URL("../src/lib/constants.ts", import.meta.url), "utf8")]);
-  assert.match(income, /<button[^>]*className=\{activeView === "cash"[\s\S]*Gotowka/);
-  assert.doesNotMatch(income, /props\.isAdmin \?/);
-  assert.match(income, /<CashWorkspace/);
-  assert.match(income, /if \(props\.isAllPortfoliosSelected\)[\s\S]*<CashWorkspace/);
-  assert.match(constants, /MEXO_TESTER_MODE = true/); assert.match(client, /MEXO_TESTER_MODE \|\|/); assert.match(server, /MEXO_TESTER_MODE \|\|/);
+test("global Tester bypass is removed and access flags are per account", async () => {
+  const [shell, client, server, constants, entitlements] = await Promise.all([readFile(new URL("../src/components/AppWorkspaceShell.tsx", import.meta.url), "utf8"), readFile(new URL("../src/components/PortfolioApp.tsx", import.meta.url), "utf8"), readFile(new URL("../src/lib/server/auth.ts", import.meta.url), "utf8"), readFile(new URL("../src/lib/constants.ts", import.meta.url), "utf8"), readFile(new URL("../src/lib/entitlements.ts", import.meta.url), "utf8")]);
+  assert.match(shell, /canAccessFeature\(account, "espi"\)/);
+  assert.match(client, /canCreatePortfolio\(account, portfolios\.length\)/);
+  assert.match(server, /canAddAsset\(account, previousAssetCount\)/);
+  assert.doesNotMatch(constants, /MEXO_TESTER_MODE/);
+  assert.doesNotMatch(client, /MEXO_TESTER_MODE/);
+  assert.doesNotMatch(server, /MEXO_TESTER_MODE|withForcedProSubscription|isForcedProEmail/);
+  assert.match(entitlements, /testerAccess/);
+  assert.match(entitlements, /espiAccess/);
 });
 
 test("watchlist page reuses GPW stock search and canonical toggle", async () => {

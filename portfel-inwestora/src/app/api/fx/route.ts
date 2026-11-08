@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentAuthenticatedUser } from "@/lib/server/auth";
-import { fetchFxRatesServer } from "@/lib/server/market-data";
+import { fetchFxRatesServerDetailed } from "@/lib/server/market-data";
 
 export const runtime = "nodejs";
 
@@ -22,11 +22,7 @@ export async function GET(request: Request) {
       new Date(`${date}T00:00:00Z`).toISOString().slice(0, 10) !== date)) {
       return NextResponse.json({ error: "Historyczny kurs FX wymaga prawidlowej daty." }, { status: 400 });
     }
-    const rates = await fetchFxRatesServer(codes, date, { historicalOnly });
-    return NextResponse.json({
-      rates,
-      fetchedAt: new Date().toISOString(),
-    });
+    return NextResponse.json(await fetchFxRatesServerDetailed(codes, date, { historicalOnly }));
   } catch (error) {
     console.error("GET /api/fx failed", error);
     return NextResponse.json(

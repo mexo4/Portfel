@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import type { RefObject } from "react";
 
 type FormattedNumberInputProps = {
@@ -47,13 +47,14 @@ export default function FormattedNumberInput({
   onChange,
   onFocus,
 }: FormattedNumberInputProps) {
-  const [displayValue, setDisplayValue] = useState(() =>
-    formatNumberInputValue(value, precision)
-  );
-
-  useEffect(() => {
-    setDisplayValue(formatNumberInputValue(value, precision));
-  }, [precision, value]);
+  const [draft, setDraft] = useState(() => ({
+    value,
+    precision,
+    text: formatNumberInputValue(value, precision),
+  }));
+  const displayValue = draft.value === value && draft.precision === precision
+    ? draft.text
+    : formatNumberInputValue(value, precision);
 
   return (
     <label className="field">
@@ -70,11 +71,11 @@ export default function FormattedNumberInput({
           const nextValue =
             typeof min === "number" && parsedValue < min ? min : parsedValue;
 
-          setDisplayValue(nextRawValue);
+          setDraft({ value: nextValue, precision, text: nextRawValue });
           onChange(nextValue, nextRawValue);
         }}
         onBlur={() => {
-          setDisplayValue(formatNumberInputValue(value, precision));
+          setDraft({ value, precision, text: formatNumberInputValue(value, precision) });
         }}
       />
     </label>

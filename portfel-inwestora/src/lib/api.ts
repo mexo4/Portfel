@@ -91,7 +91,19 @@ const requestJson = async <T,>(url: string, init?: RequestInit): Promise<T> => {
   return (await response.json()) as T;
 };
 
-const fxRequestsInFlight = new Map<string, Promise<{ rates: FxRates; fetchedAt: string }>>();
+export type FxRateQuality = {
+  status: "confirmed" | "historically-carried" | "stale" | "fallback" | "unavailable";
+  source: string;
+  asOf: string | null;
+};
+
+export type FxRatesResponse = {
+  rates: FxRates;
+  fetchedAt: string;
+  quality?: Partial<Record<CurrencyCode, FxRateQuality>>;
+};
+
+const fxRequestsInFlight = new Map<string, Promise<FxRatesResponse>>();
 
 type EtfSearchErrorPayload = {
   code?: unknown;
@@ -735,7 +747,7 @@ export const fetchFxRates = async (codes?: string[], date?: string, historicalOn
     return existing;
   }
 
-  const request = requestJson<{ rates: FxRates; fetchedAt: string }>(url).finally(() => {
+  const request = requestJson<FxRatesResponse>(url).finally(() => {
     fxRequestsInFlight.delete(url);
   });
   fxRequestsInFlight.set(url, request);

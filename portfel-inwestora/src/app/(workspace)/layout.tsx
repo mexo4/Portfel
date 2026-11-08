@@ -1,5 +1,4 @@
 import PortfolioApp from "@/components/PortfolioApp";
-import { isAdminEmail } from "@/lib/server/access";
 import { requireCurrentAccountData } from "@/lib/server/auth";
 import type { ReactNode } from "react";
 
@@ -13,5 +12,5 @@ type WorkspaceLayoutProps = Readonly<{ children: ReactNode }>;
 export default async function WorkspaceLayout({ children }: WorkspaceLayoutProps) {
   const accountData = await requireCurrentAccountData();
 
-  return <PortfolioApp initialAssets={accountData.assets} initialSales={accountData.sales} initialRealizedAdjustments={accountData.realizedAdjustments} initialPortfolios={accountData.portfolios} initialActivePortfolioId={accountData.activePortfolioId} initialPortfolioRevision={accountData.portfolioRevision} initialProfile={accountData.profile} account={accountData.user} isAdmin={isAdminEmail(accountData.user.email)}>{children}</PortfolioApp>;
+  return <PortfolioApp initialAssets={accountData.assets} initialSales={accountData.sales} initialRealizedAdjustments={accountData.realizedAdjustments} initialPortfolios={accountData.portfolios} initialActivePortfolioId={accountData.activePortfolioId} initialPortfolioRevision={accountData.portfolioRevision} initialProfile={accountData.profile} account={accountData.user} isAdmin={accountData.user.role === "admin"}>{children}</PortfolioApp>;
 }

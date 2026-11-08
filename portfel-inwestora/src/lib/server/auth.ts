@@ -2,12 +2,13 @@ import bcrypt from "bcryptjs";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import { FREE_PLAN_ASSET_LIMIT, MEXO_TESTER_MODE } from "@/lib/constants";
+import { FREE_PLAN_ASSET_LIMIT } from "@/lib/constants";
+import { canAddAsset, canCreatePortfolio, isSubscriptionPlan } from "@/lib/entitlements";
 import { assertUniquePortfolioNames, normalizePortfolioBook, normalizePortfolioState } from "@/lib/portfolio-state";
 import { getPortfolioInstrumentId, repairMisclassifiedXtbListingCurrencies } from "@/lib/operation-engine";
+import { getPortfolioAssetGroupKey } from "@/lib/ticker";
 import type { NextResponse } from "next/server";
 import { createFreshUserProfile, normalizeUserProfile } from "@/lib/profile";
-import { isForcedProEmail } from "@/lib/server/access";
 import { execute, queryOne, withTransaction } from "@/lib/server/db";
 import { sendPasswordResetEmail, sendVerificationEmail } from "@/lib/server/email";
 import { syncPortfolioCoreTablesInTransaction } from "@/lib/server/portfolio-core-sync";
@@ -47,6 +48,12 @@ type UserRow = {
   subscription_plan: string;
   subscription_status: string;
   subscription_updated_at: string | null;
+  subscription_activated_at: string | null;
+  subscription_expires_at: string | null;
+  subscription_grant_source: string | null;
+  user_role: string;
+  tester_access: boolean;
+  espi_access: boolean;
   profile_json: string;
   portfolio_json: string;
   portfolio_revision: number;
@@ -95,7 +102,7 @@ const isEmailValid = (email: string) => /^\S+@\S+\.\S+$/.test(email);
 const normalizeEmail = (email: string) => email.trim().toLowerCase();
 
 const normalizeSubscriptionPlan = (plan: string | null | undefined): SubscriptionPlan =>
-  plan === "pro" ? "pro" : "free";
+  isSubscriptionPlan(plan) ? plan : "free";
 
 const normalizeSubscriptionStatus = (
   status: string | null | undefined
@@ -103,7 +110,8 @@ const normalizeSubscriptionStatus = (
   if (
     status === "trialing" ||
     status === "past_due" ||
-    status === "canceled"
+    status === "canceled" ||
+    status === "expired"
   ) {
     return status;
   }
@@ -111,9 +119,8 @@ const normalizeSubscriptionStatus = (
   return "active";
 };
 
-export const canUseProFeatures = (user: Pick<AuthenticatedUser, "subscriptionPlan" | "subscriptionStatus">) =>
-  MEXO_TESTER_MODE || (user.subscriptionPlan === "pro" &&
-  (user.subscriptionStatus === "active" || user.subscriptionStatus === "trialing"));
+export const normalizeUserRole = (role: string | null | undefined): AuthenticatedUser["role"] =>
+  role === "admin" ? "admin" : "user";
 
 const toAuthenticatedUser = (
   user: Pick<
@@ -126,6 +133,13 @@ const toAuthenticatedUser = (
     | "password_hash"
     | "subscription_plan"
     | "subscription_status"
+    | "subscription_activated_at"
+    | "subscription_expires_at"
+    | "subscription_grant_source"
+    | "subscription_updated_at"
+    | "user_role"
+    | "tester_access"
+    | "espi_access"
   >
 ): AuthenticatedUser => ({
   id: user.id,
@@ -135,6 +149,13 @@ const toAuthenticatedUser = (
   emailVerifiedAt: user.email_verified_at,
   subscriptionPlan: normalizeSubscriptionPlan(user.subscription_plan),
   subscriptionStatus: normalizeSubscriptionStatus(user.subscription_status),
+  subscriptionActivatedAt: user.subscription_activated_at,
+  subscriptionExpiresAt: user.subscription_expires_at,
+  subscriptionGrantSource: user.subscription_grant_source,
+  subscriptionUpdatedAt: user.subscription_updated_at,
+  role: normalizeUserRole(user.user_role),
+  testerAccess: user.tester_access === true,
+  espiAccess: user.espi_access === true,
   hasPassword: Boolean(user.password_hash),
 });
 
@@ -269,6 +290,12 @@ const userColumnsWithoutPortfolio = `
   subscription_plan,
   subscription_status,
   subscription_updated_at,
+  subscription_activated_at,
+  subscription_expires_at,
+  subscription_grant_source,
+  user_role,
+  tester_access,
+  espi_access,
   profile_json,
   portfolio_revision,
   portfolio_core_revision,
@@ -329,35 +356,6 @@ const getTokenRow = (
     [hashToken(token)]
   );
 
-const withForcedProSubscription = async <T extends UserRow>(user: T): Promise<T> => {
-  if (!isForcedProEmail(user.email)) {
-    return user;
-  }
-
-  if (user.subscription_plan === "pro" && user.subscription_status === "active") {
-    return user;
-  }
-
-  const now = new Date().toISOString();
-
-  await execute(
-    `
-      UPDATE users
-      SET subscription_plan = $1, subscription_status = $2, subscription_updated_at = $3, updated_at = $4
-      WHERE id = $5
-    `,
-    ["pro", "active", now, now, user.id]
-  );
-
-  return {
-    ...user,
-    subscription_plan: "pro",
-    subscription_status: "active",
-    subscription_updated_at: now,
-    updated_at: now,
-  };
-};
-
 const removeSessionByToken = async (token: string) => {
   await execute("DELETE FROM sessions WHERE token_hash = $1", [hashToken(token)]);
 };
@@ -410,7 +408,7 @@ const getCurrentSessionUser = async (includePortfolio = false) => {
  */
 export const getCurrentAuthenticatedUser = async () => {
   const sessionUser = await getCurrentSessionUser();
-  return sessionUser ? toAuthenticatedUser(await withForcedProSubscription(sessionUser)) : null;
+  return sessionUser ? toAuthenticatedUser(sessionUser) : null;
 };
 
 const purgeTokensForUser = (
@@ -509,7 +507,7 @@ export const registerAccount = async ({
       throw new Error("Konto z tym adresem email juz istnieje.");
     }
 
-    return toAuthenticatedUser(await withForcedProSubscription(existingUser));
+    return toAuthenticatedUser(existingUser);
   }
 
   if (!normalizedName || normalizedName.length < 2) {
@@ -532,7 +530,7 @@ export const registerAccount = async ({
     updatedAt: now,
   };
 
-  const initialSubscriptionPlan = isForcedProEmail(normalizedEmail) ? "pro" : "free";
+  const initialSubscriptionPlan = "free" satisfies SubscriptionPlan;
   const initialPortfolioBook = normalizePortfolioBook({
     assets: [],
     sales: [],
@@ -588,6 +586,13 @@ export const registerAccount = async ({
     emailVerifiedAt: null,
     subscriptionPlan: initialSubscriptionPlan,
     subscriptionStatus: "active",
+    subscriptionActivatedAt: null,
+    subscriptionExpiresAt: null,
+    subscriptionGrantSource: null,
+    subscriptionUpdatedAt: now,
+    role: "user",
+    testerAccess: false,
+    espiAccess: false,
     hasPassword: true,
   } satisfies AuthenticatedUser;
 };
@@ -683,7 +688,7 @@ export const resolveGoogleOAuthAccount = async ({
       createdAt: now,
       updatedAt: now,
     };
-    const initialSubscriptionPlan = isForcedProEmail(normalizedEmail) ? "pro" : "free";
+    const initialSubscriptionPlan = "free" satisfies SubscriptionPlan;
     const initialPortfolioBook = normalizePortfolioBook({
       assets: [],
       sales: [],
@@ -749,7 +754,7 @@ export const resolveGoogleOAuthAccount = async ({
     throw new Error("Nie udalo sie polaczyc konta Google z kontem Mexo.");
   }
 
-  return toAuthenticatedUser(await withForcedProSubscription(user));
+  return toAuthenticatedUser(user);
 };
 
 export const loginAccount = async ({
@@ -782,7 +787,7 @@ export const loginAccount = async ({
     throw new EmailVerificationRequiredError(user.id);
   }
 
-  return toAuthenticatedUser(await withForcedProSubscription(user));
+  return toAuthenticatedUser(user);
 };
 
 export type CurrentAccountDataOptions = {
@@ -799,7 +804,7 @@ export const getCurrentAccountData = async ({
 
   if (!sessionUser) return null;
 
-  const user = await withForcedProSubscription(sessionUser);
+  const user = sessionUser;
   const storedPortfolio = parsePortfolioBook(user.portfolio_json);
   let portfolioBook = storedPortfolio.portfolioBook;
   let portfolioRevision = user.portfolio_revision;
@@ -936,27 +941,36 @@ export const updateCurrentUserPortfolio = async (
     throw new Error("Nie znaleziono uzytkownika.");
   }
 
-  const account = toAuthenticatedUser(await withForcedProSubscription(existingUser));
+  const account = toAuthenticatedUser(existingUser);
   const normalizedPortfolio = normalizePortfolioBook(portfolio);
   // Client-side feedback is helpful, but this is the authoritative guard for
   // every portfolio-book write, including concurrent tabs and API callers.
   assertUniquePortfolioNames(normalizedPortfolio.portfolios);
 
-  const hasPortfolioOverFreeLimit = normalizedPortfolio.portfolios.some(
-    (item) => item.assets.length > FREE_PLAN_ASSET_LIMIT
-  );
+  const previousPortfolioBook = parsePortfolioBook(existingUser.portfolio_json).portfolioBook;
+  if (options.enforcePlanLimit !== false) {
+    const portfolioLimitExceeded = normalizedPortfolio.portfolios.length > previousPortfolioBook.portfolios.length &&
+      !canCreatePortfolio(account, previousPortfolioBook.portfolios.length);
+    if (portfolioLimitExceeded) {
+      throw new Error("Plan nie pozwala utworzyć kolejnego portfela. Istniejące dane pozostają dostępne.");
+    }
 
-  if (options.enforcePlanLimit !== false && !canUseProFeatures(account) && hasPortfolioOverFreeLimit) {
-    throw new Error(
-      `Plan Free pozwala zapisac do ${FREE_PLAN_ASSET_LIMIT} pozycji. Przejdz na Pro, aby dodawac kolejne.`
-    );
+    for (const nextPortfolio of normalizedPortfolio.portfolios) {
+      const previousPortfolio = previousPortfolioBook.portfolios.find((item) => item.id === nextPortfolio.id);
+      const previousAssetCount = new Set(previousPortfolio?.assets.map(getPortfolioAssetGroupKey) ?? []).size;
+      const nextAssetCount = new Set(nextPortfolio.assets.map(getPortfolioAssetGroupKey)).size;
+      if (nextAssetCount > previousAssetCount && !canAddAsset(account, previousAssetCount)) {
+        throw new Error(
+          `Plan Free pozwala zapisać do ${FREE_PLAN_ASSET_LIMIT} pozycji w portfelu. Istniejące dane nie zostały zmienione.`
+        );
+      }
+    }
   }
 
   const updatedAt = new Date().toISOString();
   const requestedRevision = Number.isInteger(expectedPortfolioRevision)
     ? expectedPortfolioRevision
     : existingUser.portfolio_revision;
-  const previousPortfolioBook = parsePortfolioBook(existingUser.portfolio_json).portfolioBook;
   const previousIssuerMetadata = getConfirmedIssuerMetadataByIsin(previousPortfolioBook);
   const nextIssuerMetadata = getConfirmedIssuerMetadataByIsin(normalizedPortfolio);
   const issuerIsinsToInvalidate = Array.from(
@@ -967,8 +981,16 @@ export const updateCurrentUserPortfolio = async (
     const currentRows = await transaction.query<{
       portfolio_revision: number;
       portfolio_core_revision: number;
+      subscription_plan: string;
+      subscription_status: string;
+      subscription_expires_at: string | null;
+      user_role: string;
+      tester_access: boolean;
+      espi_access: boolean;
     }>(
-      "SELECT portfolio_revision, portfolio_core_revision FROM users WHERE id = $1 FOR UPDATE",
+      `SELECT portfolio_revision, portfolio_core_revision, subscription_plan, subscription_status,
+        subscription_expires_at, user_role, tester_access, espi_access
+       FROM users WHERE id = $1 FOR UPDATE`,
       [userId]
     );
     const currentUser = currentRows[0];
@@ -979,6 +1001,30 @@ export const updateCurrentUserPortfolio = async (
 
     if (currentUser.portfolio_revision !== requestedRevision) {
       throw new PortfolioRevisionConflictError(currentUser.portfolio_revision);
+    }
+
+    if (options.enforcePlanLimit !== false) {
+      const lockedAccount = {
+        ...account,
+        subscriptionPlan: normalizeSubscriptionPlan(currentUser.subscription_plan),
+        subscriptionStatus: normalizeSubscriptionStatus(currentUser.subscription_status),
+        subscriptionExpiresAt: currentUser.subscription_expires_at,
+        role: normalizeUserRole(currentUser.user_role),
+        testerAccess: currentUser.tester_access === true,
+        espiAccess: currentUser.espi_access === true,
+      };
+      if (normalizedPortfolio.portfolios.length > previousPortfolioBook.portfolios.length &&
+        !canCreatePortfolio(lockedAccount, previousPortfolioBook.portfolios.length)) {
+        throw new Error("Plan nie pozwala utworzyć kolejnego portfela. Istniejące dane pozostają dostępne.");
+      }
+      for (const nextPortfolio of normalizedPortfolio.portfolios) {
+        const previousPortfolio = previousPortfolioBook.portfolios.find((item) => item.id === nextPortfolio.id);
+        const previousAssetCount = new Set(previousPortfolio?.assets.map(getPortfolioAssetGroupKey) ?? []).size;
+        const nextAssetCount = new Set(nextPortfolio.assets.map(getPortfolioAssetGroupKey)).size;
+        if (nextAssetCount > previousAssetCount && !canAddAsset(lockedAccount, previousAssetCount)) {
+          throw new Error(`Plan Free pozwala zapisać do ${FREE_PLAN_ASSET_LIMIT} pozycji w portfelu. Istniejące dane nie zostały zmienione.`);
+        }
+      }
     }
 
     const updatedRows = await transaction.query<{ portfolio_revision: number }>(
@@ -1025,26 +1071,23 @@ export const updateCurrentUserSubscription = async (
   userId: string,
   plan: SubscriptionPlan
 ) => {
-  const existingUser = await getUserById(userId);
-
-  if (!existingUser) {
-    throw new Error("Nie znaleziono uzytkownika.");
-  }
-
-  if (plan === "pro" && !isForcedProEmail(existingUser.email)) {
-    throw new Error("Plan Pro wymaga potwierdzenia platnosci.");
-  }
+  if (plan !== "free") throw new Error("Płatne plany wymagają zaufanego potwierdzenia nadania.");
 
   const now = new Date().toISOString();
-  const nextPlan = isForcedProEmail(existingUser.email) ? "pro" : plan;
 
   await execute(
     `
       UPDATE users
-      SET subscription_plan = $1, subscription_status = $2, subscription_updated_at = $3, updated_at = $4
+      SET subscription_plan = $1,
+        subscription_status = $2,
+        subscription_updated_at = $3,
+        subscription_activated_at = NULL,
+        subscription_expires_at = NULL,
+        subscription_grant_source = NULL,
+        updated_at = $4
       WHERE id = $5
     `,
-    [nextPlan, "active", now, now, userId]
+    [plan, "active", now, now, userId]
   );
 
   const updatedUser = await getUserById(userId);
@@ -1053,24 +1096,106 @@ export const updateCurrentUserSubscription = async (
     throw new Error("Nie udalo sie zapisac planu.");
   }
 
-  return toAuthenticatedUser(await withForcedProSubscription(updatedUser));
+  return toAuthenticatedUser(updatedUser);
+};
+
+export type AdminUserAccessUpdate = {
+  role?: "user" | "admin";
+  testerAccess?: boolean;
+  espiAccess?: boolean;
+  subscriptionPlan?: SubscriptionPlan;
+};
+
+export const updateUserAccessByAdmin = async (
+  adminUserId: string,
+  targetUserId: string,
+  update: AdminUserAccessUpdate
+) => {
+  if (adminUserId === targetUserId) throw new Error("Nie możesz zmienić własnych uprawnień.");
+  if (update.subscriptionPlan && !isSubscriptionPlan(update.subscriptionPlan)) {
+    throw new Error("Niepoprawny plan abonamentowy.");
+  }
+  if (update.role !== undefined && update.role !== "user" && update.role !== "admin") {
+    throw new Error("Niepoprawna rola użytkownika.");
+  }
+
+  await withTransaction(async (transaction) => {
+    const adminRows = await transaction.query<{ user_role: string }>(
+      "SELECT user_role FROM users WHERE id = $1 FOR UPDATE",
+      [adminUserId]
+    );
+    if (adminRows[0]?.user_role !== "admin") throw new Error("Brak roli administratora.");
+    const targetRows = await transaction.query<Pick<UserRow,
+      "id" | "user_role" | "tester_access" | "espi_access" | "subscription_plan" |
+      "subscription_status" | "subscription_activated_at" | "subscription_expires_at" | "subscription_grant_source"
+    >>(
+      `SELECT id, user_role, tester_access, espi_access, subscription_plan,
+        subscription_status, subscription_activated_at, subscription_expires_at, subscription_grant_source
+       FROM users WHERE id = $1 FOR UPDATE`,
+      [targetUserId]
+    );
+    const targetUser = targetRows[0];
+    if (!targetUser) throw new Error("Nie znaleziono użytkownika.");
+
+    const now = new Date();
+    const updatedAt = now.toISOString();
+    const planWasExplicitlyUpdated = update.subscriptionPlan !== undefined;
+    const plan = update.subscriptionPlan ?? normalizeSubscriptionPlan(targetUser.subscription_plan);
+    const isPaidPlan = plan !== "free";
+    const expiresAt = !planWasExplicitlyUpdated
+      ? targetUser.subscription_expires_at
+      : isPaidPlan ? new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString() : null;
+    const activatedAt = !planWasExplicitlyUpdated
+      ? targetUser.subscription_activated_at
+      : isPaidPlan ? updatedAt : null;
+    const source = !planWasExplicitlyUpdated
+      ? targetUser.subscription_grant_source
+      : isPaidPlan ? `admin:${adminUserId}` : null;
+    const subscriptionStatus = !planWasExplicitlyUpdated
+      ? normalizeSubscriptionStatus(targetUser.subscription_status)
+      : "active";
+
+    await transaction.execute(
+      `UPDATE users SET user_role = $1, tester_access = $2, espi_access = $3,
+        subscription_plan = $4, subscription_status = $5,
+        subscription_activated_at = $6, subscription_expires_at = $7,
+        subscription_grant_source = $8, subscription_updated_at = $9, updated_at = $9
+       WHERE id = $10`,
+      [
+        update.role ?? normalizeUserRole(targetUser.user_role),
+        update.testerAccess ?? targetUser.tester_access,
+        update.espiAccess ?? targetUser.espi_access,
+        plan,
+        subscriptionStatus,
+        activatedAt,
+        expiresAt,
+        source,
+        updatedAt,
+        targetUserId,
+      ]
+    );
+  });
+
+  const updatedUser = await getUserById(targetUserId);
+  if (!updatedUser) throw new Error("Nie udało się odczytać zmienionych uprawnień.");
+  return toAuthenticatedUser(updatedUser);
 };
 
 export const deleteUserByAdmin = async (adminUserId: string, targetUserId: string) => {
-  const [adminUser, targetUser] = await Promise.all([
-    getUserById(adminUserId),
-    getUserById(targetUserId),
-  ]);
-
-  if (!adminUser || !targetUser) {
-    throw new Error("Nie znaleziono uzytkownika.");
-  }
-
-  if (adminUser.id === targetUser.id) {
-    throw new Error("Nie mozesz usunac wlasnego konta admina.");
-  }
-
-  await execute("DELETE FROM users WHERE id = $1", [targetUser.id]);
+  if (adminUserId === targetUserId) throw new Error("Nie mozesz usunac wlasnego konta admina.");
+  await withTransaction(async (transaction) => {
+    const adminRows = await transaction.query<{ user_role: string }>(
+      "SELECT user_role FROM users WHERE id = $1 FOR UPDATE",
+      [adminUserId]
+    );
+    if (adminRows[0]?.user_role !== "admin") throw new Error("Brak roli administratora.");
+    const targetRows = await transaction.query<{ id: string }>(
+      "SELECT id FROM users WHERE id = $1 FOR UPDATE",
+      [targetUserId]
+    );
+    if (!targetRows[0]) throw new Error("Nie znaleziono uzytkownika.");
+    await transaction.execute("DELETE FROM users WHERE id = $1", [targetUserId]);
+  });
 };
 
 export const requestEmailVerificationForUser = async (userId: string, baseUrl: string) => {

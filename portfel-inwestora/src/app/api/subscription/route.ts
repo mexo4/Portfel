@@ -4,11 +4,9 @@ import {
   updateCurrentUserSubscription,
 } from "@/lib/server/auth";
 import type { SubscriptionPlan } from "@/types/portfolio";
+import { isSubscriptionPlan } from "@/lib/entitlements";
 
 export const runtime = "nodejs";
-
-const isSubscriptionPlan = (value: unknown): value is SubscriptionPlan =>
-  value === "free" || value === "pro";
 
 export async function GET() {
   const accountData = await getCurrentAccountData();
@@ -20,6 +18,8 @@ export async function GET() {
   return NextResponse.json({
     plan: accountData.user.subscriptionPlan,
     status: accountData.user.subscriptionStatus,
+    activatedAt: accountData.user.subscriptionActivatedAt,
+    expiresAt: accountData.user.subscriptionExpiresAt,
   });
 }
 
@@ -37,7 +37,10 @@ export async function PUT(request: Request) {
       return NextResponse.json({ error: "Niepoprawny plan." }, { status: 400 });
     }
 
-    const user = await updateCurrentUserSubscription(accountData.user.id, payload.plan);
+    if (payload.plan !== "free") {
+      return NextResponse.json({ error: "Samodzielny zakup planów płatnych nie jest jeszcze dostępny." }, { status: 409 });
+    }
+    const user = await updateCurrentUserSubscription(accountData.user.id, payload.plan as SubscriptionPlan);
 
     return NextResponse.json({
       user,

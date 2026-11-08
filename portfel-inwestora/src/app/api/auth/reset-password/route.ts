@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { resetPasswordWithToken } from "@/lib/server/auth";
+import { applyAuthRateLimit } from "@/lib/server/auth-rate-limit-response";
 
 export const runtime = "nodejs";
 
@@ -9,6 +10,9 @@ export async function POST(request: Request) {
       token?: string;
       password?: string;
     };
+
+    const limited = await applyAuthRateLimit(request, "resetToken");
+    if (limited) return limited;
 
     await resetPasswordWithToken(payload.token ?? "", payload.password ?? "");
 

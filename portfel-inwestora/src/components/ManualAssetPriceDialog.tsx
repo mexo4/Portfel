@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useRef, useState, type FormEvent } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import type { PortfolioAssetGroup } from "@/lib/pricing";
 import { formatDateTime } from "@/lib/utils";
 import type { CurrencyCode } from "@/types/portfolio";
@@ -60,8 +60,10 @@ export default function ManualAssetPriceDialog({
   const [actionError, setActionError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const isBusy = pending || isSubmitting;
-  onCloseRef.current = onClose;
-  isBusyRef.current = isBusy;
+  useLayoutEffect(() => {
+    onCloseRef.current = onClose;
+    isBusyRef.current = isBusy;
+  }, [isBusy, onClose]);
   const updatedAt = getManualAssetPriceUpdatedAt(group);
   const currencies = Array.from(new Set([...SUPPORTED_CURRENCIES, currency.toUpperCase()]));
 

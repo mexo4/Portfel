@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
-import { MEXO_TESTER_MODE } from "@/lib/constants";
 import { getCurrentAuthenticatedUser } from "@/lib/server/auth";
+import { canAccessFeature } from "@/lib/entitlements";
 import { getEspiReport } from "@/lib/server/espi";
 
 export const runtime = "nodejs";
@@ -9,11 +9,11 @@ export async function GET(
   _request: Request,
   { params }: { params: Promise<{ reportId: string }> }
 ) {
-  if (!MEXO_TESTER_MODE) {
-    return NextResponse.json({ error: "Moduł ESPI jest dostępny w trybie Tester." }, { status: 404 });
-  }
   const user = await getCurrentAuthenticatedUser();
   if (!user) return NextResponse.json({ error: "Brak autoryzacji." }, { status: 401 });
+  if (!canAccessFeature(user, "espi")) {
+    return NextResponse.json({ error: "Brak dostępu do modułu ESPI." }, { status: 403 });
+  }
 
   try {
     const { reportId } = await params;

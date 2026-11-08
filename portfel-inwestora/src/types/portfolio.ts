@@ -92,8 +92,9 @@ export type AssetEntryMode = AssetSearchMode | "bond";
 export type CurrencyCode = string;
 
 export type InvestorExperience = "beginner" | "intermediate" | "advanced";
-export type SubscriptionPlan = "free" | "pro";
-export type SubscriptionStatus = "active" | "trialing" | "past_due" | "canceled";
+export type SubscriptionPlan = "free" | "basic" | "standard" | "pro" | "expert";
+export type SubscriptionStatus = "active" | "trialing" | "past_due" | "canceled" | "expired";
+export type UserRole = "user" | "admin";
 
 export type QuoteProvider =
   | "binance"
@@ -926,6 +927,13 @@ export type AuthenticatedUser = {
   emailVerifiedAt: string | null;
   subscriptionPlan: SubscriptionPlan;
   subscriptionStatus: SubscriptionStatus;
+  subscriptionActivatedAt: string | null;
+  subscriptionExpiresAt: string | null;
+  subscriptionGrantSource: string | null;
+  subscriptionUpdatedAt: string | null;
+  role: UserRole;
+  testerAccess: boolean;
+  espiAccess: boolean;
   hasPassword: boolean;
 };
 

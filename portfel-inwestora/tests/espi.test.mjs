@@ -305,7 +305,7 @@ test("source failures and pagination filters are normalized without unbounded li
   assert.equal(validateEspiFeedFilters(new URLSearchParams("scope=portfolio")).scope, "portfolio");
 });
 
-test("ESPI is exposed as a Tester market route and an optional, non-default Dashboard 2.0 widget", async () => {
+test("ESPI uses per-user entitlements and remains an optional, non-default Dashboard 2.0 widget", async () => {
   const [shell, layout, detail, defaultLayout, apiRoute, db] = await Promise.all([
     readFile(new URL("../src/components/AppWorkspaceShell.tsx", import.meta.url), "utf8"),
     readFile(new URL("../src/components/ConfigurableDashboard.tsx", import.meta.url), "utf8"),
@@ -315,13 +315,14 @@ test("ESPI is exposed as a Tester market route and an optional, non-default Dash
     readFile(new URL("../src/lib/server/db.ts", import.meta.url), "utf8"),
   ]);
   assert.match(shell, /Raporty ESPI/);
-  assert.match(shell, /MEXO_TESTER_MODE/);
+  assert.match(shell, /canAccessFeature\(account, "espi"\)/);
   assert.match(layout, /LatestEspiWidget/);
   assert.ok(defaultLayout.DASHBOARD_WIDGET_DEFINITIONS.some((item) => item.id === "latest-espi"));
   assert.equal(defaultLayout.DEFAULT_DASHBOARD_LAYOUT.widgets.some((item) => item.id === "latest-espi"), false);
   assert.match(detail, /correctionTargetReportNumber/);
   assert.match(detail, /correctionOfReportId/);
   assert.match(apiRoute, /after\(async \(\) =>/);
+  assert.match(apiRoute, /canAccessFeature\(user, "espi"\)/);
   assert.match(db, /UNIQUE \(source, source_id\)/);
   assert.match(db, /market TEXT NOT NULL DEFAULT 'UNKNOWN'/);
   assert.match(db, /idx_espi_reports_market_published/);

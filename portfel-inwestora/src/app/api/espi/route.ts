@@ -1,6 +1,7 @@
 import { after, NextResponse } from "next/server";
-import { MEXO_TESTER_MODE } from "@/lib/constants";
 import { getCurrentAuthenticatedUser } from "@/lib/server/auth";
+import { canAccessFeature } from "@/lib/entitlements";
+import { applyAuthRateLimit } from "@/lib/server/auth-rate-limit-response";
 import {
   getEspiFeed,
   getEspiSyncState,
@@ -10,12 +11,12 @@ import {
 
 export const runtime = "nodejs";
 
-const unavailable = () => NextResponse.json({ error: "Moduł ESPI jest dostępny w trybie Tester." }, { status: 404 });
+const unavailable = () => NextResponse.json({ error: "Brak dostępu do modułu ESPI." }, { status: 403 });
 
 export async function GET(request: Request) {
-  if (!MEXO_TESTER_MODE) return unavailable();
   const user = await getCurrentAuthenticatedUser();
   if (!user) return NextResponse.json({ error: "Brak autoryzacji." }, { status: 401 });
+  if (!canAccessFeature(user, "espi")) return unavailable();
 
   try {
     const filters = validateEspiFeedFilters(new URL(request.url).searchParams);
@@ -40,9 +41,11 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  if (!MEXO_TESTER_MODE) return unavailable();
   const user = await getCurrentAuthenticatedUser();
   if (!user) return NextResponse.json({ error: "Brak autoryzacji." }, { status: 401 });
+  if (!canAccessFeature(user, "espi")) return unavailable();
+  const limited = await applyAuthRateLimit(request, "espiSync", user.id);
+  if (limited) return limited;
 
   try {
     const payload = await request.json().catch(() => ({})) as { backfillPages?: unknown; backfillFrom?: unknown };

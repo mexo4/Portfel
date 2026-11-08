@@ -8,7 +8,7 @@ import { getWorkspaceRoute, type WorkspaceRouteKey } from "@/lib/workspace-route
 import { getWorkspaceReadHref, type PortfolioScopeSelection } from "@/lib/portfolio-selection";
 import PortfolioScopePicker from "@/components/PortfolioScopePicker";
 import type { AuthenticatedUser, CurrencyCode, InvestmentPortfolio } from "@/types/portfolio";
-import { MEXO_TESTER_MODE } from "@/lib/constants";
+import { canAccessFeature } from "@/lib/entitlements";
 
 export type { WorkspaceRouteKey } from "@/lib/workspace-routes";
 
@@ -184,7 +184,10 @@ export default function AppWorkspaceShell({ account, portfolios, selectedPortfol
   const commandTriggerRef = useRef<HTMLButtonElement | null>(null);
   const meta = routeMeta[route];
   const hasAllPortfoliosSelected = portfolioScope.mode !== "SINGLE";
-  const visibleNavigationGroups = navigationGroups.map((group) => ({ ...group, items: group.items.filter((item) => !item.testerOnly || MEXO_TESTER_MODE) }));
+  const visibleNavigationGroups = navigationGroups.map((group) => ({
+    ...group,
+    items: group.items.filter((item) => !item.testerOnly || canAccessFeature(account, "espi")),
+  }));
   const currentNavigationGroup = visibleNavigationGroups.find((group) => isGroupActive(route, group));
   const showSectionTabs = currentNavigationGroup && currentNavigationGroup.id !== "tools";
 
@@ -292,7 +295,7 @@ export default function AppWorkspaceShell({ account, portfolios, selectedPortfol
       <div className="workspace-sidebar-bottom">
         {isAdmin ? <Link href="/admin" prefetch={false} className="workspace-nav-link" title={isSidebarCollapsed ? "Panel admina" : undefined}><span className="workspace-nav-glyph"><WorkspaceIcon name="admin" /></span><span>Panel admina</span></Link> : null}
         <NavigationLink item={withWorkspaceContext({ key: "settings", href: "/settings", label: "Ustawienia", icon: "settings" })} active={route === "settings"} compact={isSidebarCollapsed} />
-        <div className="workspace-user-card"><span className="workspace-user-avatar" aria-hidden="true">{(account.email[0] ?? "M").toUpperCase()}</span><span className="workspace-user-copy"><strong>{account.email.split("@")[0]}</strong><small>{MEXO_TESTER_MODE ? "Tester" : account.subscriptionPlan === "pro" ? "Mexo Pro" : "Mexo Free"}</small></span></div>
+        <div className="workspace-user-card"><span className="workspace-user-avatar" aria-hidden="true">{(account.email[0] ?? "M").toUpperCase()}</span><span className="workspace-user-copy"><strong>{account.email.split("@")[0]}</strong><small>{account.testerAccess ? "Tester · " : ""}Mexo {account.subscriptionPlan}</small></span></div>
       </div>
     </aside>
 

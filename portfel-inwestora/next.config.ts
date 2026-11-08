@@ -1,6 +1,7 @@
 import type { NextConfig } from "next";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { getSecurityHeaders } from "./src/lib/security-headers";
 
 const configDirectory = path.dirname(fileURLToPath(import.meta.url));
 const workspaceRoot = path.resolve(configDirectory, "..");
@@ -26,7 +27,10 @@ const nextConfig: NextConfig = {
   headers: async () => [
     {
       source: "/:path*",
-      headers: [{ key: "X-Mexo-Revision", value: releaseRevision }],
+      headers: [
+        { key: "X-Mexo-Revision", value: releaseRevision },
+        ...getSecurityHeaders(process.env.NODE_ENV === "production"),
+      ],
     },
   ],
   turbopack: {

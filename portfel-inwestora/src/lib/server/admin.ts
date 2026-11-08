@@ -1,5 +1,4 @@
 import { getCurrentAccountData } from "@/lib/server/auth";
-import { isAdminEmail } from "@/lib/server/access";
 import { query } from "@/lib/server/db";
 import { normalizePortfolioState } from "@/lib/portfolio-state";
 import type { PortfolioState, SubscriptionPlan, SubscriptionStatus } from "@/types/portfolio";
@@ -12,6 +11,12 @@ type AdminUserRow = {
   subscription_plan: string;
   subscription_status: string;
   subscription_updated_at: string | null;
+  subscription_activated_at: string | null;
+  subscription_expires_at: string | null;
+  subscription_grant_source: string | null;
+  user_role: string;
+  tester_access: boolean;
+  espi_access: boolean;
   profile_json: string;
   portfolio_json: string;
   created_at: string;
@@ -27,6 +32,12 @@ export type AdminUserOverview = {
   subscriptionPlan: SubscriptionPlan;
   subscriptionStatus: SubscriptionStatus;
   subscriptionUpdatedAt: string | null;
+  subscriptionActivatedAt: string | null;
+  subscriptionExpiresAt: string | null;
+  subscriptionGrantSource: string | null;
+  role: "user" | "admin";
+  testerAccess: boolean;
+  espiAccess: boolean;
   country: string;
   preferredBroker: string;
   experienceLevel: string;
@@ -41,11 +52,15 @@ export type AdminUserOverview = {
 };
 
 export type AdminDashboardData = {
+  currentUserId: string;
   users: AdminUserOverview[];
   totals: {
     users: number;
     freeUsers: number;
+    basicUsers: number;
+    standardUsers: number;
     proUsers: number;
+    expertUsers: number;
     verifiedUsers: number;
     paidPlans: number;
     activeSessions: number;
@@ -55,10 +70,10 @@ export type AdminDashboardData = {
 };
 
 const normalizeSubscriptionPlan = (plan: string): SubscriptionPlan =>
-  plan === "pro" ? "pro" : "free";
+  plan === "basic" || plan === "standard" || plan === "pro" || plan === "expert" ? plan : "free";
 
 const normalizeSubscriptionStatus = (status: string): SubscriptionStatus => {
-  if (status === "trialing" || status === "past_due" || status === "canceled") {
+  if (status === "trialing" || status === "past_due" || status === "canceled" || status === "expired") {
     return status;
   }
 
@@ -89,6 +104,12 @@ const toAdminUserOverview = (row: AdminUserRow): AdminUserOverview => {
     subscriptionPlan: normalizeSubscriptionPlan(row.subscription_plan),
     subscriptionStatus: normalizeSubscriptionStatus(row.subscription_status),
     subscriptionUpdatedAt: row.subscription_updated_at,
+    subscriptionActivatedAt: row.subscription_activated_at,
+    subscriptionExpiresAt: row.subscription_expires_at,
+    subscriptionGrantSource: row.subscription_grant_source,
+    role: row.user_role === "admin" ? "admin" : "user",
+    testerAccess: row.tester_access === true,
+    espiAccess: row.espi_access === true,
     country: parseProfileValue(row.profile_json, "country"),
     preferredBroker: parseProfileValue(row.profile_json, "preferredBroker"),
     experienceLevel: parseProfileValue(row.profile_json, "experienceLevel"),
@@ -106,7 +127,7 @@ const toAdminUserOverview = (row: AdminUserRow): AdminUserOverview => {
 export const getAdminDashboardData = async (): Promise<AdminDashboardData | null> => {
   const accountData = await getCurrentAccountData();
 
-  if (!accountData || !isAdminEmail(accountData.user.email)) {
+  if (!accountData || accountData.user.role !== "admin") {
     return null;
   }
 
@@ -120,6 +141,12 @@ export const getAdminDashboardData = async (): Promise<AdminDashboardData | null
         users.subscription_plan,
         users.subscription_status,
         users.subscription_updated_at,
+        users.subscription_activated_at,
+        users.subscription_expires_at,
+        users.subscription_grant_source,
+        users.user_role,
+        users.tester_access,
+        users.espi_access,
         users.profile_json,
         users.portfolio_json,
         users.created_at,
@@ -138,16 +165,21 @@ export const getAdminDashboardData = async (): Promise<AdminDashboardData | null
   const users = rows.map(toAdminUserOverview);
 
   return {
+    currentUserId: accountData.user.id,
     users,
     totals: {
       users: users.length,
       freeUsers: users.filter((user) => user.subscriptionPlan === "free").length,
+      basicUsers: users.filter((user) => user.subscriptionPlan === "basic").length,
+      standardUsers: users.filter((user) => user.subscriptionPlan === "standard").length,
       proUsers: users.filter((user) => user.subscriptionPlan === "pro").length,
+      expertUsers: users.filter((user) => user.subscriptionPlan === "expert").length,
       verifiedUsers: users.filter((user) => Boolean(user.emailVerifiedAt)).length,
       paidPlans: users.filter(
         (user) =>
-          user.subscriptionPlan === "pro" &&
-          (user.subscriptionStatus === "active" || user.subscriptionStatus === "trialing")
+          user.subscriptionPlan !== "free" &&
+          (user.subscriptionStatus === "active" || user.subscriptionStatus === "trialing") &&
+          (!user.subscriptionExpiresAt || Date.parse(user.subscriptionExpiresAt) > Date.now())
       ).length,
       activeSessions: users.reduce((total, user) => total + user.activeSessions, 0),
       openPositions: users.reduce((total, user) => total + user.assetsCount, 0),

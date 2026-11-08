@@ -2849,7 +2849,7 @@ export default function PortfolioLineCharts({
         }}
         onWheel={handleChartWheel}
       >
-        <ResponsiveContainer width="100%" height={isFullscreen ? "100%" : 420}>
+        <ResponsiveContainer width="100%" height={isFullscreen ? "100%" : 420} initialDimension={{ width: 900, height: isFullscreen ? 600 : 420 }}>
           <ComposedChart data={renderedChartData} margin={chartMargin}>
             {visibleChartLines.some((line) => line.variant === "area") ? (
               <defs>
@@ -2994,7 +2994,7 @@ export default function PortfolioLineCharts({
           }
         }}
       >
-        <ResponsiveContainer width="100%" height={isFullscreen ? "100%" : 260}>
+        <ResponsiveContainer width="100%" height={isFullscreen ? "100%" : 260} initialDimension={{ width: 900, height: isFullscreen ? 600 : 260 }}>
           <ComposedChart
             data={renderedDailyInvestmentResultPoints}
             margin={

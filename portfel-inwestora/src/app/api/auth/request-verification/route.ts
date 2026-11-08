@@ -3,6 +3,7 @@ import {
   getCurrentAccountData,
   sendEmailVerificationForUser,
 } from "@/lib/server/auth";
+import { applyAuthRateLimit } from "@/lib/server/auth-rate-limit-response";
 
 export const runtime = "nodejs";
 
@@ -14,6 +15,8 @@ export async function POST(request: Request) {
   }
 
   try {
+    const limited = await applyAuthRateLimit(request, "verification", accountData.user.id);
+    if (limited) return limited;
     const baseUrl = request.headers.get("origin") ?? new URL(request.url).origin;
     const result = await sendEmailVerificationForUser(accountData.user.id, baseUrl);
 

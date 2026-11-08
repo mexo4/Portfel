@@ -21,10 +21,10 @@ export default async function PricingPage() {
 
       <section className="pricing-hero">
         <p className="eyebrow">Monetyzacja</p>
-        <h1>Prosty cennik dla rosnacego portfela</h1>
+        <h1>Pięć planów Mexo</h1>
         <p>
-          Free daje bezpieczny start, Pro zdejmie limit pozycji i porzadkuje miejsce
-          pod przyszla platnosc online.
+          Free jest obecnie dostępny. Ceny planów Basic, Standard, Pro i Expert są docelową konfiguracją;
+          ich zakup nie jest aktywny, a szczegółowy zakres nowych poziomów wymaga zatwierdzenia.
         </p>
       </section>
 

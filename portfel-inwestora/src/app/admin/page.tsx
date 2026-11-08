@@ -39,13 +39,13 @@ export default async function AdminPage() {
             <strong>{dashboard.totals.users}</strong>
           </article>
           <article className="metric-card">
-            <span>Free / Pro</span>
+            <span>Free / Basic / Standard / Pro / Expert</span>
             <strong>
-              {dashboard.totals.freeUsers} / {dashboard.totals.proUsers}
+              {dashboard.totals.freeUsers} / {dashboard.totals.basicUsers} / {dashboard.totals.standardUsers} / {dashboard.totals.proUsers} / {dashboard.totals.expertUsers}
             </strong>
           </article>
           <article className="metric-card">
-            <span>Oplacone Pro</span>
+            <span>Aktywne plany płatne</span>
             <strong>{dashboard.totals.paidPlans}</strong>
           </article>
           <article className="metric-card">
@@ -66,7 +66,7 @@ export default async function AdminPage() {
           </article>
         </section>
 
-        <AdminUsersPanel users={dashboard.users} />
+        <AdminUsersPanel users={dashboard.users} currentUserId={dashboard.currentUserId} />
       </div>
     </main>
   );

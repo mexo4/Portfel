@@ -3,15 +3,16 @@
 import {
   AUTO_REFRESH_INTERVAL_MS,
   FREE_PLAN_ASSET_LIMIT,
-  MEXO_TESTER_MODE,
 } from "@/lib/constants";
+import { resolveEffectiveEntitlements } from "@/lib/entitlements";
 import { formatCurrency, formatDateTime } from "@/lib/utils";
-import type { PortfolioSummary as SummaryModel, SubscriptionPlan } from "@/types/portfolio";
+import type { AuthenticatedUser, PortfolioSummary as SummaryModel, SubscriptionPlan } from "@/types/portfolio";
 
 type PortfolioSummaryProps = {
   summary: SummaryModel;
   lastSyncAt?: string;
   fxUpdatedAt?: string;
+  fxQualityNote?: string | null;
   isRefreshing: boolean;
   isLoggingOut?: boolean;
   isSendingVerification?: boolean;
@@ -21,6 +22,10 @@ type PortfolioSummaryProps = {
   verificationError?: string | null;
   verificationPreviewUrl?: string | null;
   subscriptionPlan: SubscriptionPlan;
+  subscriptionStatus: AuthenticatedUser["subscriptionStatus"];
+  subscriptionExpiresAt: string | null;
+  testerAccess: boolean;
+  role: AuthenticatedUser["role"];
   onRefresh: () => void;
   onLogout?: () => void;
   onRequestVerification?: () => void;
@@ -30,6 +35,7 @@ export default function PortfolioSummary({
   summary,
   lastSyncAt,
   fxUpdatedAt,
+  fxQualityNote,
   isRefreshing,
   isLoggingOut,
   isSendingVerification,
@@ -39,10 +45,22 @@ export default function PortfolioSummary({
   verificationError,
   verificationPreviewUrl,
   subscriptionPlan,
+  subscriptionStatus,
+  subscriptionExpiresAt,
+  testerAccess,
+  role,
   onRefresh,
   onLogout,
   onRequestVerification,
 }: PortfolioSummaryProps) {
+  const planState = resolveEffectiveEntitlements({
+    subscriptionPlan,
+    subscriptionStatus,
+    subscriptionExpiresAt,
+    role,
+    testerAccess,
+    espiAccess: false,
+  });
   const foreignRealizedEntries = Object.entries(summary.realizedProfitLossByCurrency)
     .filter(([currency]) => currency !== summary.currency)
     .sort(([leftCurrency], [rightCurrency]) => leftCurrency.localeCompare(rightCurrency, "pl"));
@@ -61,7 +79,7 @@ export default function PortfolioSummary({
 
         <div className="summary-actions">
           <a className="ghost-button" href="/pricing">
-            Plan {MEXO_TESTER_MODE ? "Tester" : subscriptionPlan === "pro" ? "Pro" : "Free"}
+            Plan {testerAccess ? "Tester · " : ""}{planState.effectivePlan[0]?.toUpperCase()}{planState.effectivePlan.slice(1)}{planState.isExpired ? " (wygasł)" : ""}
           </a>
 
           {canVerifyEmail && onRequestVerification ? (
@@ -164,13 +182,20 @@ export default function PortfolioSummary({
         <span className="tag">unikalne aktywa: {summary.assetsCount}</span>
         <span className="tag">sprzedaze: {summary.salesCount}</span>
         <span className="tag">
-          plan: {MEXO_TESTER_MODE ? "Tester: wszystkie wdrożone funkcje" : subscriptionPlan === "pro" ? "Pro bez limitu" : `Free: do ${FREE_PLAN_ASSET_LIMIT} pozycji w portfelu`}
+          plan: {testerAccess
+            ? "Tester: dostęp przypisany do konta"
+            : planState.isExpired
+              ? `Free po wygaśnięciu · dane zachowane · limit ${FREE_PLAN_ASSET_LIMIT} pozycji`
+              : planState.effectivePlan === "free"
+                ? `Free: do ${FREE_PLAN_ASSET_LIMIT} pozycji w portfelu`
+                : `Mexo ${planState.effectivePlan} · dostęp do ${subscriptionExpiresAt ? formatDateTime(subscriptionExpiresAt) : "bez daty końcowej (legacy; wymaga przeglądu)"}`}
         </span>
         <span className="tag">auto refresh: co {AUTO_REFRESH_INTERVAL_MS / 1000}s</span>
         <span className="tag">baza: {summary.currency}</span>
       </div>
 
       {syncError ? <p className="field-note field-note-error mt-4">{syncError}</p> : null}
+      {fxQualityNote ? <p className="field-note mt-4" role="status">{fxQualityNote}</p> : null}
       {verificationMessage ? <p className="field-note mt-4">{verificationMessage}</p> : null}
       {verificationPreviewUrl ? (
         <p className="field-note">

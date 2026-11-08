@@ -3,6 +3,7 @@ import {
   changeCurrentUserPassword,
   getCurrentAccountData,
 } from "@/lib/server/auth";
+import { applyAuthRateLimit } from "@/lib/server/auth-rate-limit-response";
 
 export const runtime = "nodejs";
 
@@ -12,6 +13,9 @@ export async function POST(request: Request) {
   if (!accountData) {
     return NextResponse.json({ error: "Brak autoryzacji." }, { status: 401 });
   }
+
+  const limited = await applyAuthRateLimit(request, "login", accountData.user.id);
+  if (limited) return limited;
 
   try {
     const payload = (await request.json()) as {

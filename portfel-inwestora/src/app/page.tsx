@@ -2,7 +2,7 @@ import Link from "next/link";
 import { getCurrentAccountData } from "@/lib/server/auth";
 
 const featureItems = [
-  "Akcje, ETF-y, krypto i obligacje skarbowe w jednym portfelu",
+  "Akcje, ETF-y i obligacje skarbowe w jednym portfelu",
   "Wycena w PLN z kursami FX i historia sprzedazy",
   "Wykresy struktury, wyniku i porownania z benchmarkami",
 ];
@@ -39,7 +39,7 @@ export default async function HomePage() {
           <h1>Portfel Inwestora</h1>
           <p>
             Prywatny panel do sledzenia aktywow, transakcji, obligacji i wyniku w PLN.
-            Startujesz za darmo, a Pro odblokowuje wieksze portfele.
+            Możesz zacząć bezpłatnie. Obsługa nowych kryptowalut jest tymczasowo wyłączona.
           </p>
           <div className="marketing-actions">
             <Link href={appHref} className="primary-button">

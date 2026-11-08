@@ -7,6 +7,7 @@ import {
   GOOGLE_OAUTH_STATE_COOKIE_NAME,
   GoogleOAuthConfigurationError,
 } from "@/lib/server/oauth";
+import { applyAuthRateLimit } from "@/lib/server/auth-rate-limit-response";
 
 export const runtime = "nodejs";
 
@@ -16,7 +17,9 @@ const redirectToLogin = (message: string) => {
   return NextResponse.redirect(url);
 };
 
-export async function GET() {
+export async function GET(request: Request) {
+  const limited = await applyAuthRateLimit(request, "login");
+  if (limited) return limited;
   try {
     const { pending, cookieValue } = createGoogleOAuthPending();
     const response = NextResponse.redirect(getGoogleAuthorizationUrl(pending));

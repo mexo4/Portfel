@@ -1,6 +1,6 @@
 import {
   fetchEodhdQuote,
-  fetchEodhdFxRates,
+  fetchEodhdFxRatesDetailed,
   searchEodhdEtfs,
   searchEodhdStocks,
 } from "@/lib/server/eodhd";
@@ -24,6 +24,7 @@ import {
   resolveTickerIdentity,
 } from "@/lib/ticker-aliases";
 import { normalizeText, round, toCurrencyCode, uniqueBy } from "@/lib/utils";
+import { classifyFxRateQuality, type FxRateQuality } from "@/lib/fx-quality";
 import {
   getLatestCompletedGpwSessionDate,
   isFreshGpwMarketPrice,
@@ -2030,7 +2031,9 @@ const shiftDateInputValue = (date: string, days: number) => {
   return sourceDate.toISOString().slice(0, 10);
 };
 
-const fetchNbpFxTable = async (table: "A" | "B", date?: string) => {
+type NbpFxTable = { effectiveDate?: string; rates: Array<{ code?: string; mid?: number }> };
+
+const fetchNbpFxTable = async (table: "A" | "B", date?: string): Promise<NbpFxTable> => {
   const response = await fetch(
     `https://api.nbp.pl/api/exchangerates/tables/${table}${date ? `/${date}` : ""}?format=json`,
     {
@@ -2047,13 +2050,14 @@ const fetchNbpFxTable = async (table: "A" | "B", date?: string) => {
   }
 
   const payload = (await response.json()) as Array<{
+    effectiveDate?: string;
     rates?: Array<{
       code?: string;
       mid?: number;
     }>;
   }>;
 
-  return payload[0]?.rates ?? [];
+  return { effectiveDate: payload[0]?.effectiveDate, rates: payload[0]?.rates ?? [] };
 };
 
 const fetchNbpHistoricalFxRates = async (codes: CurrencyCode[], date: string) => {
@@ -2063,112 +2067,129 @@ const fetchNbpHistoricalFxRates = async (codes: CurrencyCode[], date: string) =>
       fetchNbpFxTable("A", effectiveDate),
       fetchNbpFxTable("B", effectiveDate),
     ]);
-    const nbpRates = [
-      ...(tableA.status === "fulfilled" ? tableA.value : []),
-      ...(tableB.status === "fulfilled" ? tableB.value : []),
+    const nbpTables = [
+      ...(tableA.status === "fulfilled" ? [{ effectiveDate: tableA.value.effectiveDate, rates: tableA.value.rates }] : []),
+      ...(tableB.status === "fulfilled" ? [{ effectiveDate: tableB.value.effectiveDate, rates: tableB.value.rates }] : []),
     ];
 
-    if (nbpRates.length === 0) {
+    if (nbpTables.every((table) => table.rates.length === 0)) {
       continue;
     }
 
-    return codes.reduce<FxRates>((rates, code) => {
+    const { rates, asOfByCode } = codes.reduce<{ rates: FxRates; asOfByCode: Partial<Record<CurrencyCode, string>> }>((result, code) => {
       if (code === "PLN") {
-        rates[code] = 1;
-        return rates;
+        result.rates[code] = 1;
+        return result;
       }
 
-      const nbpRate = nbpRates.find((item) => item.code === code)?.mid;
+      const source = nbpTables.find((table) => table.rates.some((item) => item.code === code));
+      const nbpRate = source?.rates.find((item) => item.code === code)?.mid;
 
       if (typeof nbpRate === "number" && nbpRate > 0) {
-        rates[code] = round(nbpRate, 6);
+        result.rates[code] = round(nbpRate, 6);
+        if (source?.effectiveDate) result.asOfByCode[code] = source.effectiveDate;
       }
 
-      return rates;
-    }, { PLN: 1 });
+      return result;
+    }, { rates: { PLN: 1 }, asOfByCode: {} });
+    return {
+      rates,
+      asOfByCode,
+    };
   }
 
-  return { PLN: 1 };
+  return { rates: { PLN: 1 } as FxRates, asOfByCode: {} };
 };
 
-export const fetchFxRatesServer = async (
+export type FxRateProvenance = { status: FxRateQuality; source: "eodhd" | "nbp" | "fallback" | "unavailable"; asOf: string | null };
+export type FxRatesDetailed = { rates: FxRates; quality: Partial<Record<CurrencyCode, FxRateProvenance>>; fetchedAt: string };
+
+export const fetchFxRatesServerDetailed = async (
   codes: CurrencyCode[] = [],
   date?: string,
   options: { historicalOnly?: boolean } = {}
-): Promise<FxRates> => {
+): Promise<FxRatesDetailed> => {
   const normalizedCodes = uniqueBy(
     codes.map((code) => toCurrencyCode(code)).concat("PLN"),
     (code) => code
   );
+  const fetchedAt = new Date().toISOString();
+  const rates: FxRates = { PLN: 1 };
+  const quality: Partial<Record<CurrencyCode, FxRateProvenance>> = {
+    PLN: { status: "confirmed", source: "nbp", asOf: date ?? fetchedAt.slice(0, 10) },
+  };
 
   if (date) {
-    const historicalNbpRates = await fetchNbpHistoricalFxRates(normalizedCodes, date);
+    const historical = await fetchNbpHistoricalFxRates(normalizedCodes, date);
+    Object.assign(rates, historical.rates);
+    for (const code of normalizedCodes) {
+      if (code === "PLN") continue;
+      const rate = historical.rates[code];
+      quality[code] = {
+        status: classifyFxRateQuality({ rate, asOf: historical.asOfByCode[code], targetDate: date, source: "nbp" }),
+        source: rate ? "nbp" : "unavailable",
+        asOf: rate ? historical.asOfByCode[code] ?? null : null,
+      };
+    }
     // Historical imports must never silently turn a missing dated fixing into
     // today's FX rate. Missing currencies stay absent for explicit validation.
-    if (options.historicalOnly) return historicalNbpRates;
+    if (options.historicalOnly) return { rates, quality, fetchedAt };
     const missingHistoricalCodes = normalizedCodes.filter(
-      (code) => historicalNbpRates[code] === undefined
+      (code) => rates[code] === undefined
     );
 
     if (missingHistoricalCodes.length === 0) {
-      return historicalNbpRates;
+      return { rates, quality, fetchedAt };
     }
 
-    const fallbackCurrentRates = await fetchEodhdFxRates(missingHistoricalCodes);
-
-    return normalizedCodes.reduce<FxRates>((rates, code) => {
-      if (historicalNbpRates[code] !== undefined) {
-        rates[code] = historicalNbpRates[code];
-        return rates;
-      }
-
-      if (fallbackCurrentRates[code] !== undefined) {
-        rates[code] = fallbackCurrentRates[code];
-        return rates;
-      }
-
-      if (code === "PLN") {
-        rates[code] = 1;
-      }
-
-      return rates;
-    }, { PLN: 1 });
+    const fallbackCurrentRates = await fetchEodhdFxRatesDetailed(missingHistoricalCodes);
+    for (const code of missingHistoricalCodes) {
+      const rate = fallbackCurrentRates.rates[code];
+      if (typeof rate === "number") rates[code] = rate;
+      quality[code] = {
+        status: rate ? "fallback" : "unavailable",
+        source: rate ? "fallback" : "unavailable",
+        asOf: rate ? fallbackCurrentRates.asOf[code] ?? null : null,
+      };
+    }
+    return { rates, quality, fetchedAt };
   }
 
-  const eodhdRates = await fetchEodhdFxRates(normalizedCodes);
-  const missingCodes = normalizedCodes.filter((code) => eodhdRates[code] === undefined);
-
-  if (missingCodes.length === 0) {
-    return eodhdRates;
+  const eodhdFx = await fetchEodhdFxRatesDetailed(normalizedCodes);
+  const missingCodes = normalizedCodes.filter((code) => eodhdFx.rates[code] === undefined);
+  Object.assign(rates, eodhdFx.rates);
+  for (const code of normalizedCodes) {
+    if (code === "PLN") continue;
+    if (typeof eodhdFx.rates[code] === "number") {
+      const asOf = eodhdFx.asOf[code] ?? null;
+      quality[code] = {
+        status: classifyFxRateQuality({ rate: eodhdFx.rates[code], asOf, targetDate: fetchedAt.slice(0, 10), source: "eodhd" }),
+        source: "eodhd",
+        asOf,
+      };
+    }
   }
-
-  const [tableA, tableB] = await Promise.allSettled([fetchNbpFxTable("A"), fetchNbpFxTable("B")]);
-  const nbpRates = [
-    ...(tableA.status === "fulfilled" ? tableA.value : []),
-    ...(tableB.status === "fulfilled" ? tableB.value : []),
-  ];
-
-  return normalizedCodes.reduce<FxRates>((rates, code) => {
-    if (rates[code] !== undefined) {
-      return rates;
+  if (missingCodes.length > 0) {
+    const [tableA, tableB] = await Promise.allSettled([fetchNbpFxTable("A"), fetchNbpFxTable("B")]);
+    const nbpTables = [
+      ...(tableA.status === "fulfilled" ? [{ effectiveDate: tableA.value.effectiveDate, rates: tableA.value.rates }] : []),
+      ...(tableB.status === "fulfilled" ? [{ effectiveDate: tableB.value.effectiveDate, rates: tableB.value.rates }] : []),
+    ];
+    for (const code of missingCodes) {
+      const source = nbpTables.find((table) => table.rates.some((item) => item.code === code));
+      const rate = source?.rates.find((item) => item.code === code)?.mid;
+      const asOf = source?.effectiveDate;
+      if (typeof rate === "number" && rate > 0) rates[code] = round(rate, 6);
+      quality[code] = {
+        status: classifyFxRateQuality({ rate, asOf, targetDate: fetchedAt.slice(0, 10), source: "nbp" }),
+        source: rate ? "nbp" : "unavailable",
+        asOf: rate ? asOf ?? null : null,
+      };
     }
-
-    if (eodhdRates[code] !== undefined) {
-      rates[code] = eodhdRates[code];
-      return rates;
-    }
-
-    if (code === "PLN") {
-      rates[code] = 1;
-      return rates;
-    }
-
-    const nbpRate = nbpRates.find((item) => item.code === code)?.mid;
-
-    if (typeof nbpRate === "number" && nbpRate > 0) {
-      rates[code] = round(nbpRate, 6);
-    }
-
-    return rates;
-  }, { PLN: 1 });
+  }
+  return { rates, quality, fetchedAt };
 };
+
+export const fetchFxRatesServer = async (
+  codes: CurrencyCode[] = [], date?: string, options: { historicalOnly?: boolean } = {}
+): Promise<FxRates> => (await fetchFxRatesServerDetailed(codes, date, options)).rates;

@@ -7,9 +7,11 @@ import { deleteAdminUser } from "@/lib/api";
 import { getAssetPurchasePriceCurrency } from "@/lib/pricing";
 import { formatDate, formatDateTime, formatNumber } from "@/lib/utils";
 import type { AdminDashboardData, AdminUserOverview } from "@/lib/server/admin";
+import type { SubscriptionPlan } from "@/types/portfolio";
 
 type AdminUsersPanelProps = {
   users: AdminDashboardData["users"];
+  currentUserId: string;
 };
 
 type AdminTransaction = {
@@ -22,8 +24,9 @@ type AdminTransaction = {
 };
 
 const isPlanPaid = (user: AdminUserOverview) =>
-  user.subscriptionPlan === "pro" &&
-  (user.subscriptionStatus === "active" || user.subscriptionStatus === "trialing");
+  user.subscriptionPlan !== "free" &&
+  (user.subscriptionStatus === "active" || user.subscriptionStatus === "trialing") &&
+  (!user.subscriptionExpiresAt || Date.parse(user.subscriptionExpiresAt) > Date.now());
 
 const getPaymentLabel = (user: AdminUserOverview) => {
   if (isPlanPaid(user)) {
@@ -86,11 +89,13 @@ const buildTransactions = (user: AdminUserOverview) => {
   );
 };
 
-export default function AdminUsersPanel({ users }: AdminUsersPanelProps) {
+export default function AdminUsersPanel({ users, currentUserId }: AdminUsersPanelProps) {
   const router = useRouter();
   const [expandedUsers, setExpandedUsers] = useState<Record<string, boolean>>({});
   const [pendingDeleteUserId, setPendingDeleteUserId] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [pendingAccessUserId, setPendingAccessUserId] = useState<string | null>(null);
+  const [accessError, setAccessError] = useState<string | null>(null);
   const transactionsByUserId = useMemo(
     () => new Map(users.map((user) => [user.id, buildTransactions(user)] as const)),
     [users]
@@ -113,6 +118,25 @@ export default function AdminUsersPanel({ users }: AdminUsersPanelProps) {
       setDeleteError(error instanceof Error ? error.message : "Nie udalo sie usunac profilu.");
     } finally {
       setPendingDeleteUserId(null);
+    }
+  };
+
+  const updateAccess = async (user: AdminUserOverview, patch: Record<string, unknown>) => {
+    setPendingAccessUserId(user.id);
+    setAccessError(null);
+    try {
+      const response = await fetch(`/api/admin/users/${encodeURIComponent(user.id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      const payload = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(payload.error ?? "Nie udało się zmienić dostępu.");
+      router.refresh();
+    } catch (error) {
+      setAccessError(error instanceof Error ? error.message : "Nie udało się zmienić dostępu.");
+    } finally {
+      setPendingAccessUserId(null);
     }
   };
 
@@ -176,18 +200,38 @@ export default function AdminUsersPanel({ users }: AdminUsersPanelProps) {
                     <span>Utworzono: {formatDate(user.createdAt)}</span>
                     <span>Aktualizacja: {formatDateTime(user.updatedAt)}</span>
                     <span>Plan zmieniony: {formatDateTime(user.subscriptionUpdatedAt ?? undefined)}</span>
+                    <span>Dostęp do: {formatDateTime(user.subscriptionExpiresAt ?? undefined)}</span>
+                    <span>Źródło nadania: {user.subscriptionGrantSource ?? "brak"}</span>
+                    <span>Rola: {user.role} · Tester: {user.testerAccess ? "tak" : "nie"} · ESPI: {user.espiAccess ? "tak" : "nie"}</span>
                   </div>
 
                   <div className="admin-profile-actions">
+                    <label>
+                      Plan
+                      <select value={user.subscriptionPlan} disabled={pendingAccessUserId === user.id} onChange={(event) => void updateAccess(user, { subscriptionPlan: event.target.value as SubscriptionPlan })}>
+                        <option value="free">Free</option><option value="basic">Basic</option><option value="standard">Standard</option><option value="pro">Pro</option><option value="expert">Expert</option>
+                      </select>
+                    </label>
+                    <label>
+                      Rola
+                      <select value={user.role} disabled={pendingAccessUserId === user.id || user.id === currentUserId} onChange={(event) => void updateAccess(user, { role: event.target.value })}>
+                        <option value="user">Użytkownik</option><option value="admin">Administrator</option>
+                      </select>
+                    </label>
+                    <label><input type="checkbox" checked={user.testerAccess} disabled={pendingAccessUserId === user.id || user.id === currentUserId} onChange={(event) => void updateAccess(user, { testerAccess: event.target.checked })} /> Dostęp Tester</label>
+                    <label><input type="checkbox" checked={user.espiAccess} disabled={pendingAccessUserId === user.id || user.id === currentUserId} onChange={(event) => void updateAccess(user, { espiAccess: event.target.checked })} /> Dostęp ESPI</label>
                     <button
                       className="ghost-button admin-danger-button"
                       type="button"
                       onClick={() => void handleDeleteUser(user)}
-                      disabled={pendingDeleteUserId === user.id}
+                      disabled={pendingDeleteUserId === user.id || user.id === currentUserId}
                     >
                       {pendingDeleteUserId === user.id ? "Usuwam..." : "Usun profil"}
                     </button>
                   </div>
+                  {pendingAccessUserId === user.id ? <p className="field-note">Zapisuję zmianę dostępu…</p> : null}
+                  {accessError ? <p className="field-note field-note-error">{accessError}</p> : null}
+                  <p className="field-note">Płatny plan nadany przez administratora działa 30 dni. Nie skonfigurowano płatności automatycznych. Nie możesz zmienić własnego dostępu.</p>
 
                   <div className="admin-transaction-head">
                     <h3 className="admin-subtitle">Wszystkie transakcje</h3>

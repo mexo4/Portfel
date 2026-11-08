@@ -90,6 +90,12 @@ const schemaStatements = [
       subscription_plan TEXT NOT NULL DEFAULT 'free',
       subscription_status TEXT NOT NULL DEFAULT 'active',
       subscription_updated_at TEXT,
+      subscription_activated_at TEXT,
+      subscription_expires_at TEXT,
+      subscription_grant_source TEXT,
+      user_role TEXT NOT NULL DEFAULT 'user',
+      tester_access BOOLEAN NOT NULL DEFAULT FALSE,
+      espi_access BOOLEAN NOT NULL DEFAULT FALSE,
       profile_json TEXT NOT NULL,
       portfolio_json TEXT NOT NULL,
       portfolio_revision INTEGER NOT NULL DEFAULT 0,
@@ -661,6 +667,25 @@ const schemaStatements = [
   "ALTER TABLE users ADD COLUMN IF NOT EXISTS subscription_plan TEXT NOT NULL DEFAULT 'free'",
   "ALTER TABLE users ADD COLUMN IF NOT EXISTS subscription_status TEXT NOT NULL DEFAULT 'active'",
   "ALTER TABLE users ADD COLUMN IF NOT EXISTS subscription_updated_at TEXT",
+  "ALTER TABLE users ADD COLUMN IF NOT EXISTS subscription_activated_at TEXT",
+  "ALTER TABLE users ADD COLUMN IF NOT EXISTS subscription_expires_at TEXT",
+  "ALTER TABLE users ADD COLUMN IF NOT EXISTS subscription_grant_source TEXT",
+  "ALTER TABLE users ADD COLUMN IF NOT EXISTS user_role TEXT NOT NULL DEFAULT 'user'",
+  "ALTER TABLE users ADD COLUMN IF NOT EXISTS tester_access BOOLEAN NOT NULL DEFAULT FALSE",
+  "ALTER TABLE users ADD COLUMN IF NOT EXISTS espi_access BOOLEAN NOT NULL DEFAULT FALSE",
+  `CREATE TABLE IF NOT EXISTS auth_rate_limit_buckets (
+    bucket_hash TEXT NOT NULL,
+    window_started_at TIMESTAMPTZ NOT NULL,
+    hit_count INTEGER NOT NULL,
+    PRIMARY KEY (bucket_hash, window_started_at)
+  )`,
+  "CREATE INDEX IF NOT EXISTS idx_auth_rate_limit_window ON auth_rate_limit_buckets(window_started_at)",
+  `CREATE TABLE IF NOT EXISTS auth_rate_limit_maintenance (
+    maintenance_key TEXT PRIMARY KEY,
+    last_cleaned_at TIMESTAMPTZ NOT NULL
+  )`,
+  `INSERT INTO auth_rate_limit_maintenance (maintenance_key, last_cleaned_at)
+   VALUES ('auth-rate-limit', now()) ON CONFLICT (maintenance_key) DO NOTHING`,
   "ALTER TABLE users ADD COLUMN IF NOT EXISTS portfolio_revision INTEGER NOT NULL DEFAULT 0",
   "ALTER TABLE users ADD COLUMN IF NOT EXISTS portfolio_core_revision INTEGER NOT NULL DEFAULT -1",
   "ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL",

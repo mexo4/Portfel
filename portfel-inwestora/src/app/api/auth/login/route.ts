@@ -6,6 +6,7 @@ import {
   loginAccount,
   sendEmailVerificationForUser,
 } from "@/lib/server/auth";
+import { applyAuthRateLimit } from "@/lib/server/auth-rate-limit-response";
 
 export const runtime = "nodejs";
 
@@ -15,6 +16,9 @@ export async function POST(request: Request) {
       email?: string;
       password?: string;
     };
+
+    const limited = await applyAuthRateLimit(request, "login", payload.email ?? "");
+    if (limited) return limited;
 
     const user = await loginAccount({
       email: payload.email ?? "",
@@ -28,23 +32,22 @@ export async function POST(request: Request) {
     return response;
   } catch (error) {
     if (error instanceof EmailVerificationRequiredError) {
+      const limited = await applyAuthRateLimit(request, "verification", error.userId);
+      if (limited) return limited;
       const baseUrl = request.headers.get("origin") ?? new URL(request.url).origin;
-      const verification = await sendEmailVerificationForUser(error.userId, baseUrl);
+      await sendEmailVerificationForUser(error.userId, baseUrl);
 
       return NextResponse.json(
         {
-          error: error.message,
-          requiresVerification: true,
-          verificationSent: verification.sent,
-          previewUrl: process.env.NODE_ENV === "production" ? null : verification.previewUrl,
+          // Keep the public response indistinguishable from an invalid
+          // credential pair. The verification message is still sent, but the
+          // API does not confirm that this address owns an account.
+          error: "Niepoprawny email lub hasło.",
         },
-        { status: 403 }
+        { status: 401 }
       );
     }
 
-    const message =
-      error instanceof Error ? error.message : "Nie udalo sie zalogowac.";
-
-    return NextResponse.json({ error: message }, { status: 400 });
+    return NextResponse.json({ error: "Niepoprawny email lub hasło." }, { status: 401 });
   }
 }

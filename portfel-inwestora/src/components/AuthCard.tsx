@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useRef, useState, useSyncExternalStore, type FormEvent } from "react";
 import PasswordField from "@/components/PasswordField";
 import { ApiError, loginUser, registerUser } from "@/lib/api";
 
@@ -26,6 +26,10 @@ const getVerificationPayload = (error: unknown) => {
   const payload = error.payload as VerificationErrorPayload;
   return payload.requiresVerification ? payload : null;
 };
+
+const subscribeToHydration = () => () => undefined;
+const getClientHydrationSnapshot = () => true;
+const getServerHydrationSnapshot = () => false;
 
 function GoogleMark() {
   return (
@@ -62,16 +66,16 @@ export default function AuthCard({
   const [error, setError] = useState<string | null>(initialError);
   const [notice, setNotice] = useState<string | null>(initialNotice);
   const [verificationPreviewUrl, setVerificationPreviewUrl] = useState<string | null>(null);
-  const [isHydrated, setIsHydrated] = useState(false);
+  const isHydrated = useSyncExternalStore(
+    subscribeToHydration,
+    getClientHydrationSnapshot,
+    getServerHydrationSnapshot
+  );
   const [isSubmitting, setIsSubmitting] = useState(false);
   const displayNameRef = useRef<HTMLInputElement | null>(null);
   const emailRef = useRef<HTMLInputElement | null>(null);
   const passwordRef = useRef<HTMLInputElement | null>(null);
   const isRegister = mode === "register";
-
-  useEffect(() => {
-    setIsHydrated(true);
-  }, []);
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();

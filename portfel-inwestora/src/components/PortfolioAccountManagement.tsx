@@ -38,6 +38,7 @@ type Props = {
   activePortfolio: InvestmentPortfolio | null | undefined;
   activePortfolioId: string;
   isAllPortfoliosSelected: boolean;
+  canCreateAnotherPortfolio: boolean;
   summaries: Array<{ portfolio: InvestmentPortfolio; summary: PortfolioSummary }>;
   isPending: boolean;
   onSelect: (portfolioId: string) => void;
@@ -287,6 +288,7 @@ export default function PortfolioAccountManagement({
   activePortfolio,
   activePortfolioId,
   isAllPortfoliosSelected,
+  canCreateAnotherPortfolio,
   summaries,
   isPending,
   onSelect,
@@ -332,7 +334,7 @@ export default function PortfolioAccountManagement({
   }, [isCreating]);
 
   const openCreateModal = () => {
-    if (isPending) return;
+    if (isPending || !canCreateAnotherPortfolio) return;
     returnFocusRef.current =
       document.activeElement instanceof HTMLElement
         ? document.activeElement
@@ -432,7 +434,7 @@ export default function PortfolioAccountManagement({
           <div className="portfolio-hub-actions">
             <button className="ghost-button" type="button" onClick={onRename} disabled={isPending || isAllPortfoliosSelected}>Zmień nazwę</button>
             <button className="ghost-button admin-danger-button" type="button" onClick={onDelete} disabled={portfolios.length <= 1 || isPending || isAllPortfoliosSelected}>{isPending ? "Zapisywanie…" : "Usuń portfel"}</button>
-            <button ref={createTriggerRef} className="primary-button" type="button" onClick={openCreateModal} disabled={isPending} aria-haspopup="dialog" aria-expanded={isCreating}>Dodaj portfel</button>
+            <button ref={createTriggerRef} className="primary-button" type="button" onClick={openCreateModal} disabled={isPending || !canCreateAnotherPortfolio} aria-haspopup="dialog" aria-expanded={isCreating}>Dodaj portfel</button>
           </div>
         </div>
 

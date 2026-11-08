@@ -12,10 +12,10 @@ import {
   CRYPTO_UI_ENABLED,
   FALLBACK_FX_RATES,
   FREE_PLAN_ASSET_LIMIT,
-  MEXO_TESTER_MODE,
   isAssetEntryModeEnabled,
   SEARCH_DEBOUNCE_MS,
 } from "@/lib/constants";
+import { canAddAsset, canCreatePortfolio, resolveEffectiveEntitlements } from "@/lib/entitlements";
 import {
   ApiError,
   addWatchlistItem,
@@ -23,6 +23,7 @@ import {
   countAssetsWithoutUsableQuote,
   fetchWatchlist,
   fetchFxRates,
+  type FxRatesResponse,
   fetchQuotePreview,
   fetchTreasuryBondRedemption,
   fetchTreasuryBondSeries,
@@ -91,6 +92,7 @@ import {
   getModeConfig,
   pickBestSearchResult,
 } from "@/lib/search";
+import { getVerifiedHistoricalFxRate } from "@/lib/fx-quality";
 import {
   createAssetId,
   createEmptyDraft,
@@ -450,42 +452,25 @@ const getFxRateToPlnSnapshot = (
 
 const fetchHistoricalFxRates = async (
   codes: Array<string | undefined>,
-  date: string,
-  currentRates: FxRates
-) => {
+  date: string
+): Promise<FxRatesResponse> => {
   const normalizedCodes = Array.from(
     new Set(codes.map((code) => toCurrencyCode(code, "PLN")).filter(Boolean))
   );
 
-  // PLN -> PLN is exact and does not require an NBP round-trip. This is the
-  // common GPW add path and previously made a completed click look stalled.
   if (normalizedCodes.every((code) => code === "PLN")) {
-    return {
-      ...FALLBACK_FX_RATES,
-      ...currentRates,
-      PLN: 1,
-    };
+    return { rates: { PLN: 1 }, quality: { PLN: { status: "confirmed", source: "nbp", asOf: date } }, fetchedAt: new Date().toISOString() };
   }
 
   try {
-    const response = await fetchFxRates(normalizedCodes, date);
-
-    return {
-      ...FALLBACK_FX_RATES,
-      ...currentRates,
-      ...response.rates,
-    };
+    return await fetchFxRates(normalizedCodes, date, true);
   } catch {
-    return {
-      ...FALLBACK_FX_RATES,
-      ...currentRates,
-    };
+    const quality = Object.fromEntries(
+      normalizedCodes.map((code) => [code, { status: "unavailable" as const, source: "unavailable", asOf: null }])
+    );
+    return { rates: { PLN: 1 }, quality, fetchedAt: new Date().toISOString() };
   }
 };
-
-const canUseProFeatures = (account: AuthenticatedUser) =>
-  MEXO_TESTER_MODE || (account.subscriptionPlan === "pro" &&
-  (account.subscriptionStatus === "active" || account.subscriptionStatus === "trialing"));
 
 const getImportedOperationType = (
   operation: ImportedBrokerOperation
@@ -1101,6 +1086,7 @@ export default function PortfolioApp({
   const [hasLoadedSortMode, setHasLoadedSortMode] = useState(false);
   const [fxRates, setFxRates] = useState<FxRates>(FALLBACK_FX_RATES);
   const [verifiedFxCurrencies, setVerifiedFxCurrencies] = useState<CurrencyCode[]>(["PLN"]);
+  const [fxQualityNote, setFxQualityNote] = useState<string | null>(null);
   const [isSearching, setIsSearching] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isSavingPortfolio, setIsSavingPortfolio] = useState(false);
@@ -1485,13 +1471,14 @@ export default function PortfolioApp({
       if (timeoutId !== null) clearTimeout(timeoutId);
     };
   }, [portfolioHistoryPrefetchDescriptor]);
-  const hasProFeatures = canUseProFeatures(account);
   const getFreePlanAssetLimitError = (
     nextAssetGroups = new Set(assets.map(getPortfolioAssetGroupKey)).size + 1
-  ) =>
-    !hasProFeatures && nextAssetGroups > FREE_PLAN_ASSET_LIMIT
-      ? `Plan Free pozwala miec do ${FREE_PLAN_ASSET_LIMIT} pozycji w jednym portfelu. Przejdz na Pro, aby dodawac kolejne.`
+  ) => {
+    const currentAssetGroups = new Set(assets.map(getPortfolioAssetGroupKey)).size;
+    return nextAssetGroups > currentAssetGroups && !canAddAsset(account, currentAssetGroups)
+      ? `Obecny limit planu wynosi ${FREE_PLAN_ASSET_LIMIT} pozycji na portfel. Twoje zapisane dane pozostają dostępne.`
       : null;
+  };
   const activePortfolioForEngine = useMemo(
     () =>
       activePortfolio
@@ -2756,10 +2743,16 @@ export default function PortfolioApp({
       fxRatesRef.current = nextRates;
       setFxRates(nextRates);
       setFxUpdatedAt(response.fetchedAt);
+      const unverified = Object.entries(response.quality ?? {})
+        .filter(([, detail]) => detail?.status === "fallback" || detail?.status === "stale" || detail?.status === "unavailable")
+        .map(([currency]) => currency);
+      setFxQualityNote(unverified.length > 0
+        ? `Kursy ${unverified.join(", ")} mają status awaryjny, nieaktualny lub niedostępny. Wycena może być orientacyjna; historyczne wskaźniki nie używają tych wartości jako potwierdzonego FX.`
+        : null);
       setVerifiedFxCurrencies(Array.from(new Set([
         "PLN",
-        ...Object.entries(response.rates)
-          .filter(([, rate]) => typeof rate === "number" && Number.isFinite(rate) && rate > 0)
+        ...Object.entries(response.quality ?? {})
+          .filter(([, detail]) => detail?.status === "confirmed" || detail?.status === "historically-carried")
           .map(([currency]) => currency as CurrencyCode),
       ])));
     } catch {
@@ -2770,6 +2763,7 @@ export default function PortfolioApp({
       fxRatesRef.current = nextRates;
       setFxRates(nextRates);
       setVerifiedFxCurrencies(["PLN"]);
+      setFxQualityNote("Nie udało się potwierdzić aktualnych kursów walut. Wykorzystane wartości zapasowe nie są traktowane jako wiarygodne FX.");
     }
 
     const missingCurrencies = Array.from(
@@ -4134,8 +4128,7 @@ export default function PortfolioApp({
         }),
         fetchHistoricalFxRates(
           [purchaseCurrency, expectedPriceCurrency],
-          purchaseDate,
-          fxRates
+          purchaseDate
         ),
       ]);
 
@@ -4151,17 +4144,10 @@ export default function PortfolioApp({
         ? prefetchedFxRates
         : await fetchHistoricalFxRates(
             [purchaseCurrency, purchasePriceCurrency],
-            purchaseDate,
-            prefetchedFxRates
+            purchaseDate
           );
-      const purchaseFxRateToPln = getFxRateToPlnSnapshot(
-        purchasePriceCurrency,
-        purchaseFxRates
-      );
-      const purchaseSettlementFxRateToPln = getFxRateToPlnSnapshot(
-        purchaseCurrency,
-        purchaseFxRates
-      );
+      const purchaseFxRateToPln = getVerifiedHistoricalFxRate(purchasePriceCurrency, purchaseFxRates);
+      const purchaseSettlementFxRateToPln = getVerifiedHistoricalFxRate(purchaseCurrency, purchaseFxRates);
 
       if (!purchaseFxRateToPln || !purchaseSettlementFxRateToPln) {
         setSearchError(
@@ -4383,28 +4369,23 @@ export default function PortfolioApp({
             .filter(Boolean)
         )
       );
-      let saleFxRates = fxRates;
+      let saleFxRates: FxRates = { PLN: 1 };
+      let saleFxQuality: FxRatesResponse["quality"];
 
       try {
-        const response = await fetchFxRates(historicalFxCodes, saleDate);
-        saleFxRates = {
-          ...FALLBACK_FX_RATES,
-          ...saleFxRates,
-          ...response.rates,
-        };
+        const response = await fetchFxRates(historicalFxCodes, saleDate, true);
+        saleFxRates = { ...response.rates, PLN: 1 };
+        saleFxQuality = response.quality;
       } catch {
-        saleFxRates = {
-          ...FALLBACK_FX_RATES,
-          ...saleFxRates,
-        };
+        saleFxQuality = {};
       }
 
-      if (
-        !getFxRateToPlnSnapshot(saleCurrency, saleFxRates) ||
-        !getFxRateToPlnSnapshot(settlementCurrency, saleFxRates)
-      ) {
+      const missingHistoricalFx = historicalFxCodes.filter((currency) =>
+        !getVerifiedHistoricalFxRate(currency, { rates: saleFxRates, quality: saleFxQuality })
+      );
+      if (missingHistoricalFx.length > 0) {
         setSearchError(
-          "Brakuje kursu FX z dnia transakcji. Nie zapisano sprzedazy z niepewnym wynikiem."
+          `Brakuje zweryfikowanego historycznego kursu FX (${missingHistoricalFx.join(", ")}) z dnia transakcji. Nie zapisano sprzedaży z niepewnym wynikiem.`
         );
         return;
       }
@@ -5545,6 +5526,9 @@ export default function PortfolioApp({
     }
 
     const currentPortfolios = commitActivePortfolioSnapshot(portfoliosRef.current);
+    if (!canCreatePortfolio(account, currentPortfolios.length)) {
+      throw new Error("Obecny plan nie pozwala utworzyć kolejnego portfela. Istniejące dane pozostają dostępne.");
+    }
     if (getDuplicatePortfolioName(currentPortfolios, name)) {
       throw new Error("Masz już portfel o tej nazwie. Wybierz inną nazwę.");
     }
@@ -5743,7 +5727,7 @@ export default function PortfolioApp({
   );
   const displayedSyncError = syncError ?? fxError;
 
-  const summaryPanel = <PortfolioSummary summary={summary} lastSyncAt={lastSyncAt} fxUpdatedAt={fxUpdatedAt} isRefreshing={isRefreshing} isLoggingOut={isLoggingOut} isSendingVerification={isSendingVerification} canVerifyEmail={!account.emailVerifiedAt} syncError={displayedSyncError} verificationMessage={verificationMessage} verificationError={verificationError} verificationPreviewUrl={verificationPreviewUrl} subscriptionPlan={account.subscriptionPlan} onRefresh={() => { void handleRefreshPortfolioData(); }} onRequestVerification={() => { void handleVerificationRequest(); }} />;
+  const summaryPanel = <PortfolioSummary summary={summary} lastSyncAt={lastSyncAt} fxUpdatedAt={fxUpdatedAt} fxQualityNote={fxQualityNote} isRefreshing={isRefreshing} isLoggingOut={isLoggingOut} isSendingVerification={isSendingVerification} canVerifyEmail={!account.emailVerifiedAt} syncError={displayedSyncError} verificationMessage={verificationMessage} verificationError={verificationError} verificationPreviewUrl={verificationPreviewUrl} subscriptionPlan={account.subscriptionPlan} subscriptionStatus={account.subscriptionStatus} subscriptionExpiresAt={account.subscriptionExpiresAt} testerAccess={account.testerAccess} role={account.role} onRefresh={() => { void handleRefreshPortfolioData(); }} onRequestVerification={() => { void handleVerificationRequest(); }} />;
 
   const removeAsset = (assetId: string) => {
     if (!requireConcretePortfolioSelection()) {
@@ -5826,7 +5810,7 @@ export default function PortfolioApp({
     {entryMode === "bond" ? <TreasuryBondForm draft={bondDraft} series={bondSeries} quote={bondQuote} redemptionPreview={bondRedemptionPreview} swapPreview={bondSwapPreview} isLoadingSeries={isBondLoading} isLoadingRedemption={isBondRedemptionLoading} isLoadingSwap={isBondSwapLoading} error={bondError} redemptionError={bondRedemptionError} swapError={bondSwapError} successMessage={bondSuccess} targetPortfolios={isAllPortfoliosSelected ? selectedPortfolios : undefined} targetPortfolioId={operationTargetPortfolioId} onTargetPortfolioChange={isAllPortfoliosSelected ? handleOperationTargetChange : undefined} isTargetPortfolioPending={isPortfolioMutationPending || isBondRedemptionLoading || isBondSwapLoading} onChange={(nextDraft: TreasuryBondDraft) => { setBondDraft(nextDraft); setBondSuccess(null); resetBondInteractionState(); }} onCodeChange={(code: string) => { setBondDraft((currentDraft) => ({ ...currentDraft, code: normalizeTreasuryBondCode(code) })); setBondError(null); setBondSuccess(null); resetBondInteractionState(); }} onBuySubmit={() => { void handleAddBondAsset(); }} onSellSubmit={() => { void handleSellBondAsset(); }} onRedeemSubmit={() => { void handleRedeemBondAsset(); }} onSwapSubmit={() => { void handleSwapBondAsset(); }} /> : <AddAssetForm showModeSelector={false} searchMode={searchMode} draft={draft} results={results} etfResultGroups={etfResultGroups} lastAddedResult={lastAddedResult} isSearching={isSearching} isQuoteLoading={isQuoteLoading} isBuyPending={isAssetAddPending} searchError={searchError} quoteError={quoteError} successMessage={assetSuccess} targetPortfolios={isAllPortfoliosSelected ? selectedPortfolios : undefined} targetPortfolioId={operationTargetPortfolioId} onTargetPortfolioChange={isAllPortfoliosSelected ? handleOperationTargetChange : undefined} isTargetPortfolioPending={isPortfolioMutationPending} watchlistKeys={watchlistKeys} isWatchlistTogglePending={isWatchlistTogglePending} watchlistError={watchlistError} onToggleWatchlist={(result: AssetSearchResult) => { void handleToggleWatchlist(result); }} onDraftChange={setDraft} onSearchModeChange={handleSearchModeChange} onQueryChange={(query: string) => { const trimmedQuery = query.trim(); const minimumSearchLength = getMinimumSearchLength(searchMode); quoteRequestSeqRef.current += 1; lastPreviewRequestKeyRef.current = ""; isManualSymbolRef.current = false; setIsSearching(trimmedQuery.length >= minimumSearchLength); setIsQuoteLoading(false); setResults([]); setEtfResultGroups([]); setSearchError(null); setAssetSuccess(null); setQuoteError(null); setWatchlistError(null); setDraft((currentDraft) => ({ ...currentDraft, query, name: query, symbol: "", providerId: undefined, priceScale: undefined, issuerCountry: undefined, instrumentIdentity: undefined, marketCurrencyConfirmed: undefined, latestPrice: undefined, latestPriceDate: undefined, previousClose: undefined })); }} onSymbolChange={(symbol: string) => { quoteRequestSeqRef.current += 1; lastPreviewRequestKeyRef.current = ""; isManualSymbolRef.current = true; setIsSearching(false); setIsQuoteLoading(false); setResults([]); setEtfResultGroups([]); setSearchError(null); setAssetSuccess(null); setQuoteError(null); setWatchlistError(null); setDraft((currentDraft) => ({ ...currentDraft, symbol: symbol.toUpperCase(), query: "", name: "", providerId: undefined, priceScale: undefined, issuerCountry: undefined, instrumentIdentity: undefined, marketCurrencyConfirmed: undefined, latestPrice: undefined, latestPriceDate: undefined, previousClose: undefined })); }} onPickResult={(result: AssetSearchResult) => { void handlePickResult(result); }} onReuseLastAddedResult={(result: AssetSearchResult) => { void handlePickResult(result); }} onBuySubmit={() => { void handleAddAsset(); }} onSellSubmit={() => { void handleSellAsset(); }} />}
   </>;
 
-  const portfolioManagement = <PortfolioAccountManagement portfolios={portfolios} activePortfolio={activePortfolio} activePortfolioId={activePortfolioId} isAllPortfoliosSelected={isAllPortfoliosSelected} summaries={portfolioSummaries} isPending={isSavingPortfolio || isPortfolioMutationPending} onSelect={(portfolioId: string) => { void handleSelectPortfolio(portfolioId); }} onRename={() => { void handleRenamePortfolio(); }} onDelete={() => { void handleDeletePortfolio(); }} onCreate={handleCreatePortfolio} onUpdateAccount={(input: Parameters<ComponentProps<typeof PortfolioAccountManagement>["onUpdateAccount"]>[0]) => { void handleUpdatePortfolioAccount(input); }} />;
+  const portfolioManagement = <PortfolioAccountManagement portfolios={portfolios} activePortfolio={activePortfolio} activePortfolioId={activePortfolioId} isAllPortfoliosSelected={isAllPortfoliosSelected} canCreateAnotherPortfolio={canCreatePortfolio(account, portfolios.length)} summaries={portfolioSummaries} isPending={isSavingPortfolio || isPortfolioMutationPending} onSelect={(portfolioId: string) => { void handleSelectPortfolio(portfolioId); }} onRename={() => { void handleRenamePortfolio(); }} onDelete={() => { void handleDeletePortfolio(); }} onCreate={handleCreatePortfolio} onUpdateAccount={(input: Parameters<ComponentProps<typeof PortfolioAccountManagement>["onUpdateAccount"]>[0]) => { void handleUpdatePortfolioAccount(input); }} />;
 
   const operationsWorkspace = (
     <OperationsHistory
@@ -5894,7 +5878,8 @@ export default function PortfolioApp({
   ) : null;
   const importWorkspace = <BrokerImportPanel onImport={handleImportBrokerOperations} />;
   const wealthWorkspace = <WealthWorkspace profile={profile} fxRates={fxRates} onChange={setProfile} />;
-  const settingsWorkspace = <><UserProfilePanel account={account} profile={profile} positionsCount={groupedAssets.length} assetsCount={displayedAssets.length} isLoggingOut={isLoggingOut} onChange={(patch: Partial<UserProfile>) => setProfile((current) => ({ ...current, ...patch, updatedAt: new Date().toISOString() }))} onReset={() => setProfile((current) => ({ ...current, displayName: "", country: "", preferredBroker: "", investmentGoal: "", monthlyContributionPln: 0, updatedAt: new Date().toISOString() }))} onLogout={() => { void handleLogout(); }} /><ChangePasswordPanel hasPassword={account.hasPassword} /><section className="panel panel-compact workspace-plan-placeholder"><p className="eyebrow">Plan</p><h2 className="section-title">{MEXO_TESTER_MODE ? "Tester" : account.subscriptionPlan === "pro" ? "Mexo Pro" : "Mexo Free"}</h2><p className="section-copy">W trybie testowym wszystkie wdrożone funkcje są dostępne. Zarządzanie płatnościami pozostaje poza tą wersją aplikacji.</p></section></>;
+  const effectivePlan = resolveEffectiveEntitlements(account);
+  const settingsWorkspace = <><UserProfilePanel account={account} profile={profile} positionsCount={groupedAssets.length} assetsCount={displayedAssets.length} isLoggingOut={isLoggingOut} onChange={(patch: Partial<UserProfile>) => setProfile((current) => ({ ...current, ...patch, updatedAt: new Date().toISOString() }))} onReset={() => setProfile((current) => ({ ...current, displayName: "", country: "", preferredBroker: "", investmentGoal: "", monthlyContributionPln: 0, updatedAt: new Date().toISOString() }))} onLogout={() => { void handleLogout(); }} /><ChangePasswordPanel hasPassword={account.hasPassword} /><section className="panel panel-compact workspace-plan-placeholder"><p className="eyebrow">Plan</p><h2 className="section-title">{account.testerAccess ? "Tester · " : ""}Mexo {effectivePlan.effectivePlan[0]?.toUpperCase()}{effectivePlan.effectivePlan.slice(1)}</h2><p className="section-copy">{effectivePlan.isExpired ? "Płatny okres wygasł. Twoje dane pozostają zapisane; obowiązują limity Free." : account.testerAccess ? "Dostęp testowy przypisany do tego konta. Rola administratora i plan abonamentowy są niezależnymi ustawieniami." : "Plan i rola konta są rozdzielone. Zakup płatnych planów będzie dostępny po uruchomieniu płatności."}</p>{account.subscriptionExpiresAt ? <p className="field-note">Dostęp do planu do: {new Date(account.subscriptionExpiresAt).toLocaleDateString("pl-PL")}</p> : null}</section></>;
 
   const workspaceValue: PortfolioWorkspaceValue = {
     account, isAdmin, portfolios, selectedPortfolios, portfolioSummaries, selectedPortfolioSummaries,

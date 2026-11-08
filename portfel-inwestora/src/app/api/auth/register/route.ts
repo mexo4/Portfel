@@ -3,6 +3,7 @@ import {
   registerAccount,
   sendEmailVerificationForUser,
 } from "@/lib/server/auth";
+import { applyAuthRateLimit } from "@/lib/server/auth-rate-limit-response";
 
 export const runtime = "nodejs";
 
@@ -13,6 +14,9 @@ export async function POST(request: Request) {
       email?: string;
       password?: string;
     };
+
+    const limited = await applyAuthRateLimit(request, "register", payload.email ?? "");
+    if (limited) return limited;
 
     const user = await registerAccount({
       displayName: payload.displayName ?? "",
@@ -29,10 +33,10 @@ export async function POST(request: Request) {
       verificationSent: verification.sent,
       previewUrl: process.env.NODE_ENV === "production" ? null : verification.previewUrl,
     });
-  } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Nie udalo sie zalozyc konta.";
-
-    return NextResponse.json({ error: message }, { status: 400 });
+  } catch {
+    return NextResponse.json(
+      { error: "Nie udało się założyć konta. Sprawdź dane albo użyj logowania, jeśli konto już istnieje." },
+      { status: 400 }
+    );
   }
 }

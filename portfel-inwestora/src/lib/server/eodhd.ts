@@ -151,7 +151,7 @@ const DISPLAY_SUFFIX_TO_EODHD_EXCHANGES: Record<string, string[]> = {
 };
 
 const quoteCache = new Map<string, { quote: AssetQuote; expiresAt: number }>();
-const fxRateCache = new Map<string, { rate: number; expiresAt: number }>();
+const fxRateCache = new Map<string, { rate: number; asOf: string | null; expiresAt: number }>();
 const issuerSearchInFlight = new Map<string, Promise<EodhdSearchItem[] | null>>();
 
 const hasEodhdApiKey = () => Boolean(EODHD_API_KEY);
@@ -888,11 +888,14 @@ export const fetchEodhdQuote = async ({
 
 export const fetchEodhdEtfQuote = fetchEodhdQuote;
 
-const getCachedFxRate = (code: string) => {
+type EodhdFxRate = { rate: number; asOf: string | null };
+type EodhdFxRatesDetailed = { rates: FxRates; asOf: Partial<Record<CurrencyCode, string | null>> };
+
+const getCachedFxRate = (code: string): EodhdFxRate | null => {
   const normalizedCode = normalizeSymbol(code);
 
   if (normalizedCode === "PLN") {
-    return 1;
+    return { rate: 1, asOf: new Date().toISOString().slice(0, 10) };
   }
 
   const cachedEntry = fxRateCache.get(normalizedCode);
@@ -906,47 +909,55 @@ const getCachedFxRate = (code: string) => {
     return null;
   }
 
-  return cachedEntry.rate;
+  return { rate: cachedEntry.rate, asOf: cachedEntry.asOf };
 };
 
-const setCachedFxRate = (code: string, rate: number) => {
+const setCachedFxRate = (code: string, rate: number, asOf: string | null) => {
   fxRateCache.set(normalizeSymbol(code), {
     rate,
+    asOf,
     expiresAt: Date.now() + FX_RATE_CACHE_TTL_MS,
   });
 };
 
-const fetchFxPairRate = async (pair: string) => {
+const timestampToDate = (timestamp: number | undefined) => {
+  if (typeof timestamp !== "number" || !Number.isFinite(timestamp) || timestamp <= 0) return null;
+  const milliseconds = timestamp > 10_000_000_000 ? timestamp : timestamp * 1_000;
+  const date = new Date(milliseconds);
+  return Number.isFinite(date.getTime()) ? date.toISOString().slice(0, 10) : null;
+};
+
+const fetchFxPairRate = async (pair: string): Promise<EodhdFxRate | null> => {
   const response = await fetchJson<EodhdQuoteResponse>(
     `${EODHD_API_ROOT}/real-time/${encodeURIComponent(pair)}?api_token=${encodeURIComponent(EODHD_API_KEY)}&fmt=json`
   );
 
   if (typeof response?.close === "number" && response.close > 0) {
-    return round(response.close, 6);
+    return { rate: round(response.close, 6), asOf: timestampToDate(response.timestamp) };
   }
 
   if (typeof response?.previousClose === "number" && response.previousClose > 0) {
-    return round(response.previousClose, 6);
+    return { rate: round(response.previousClose, 6), asOf: timestampToDate(response.timestamp) };
   }
 
   return null;
 };
 
-const fetchFxRateToPln = async (code: CurrencyCode): Promise<number | null> => {
+const fetchFxRateToPlnDetailed = async (code: CurrencyCode): Promise<EodhdFxRate | null> => {
   const normalizedCode = toCurrencyCode(code);
 
   if (normalizedCode === "PLN") {
-    return 1;
+    return { rate: 1, asOf: new Date().toISOString().slice(0, 10) };
   }
 
   if (normalizedCode === "GBX") {
-    const gbpRate = await fetchFxRateToPln("GBP");
-    return gbpRate === null ? null : round(gbpRate / 100, 6);
+    const gbpRate = await fetchFxRateToPlnDetailed("GBP");
+    return gbpRate === null ? null : { rate: round(gbpRate.rate / 100, 6), asOf: gbpRate.asOf };
   }
 
   const cachedRate = getCachedFxRate(normalizedCode);
 
-  if (cachedRate !== null) {
+  if (cachedRate) {
     return cachedRate;
   }
 
@@ -954,7 +965,7 @@ const fetchFxRateToPln = async (code: CurrencyCode): Promise<number | null> => {
   const directRate = await fetchFxPairRate(directPair);
 
   if (directRate !== null) {
-    setCachedFxRate(normalizedCode, directRate);
+    setCachedFxRate(normalizedCode, directRate.rate, directRate.asOf);
     return directRate;
   }
 
@@ -962,7 +973,7 @@ const fetchFxRateToPln = async (code: CurrencyCode): Promise<number | null> => {
 
   if (normalizedCode === "USD") {
     if (usdToPln !== null) {
-      setCachedFxRate(normalizedCode, usdToPln);
+      setCachedFxRate(normalizedCode, usdToPln.rate, usdToPln.asOf);
       return usdToPln;
     }
 
@@ -975,12 +986,16 @@ const fetchFxRateToPln = async (code: CurrencyCode): Promise<number | null> => {
     return null;
   }
 
-  const fallbackRate = round(codeToUsd * usdToPln, 6);
-  setCachedFxRate(normalizedCode, fallbackRate);
-  return fallbackRate;
+  const fallbackRate = round(codeToUsd.rate * usdToPln.rate, 6);
+  const asOf = codeToUsd.asOf && usdToPln.asOf
+    ? (codeToUsd.asOf < usdToPln.asOf ? codeToUsd.asOf : usdToPln.asOf)
+    : null;
+  const result = { rate: fallbackRate, asOf };
+  setCachedFxRate(normalizedCode, fallbackRate, asOf);
+  return result;
 };
 
-export const fetchEodhdFxRates = async (codes: CurrencyCode[]): Promise<FxRates> => {
+export const fetchEodhdFxRatesDetailed = async (codes: CurrencyCode[]): Promise<EodhdFxRatesDetailed> => {
   const normalizedCodes = uniqueBy(
     codes
       .map((code) => toCurrencyCode(code))
@@ -990,14 +1005,18 @@ export const fetchEodhdFxRates = async (codes: CurrencyCode[]): Promise<FxRates>
   );
 
   const results = await Promise.all(
-    normalizedCodes.map(async (code) => [code, await fetchFxRateToPln(code)] as const)
+    normalizedCodes.map(async (code) => [code, await fetchFxRateToPlnDetailed(code)] as const)
   );
 
-  return results.reduce<FxRates>((rates, [code, rate]) => {
-    if (rate !== null) {
-      rates[code] = rate;
+  return results.reduce<EodhdFxRatesDetailed>((result, [code, quote]) => {
+    if (quote !== null) {
+      result.rates[code] = quote.rate;
+      result.asOf[code] = quote.asOf;
     }
 
-    return rates;
-  }, { PLN: 1 });
+    return result;
+  }, { rates: { PLN: 1 }, asOf: { PLN: new Date().toISOString().slice(0, 10) } });
 };
+
+export const fetchEodhdFxRates = async (codes: CurrencyCode[]): Promise<FxRates> =>
+  (await fetchEodhdFxRatesDetailed(codes)).rates;

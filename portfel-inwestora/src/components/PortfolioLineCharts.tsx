@@ -217,6 +217,37 @@ type ManualChartViewport = ChartViewport | "full" | null;
 
 const DEFAULT_BENCHMARK_SEARCH_MODE: AssetSearchMode = "etf";
 const RANGE_PRESET_STORAGE_KEY = "mexo.lineCharts.rangePreset";
+const AGGREGATE_BENCHMARKS_STORAGE_KEY = "mexo.lineCharts.aggregateBenchmarks";
+
+const isPortfolioBenchmarkDefinition = (
+  value: unknown
+): value is PortfolioBenchmarkDefinition => {
+  if (!value || typeof value !== "object") return false;
+
+  const benchmark = value as Partial<PortfolioBenchmarkDefinition>;
+  return Boolean(
+    typeof benchmark.id === "string" &&
+      typeof benchmark.name === "string" &&
+      typeof benchmark.symbol === "string" &&
+      (benchmark.kind === "stock" ||
+        benchmark.kind === "etf" ||
+        benchmark.kind === "crypto" ||
+        benchmark.kind === "bond") &&
+      typeof benchmark.marketCurrency === "string" &&
+      typeof benchmark.provider === "string"
+  );
+};
+
+const readAggregateBenchmarks = (): PortfolioBenchmarkDefinition[] => {
+  try {
+    const stored = JSON.parse(
+      window.localStorage.getItem(AGGREGATE_BENCHMARKS_STORAGE_KEY) ?? "[]"
+    ) as unknown;
+    return Array.isArray(stored) ? stored.filter(isPortfolioBenchmarkDefinition) : [];
+  } catch {
+    return [];
+  }
+};
 const RANGE_PRESET_EVENT = "mexo:chart-range-change";
 let rangePresetMemory: RangePreset = "1M";
 const subscribeRangePreset = (listener: () => void) => {
@@ -866,6 +897,7 @@ export default function PortfolioLineCharts({
   portfolioScopes,
   initialMode = "value",
 }: PortfolioLineChartsProps) {
+  const isAggregateHistory = Boolean(portfolioScopes?.length);
   const [mode, setMode] = useState<ChartMode>(initialMode);
   const rangePreset = useSyncExternalStore(
     subscribeRangePreset,
@@ -913,6 +945,15 @@ export default function PortfolioLineCharts({
     const next = typeof update === "function" ? update(current) : update;
     setVisibleBenchmarkOverride({ selectionSignature, ids: next });
   };
+
+  useEffect(() => {
+    if (!isAggregateHistory) return;
+
+    setSelectedBenchmarkOverride({
+      sourceSignature: benchmarkPropSignature,
+      values: readAggregateBenchmarks(),
+    });
+  }, [benchmarkPropSignature, isAggregateHistory]);
   const [benchmarkSearchMode, setBenchmarkSearchMode] = useState<AssetSearchMode>(
     DEFAULT_BENCHMARK_SEARCH_MODE
   );
@@ -1400,6 +1441,24 @@ export default function PortfolioLineCharts({
   );
   const visibleDates = visiblePoints.map((point) => point.date);
 
+  const persistBenchmarkSelection = (nextBenchmarks: PortfolioBenchmarkDefinition[]) => {
+    if (isAggregateHistory) {
+      try {
+        window.localStorage.setItem(
+          AGGREGATE_BENCHMARKS_STORAGE_KEY,
+          JSON.stringify(nextBenchmarks)
+        );
+      } catch {
+        // Keep the in-memory selection usable if browser storage is unavailable.
+      }
+      return;
+    }
+
+    if (onBenchmarksChange) {
+      void onBenchmarksChange(nextBenchmarks).catch(() => undefined);
+    }
+  };
+
   const handleAddBenchmark = (result: AssetSearchResult) => {
     const benchmark = createPortfolioBenchmarkDefinition(result, benchmarkSearchMode);
     const nextBenchmarks = selectedBenchmarks.some((item) => item.id === benchmark.id)
@@ -1407,7 +1466,7 @@ export default function PortfolioLineCharts({
       : [...selectedBenchmarks, benchmark];
     if (nextBenchmarks !== selectedBenchmarks) {
       setSelectedBenchmarkOverride({ sourceSignature: benchmarkPropSignature, values: nextBenchmarks });
-      void onBenchmarksChange?.(nextBenchmarks).catch(() => undefined);
+      persistBenchmarkSelection(nextBenchmarks);
     }
     const nextSelectionSignature = nextBenchmarks.map((item) => item.id).join("|");
     const visible = visibleBenchmarkIds.includes(benchmark.id)
@@ -1422,7 +1481,7 @@ export default function PortfolioLineCharts({
     const nextBenchmarks = selectedBenchmarks.filter((benchmark) => benchmark.id !== benchmarkId);
     if (nextBenchmarks.length !== selectedBenchmarks.length) {
       setSelectedBenchmarkOverride({ sourceSignature: benchmarkPropSignature, values: nextBenchmarks });
-      void onBenchmarksChange?.(nextBenchmarks).catch(() => undefined);
+      persistBenchmarkSelection(nextBenchmarks);
     }
     const nextSelectionSignature = nextBenchmarks.map((item) => item.id).join("|");
     setVisibleBenchmarkOverride({
@@ -3175,6 +3234,11 @@ export default function PortfolioLineCharts({
                 Zacznij od podstawowego indeksu, a następnie — jeśli potrzebujesz —
                 wybierz konkretny instrument referencyjny.
               </p>
+              {isAggregateHistory ? (
+                <p className="table-note">
+                  W widoku „Wszystkie portfele” wybór benchmarków zapisuje się w tej przeglądarce.
+                </p>
+              ) : null}
             </div>
             {selectedBenchmarks.length > 0 ? (
               <span className="search-panel-count">{selectedBenchmarks.length}</span>

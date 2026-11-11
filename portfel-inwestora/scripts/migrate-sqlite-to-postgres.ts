@@ -3,7 +3,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { loadEnvConfig } from "@next/env";
-import { Pool } from "pg";
+import { Pool, type PoolClient } from "pg";
 
 type TableDefinition = {
   name: string;
@@ -289,7 +289,7 @@ const getSqliteTableNames = (sqliteDb: InstanceType<typeof DatabaseSync>) =>
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
       )
       .all()
-      .map((row: { name: string }) => row.name)
+      .map((row) => String(row.name))
   );
 
 const assertSqliteTablesExist = (sqliteDb: InstanceType<typeof DatabaseSync>) => {
@@ -304,7 +304,7 @@ const assertSqliteTablesExist = (sqliteDb: InstanceType<typeof DatabaseSync>) =>
 };
 
 const assertPostgresTablesExist = async (
-  client: InstanceType<typeof Pool>["Client"]
+  client: PoolClient
 ) => {
   const expectedTableNames = tableDefinitions.map((table) => table.name);
   const result = await client.query(
@@ -330,7 +330,7 @@ const assertPostgresTablesExist = async (
 
 const assertNoUserEmailConflicts = async (
   sqliteDb: InstanceType<typeof DatabaseSync>,
-  client: InstanceType<typeof Pool>["Client"]
+  client: PoolClient
 ) => {
   const sqliteUsers = sqliteDb
     .prepare("SELECT id, email FROM users")
@@ -394,7 +394,7 @@ const buildUpsertStatement = (table: TableDefinition) => {
 
 const importUsers = async (
   sqliteDb: InstanceType<typeof DatabaseSync>,
-  client: InstanceType<typeof Pool>["Client"],
+  client: PoolClient,
   dryRun: boolean
 ) => {
   const table = tableDefinitions.find((definition) => definition.name === "users")!;
@@ -451,7 +451,7 @@ const importUsers = async (
 
 const importTable = async (
   sqliteDb: InstanceType<typeof DatabaseSync>,
-  client: InstanceType<typeof Pool>["Client"],
+  client: PoolClient,
   table: TableDefinition,
   dryRun: boolean
 ) => {
@@ -477,7 +477,7 @@ const importTable = async (
 
 const getCounts = async (
   sqliteDb: InstanceType<typeof DatabaseSync>,
-  client: InstanceType<typeof Pool>["Client"]
+  client: PoolClient
 ) => {
   const counts: CountReport = {};
 

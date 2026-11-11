@@ -57,6 +57,24 @@ test("a benchmark in another quote currency remains selectable because it is com
   assert.equal("purchaseCurrency" in benchmark, false);
 });
 
+test("all-portfolios history returns benchmark data and keeps its selection in the browser", async () => {
+  const historySource = await readSource("src/lib/server/portfolio-history.ts");
+  const chartSource = await readSource("src/components/PortfolioLineCharts.tsx");
+
+  assert.match(
+    historySource,
+    /const benchmarkScopeId = uniqueScopes[\s\S]*?startDate: getPortfolioHistoryStartDate\(scope\)[\s\S]*?sort\(\(left, right\) => left\.startDate\.localeCompare\(right\.startDate\)\)/
+  );
+  assert.match(
+    historySource,
+    /benchmarks: scope\.portfolioId === benchmarkScopeId \? benchmarks : \[\]/
+  );
+  assert.match(historySource, /const benchmarkSeries = histories\.find\([\s\S]*?\?\.benchmarkSeries/);
+  assert.match(chartSource, /AGGREGATE_BENCHMARKS_STORAGE_KEY = "mexo\.lineCharts\.aggregateBenchmarks"/);
+  assert.match(chartSource, /readAggregateBenchmarks\(\)/);
+  assert.match(chartSource, /window\.localStorage\.setItem\([\s\S]*?AGGREGATE_BENCHMARKS_STORAGE_KEY/);
+});
+
 test("daily investment-result values are cash-flow neutral P/L deltas", () => {
   const daily = buildPortfolioDailyMetricPoints([
     {

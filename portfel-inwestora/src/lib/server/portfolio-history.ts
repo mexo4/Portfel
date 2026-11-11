@@ -2476,6 +2476,14 @@ export const buildAggregatePortfolioHistory = async ({
     };
   }
 
+  const benchmarkScopeId = uniqueScopes
+    .map((scope) => ({
+      portfolioId: scope.portfolioId,
+      startDate: getPortfolioHistoryStartDate(scope),
+    }))
+    .filter((scope): scope is { portfolioId: string; startDate: string } => Boolean(scope.startDate))
+    .sort((left, right) => left.startDate.localeCompare(right.startDate))[0]?.portfolioId;
+
   const scopedProgress = new Map<string, PortfolioHistoryProgressUpdate>();
   const histories = await Promise.all(
     uniqueScopes.map((scope) =>
@@ -2487,10 +2495,7 @@ export const buildAggregatePortfolioHistory = async ({
         accounts: scope.accounts ?? [],
         presentationCurrency: normalizedPresentationCurrency,
         includeAssetSeries: false,
-        // A user-selected benchmark has no single economically correct
-        // aggregate start/cash-flow basis. Keep the existing per-portfolio
-        // calculation honest rather than producing a synthetic comparison.
-        benchmarks: [],
+        benchmarks: scope.portfolioId === benchmarkScopeId ? benchmarks : [],
         onProgress: (progress) => {
           scopedProgress.set(scope.portfolioId, progress);
           if (scopedProgress.size !== uniqueScopes.length) {
@@ -2529,6 +2534,9 @@ export const buildAggregatePortfolioHistory = async ({
     presentationTimeWeightedReturnPercent:
       presentationTwrStatus === "complete" ? point.presentationTimeWeightedReturnPercent ?? null : null,
   }));
+  const benchmarkSeries = histories.find(
+    (_, index) => uniqueScopes[index]?.portfolioId === benchmarkScopeId
+  )?.benchmarkSeries ?? [];
   const externalCashFlows = aggregateExternalCashFlows(histories);
   const twrStatusReason = Array.from(
     new Set(histories.flatMap((history, index) => history.twrStatusReason
@@ -2548,10 +2556,6 @@ export const buildAggregatePortfolioHistory = async ({
     twrStatus: twrStatus ?? "unavailable",
   });
 
-  if (benchmarks.length > 0) {
-    warnings.add("Benchmarki są dostępne po wyborze konkretnego portfela; widok łączny nie tworzy syntetycznej serii.");
-  }
-
   const finalProgress = Array.from(scopedProgress.values());
   const scopedTaskTotal = finalProgress.reduce((sum, item) => sum + item.total, 0);
   onProgress?.({
@@ -2570,6 +2574,6 @@ export const buildAggregatePortfolioHistory = async ({
     ...(presentationTwrStatusReason ? { presentationTwrStatusReason } : {}),
     externalCashFlows,
     assetSeries: [],
-    benchmarkSeries: [],
+    benchmarkSeries,
   };
 };

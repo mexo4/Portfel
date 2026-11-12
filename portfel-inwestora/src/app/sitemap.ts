@@ -7,6 +7,7 @@ export default function sitemap(): MetadataRoute.Sitemap {
     { url: `${origin}/`, changeFrequency: "weekly", priority: 1 },
     { url: `${origin}/pricing`, changeFrequency: "monthly", priority: 0.6 },
     { url: `${origin}/narzedzia/procent-skladany`, changeFrequency: "monthly", priority: 0.8 },
+    { url: `${origin}/narzedzia/kalkulator-fire`, changeFrequency: "monthly", priority: 0.8 },
   ];
   // Inclusion is explicit, because redistribution rights for all public event sources
   // must be reviewed before asking search engines to index the new calendar.

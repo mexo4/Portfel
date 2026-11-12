@@ -486,6 +486,17 @@ test("selected chart range drives the summary and value-axis scale, and weekend 
   assert.match(source, /filterChartPointsByRange\([\s\S]*excludeWeekendZeroPoints\(/);
 });
 
+test("benchmark comparison follows the selected range and does not capture chart scrolling", async () => {
+  const source = await readFile(new URL("../src/components/PortfolioLineCharts.tsx", import.meta.url), "utf8");
+
+  assert.match(source, /const comparisonPoints = useMemo\([\s\S]*filterChartPointsByRange\(displayPoints, effectiveRangePreset\)/);
+  assert.match(source, /const portfolioBaselinePercent = comparisonPoints\.find\(/);
+  assert.match(source, /const baselinePercent = visibleBenchmarkPoints\.find\(/);
+  assert.match(source, /Portfel i benchmarki są rebazowane do pierwszego punktu wybranego zakresu/);
+  assert.doesNotMatch(source, /onWheel=\{handleChartWheel\}|onPointerDown=\{handleChartPointerDown\}|panChartViewport/);
+  assert.match(source, /Najedź na wykres, aby zobaczyć szczegóły/);
+});
+
 test("benchmark UI has a core-index short circuit, abortable provider search, and no global search rewrite", async () => {
   const source = await readSource("src/components/PortfolioLineCharts.tsx");
 

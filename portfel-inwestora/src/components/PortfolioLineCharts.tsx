@@ -9,7 +9,6 @@ import {
   useState,
   useSyncExternalStore,
   type PointerEvent as ReactPointerEvent,
-  type WheelEvent as ReactWheelEvent,
 } from "react";
 import {
   Area,
@@ -39,7 +38,6 @@ import {
   getFullChartViewport,
   getSupportedChartRangePresets,
   normalizeChartRangePreset,
-  panChartViewport,
   zoomChartViewport,
   type ChartRangePreset,
   type ChartViewport,
@@ -197,20 +195,6 @@ type FallbackSegment = {
 type FallbackHistoryState = {
   points: PortfolioHistoryPoint[];
   assetSeries: PortfolioAssetHistorySeries[];
-};
-
-type ChartDragState = {
-  pointerId: number;
-  pointerType: string;
-  startViewport: ChartViewport | null;
-  startX: number;
-  width: number;
-};
-
-type ChartPinchState = {
-  initialDistance: number;
-  initialViewport: ChartViewport | null;
-  initialX: number;
 };
 
 type ManualChartViewport = ChartViewport | "full" | null;
@@ -918,7 +902,6 @@ export default function PortfolioLineCharts({
     viewport: ManualChartViewport;
   }>({ signature: "", viewport: null });
   const [isRangePickerOpen, setIsRangePickerOpen] = useState(false);
-  const [isChartInteracting, setIsChartInteracting] = useState(false);
   const [hiddenSeriesState, setHiddenSeriesState] = useState<{ signature: string; keys: string[] }>({ signature: "", keys: [] });
   const [isChartModalOpen, setIsChartModalOpen] = useState(false);
   const benchmarkPropSignature = JSON.stringify(benchmarks);
@@ -974,9 +957,6 @@ export default function PortfolioLineCharts({
   }>({ signature: "", progress: null });
   const chartFrameRef = useRef<HTMLDivElement | null>(null);
   const modalChartFrameRef = useRef<HTMLDivElement | null>(null);
-  const dragStateRef = useRef<ChartDragState | null>(null);
-  const touchPointersRef = useRef(new Map<number, { x: number; y: number }>());
-  const pinchStateRef = useRef<ChartPinchState | null>(null);
   const manualViewportRef = useRef<ManualChartViewport>(null);
   const viewportSignatureRef = useRef("");
   const pendingViewportRef = useRef<ManualChartViewport>(null);
@@ -989,7 +969,6 @@ export default function PortfolioLineCharts({
   } | null>(null);
   const crosshairFrameRef = useRef<number | null>(null);
   const nativeFullscreenActiveRef = useRef(false);
-  const didDragChartRef = useRef(false);
 
   const cancelScheduledViewport = useCallback(() => {
     if (viewportFrameRef.current !== null) {
@@ -1098,7 +1077,6 @@ export default function PortfolioLineCharts({
   const closeChartModal = useCallback(() => {
     nativeFullscreenActiveRef.current = false;
     setIsRangePickerOpen(false);
-    setIsChartInteracting(false);
     setIsChartModalOpen(false);
 
     if (document.fullscreenElement) {
@@ -1416,8 +1394,17 @@ export default function PortfolioLineCharts({
     ? availableRangePresets.at(-1) ?? "MAX"
     : rangePreset;
 
-  // The selected range is a rendering viewport only. Keep models and percentage
-  // baselines on the full history so panning never recalculates performance.
+  // The comparison mode must calculate returns from the selected window, not
+  // from the first day ever stored for the portfolio. The other modes keep the
+  // full series so their viewport controls can still reveal earlier context.
+  const comparisonPoints = useMemo(
+    () => filterChartPointsByRange(displayPoints, effectiveRangePreset),
+    [displayPoints, effectiveRangePreset]
+  );
+
+  // The selected range is a rendering viewport for the other chart modes.
+  // Portfolio-vs-benchmark uses comparisonPoints above so its performance
+  // baseline and summary match the selected period.
   const visiblePoints = displayPoints;
   const visibleReturnPoints = useMemo(
     () => buildReturnSeries(displayPoints),
@@ -1439,7 +1426,6 @@ export default function PortfolioLineCharts({
       })),
     [displayPoints]
   );
-  const visibleDates = visiblePoints.map((point) => point.date);
 
   const persistBenchmarkSelection = (nextBenchmarks: PortfolioBenchmarkDefinition[]) => {
     if (isAggregateHistory) {
@@ -1728,7 +1714,7 @@ export default function PortfolioLineCharts({
     }
 
     if (mode === "portfolio-vs-benchmark") {
-      if (selectedBenchmarks.length === 0 || visibleDates.length === 0) {
+      if (selectedBenchmarks.length === 0 || comparisonPoints.length === 0) {
         return {
           title: "Portfel vs benchmark",
           copy: "Porownanie stopy zwrotu portfela z benchmarkami w stylu myfund.",
@@ -1748,10 +1734,13 @@ export default function PortfolioLineCharts({
         };
       }
 
+      const visibleDates = comparisonPoints.map((point) => point.date);
       const visibleDateSet = new Set(visibleDates);
-      const portfolioBaselinePercent = null;
+      const portfolioBaselinePercent = comparisonPoints.find(
+        (point) => getFiniteNumber(point.timeWeightedReturnPercent) !== null
+      )?.timeWeightedReturnPercent ?? null;
       const portfolioPercentByDate = new Map(
-        visiblePoints.map(
+        comparisonPoints.map(
           (point) =>
             [
               point.date,
@@ -1763,9 +1752,9 @@ export default function PortfolioLineCharts({
         )
       );
       const portfolioPointByDate = new Map(
-        visiblePoints.map((point) => [point.date, point] as const)
+        comparisonPoints.map((point) => [point.date, point] as const)
       );
-      const numericPortfolioPoints = visiblePoints
+      const numericPortfolioPoints = comparisonPoints
         .map((point) => ({
           point,
           percent: portfolioPercentByDate.get(point.date) ?? null,
@@ -1809,10 +1798,12 @@ export default function PortfolioLineCharts({
           return models;
         }
 
-        const baselinePercent = null;
         const visibleBenchmarkPoints = series.points.filter((point) =>
           visibleDateSet.has(point.date)
         );
+        const baselinePercent = visibleBenchmarkPoints.find(
+          (point) => getFiniteNumber(point.returnPercent) !== null
+        )?.returnPercent ?? null;
         const percentByDate = new Map(
           visibleBenchmarkPoints.map(
             (point) =>
@@ -1912,6 +1903,10 @@ export default function PortfolioLineCharts({
           deltaTone: "tone-neutral",
           stats: [
             {
+              label: "Zakres",
+              value: effectiveRangePreset,
+            },
+            {
               label: "Dodane benchmarki",
               value: String(selectedBenchmarks.length),
             },
@@ -1945,6 +1940,10 @@ export default function PortfolioLineCharts({
           deltaValue: "brak danych",
           deltaTone: "tone-neutral",
           stats: [
+            {
+              label: "Zakres",
+              value: effectiveRangePreset,
+            },
             {
               label: "Portfel",
               value: formatSignedPercent(portfolioPercent),
@@ -1990,6 +1989,10 @@ export default function PortfolioLineCharts({
               );
       const stats = [
         {
+          label: "Zakres",
+          value: effectiveRangePreset,
+        },
+        {
           label: "Portfel",
           value: formatSignedPercent(portfolioPercent),
           tone: getToneClass(portfolioPercent),
@@ -2014,7 +2017,7 @@ export default function PortfolioLineCharts({
 
       return {
         title: "Portfel vs benchmark",
-        copy: "Stopa zwrotu portfela i benchmarkow jest liczona dziennie, a zakres odnosi sie do poprzedniego punktu wyceny.",
+        copy: "Portfel i benchmarki są rebazowane do pierwszego punktu wybranego zakresu, dzięki czemu pokazują wynik tylko z tego okresu.",
         data,
         lines: [portfolioLine, ...benchmarkLines],
         summaryLabel: "Stopa portfela",
@@ -2115,11 +2118,12 @@ export default function PortfolioLineCharts({
     benchmarkSeriesById,
     baseCurrency,
     combinedProfitLoss,
+    comparisonPoints,
+    effectiveRangePreset,
     mode,
     selectedBenchmarks,
     visibleBenchmarkDefinitions,
     visibleDailyChangePoints,
-    visibleDates,
     visibleDrawdownPoints,
     visiblePoints,
     visibleReturnPoints,
@@ -2522,161 +2526,6 @@ export default function PortfolioLineCharts({
     });
   };
 
-  const getChartViewport = () => {
-    const currentViewport = pendingViewportRef.current ?? manualViewportRef.current;
-    const fullViewport = getFullChartViewport(chartModel.data.length);
-
-    if (currentViewport === "full") {
-      return fullViewport;
-    }
-
-    return currentViewport ?? baseChartViewport ?? fullViewport;
-  };
-
-  const handleChartWheel = (event: ReactWheelEvent<HTMLDivElement>) => {
-    if (!hasRenderableData || event.deltaY === 0) {
-      return;
-    }
-
-    event.preventDefault();
-    const bounds = event.currentTarget.getBoundingClientRect();
-    const anchorRatio = Math.max(0, Math.min(1, (event.clientX - bounds.left) / bounds.width));
-    const factor = event.deltaY < 0 ? 0.78 : 1.28;
-
-    handleChartZoom(factor, anchorRatio);
-  };
-
-  const handleChartPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (!hasRenderableData || (event.pointerType === "mouse" && event.button !== 0)) {
-      return;
-    }
-
-    const bounds = event.currentTarget.getBoundingClientRect();
-    const viewport = getChartViewport();
-
-    event.currentTarget.setPointerCapture(event.pointerId);
-    didDragChartRef.current = false;
-    updateCrosshairPosition(event);
-    setIsChartInteracting(true);
-    dragStateRef.current = {
-      pointerId: event.pointerId,
-      pointerType: event.pointerType,
-      startViewport: viewport,
-      startX: event.clientX,
-      width: Math.max(1, bounds.width),
-    };
-
-    if (event.pointerType !== "touch") {
-      return;
-    }
-
-    touchPointersRef.current.set(event.pointerId, {
-      x: event.clientX,
-      y: event.clientY,
-    });
-
-    if (touchPointersRef.current.size !== 2) {
-      return;
-    }
-
-    const [firstPointer, secondPointer] = Array.from(touchPointersRef.current.values());
-    const initialDistance = Math.hypot(
-      firstPointer.x - secondPointer.x,
-      firstPointer.y - secondPointer.y
-    );
-
-    pinchStateRef.current = {
-      initialDistance: Math.max(1, initialDistance),
-      initialViewport: viewport,
-      initialX: (firstPointer.x + secondPointer.x) / 2,
-    };
-  };
-
-  const handleChartPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
-    updateCrosshairPosition(event);
-
-    if (event.pointerType === "touch") {
-      touchPointersRef.current.set(event.pointerId, {
-        x: event.clientX,
-        y: event.clientY,
-      });
-
-      const pinchState = pinchStateRef.current;
-
-      if (pinchState && touchPointersRef.current.size >= 2) {
-        const [firstPointer, secondPointer] = Array.from(touchPointersRef.current.values());
-        const distance = Math.max(
-          1,
-          Math.hypot(firstPointer.x - secondPointer.x, firstPointer.y - secondPointer.y)
-        );
-        const bounds = event.currentTarget.getBoundingClientRect();
-        const anchorRatio = Math.max(
-          0,
-          Math.min(1, (pinchState.initialX - bounds.left) / Math.max(1, bounds.width))
-        );
-
-        event.preventDefault();
-        const nextViewport = zoomChartViewport({
-          viewport: pinchState.initialViewport,
-          pointCount: chartModel.data.length,
-          factor: pinchState.initialDistance / distance,
-          anchorRatio,
-        });
-
-        scheduleViewportUpdate(nextViewport ?? "full");
-        return;
-      }
-    }
-
-    const dragState = dragStateRef.current;
-
-    if (!dragState || dragState.pointerId !== event.pointerId || !dragState.startViewport) {
-      return;
-    }
-
-    const span = dragState.startViewport.endIndex - dragState.startViewport.startIndex;
-
-    if (span <= 0) {
-      return;
-    }
-
-    const deltaPoints = Math.round(
-      -((event.clientX - dragState.startX) / dragState.width) * span
-    );
-
-    if (Math.abs(event.clientX - dragState.startX) > 4) {
-      didDragChartRef.current = true;
-    }
-
-    if (deltaPoints === 0) {
-      return;
-    }
-
-    event.preventDefault();
-    const nextViewport = panChartViewport({
-      viewport: dragState.startViewport,
-      pointCount: chartModel.data.length,
-      deltaPoints,
-    });
-
-    scheduleViewportUpdate(nextViewport ?? "full");
-  };
-
-  const finishChartPointer = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (event.pointerType === "touch") {
-      touchPointersRef.current.delete(event.pointerId);
-      pinchStateRef.current = null;
-    }
-
-    if (dragStateRef.current?.pointerId === event.pointerId) {
-      dragStateRef.current = null;
-    }
-
-    if (touchPointersRef.current.size === 0) {
-      setIsChartInteracting(false);
-    }
-  };
-
   const renderRangeSelector = (isFullscreen = false) => {
     if (availableRangePresets.length === 0) {
       return null;
@@ -2919,27 +2768,15 @@ export default function PortfolioLineCharts({
         ref={isFullscreen ? modalChartFrameRef : chartFrameRef}
         className={
           isFullscreen
-            ? `line-visual-chart-frame line-visual-modal-chart-frame mt-4${
-                isChartInteracting ? " is-interacting" : ""
-              }`
-            : `line-visual-chart-frame mt-4${isChartInteracting ? " is-interacting" : ""}`
+            ? "line-visual-chart-frame line-visual-modal-chart-frame mt-4"
+            : "line-visual-chart-frame mt-4"
         }
-        aria-label={`${chartModel.title}. Przeciągnij, aby przesunąć dane; użyj kółka lub gestu szczypania, aby zmienić przybliżenie.`}
-        onPointerCancel={finishChartPointer}
-        onPointerDown={handleChartPointerDown}
+        aria-label={`${chartModel.title}. Najedź na wykres, aby zobaczyć szczegóły.`}
         onPointerLeave={(event) => {
-          if (!dragStateRef.current) {
-            scheduleCrosshairUpdate(event.currentTarget, { visible: false });
-          }
+          scheduleCrosshairUpdate(event.currentTarget, { visible: false });
         }}
-        onPointerMove={handleChartPointerMove}
-        onPointerUp={finishChartPointer}
-        onDoubleClick={() => {
-          if (!didDragChartRef.current) {
-            handleOpenChartModal();
-          }
-        }}
-        onWheel={handleChartWheel}
+        onPointerMove={updateCrosshairPosition}
+        onDoubleClick={handleOpenChartModal}
       >
         <ResponsiveContainer width="100%" height={isFullscreen ? "100%" : 420} initialDimension={{ width: 900, height: isFullscreen ? 600 : 420 }}>
           <ComposedChart data={renderedChartData} margin={chartMargin}>
@@ -3027,7 +2864,7 @@ export default function PortfolioLineCharts({
                   }}
                   animationDuration={isFullscreen ? 640 : 480}
                   animationEasing="ease-out"
-                  isAnimationActive={!isChartInteracting}
+                  isAnimationActive
                   connectNulls={line.connectNulls}
                   dataKey={line.dataKey}
                   fill={`url(#gradient-${isFullscreen ? "modal-" : ""}${line.dataKey})`}
@@ -3047,7 +2884,7 @@ export default function PortfolioLineCharts({
                   }}
                   animationDuration={isFullscreen ? 640 : 480}
                   animationEasing="ease-out"
-                  isAnimationActive={!isChartInteracting}
+                  isAnimationActive
                   connectNulls={line.connectNulls}
                   dataKey={line.dataKey}
                   dot={false}
@@ -3141,7 +2978,7 @@ export default function PortfolioLineCharts({
             />
             <Bar
               dataKey="investmentResult"
-              isAnimationActive={!isChartInteracting}
+              isAnimationActive
               maxBarSize={isFullscreen ? 28 : 18}
               radius={isFullscreen ? [6, 6, 3, 3] : [4, 4, 2, 2]}
             >

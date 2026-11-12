@@ -57,7 +57,10 @@ import {
   rankBenchmarkSearchResults,
 } from "@/lib/benchmark-search";
 import { buildPortfolioDailyMetricPoints } from "@/lib/portfolio-daily-metrics";
-import { calculateCapitalReturnPercent } from "@/lib/portfolio-performance";
+import {
+  calculateCapitalReturnPercent,
+  calculatePeriodCapitalReturnPercent,
+} from "@/lib/portfolio-performance";
 import {
   convertFromPln,
   convertToPln,
@@ -276,7 +279,7 @@ const MODE_OPTIONS: Array<{
   {
     value: "portfolio-vs-benchmark",
     label: "Portfel vs benchmark",
-    copy: "stopa zwrotu jak w myfund",
+    copy: "stopa kapitałowa w wybranym zakresie",
   },
   {
     value: "daily-change",
@@ -1736,17 +1739,18 @@ export default function PortfolioLineCharts({
 
       const visibleDates = comparisonPoints.map((point) => point.date);
       const visibleDateSet = new Set(visibleDates);
-      const portfolioBaselinePercent = comparisonPoints.find(
-        (point) => getFiniteNumber(point.timeWeightedReturnPercent) !== null
-      )?.timeWeightedReturnPercent ?? null;
+      const portfolioBaselineProfitLoss = getFiniteNumber(
+        comparisonPoints.find((point) => getFiniteNumber(point.profitLossPln) !== null)?.profitLossPln
+      ) ?? 0;
       const portfolioPercentByDate = new Map(
         comparisonPoints.map(
           (point) =>
             [
               point.date,
-              calculateRelativeReturnPercent(
-                point.timeWeightedReturnPercent,
-                portfolioBaselinePercent
+              calculatePeriodCapitalReturnPercent(
+                portfolioBaselineProfitLoss,
+                point.profitLossPln,
+                point.netInvestedPln
               ),
             ] as const
         )
@@ -2017,7 +2021,7 @@ export default function PortfolioLineCharts({
 
       return {
         title: "Portfel vs benchmark",
-        copy: "Portfel i benchmarki są rebazowane do pierwszego punktu wybranego zakresu, dzięki czemu pokazują wynik tylko z tego okresu.",
+        copy: "Portfel pokazuje zmianę wyniku netto względem kapitału końcowego, a benchmarki są rebazowane do pierwszego punktu wybranego zakresu.",
         data,
         lines: [portfolioLine, ...benchmarkLines],
         summaryLabel: "Stopa portfela",

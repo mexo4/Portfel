@@ -10,6 +10,7 @@ import {
 import { buildPortfolioDailyMetricPoints } from "../src/lib/portfolio-daily-metrics.ts";
 import { aggregatePortfolioHistoryPoints, buildBuyCashflowEvents, getAggregateTwrStatus, getHistoryTradingDayPredicate, getPortfolioTwrFxWarnings, hasUnreliableHistoryGap } from "../src/lib/server/portfolio-history.ts";
 import { buildCalendarReturns, deriveDailyCashFlowNeutralReturns } from "../src/lib/portfolio-risk-analytics.ts";
+import { calculatePeriodCapitalReturnPercent } from "../src/lib/portfolio-performance.ts";
 import { isGpwTradingDay } from "../src/lib/gpw-market-calendar.ts";
 import { isXetraTradingDay } from "../src/lib/market-session-calendar.ts";
 import { getDashboardHistoryMetrics } from "../src/lib/dashboard-read-model.ts";
@@ -219,6 +220,11 @@ test("partial-year calendar separates positive nominal result from negative TWR"
   assert.equal(yearly?.isComplete, false);
   assert.equal(yearly?.dateFrom, "2025-07-31");
   assert.equal(yearly?.dateTo, "2025-12-31");
+});
+
+test("benchmark range return follows the net result even after an earlier loss and later deposit", () => {
+  assert.equal(calculatePeriodCapitalReturnPercent(0, 1_834.59, 80_000), 2.29);
+  assert.equal(calculatePeriodCapitalReturnPercent(-50, 55, 1_100), 9.55);
 });
 
 test("calendar simple return is unavailable when ending net invested capital is not positive", () => {
@@ -490,9 +496,10 @@ test("benchmark comparison follows the selected range and does not capture chart
   const source = await readFile(new URL("../src/components/PortfolioLineCharts.tsx", import.meta.url), "utf8");
 
   assert.match(source, /const comparisonPoints = useMemo\([\s\S]*filterChartPointsByRange\(displayPoints, effectiveRangePreset\)/);
-  assert.match(source, /const portfolioBaselinePercent = comparisonPoints\.find\(/);
+  assert.match(source, /const portfolioBaselineProfitLoss = getFiniteNumber\(/);
+  assert.match(source, /calculatePeriodCapitalReturnPercent\(/);
   assert.match(source, /const baselinePercent = visibleBenchmarkPoints\.find\(/);
-  assert.match(source, /Portfel i benchmarki są rebazowane do pierwszego punktu wybranego zakresu/);
+  assert.match(source, /Portfel pokazuje zmianę wyniku netto względem kapitału końcowego/);
   assert.doesNotMatch(source, /onWheel=\{handleChartWheel\}|onPointerDown=\{handleChartPointerDown\}|panChartViewport/);
   assert.match(source, /Najedź na wykres, aby zobaczyć szczegóły/);
 });

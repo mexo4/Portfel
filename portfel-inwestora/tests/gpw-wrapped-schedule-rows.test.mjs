@@ -97,3 +97,33 @@ Nowo ustalony termin przekazania raportu kwartalnego za I kwartał 2026 r. to: 2
   assert.deepEqual(asRows(events), [["QUARTERLY_REPORT", "2026-05-29", "Q1", "2026", true]]);
   assert.equal(events[0].previousEventDate, "2026-05-08");
 });
+
+// --- dates a schedule names without announcing a report on them --------------------------------------------
+
+import { getReportScheduleNonPublicationDates } from "../src/lib/corporate-events.ts";
+
+const fixtureText = (id) => gpwWrappedScheduleRows.find((entry) => entry.id === id).text;
+const byDate = (dates) => new Map(dates.map((entry) => [entry.date, entry]));
+
+test("LPP: the closing day of each fiscal quarter is named as such, and the real appointments are not", () => {
+  const dates = byDate(getReportScheduleNonPublicationDates(fixtureText("gpw:480147")));
+  assert.deepEqual(dates.get("2027-01-31")?.closes, { eventType: "QUARTERLY_REPORT", fiscalPeriod: "Q4", fiscalYear: 2026 });
+  assert.deepEqual(dates.get("2026-04-30")?.closes, { eventType: "QUARTERLY_REPORT", fiscalPeriod: "Q1", fiscalYear: 2026 });
+  for (const appointment of ["2026-03-26", "2026-06-11", "2026-09-17", "2026-12-03"]) {
+    assert.equal(dates.has(appointment), false, appointment);
+  }
+});
+
+test("a fiscal-year end is a boundary, never an appointment (Delko 30.06.2027)", () => {
+  const dates = byDate(getReportScheduleNonPublicationDates(fixtureText("gpw:493765")));
+  assert.equal(dates.get("2027-06-30")?.role, "PERIOD_BOUNDARY");
+  for (const appointment of ["2026-10-29", "2026-11-25", "2027-03-25", "2027-05-26"]) {
+    assert.equal(dates.has(appointment), false, appointment);
+  }
+});
+
+test("the date of the cited regulation is a legal-act date (6 June 2025), not an appointment", () => {
+  const dates = byDate(getReportScheduleNonPublicationDates(fixtureText("gpw:480814")));
+  assert.equal(dates.get("2025-06-06")?.role, "LEGAL_ACT");
+  assert.equal(dates.has("2026-04-29"), false);
+});

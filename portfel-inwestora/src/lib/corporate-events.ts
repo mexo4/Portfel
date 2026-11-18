@@ -508,6 +508,10 @@ const SCHEDULE_SECTION_HEADING = new RegExp(
   "iu"
 );
 
+/** The year a section heading names ("raporty roczne za rok 2025:", "Raporty kwartalne za 2026 rok:"). */
+const getHeadingYear = (heading: string) =>
+  heading.match(/\bza\s+(?:rok\s+(?:obrotowy\s+)?)?(20\d{2})(?!\s*\/)/iu)?.[1];
+
 /** A line that begins with a calendar date ("20 listopada 2026", "20.11.2026") or an explicit appointment cue. */
 const STARTS_WITH_SCHEDULE_DATE = new RegExp(
   String.raw`^(?:[-–—:]?\s*)?(?:\d{1,2}(?:\s*[.\-/]\s*\d{1,2}\s*[.\-/]|\s+(?:stycznia|lutego|marca|kwietnia|maja|czerwca|lipca|sierpnia|września|października|listopada|grudnia)\b)|w\s+dniu\b|dnia\b|termin\s+publikacji\b)`,
@@ -516,8 +520,10 @@ const STARTS_WITH_SCHEDULE_DATE = new RegExp(
 
 export const getCandidateSegments = (text: string) => {
   const lines = text.split(/\n+/).map((line) => line.trim()).filter(Boolean);
-  const segments: Array<{ text: string; sectionType: CorporateEventType | null }> = [];
+  const segments: Array<{ text: string; sectionType: CorporateEventType | null; sectionYear?: string }> = [];
   let sectionType: CorporateEventType | null = null;
+  // A heading such as "raporty roczne za rok 2025:" also names the year of its rows ("- jednostkowy - 29 kwietnia 2026 r.").
+  let sectionYear: string | undefined;
   for (let index = 0; index < lines.length; index += 1) {
     let line = lines[index];
     // Prose can wrap the publication verb between physical lines ("który
@@ -538,6 +544,7 @@ export const getCandidateSegments = (text: string) => {
           /(?:opublikowan|publikacj|przekazan|termin)/iu.test(lines[index + 1] ?? ""))) &&
       isReportType(getEventType(line))) {
       sectionType = getEventType(line);
+      sectionYear = getHeadingYear(line);
       continue;
     }
     // ESPI correction notices are sometimes extracted as wrapped prose rather
@@ -569,6 +576,7 @@ export const getCandidateSegments = (text: string) => {
     if (/^\d+[.)]\s+(?:(?:rozszerzone|skonsolidowane)\s+)*raporty\s+(?:roczne|kwartalne|półroczne)(?:\s+[^:]{0,50})?:\s*$/iu.test(line) ||
       (SCHEDULE_SECTION_HEADING.test(line) && extractPolishDates(line).length === 0)) {
       sectionType = getEventType(line);
+      sectionYear = getHeadingYear(line);
       continue;
     }
     // PDF text extraction sometimes wraps only the year of an announced
@@ -635,10 +643,12 @@ export const getCandidateSegments = (text: string) => {
     }
     if (/^\s*(?:\d+[.)]\s*)?(?:rozszerzone\s+)?(?:skonsolidowane\s+)?raporty\s+(?:roczne|kwartalne|półroczne)(?:\s+[^:]{0,35})?\s*:?\s*$/iu.test(line)) {
       sectionType = getEventType(line);
+      sectionYear = getHeadingYear(line);
       continue;
     }
     if (/\b(?:jednocześnie|ponadto|na podstawie|w związku z tym)\b/iu.test(line) && !/zostanie opublikowan|termin publikacji/iu.test(line)) {
       sectionType = null;
+      sectionYear = undefined;
     }
     // A line that already closed its list item with ";" is the tail of the
     // previous row ("… zawierający jednostkową kwartalną informację
@@ -648,13 +658,13 @@ export const getCandidateSegments = (text: string) => {
       const next = lines[index + 1];
       // "1. Skonsolidowany …" is a numbered row, not a date: require a real one.
       if (next && STARTS_WITH_SCHEDULE_DATE.test(next)) {
-        segments.push({ text: `${line} ${next}`, sectionType });
+        segments.push({ text: `${line} ${next}`, sectionType, sectionYear });
         index += 1;
         continue;
       }
     }
     for (const clause of line.split(/(?:;|,\s*(?=[-–—]\s*za\s+[ivx1-4])|(?<=[.,])\s+(?=(?:(?:skonsolidowan|jednostkow|rozszerzon)\w*\s+)?raport\s+(?:roczn|półroczn|kwartaln)))\s*(?=(?:[-–—]\s*)?(?:skonsolidowan|jednostkow|rozszerzon|raport|za\s+[ivx1-4]))/iu)) {
-      segments.push({ text: clause, sectionType });
+      segments.push({ text: clause, sectionType, sectionYear });
     }
   }
   return segments;
@@ -787,6 +797,75 @@ const isNonCalendarFiscalYearEvent = (event: ParsedCorporateEvent, fiscalYears: 
   return eventYears.some((year) => fiscalYears.has(year));
 };
 
+export type NonPublicationDate = {
+  date: string;
+  /**
+   * PERIOD_BOUNDARY: start/end of a fiscal period or year; PRELIMINARY_RESULTS: selected-data announcement;
+   * LEGAL_ACT: date of a regulation or statute cited as the legal basis ("Rozporządzenia … z dnia 6 czerwca 2025 r.").
+   */
+  role: "PERIOD_BOUNDARY" | "PRELIMINARY_RESULTS" | "LEGAL_ACT";
+  /**
+   * Set when the document states that this very date closes a named period ("IV kwartał 2026 - od 1 listopada
+   * do 31 stycznia 2027"). A stored report row with exactly this identity and date is the period end taken for
+   * an appointment, whatever its provenance.
+   */
+  closes?: { eventType: "QUARTERLY_REPORT" | "HALF_YEAR_REPORT" | "ANNUAL_REPORT"; fiscalPeriod: string; fiscalYear: number };
+};
+
+/** The period named right before "od <start> do <end>": "IV kwartał 2026 -", "I półrocze 2026:", "rok 2026 -". */
+const getPeriodNamedBefore = (before: string): NonPublicationDate["closes"] => {
+  const tail = before.slice(-90);
+  const quarter = /\b(i{1,3}|iv|[1-4])\.?\s+kwartał\p{L}*\s+(?:roku\s+)?(20\d{2})\s*[-–—:,(]?\s*(?:okres\p{L}*\s*)?$/iu.exec(tail);
+  if (quarter) {
+    const number = ({ i: 1, ii: 2, iii: 3, iv: 4, "1": 1, "2": 2, "3": 3, "4": 4 } as const)[
+      quarter[1]!.toLowerCase() as "i" | "ii" | "iii" | "iv" | "1" | "2" | "3" | "4"
+    ];
+    return { eventType: "QUARTERLY_REPORT", fiscalPeriod: `Q${number}`, fiscalYear: Number(quarter[2]) };
+  }
+  const half = /\bI?\s*półrocz\p{L}*\s+(?:roku\s+)?(20\d{2})\s*[-–—:,(]?\s*(?:okres\p{L}*\s*)?$/iu.exec(tail);
+  if (half) return { eventType: "HALF_YEAR_REPORT", fiscalPeriod: "H1", fiscalYear: Number(half[1]) };
+  const year = /\brok\p{L}*\s+(?:obrotow\p{L}*\s+|finansow\p{L}*\s+)?(20\d{2})\s*[-–—:,(]?\s*(?:okres\p{L}*\s*)?$/iu.exec(tail);
+  if (year) return { eventType: "ANNUAL_REPORT", fiscalPeriod: "FY", fiscalYear: Number(year[1]) };
+  return undefined;
+};
+
+/**
+ * Dates a schedule document states without announcing a report on them: the
+ * boundaries of reporting periods ("okres od 1 listopada do 31 stycznia 2027",
+ * "rok zakończony 31 grudnia 2025") and the days selected unaudited data are
+ * published. An older parser could take one of them for a publication date
+ * (the stored "Q4 2026 on Sunday 31 January 2027" row of LPP); a document that
+ * names a stored row's date only in this role is evidence that the row is stale.
+ */
+export const getReportScheduleNonPublicationDates = (document: string): NonPublicationDate[] => {
+  const text = expandShortFiscalYears(normalizeDocumentText(document)).replace(/\s+/gu, " ");
+  const found = new Map<string, NonPublicationDate>();
+  const add = (value: string, role: NonPublicationDate["role"], closes?: NonPublicationDate["closes"]) => {
+    for (const date of extractPolishDates(value)) {
+      const known = found.get(date);
+      if (!known) found.set(date, { date, role, ...(closes ? { closes } : {}) });
+      else if (closes && !known.closes) known.closes = closes;
+    }
+  };
+  const dateToken = String.raw`(?:\d{1,2}\s+\p{L}+(?:\s+20\d{2})?|\d{1,2}[.\-/]\d{1,2}[.\-/]20\d{2})`;
+  const dated = String.raw`(?:\d{1,2}\s+\p{L}+\s+20\d{2}|\d{1,2}[.\-/]\d{1,2}[.\-/]20\d{2})`;
+  for (const match of text.matchAll(new RegExp(String.raw`\bod\s+(${dateToken})\s*(?:r\.?|roku)?\s+do\s+(${dated})`, "giu"))) {
+    add(match[1] ?? "", "PERIOD_BOUNDARY");
+    add(match[2] ?? "", "PERIOD_BOUNDARY", getPeriodNamedBefore(text.slice(0, match.index ?? 0)));
+  }
+  for (const match of text.matchAll(new RegExp(String.raw`\b(?:zakończon\p{L}*|kończąc\p{L}*\s+się)\s+(?:w\s+dniu\s+)?(${dated})`, "giu"))) {
+    add(match[1] ?? "", "PERIOD_BOUNDARY");
+  }
+  for (const match of text.matchAll(
+    /\bwybran\p{L}*\s+(?:niezaudytowan\p{L}*\s+)?dan\p{L}*\s+finansow\p{L}*[\s\S]{0,350}?(?:zostan\p{L}*\s+(?:opublikowan|przekazan)\p{L}*[\s\S]{0,100}?20\d{2}\s*(?:roku|r\.?))/giu
+  )) add(match[0], "PRELIMINARY_RESULTS");
+  // "§ 84 ust. 1 Rozporządzenia Ministra Finansów z dnia 6 czerwca 2025 r." is the legal basis, never an appointment.
+  for (const match of text.matchAll(new RegExp(
+    String.raw`\b(?:rozporządzeni\p{L}*|ustaw\p{L}*|dyrektyw\p{L}*|uchwał\p{L}*)[^.]{0,140}?\bz\s+(?:dnia\s+)?(${dated})`, "giu"
+  ))) add(match[1] ?? "", "LEGAL_ACT");
+  return [...found.values()];
+};
+
 const getReportScheduleReviewReasons = (
   event: ParsedCorporateEvent,
   nonCalendarFiscalYears: ReadonlySet<number> = new Set()
@@ -869,8 +948,10 @@ const joinWrappedScheduleRows = (text: string) => {
     if (!line) continue;
     const previous = rows.at(-1);
     // A short heading tail ("finansowe:") belongs to the heading line above it.
+    // ("Skonsolidowany raport za I półrocze 2026 roku zawierający skrócone jednostkowe informacje" / "finansowe:")
     if (previous !== undefined && /[:：]\s*$/u.test(line) && line.length <= 40 &&
-      !SCHEDULE_ROW_START.test(line) && SCHEDULE_HEADING_TYPE.test(previous) &&
+      !SCHEDULE_ROW_START.test(line) &&
+      (SCHEDULE_HEADING_TYPE.test(previous) || /\braport\p{L}*\s+za\s+(?:[ivx\d]+\s+)?(?:kwartał|półrocze|rok)\b/iu.test(previous)) &&
       !SCHEDULE_ROW_START.test(previous) && !/[.;:!?]\s*$/u.test(previous)) {
       rows[rows.length - 1] = normalizeScheduleHeading(`${previous} ${line}`);
       continue;
@@ -923,6 +1004,8 @@ const expandQuarterAbbreviations = (text: string) =>
 
 /** A schedule row that names only its period: "- za III kwartał 2026 roku - 27 listopada 2026 roku". */
 const SCHEDULE_PERIOD_ROW = /^(?:(?:[-–—•]|\d{1,2}[.)]|[IVX]{1,4}[.)]|[a-z][._)])\s*)?za\s+/iu;
+/** A schedule row that names only its scope under a typed heading: "- jednostkowy - 29 kwietnia 2026 r.". */
+const SCHEDULE_SCOPE_ROW = /^(?:(?:[-–—•]|\d{1,2}[._)]|[a-z][._)])\s*)?(?:skonsolidowan\p{L}*|jednostkow\p{L}*)(?:\s+(?:i|oraz)\s+(?:skonsolidowan\p{L}*|jednostkow\p{L}*))?\s*[-–—:]\s*\d/iu;
 
 const parseReportScheduleEvents = (sourceText: string) => {
   const text = expandShortFiscalYears(sourceText);
@@ -954,6 +1037,12 @@ const parseReportScheduleEvents = (sourceText: string) => {
   const scheduleText = joinWrappedScheduleRows(expandQuarterAbbreviations(text.replace(
     /\bwybran\p{L}*\s+(?:niezaudytowan\p{L}*\s+)?dan\p{L}*\s+finansow\p{L}*[\s\S]{0,350}?(?:zostan\p{L}*\s+(?:opublikowan|przekazan)\p{L}*[\s\S]{0,100}?20\d{2}\s*(?:roku|r\.?))/giu,
     " "
+  ).replace(
+    // The statutory report on payments to public administration is announced beside the periodic reports
+    // ("sprawozdanie z płatności na rzecz administracji publicznej za rok 2025 zostanie przekazane w dniu …")
+    // but is not one: its sentence must neither become a row nor inherit the heading above it.
+    /\bsprawozdani\p{L}*\s+z\s+płatności\s+na\s+rzecz\s+administracji[\s\S]{0,200}?20\d{2}\s*(?:roku|r\.?)/giu,
+    " "
   )));
   // A document titled "Terminy publikacji raportów okresowych …" gives row
   // context to "- za III kwartał 2026 roku - 27 listopada 2026 roku" even when
@@ -980,7 +1069,7 @@ const parseReportScheduleEvents = (sourceText: string) => {
     if (!/\b(?:rapor\p{L}*|sprawozdani\p{L}*)\b/iu.test(clause) &&
       !isReportType(segment.sectionType) && !(scheduleDocument && SCHEDULE_PERIOD_ROW.test(clause))) continue;
     // A date in a legal citation below a section heading is not a report.
-    if (!getEventType(clause) && !SCHEDULE_PERIOD_ROW.test(clause) &&
+    if (!getEventType(clause) && !SCHEDULE_PERIOD_ROW.test(clause) && !SCHEDULE_SCOPE_ROW.test(clause) &&
       !/(?:zostanie|będzie)\s+(?:opublikowan|przekazan)|termin\s+(?:publikacji|przekazania)/iu.test(clause)) continue;
     const eventDate = getReportPublicationDate(clause);
     if (!eventDate) continue;
@@ -1004,7 +1093,9 @@ const parseReportScheduleEvents = (sourceText: string) => {
       Number(periodBounds.periodEnd.slice(0, 4)) === Number(endingYear) - 1
       ? `${Number(endingYear) - 1}/${endingYear}`
       : (() => {
-        const clauseYearLabel = getFiscalYearLabel(clause);
+        // The heading's year belongs to rows of the heading's own report type: a half-year row under a stale
+        // "Raporty roczne za 2025 rok:" heading is not for 2025.
+        const clauseYearLabel = getFiscalYearLabel(clause) ?? (type === segment.sectionType ? segment.sectionYear : undefined);
         const scheduleYears = scheduleYearLabel?.match(/20\d{2}/g)?.map(Number) ?? [];
         const clauseYears = clauseYearLabel?.match(/20\d{2}/g)?.map(Number) ?? [];
         // Require the entire explicit fiscal-year pair to belong to the

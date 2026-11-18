@@ -50,8 +50,8 @@ export const loadProjectionCorpus = async () => {
   ];
   const documents = [];
   for (const [group, file, exportName, field] of sets) {
-    const module = await import(`${fixtures}${file}`);
-    for (const entry of module[exportName]) documents.push({ id: `${group}:${entry.id}`, text: entry[field] });
+    const fixture = await import(`${fixtures}${file}`);
+    for (const entry of fixture[exportName]) documents.push({ id: `${group}:${entry.id}`, text: entry[field] });
   }
   return documents;
 };

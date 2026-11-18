@@ -366,9 +366,9 @@ test("TWR completeness checks missing trading sessions instead of raw calendar d
     { date: "2026-08-10", close: 100 },
     { date: "2026-08-21", close: 103 },
   ], "2026-08-10", "2026-08-21"), true);
-  // GPW was closed on Christmas Eve (from 2025), Christmas Day, Boxing Day,
-  // and then the weekend. The six-day calendar interval contains no missing
-  // exchange session and must not invalidate the portfolio TWR.
+  // GPW was closed on Christmas Eve, Christmas Day and Boxing Day (Uchwała
+  // 701/2024), and then the weekend. The six-day calendar interval contains no
+  // missing exchange session and must not invalidate the portfolio TWR.
   assert.equal(hasUnreliableHistoryGap([
     { date: "2025-12-23", close: 100 },
     { date: "2025-12-29", close: 101 },
@@ -379,11 +379,26 @@ test("TWR completeness checks missing trading sessions instead of raw calendar d
     { date: "2025-12-23", close: 100 },
     { date: "2025-12-29", close: 101 },
   ], "2025-12-23", "2025-12-29", isXetraTradingDay), false);
-  // Three missing open sessions remain a real data-quality gap.
+  // GPW has no session on 31.12 and 1.01 (Uchwały 701/2024 and 753/2025), so
+  // between 29.12 and 5.01 only 30.12 and 2.01 are missing sessions: within the
+  // tolerated gap. Counting 31.12 as a session wrongly made this window unreliable.
   assert.equal(hasUnreliableHistoryGap([
     { date: "2025-12-29", close: 100 },
     { date: "2026-01-05", close: 101 },
-  ], "2025-12-29", "2026-01-05", isGpwTradingDay), true);
+  ], "2025-12-29", "2026-01-05", isGpwTradingDay), false);
+  // Three missing open sessions (30.12, 2.01 and 5.01; 6.01 is a holiday) remain
+  // a real data-quality gap.
+  assert.equal(hasUnreliableHistoryGap([
+    { date: "2025-12-29", close: 100 },
+    { date: "2026-01-07", close: 101 },
+  ], "2025-12-29", "2026-01-07", isGpwTradingDay), true);
+  // 24.12.2024 was a day without a session as well (Uchwała 571/2023): only 23.12
+  // and 27.12 are missing between these quotes. Before the calendar fix 24.12 was
+  // counted as a third missing session.
+  assert.equal(hasUnreliableHistoryGap([
+    { date: "2024-12-20", close: 100 },
+    { date: "2024-12-30", close: 101 },
+  ], "2024-12-20", "2024-12-30", isGpwTradingDay), false);
   // A real Xetra data outage spanning three open sessions must still block
   // completeness; the calendar only exempts official venue holidays.
   assert.equal(hasUnreliableHistoryGap([

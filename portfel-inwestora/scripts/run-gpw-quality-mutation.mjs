@@ -95,8 +95,9 @@ const mutants = [
     transform: (source) => inside(
       source,
       "const parseReportScheduleEvents",
-      "const clauseYearLabel = getFiscalYearLabel(clause);",
-      "const clauseYearLabel = getFiscalYearLabel(segment.text) ?? getFiscalYearLabel(clause);",
+      // No trailing ";": the parser line continues with the heading-year fallback.
+      "const clauseYearLabel = getFiscalYearLabel(clause)",
+      "const clauseYearLabel = getFiscalYearLabel(segment.text) ?? getFiscalYearLabel(clause)",
       "borrow-fiscal-year-from-adjacent-row",
     ),
   },

@@ -1,0 +1,20 @@
+{
+  "reports": {
+    "version": 11,
+    "documents": 78,
+    "events": 95,
+    "sha256": "9ab90ef9bb05d4f636b370bfab17c40239008689f15bf840b2bbc791bdca597f"
+  },
+  "meetings": {
+    "version": 9,
+    "documents": 78,
+    "events": 19,
+    "sha256": "feb7dc062b5e3035b5c20c298174fb87e057599d0185f5c5cd64457f3230b1a5"
+  },
+  "dividends": {
+    "version": 9,
+    "documents": 78,
+    "events": 24,
+    "sha256": "bdd123983f949684023ec39c532bfe9bab233daf2ee5c7b3739c7e7f959e2857"
+  }
+}

@@ -33,7 +33,10 @@ test("report route selects only official GPW report event types at the read laye
 
 test("report schedule pending count uses contiguous PostgreSQL parameter indexes", () => {
   const service = read("../src/lib/server/corporate-events.ts");
-  assert.match(service, /REPORT_SCHEDULE_PROJECTION_VERSION = 10/);
+  // The number itself lives in gpw-projection-versions.ts and is pinned to the parser output by
+  // gpw-projection-version-guard.test.mjs; here only the wiring is checked.
+  assert.match(service, /from "@\/lib\/gpw-projection-versions"/);
+  assert.doesNotMatch(service, /REPORT_SCHEDULE_PROJECTION_VERSION = \d+/);
   const start = service.indexOf("export const synchronizeGlobalReportSchedules");
   const end = service.indexOf("export const getGlobalReportScheduleSourceState", start);
   const sync = service.slice(start, end);

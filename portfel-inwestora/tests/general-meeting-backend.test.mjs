@@ -161,7 +161,8 @@ test("global WZA projection is independent from portfolio membership and logs sy
   assert.match(provider, /synchronizeGlobalGeneralMeetings/);
   assert.match(provider, /corporate_events_projection_status/);
   assert.match(provider, /GENERAL_MEETING_PROJECTION_BATCH_SIZE = 100/);
-  assert.match(provider, /GENERAL_MEETING_PROJECTION_VERSION = 8/);
+  assert.match(provider, /from "@\/lib\/gpw-projection-versions"/);
+  assert.doesNotMatch(provider, /GENERAL_MEETING_PROJECTION_VERSION = \d+/);
   assert.match(provider, /report\.source_id NOT LIKE 'newconnect:%'/);
   assert.match(provider, /report\.published_at >= \$1/);
   assert.match(provider, /report\.category = 'GENERAL_MEETING'/);

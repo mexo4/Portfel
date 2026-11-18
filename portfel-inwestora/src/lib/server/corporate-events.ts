@@ -37,6 +37,11 @@ import { readOfficialMeetingPdf } from "@/lib/server/general-meeting-pdf";
 import { normalizeText, uniqueBy } from "@/lib/utils";
 import { getReportScheduleProjectionStatus, planReportScheduleReprojection, type StoredReportProjection } from "@/lib/report-schedule-reprojection";
 import { assessReportPublicationBatch } from "@/lib/report-schedule-publication";
+import {
+  DIVIDEND_PROJECTION_VERSION,
+  GENERAL_MEETING_PROJECTION_VERSION,
+  REPORT_SCHEDULE_PROJECTION_VERSION,
+} from "@/lib/gpw-projection-versions";
 import { invalidatePublicGpwEventsCache } from "@/lib/server/public-gpw-cache";
 import {
   isDividendReportSuperseded,
@@ -1754,9 +1759,8 @@ export type GlobalGeneralMeetingSyncResult = {
   sourceSync?: GpwGeneralMeetingSourceSyncResult;
 };
 
-// Re-evaluate previously successful documents after adding explicit correction
-// reconciliation and preserving row-level fiscal-year labels.
-const REPORT_SCHEDULE_PROJECTION_VERSION = 10;
+// The projection versions live in src/lib/gpw-projection-versions.ts, next to the
+// guard test that ties them to the parser output.
 const REPORT_SCHEDULE_BATCH_SIZE = 100;
 const REPORT_SCHEDULE_UNMATCHED_RETRY_MS = 7 * 24 * 60 * 60 * 1_000;
 const REPORT_SCHEDULE_PARSE_RETRY_MS = 24 * 60 * 60 * 1_000;
@@ -2005,8 +2009,6 @@ export const getGlobalReportSchedules = async ({
     ["QUARTERLY_REPORT", "HALF_YEAR_REPORT", "ANNUAL_REPORT"]);
 };
 
-// Re-evaluate old publications after correcting false cancellations and time parsing.
-const GENERAL_MEETING_PROJECTION_VERSION = 8;
 // A batch is deliberately small enough to keep the authenticated calendar API
 // responsive; the versioned queue continues on the next poll until empty.
 const GENERAL_MEETING_PROJECTION_BATCH_SIZE = 100;
@@ -2269,7 +2271,6 @@ export const getGlobalGeneralMeetingSourceState = getGpwGeneralMeetingSyncState;
 
 export type GlobalDividendSyncResult = GlobalGeneralMeetingSyncResult;
 
-const DIVIDEND_PROJECTION_VERSION = 8;
 const DIVIDEND_PROJECTION_BATCH_SIZE = 100;
 const DIVIDEND_UNMATCHED_RETRY_MS = 7 * 24 * 60 * 60 * 1_000;
 const DIVIDEND_REPROJECTION_MAX_EVENTS = 100;

@@ -33,6 +33,14 @@ const YEAR_CONTRADICTION_REASONS = new Set([
   "FISCAL_YEAR_NOT_EXPLICIT",
 ]);
 
+/**
+ * What one document puts in front of a human: events the policy held back, and events published without
+ * a year. Both end up in the review queue (the document becomes REVIEW_REQUIRED), so both count as review
+ * items in the sync result that feeds the data-quality health.
+ */
+export const countReportReviewItems = (decisions: ReportPublicationDecision[]) =>
+  decisions.filter((decision) => !decision.publish || decision.yearWithdrawn).length;
+
 export type ReportPublicationContext = {
   /** When the official document was published. A withdrawn-year row needs it: its date must still lie ahead. */
   sourcePublishedAt?: string | null;

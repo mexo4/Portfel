@@ -49,7 +49,7 @@ Symulacja stanu końcowego bazy (`scripts/simulate-gpw-report-reprojection.mjs`,
 
 LPP: wiersz „Q4 2026, 31.01.2027” znika; GTN: Q3 przesunięty na 28.10; IDM: jeden wiersz Q3 2026 18.11; Enter Air i ERG: „Q3, do weryfikacji” zamiast niemożliwego roku.
 
-Testy: `npm test` 926 testów, 923 przechodzi, 3 pominięte (integracja PostgreSQL), 0 błędów. `tsc --noEmit` bez błędów, `eslint` czysty dla zmienionych plików (12 istniejących błędów w `PortfolioLineCharts.tsx` nie jest mojego autorstwa).
+Testy: `npm test` 962 testy (po scaleniu kalendarza sesji i poprawce licznika), 957 przechodzi, 5 pominiętych (testy integracyjne PostgreSQL: 3 kalendarza GPW, uruchamiane osobno z `MEXO_GPW_TEST_DATABASE_URL`, i 2 niezwiązane z kalendarzem), 0 błędów. `tsc --noEmit` bez błędów, `eslint` czysty dla zmienionych plików (12 istniejących błędów w `PortfolioLineCharts.tsx` nie jest mojego autorstwa).
 
 ## 4. Narzędzia
 
@@ -59,7 +59,7 @@ Testy: `npm test` 926 testów, 923 przechodzi, 3 pominięte (integracja PostgreS
 
 ## 5. Wdrożenie i wycofanie (nie wykonano)
 
-1. Przed wdrożeniem: kopia lub punkt przywracania bazy, CI z testem integracyjnym PostgreSQL (`tests/gpw-postgres-integration.test.mjs`, wymaga `MEXO_GPW_TEST_DATABASE_URL`; **nie uruchomiono go lokalnie**).
+1. Przed wdrożeniem: kopia lub punkt przywracania bazy, CI z testem integracyjnym PostgreSQL (`tests/gpw-postgres-integration.test.mjs`, wymaga `MEXO_GPW_TEST_DATABASE_URL`; trzy scenariusze: projekcja z korektami, wycofanie dnia zamykającego okres (LPP) i wycofanie wiersza współdzielonego przez dwie kopie komunikatu). Pierwszy przebieg CI po scaleniu #37 wykrył błąd licznika `reviewed` (zdarzenia opublikowane bez roku nie były liczone); po poprawce wszystkie trzy scenariusze przechodzą na lokalnym PostgreSQL 16, tak samo `next build` i HTTP E2E.
 2. Po wdrożeniu zwykła synchronizacja czyta ponownie dokumenty z inną wersją (100 na przebieg, co najmniej co 5 minut przy ruchu na stronie). Postęp widać w panelu jako „do ponownej oceny”.
 3. Każde wycofanie jest zapisane w `corporate_event_projection_changes` z pełnym `previous_row` i powodem `REPORT_SCHEDULE_REPROJECTION:<powód>`; do przeglądu: `SELECT * FROM corporate_event_projection_changes WHERE reason LIKE 'REPORT_SCHEDULE_REPROJECTION%' ORDER BY changed_at DESC`. Przywrócenie wiersza to ustawienie `active = TRUE` i poprzedniego `status` z `previous_row` (ręcznie, po przeglądzie).
 4. Nie ma przełącznika wstrzymującego ponowne czytanie; wycofanie zmiany to wycofanie wdrożenia, a wiersze wycofane do tego czasu przywraca się z `previous_row`.
@@ -71,5 +71,5 @@ Testy: `npm test` 926 testów, 923 przechodzi, 3 pominięte (integracja PostgreS
 - **Źródła**: synchronizacja PAP_ESPI ma status `PARSE_ERROR` od 09.11 (ostatni sukces), backfill GPW_WZA nie jest ukończony (strona 1). To problemy operacyjne poza tą zmianą.
 - Pozostałe po symulacji (8 wierszy bez okresu nieoznaczonych jako niezweryfikowane, 5 terminów z dwiema etykietami): wiersze z daty rozporządzenia utworzone przez stronę spoza kolejki i współdzielone z dwoma komunikatami (PKN, ABE), Synektik (rok obrotowy IX–X), warianty zakresu (DNP), pojedyncze przypadki (MCR, ICE, S2B). Zostają aktywne i trafiają do kolejki.
 - Parser nie czyta jeszcze: wiersza półrocznego z etykietą zawiniętą i cytatem rozporządzenia (Eurotel), zmian terminu bez żadnej daty w tym samym akapicie (Bumech); 81 z 671 dokumentów nadal nie daje zdarzeń (76 z nich zapisano wcześniej jako brak zdarzeń; wśród nich 17 zmian terminu z sierpnia–listopada 2026, głównie półrocznych, już minionych; z kwartalnych m.in. Sygnity i Bumech).
-- Nie wykonano: powtórki na izolowanej bazie PostgreSQL (brak lokalnej bazy, Docker nie działa), pomiaru recall na próbce 25 emitentów względem oficjalnych komunikatów (nie ma dostępu do gpw.pl z tej maszyny), testu HTTP E2E strony.
+- Nie wykonano: powtórki całego obrazu produkcji (671 dokumentów) w izolowanej bazie PostgreSQL oraz pomiaru recall na próbce 25 emitentów względem oficjalnych komunikatów (nie ma dostępu do gpw.pl z tej maszyny). Kontrakty PostgreSQL i HTTP E2E strony zostały uruchomione 18.11.2026 na lokalnym PostgreSQL 16 dopiero po tym, jak CI wykryło błąd licznika `reviewed`.
 - Faza 5 (poprzednia data przy „Termin zmieniony”, strefa czasowa przy godzinie) nie została zrobiona.

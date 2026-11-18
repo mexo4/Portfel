@@ -2494,10 +2494,13 @@ const parseReportScheduleCorrectionEvents = (text: string): ParsedCorporateEvent
         // "którego pierwotny termin publikacji wyznaczono na 21 listopada 2025 r."
         /\bwyznaczon\w*\s+na\s+(?:dzien\s*)?$/iu.test(normalizedBeforeFirst) ||
         // "pierwotny termin publikacji … był ustalony na dzień 29 maja 2026 roku."
-        /\b(?:byl\w*\s+ustalon\w*|ustalon\w*(?:\s+byl\w*)?)\s+na\s+(?:dzien\s*)?$/iu.test(normalizedBeforeFirst);
+        /\b(?:byl\w*\s+ustalon\w*|ustalon\w*(?:\s+byl\w*)?)\s+na\s+(?:dzien\s*)?$/iu.test(normalizedBeforeFirst) ||
+        // "Poprzedni termin - 27.11.2026 r. / Aktualny termin - 02.11.2026 r."
+        /\bpoprzedni\w*\s+termin\w*\s*[-–—:]?\s*$/iu.test(normalizedBeforeFirst);
       const replacementPublicationCue =
         /\b(?:zostanie|bedzie)\s+(?:opublikowan\w*|przekazan\w*|podan\w*)[\s\S]{0,160}\b(?:w\s+dniu|dnia|na\s+dzien)\s*$/iu.test(normalizedBetween) ||
         /\bpublikacj\w*\s+(?:raportu\s+)?nastapi\s+(?:w\s+dniu|dnia)\s*$/iu.test(normalizedBetween) ||
+        /\b(?:aktualn|now)\w*\s+termin\w*\s*[-–—:]?\s*$/iu.test(normalizedBetween) ||
         /\bnow(?:y|ego|ym)\s+termin\p{L}*[\s\S]{0,140}\b(?:jest|bedzie)\s*(?:dzien\s*)?$/iu.test(normalizedBetween) ||
         // "nowo ustalony, wcześniejszy termin przekazania … raportu … to: 28 sierpnia 2026 r."
         /\bnowo\s+ustalon\w*[\s\S]{0,40}?termin\w*[\s\S]{0,200}?\b(?:to|jest)\s*:?\s*$/iu.test(normalizedBetween) ||

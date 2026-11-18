@@ -134,7 +134,7 @@ test("each change notice carries the appointment it replaced, never a cited repo
   const previous = {
     "gpw:500651": "2026-11-25", "gpw:500649": "2026-11-26", "gpw:499833": "2026-11-13", "gpw:476921": "2025-11-20",
     "gpw:485707": "2026-04-24", "gpw:475722": "2025-10-31", "gpw:488860": "2026-06-01", "gpw:489134": "2026-05-29",
-    "gpw:488697": "2026-09-09", "gpw:475659": "2025-11-21", "gpw:485483": "2026-04-24",
+    "gpw:488697": "2026-09-09", "gpw:475659": "2025-11-21", "gpw:485483": "2026-04-24", "gpw:499701": "2026-11-27",
   };
   for (const [id, date] of Object.entries(previous)) {
     const [event] = reportEvents(fixtureText(id));

@@ -100,10 +100,14 @@ export const getGpwEventLabel = (event: PublicGpwCalendarEvent) => {
   return `Raport kwartalny${period ? ` ${period}` : ""}`;
 };
 
-export const getGpwEventStatusLabel = (status: PublicGpwCalendarEvent["status"]) => {
+export const getGpwEventStatusLabel = (status: PublicGpwCalendarEvent["status"], kind?: PublicGpwEventKind) => {
   if (status === "PROPOSED") return "Propozycja";
   if (status === "CHANGED") return "Termin zmieniony";
   if (status === "CONFIRMED") return "Potwierdzone";
+  // A report whose year the source states inconsistently is shown with its date and period only.
+  if (kind === "QUARTERLY_REPORT" || kind === "HALF_YEAR_REPORT" || kind === "ANNUAL_REPORT") {
+    return "Do weryfikacji (niespójne dane w źródle)";
+  }
   return "Status nieustalony";
 };
 

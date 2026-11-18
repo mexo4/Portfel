@@ -8,6 +8,7 @@ import {
   type CorporateEventType,
   type CorporateEventsResponse,
   getCorporateEventIdentityKey,
+  getReportScheduleNonPublicationDates,
   resolveCorporateEventStatus,
   getDividendAmendmentEvidence,
   isNonBindingDividendDraftNotice,
@@ -35,7 +36,14 @@ import { getMarketCachePayload, setMarketCachePayload } from "@/lib/server/marke
 import { fetchWithSystemTrust } from "@/lib/server/system-trust-fetch";
 import { readOfficialMeetingPdf } from "@/lib/server/general-meeting-pdf";
 import { normalizeText, uniqueBy } from "@/lib/utils";
-import { getReportScheduleProjectionStatus, planReportScheduleReprojection, type StoredReportProjection } from "@/lib/report-schedule-reprojection";
+import {
+  getReportScheduleProjectionStatus,
+  planPeriodEndRetirements,
+  planReportScheduleReprojection,
+  planSharedRowRetirements,
+  type OtherSourceReading,
+  type StoredReportProjection,
+} from "@/lib/report-schedule-reprojection";
 import { assessReportPublicationBatch } from "@/lib/report-schedule-publication";
 import {
   DIVIDEND_PROJECTION_VERSION,
@@ -135,12 +143,31 @@ type IssuerSource = {
   url: string;
 };
 
+/** A report event the publication policy or a source conflict kept out of the calendar. */
+type BlockedReportEvent = { eventType: ParsedCorporateEvent["eventType"]; eventDate: string; identity: string };
+
+/** One line of the report-schedule review queue, stored in espi_reports.report_schedule_review_reasons. */
+export type ReportScheduleReviewEntry = {
+  code: string;
+  /** False when the event was held back from the calendar, true when it is shown without its year. */
+  published?: boolean;
+  eventType?: ParsedCorporateEvent["eventType"];
+  eventDate?: string;
+  fiscalPeriod?: string | null;
+  fiscalYearLabel?: string | null;
+  rowIds?: string[];
+};
+
 type ProviderEventBatch = {
   source: CorporateEventSourceReference;
   events: ParsedCorporateEvent[];
   /** True only when the entire report-schedule document was parsed without
    * attachment or semantic-review gaps; permits stable-ID legacy enrichment. */
   reportSourceComplete?: boolean;
+  /** URL of the official report that this one formally corrects ("Korekta raportu bieżącego nr …"), if any. */
+  correctedSourceUrl?: string;
+  /** Rows the reprojection plan retires after this batch is applied; they must not count as "already on the calendar". */
+  retiringEventIds?: string[];
 };
 
 type ProviderResult = {
@@ -1064,17 +1091,23 @@ const upsertParsedEvents = async (
   instrument: CanonicalInstrument,
   batch: ProviderEventBatch
 ) => {
-  if (batch.events.length === 0) return { created: 0, duplicates: 0, saved: 0, changed: 0, reviewReasons: [] as string[] };
+  if (batch.events.length === 0) {
+    return { created: 0, duplicates: 0, saved: 0, changed: 0, reviewReasons: [] as string[], blocked: [] as BlockedReportEvent[] };
+  }
 
   let created = 0;
   let duplicates = 0;
   let saved = 0;
   let changed = 0;
   const reviewReasons: string[] = [];
+  const blocked: BlockedReportEvent[] = [];
 
-  for (const { event: parsed, publish, reasons } of assessReportPublicationBatch(batch.events)) {
+  for (const { event: parsed, publish, reasons } of assessReportPublicationBatch(
+    batch.events, { sourcePublishedAt: batch.source.sourcePublishedAt }
+  )) {
     if (!publish) {
       reviewReasons.push(...reasons);
+      blocked.push({ eventType: parsed.eventType, eventDate: parsed.eventDate, identity: getCorporateEventIdentityKey(parsed) });
       diagnose({ provider: "report-schedule-publication", sourceUrl: batch.source.sourceUrl,
         phase: "quarantined", reasons });
       continue;
@@ -1109,11 +1142,16 @@ const upsertParsedEvents = async (
       // Only one active same-day row for this issuer/type, owned exclusively by
       // this very source, can be enriched in place. A collision must remain a
       // review item instead of silently changing another report's identity.
+      // A formal correction also owns the rows of the report it corrects: it may
+      // complete such a row, or relabel it when it only fixes the period/year
+      // (IDM: "III kwartał 2025" corrected to "III kwartał 2026", same date).
+      const ownUrls = [batch.source.sourceUrl, ...(batch.correctedSourceUrl ? [batch.correctedSourceUrl] : [])];
       const sameDay = await transaction.query<ExistingEventRow & {
         fiscal_period: string | null;
         fiscal_year: number | null;
         fiscal_year_label: string | null;
         source_owned: boolean;
+        corrected_owned: boolean;
       }>(
         `SELECT event.id, event.event_date, event.record_date, event.status,
                 event.source_published_at, event.source_priority, event.source_type,
@@ -1121,25 +1159,30 @@ const upsertParsedEvents = async (
                 event.event_identity, event.fiscal_period, event.fiscal_year,
                 event.fiscal_year_label,
                 (EXISTS (SELECT 1 FROM corporate_event_sources AS source
-                  WHERE source.corporate_event_id = event.id AND source.source_url = $4)
+                  WHERE source.corporate_event_id = event.id AND source.source_url = ANY($4::text[]))
                  AND NOT EXISTS (SELECT 1 FROM corporate_event_sources AS other_source
-                  WHERE other_source.corporate_event_id = event.id AND other_source.source_url <> $4)) AS source_owned
+                  WHERE other_source.corporate_event_id = event.id AND other_source.source_url <> ALL($4::text[]))) AS source_owned,
+                (EXISTS (SELECT 1 FROM corporate_event_sources AS corrected
+                  WHERE corrected.corporate_event_id = event.id AND corrected.source_url = $5)) AS corrected_owned
          FROM corporate_events AS event
          WHERE event.instrument_id = $1 AND event.event_type = $2
            AND event.event_date = $3 AND event.active = TRUE
          ORDER BY event.updated_at DESC LIMIT 2 FOR UPDATE OF event`,
-        [instrument.id, parsed.eventType, parsed.eventDate, batch.source.sourceUrl]
+        [instrument.id, parsed.eventType, parsed.eventDate, ownUrls, batch.correctedSourceUrl ?? null]
       );
       if (sameDay.length === 1 && sameDay[0].source_owned &&
         (!sameDay[0].fiscal_period ||
-          (!sameDay[0].fiscal_year && !sameDay[0].fiscal_year_label))) {
+          (!sameDay[0].fiscal_year && !sameDay[0].fiscal_year_label) ||
+          (sameDay[0].corrected_owned && sameDay[0].event_identity !== eventIdentity))) {
         existing = sameDay[0];
       }
     }
     if (!existing && isReportSchedule && parsed.previousEventDate) {
       // A formal correction may change both the appointment date and the
       // period identity. Reuse the old projection (and stable ICS UID) only
-      // when its prior date is explicit and this URL is its sole provenance.
+      // when its prior date is explicit and this URL (or the report it formally
+      // corrects) is its sole provenance.
+      const correctedOwnUrls = [batch.source.sourceUrl, ...(batch.correctedSourceUrl ? [batch.correctedSourceUrl] : [])];
       const corrected = await transaction.query<ExistingEventRow>(
         `SELECT event.id, event.event_date, event.record_date, event.status, event.source_published_at,
                 event.source_priority, event.source_type, event.updated_at,
@@ -1149,14 +1192,14 @@ const upsertParsedEvents = async (
            AND event.event_date = $3 AND event.active = TRUE
            AND EXISTS (
              SELECT 1 FROM corporate_event_sources AS source
-             WHERE source.corporate_event_id = event.id AND source.source_url = $4
+             WHERE source.corporate_event_id = event.id AND source.source_url = ANY($4::text[])
            )
            AND NOT EXISTS (
              SELECT 1 FROM corporate_event_sources AS other_source
-             WHERE other_source.corporate_event_id = event.id AND other_source.source_url <> $4
+             WHERE other_source.corporate_event_id = event.id AND other_source.source_url <> ALL($4::text[])
            )
          ORDER BY event.updated_at DESC LIMIT 2 FOR UPDATE OF event`,
-        [instrument.id, parsed.eventType, parsed.previousEventDate, batch.source.sourceUrl]
+        [instrument.id, parsed.eventType, parsed.previousEventDate, correctedOwnUrls]
       );
       if (corrected.length === 1) existing = corrected[0];
     }
@@ -1243,6 +1286,21 @@ const upsertParsedEvents = async (
         ? candidates[0]
         : undefined;
     }
+    if (!existing && isReportSchedule && !parsed.fiscalYear && !parsed.fiscalYearLabel) {
+      // The year of this row was withdrawn (the source contradicts itself). If the calendar already
+      // holds that report type on that day, the row adds nothing but a duplicate.
+      const sameDayRows = await transaction.query<{ id: string }>(
+        `SELECT id FROM corporate_events
+         WHERE instrument_id = $1 AND event_type = $2 AND event_date = $3 AND active = TRUE
+           AND id <> ALL($4::text[]) LIMIT 1`,
+        [instrument.id, parsed.eventType, parsed.eventDate, batch.retiringEventIds ?? []]
+      );
+      if (sameDayRows.length > 0) {
+        diagnose({ provider: "report-schedule-publication", sourceUrl: batch.source.sourceUrl,
+          phase: "year-withdrawn-duplicate-skipped", eventId: sameDayRows[0]!.id });
+        continue;
+      }
+    }
     const effectiveEventDate = parsed.eventType === "UPCOMING_DIVIDEND" &&
       !parsed.recordDate && existing?.record_date ? existing.record_date : parsed.eventDate;
     const now = new Date().toISOString();
@@ -1257,6 +1315,7 @@ const upsertParsedEvents = async (
     if (existing && isReportSchedule && existing.event_date !== parsed.eventDate &&
       !parsed.isScheduleChange && !sameSourceReprojection) {
       reviewReasons.push("CONFLICTING_DATE_FROM_DIFFERENT_SOURCE");
+      blocked.push({ eventType: parsed.eventType, eventDate: parsed.eventDate, identity: eventIdentity });
       diagnose({ provider: "report-schedule-publication", sourceUrl: batch.source.sourceUrl,
         phase: "conflicting-date-quarantined", eventId: existing.id });
       continue;
@@ -1464,7 +1523,7 @@ const upsertParsedEvents = async (
       [new Date().toISOString(), instrument.id, fiscalYear, `dividend:${fiscalYear}:single`]
     );
   }
-  return { created, duplicates, saved, changed, reviewReasons: [...new Set(reviewReasons)] };
+  return { created, duplicates, saved, changed, reviewReasons: [...new Set(reviewReasons)], blocked };
 };
 
 const recordSourceCheck = async (
@@ -1876,11 +1935,13 @@ export const synchronizeGlobalReportSchedules = ({ force = false, refreshSource 
           [getCorporateEventIdentityKey(event), event.eventDate].join(":"), event,
         ]));
         const reportAttachments = attachmentsByReport.get(report.id) ?? [];
+        const attachmentTexts: string[] = [];
         let parseComplete = reportAttachments.length <= 3;
         for (const attachment of reportAttachments.slice(0, 3)) {
           try {
             const text = await readOfficialMeetingPdf(attachment.source_url);
             if (!text) { parseComplete = false; continue; }
+            attachmentTexts.push(text);
             for (const event of parseCorporateEventDocument(`${report.source_title}\n${text}`)) {
               if (event.eventType !== "QUARTERLY_REPORT" && event.eventType !== "HALF_YEAR_REPORT" && event.eventType !== "ANNUAL_REPORT") continue;
               events.set([getCorporateEventIdentityKey(event), event.eventDate].join(":"), event);
@@ -1891,8 +1952,15 @@ export const synchronizeGlobalReportSchedules = ({ force = false, refreshSource 
               phase: "attachment", error: error instanceof Error ? error.name : "unknown" });
           }
         }
-        const publicationDecisions = assessReportPublicationBatch([...events.values()]);
+        const publicationDecisions = assessReportPublicationBatch(
+          [...events.values()], { sourcePublishedAt: report.published_at }
+        );
         const reviewEvents = publicationDecisions.filter((decision) => !decision.publish);
+        // Dates the document names only as period boundaries or preliminary-results days: evidence that a
+        // stored row on such a date is not a publication appointment.
+        const nonPublicationDates = getReportScheduleNonPublicationDates(
+          [`${report.source_title}\n${report.title}\n${report.body_text}`, ...attachmentTexts].join("\n")
+        );
         reviewed += reviewEvents.length;
         if (reviewEvents.length) {
           diagnose({ provider: "global-espi-report-schedule", sourceId: report.source_id,
@@ -1920,28 +1988,128 @@ export const synchronizeGlobalReportSchedules = ({ force = false, refreshSource 
              GROUP BY event.id, event.event_type, event.event_identity, event.event_date`,
             [instrument.id, report.source_url]
           );
+          // A quarantined event protects only the rows it explains; it no longer freezes the whole document.
           const projectionPlan = planReportScheduleReprojection(
-            oldProjections, [...events.values()], report.source_url,
-            parseComplete && reviewEvents.length === 0
+            oldProjections,
+            publicationDecisions.filter((decision) => decision.publish).map((decision) => decision.event),
+            report.source_url, parseComplete,
+            { held: reviewEvents.map((decision) => decision.event), nonPublicationDates }
           );
+          // Rows kept only because other sources are linked to them. The same ESPI notice is often stored twice
+          // (gpw.pl and PAP); when every linked source, re-read now, no longer supports the row's identity and this
+          // document republishes its date under another one, no source stands behind it any more.
+          const publishedEvents = publicationDecisions.filter((decision) => decision.publish).map((decision) => decision.event);
+          const sharedCandidates = oldProjections.filter((row) =>
+            projectionPlan.ambiguousIds.includes(row.id) && row.source_urls.length > 1);
+          const otherReadings = new Map<string, OtherSourceReading>();
+          const otherUrls = [...new Set(sharedCandidates.flatMap((row) => row.source_urls)
+            .filter((url) => url !== report.source_url))];
+          if (otherUrls.length > 0) {
+            const otherReports = await transaction.query<{
+              source_url: string; source_title: string; title: string; body_text: string;
+              published_at: string; has_pdf: boolean;
+            }>(
+              `SELECT other.source_url, other.source_title, other.title, other.body_text, other.published_at,
+                      EXISTS (SELECT 1 FROM espi_report_attachments AS attachment
+                              WHERE attachment.espi_report_id = other.id
+                                AND (attachment.media_type = 'application/pdf' OR attachment.name ILIKE '%.pdf')) AS has_pdf
+               FROM espi_reports AS other WHERE other.source_url = ANY($1::text[])`,
+              [otherUrls]
+            );
+            for (const other of otherReports) {
+              // A source whose events may live in an attachment cannot be judged from its body text alone.
+              if (other.has_pdf) continue;
+              const otherEvents = parseCorporateEventDocument(`${other.source_title}\n${other.title}\n${other.body_text}`)
+                .filter((event) => event.eventType === "QUARTERLY_REPORT" || event.eventType === "HALF_YEAR_REPORT" || event.eventType === "ANNUAL_REPORT");
+              otherReadings.set(other.source_url, {
+                published: assessReportPublicationBatch(otherEvents, { sourcePublishedAt: other.published_at })
+                  .filter((decision) => decision.publish).map((decision) => decision.event),
+              });
+            }
+          }
+          const sharedRetirements = planSharedRowRetirements(sharedCandidates, report.source_url, publishedEvents, otherReadings);
+          const correctedReport = (await transaction.query<{ source_url: string }>(
+            `SELECT original.source_url FROM espi_reports AS report
+             JOIN espi_reports AS original ON original.id = report.correction_of_report_id
+             WHERE report.id = $1`,
+            [report.id]
+          ))[0];
           const upsert = await upsertParsedEvents(transaction, instrument, {
             events: [...events.values()],
             source: { sourceType: "ISSUER_CURRENT_REPORT", sourceUrl: report.source_url,
               sourcePublishedAt: report.published_at, sourceTitle: report.source_title || report.title },
             reportSourceComplete: parseComplete && reviewEvents.length === 0,
+            correctedSourceUrl: correctedReport?.source_url,
+            retiringEventIds: [...projectionPlan.deactivateIds, ...sharedRetirements],
           });
-          if (projectionPlan.deactivateIds.length > 0 && upsert.reviewReasons.length === 0) {
-            await deactivateEventProjection(transaction, projectionPlan.deactivateIds,
-              "REPORT_SCHEDULE_REPROJECTION", report.source_url);
+          // A source conflict or a held event blocks only the rows it concerns (same report type and
+          // date, or same identity); every other retirement the plan proved goes ahead.
+          const rowsById = new Map(oldProjections.map((row) => [row.id, row]));
+          const retirementsByReason = new Map<string, string[]>();
+          const isBlockedByUpsert = (row: StoredReportProjection) => upsert.blocked.some((blockedEvent) =>
+            blockedEvent.eventType === row.event_type &&
+            (blockedEvent.eventDate === row.event_date || blockedEvent.identity === row.event_identity));
+          for (const id of projectionPlan.deactivateIds) {
+            const row = rowsById.get(id);
+            if (!row || isBlockedByUpsert(row)) continue;
+            const reason = projectionPlan.retirementReasons[id] ?? "DATE_REPUBLISHED_UNDER_OTHER_IDENTITY";
+            retirementsByReason.set(reason, [...(retirementsByReason.get(reason) ?? []), id]);
           }
-          const reviewReasons = [...new Set([
-            ...reviewEvents.flatMap((decision) => decision.reasons), ...upsert.reviewReasons,
-            ...(projectionPlan.ambiguousIds.length > 0 ? ["AMBIGUOUS_REPROJECTION"] : []),
-          ])];
+          if (sharedRetirements.length > 0) {
+            const retirable = sharedRetirements.filter((id) => !isBlockedByUpsert(rowsById.get(id)!));
+            if (retirable.length > 0) retirementsByReason.set("ALL_SOURCES_REPUBLISH_UNDER_OTHER_IDENTITY", retirable);
+          }
+          // A row that is exactly the closing day of the period it names (LPP "Q4 2026 on 31.01.2027") is retired
+          // whatever its provenance: it may come from a page that is not part of the ESPI queue at all.
+          const closingDates = nonPublicationDates.filter((entry) => entry.closes).map((entry) => entry.date);
+          if (closingDates.length > 0) {
+            const periodEndRows = await transaction.query<StoredReportProjection>(
+              `SELECT event.id, event.event_type, event.event_identity, event.event_date,
+                      ARRAY_REMOVE(ARRAY_AGG(DISTINCT provenance.source_url), NULL) AS source_urls
+               FROM corporate_events AS event
+               LEFT JOIN corporate_event_sources AS provenance ON provenance.corporate_event_id = event.id
+               WHERE event.instrument_id = $1 AND event.active = TRUE
+                 AND event.event_type IN ('QUARTERLY_REPORT', 'HALF_YEAR_REPORT', 'ANNUAL_REPORT')
+                 AND event.event_date = ANY($2::text[])
+               GROUP BY event.id, event.event_type, event.event_identity, event.event_date`,
+              [instrument.id, closingDates]
+            );
+            const byId = new Map(periodEndRows.map((row) => [row.id, row]));
+            const alreadyPlanned = new Set([...retirementsByReason.values()].flat());
+            const periodEndIds = planPeriodEndRetirements(
+              periodEndRows, nonPublicationDates,
+              publishedEvents
+            ).filter((id) => !alreadyPlanned.has(id) && !isBlockedByUpsert(byId.get(id)!));
+            if (periodEndIds.length > 0) {
+              retirementsByReason.set("PERIOD_BOUNDARY_NOT_PUBLICATION", [
+                ...(retirementsByReason.get("PERIOD_BOUNDARY_NOT_PUBLICATION") ?? []), ...periodEndIds,
+              ]);
+            }
+          }
+          for (const [reason, ids] of retirementsByReason) {
+            await deactivateEventProjection(transaction, ids, `REPORT_SCHEDULE_REPROJECTION:${reason}`, report.source_url);
+          }
+          const retired = [...retirementsByReason.values()].reduce((total, ids) => total + ids.length, 0);
+          // The review queue: what the policy held back or published without a year, what the sources
+          // contradicted, and the rows the document neither confirms nor refutes. Structured, so that the
+          // calendar-health view can list the exact events and rows.
+          const reviewReasons: ReportScheduleReviewEntry[] = [
+            ...publicationDecisions.filter((decision) => !decision.publish || decision.yearWithdrawn)
+              .flatMap((decision) => decision.reasons.map((code) => ({
+                code, published: decision.publish, eventType: decision.event.eventType,
+                eventDate: decision.event.eventDate, fiscalPeriod: decision.event.fiscalPeriod ?? null,
+                fiscalYearLabel: decision.event.fiscalYearLabel ?? null,
+              }))),
+            ...upsert.reviewReasons.map((code) => ({ code })),
+            ...(projectionPlan.ambiguousIds.length > 0
+              ? [{ code: "AMBIGUOUS_REPROJECTION", rowIds: projectionPlan.ambiguousIds }] : []),
+            ...(projectionPlan.heldIds.length > 0
+              ? [{ code: "ROW_HELD_BY_QUARANTINE", rowIds: projectionPlan.heldIds }] : []),
+          ];
           if (reviewReasons.length > 0 || !parseComplete) {
             diagnose({ provider: "global-espi-report-schedule", sourceId: report.source_id,
               phase: "reprojection-review", ambiguous: projectionPlan.ambiguousIds.length,
-              parseComplete, reviewed: reviewReasons.length });
+              held: projectionPlan.heldIds.length, retired, parseComplete, reviewed: reviewReasons.length });
           }
           await transaction.execute(
             `UPDATE espi_reports SET report_schedule_projection_status = $4,
@@ -1952,8 +2120,7 @@ export const synchronizeGlobalReportSchedules = ({ force = false, refreshSource 
                 : getReportScheduleProjectionStatus(events.size, parseComplete),
               JSON.stringify(reviewReasons)]
           );
-          return { upsert, changed: upsert.changed > 0 ||
-            (projectionPlan.deactivateIds.length > 0 && upsert.reviewReasons.length === 0) };
+          return { upsert, changed: upsert.changed > 0 || retired > 0 };
         });
         reviewed += result.upsert.reviewReasons.length;
         created += result.upsert.created;

@@ -9,6 +9,7 @@ import {
 } from "../src/lib/server/corporate-events.ts";
 import { expandGpwStoredCalendarEvent } from "../src/lib/public-gpw-calendar.ts";
 import { toIcalMilestones } from "../src/lib/gpw-ical.ts";
+import { gpwWrappedScheduleRows } from "./fixtures/gpw-wrapped-schedule-rows-2026-11-18.mjs";
 
 const databaseUrl = process.env.MEXO_GPW_TEST_DATABASE_URL;
 
@@ -430,5 +431,189 @@ test("PostgreSQL: schedule projection is idempotent, correction-safe, and preser
     await globalThis.portfelPostgresPool?.end();
     globalThis.portfelPostgresPool = undefined;
     globalThis.portfelSchemaInitialization = undefined;
+  }
+});
+
+// --- Retirement paths the first contract does not reach (added after the CI run of PR #37) -------------------------
+// The test above covers in-place enrichment, a corrected period and a cancelled meeting. The two below cover what the
+// document-level reprojection retires: the closing day of a period taken for an appointment (LPP), and a legacy row
+// shared by two copies of one notice (gpw.pl + PAP). The announcement date is fixed, not "now", so the outcome does
+// not depend on the day the suite runs.
+
+const FIXTURE_PUBLISHED_AT = "2026-01-20T09:00:00.000Z";
+
+const useIsolatedDatabase = async () => {
+  const url = new URL(databaseUrl);
+  assert.ok(["127.0.0.1", "::1", "localhost"].includes(url.hostname),
+    "integration tests may only write to a loopback PostgreSQL instance");
+  assert.equal(decodeURIComponent(url.username), "mexo_gpw_test",
+    "integration tests require the dedicated mexo_gpw_test role");
+  assert.equal(decodeURIComponent(url.pathname.slice(1)), "mexo_gpw_test",
+    "integration tests require the dedicated mexo_gpw_test database");
+  process.env.DATABASE_URL = databaseUrl;
+  await initializeDatabase();
+};
+
+const releaseIsolatedDatabase = async (runId, instrumentId) => {
+  await execute("DELETE FROM espi_reports WHERE source_id LIKE $1", [`%${runId}%`]);
+  await execute("DELETE FROM corporate_event_instruments WHERE id = $1", [instrumentId]);
+  await globalThis.portfelPostgresPool?.end();
+  globalThis.portfelPostgresPool = undefined;
+  globalThis.portfelSchemaInitialization = undefined;
+};
+
+const insertFixtureInstrument = (instrumentId, ticker, now) => execute(
+  `INSERT INTO corporate_event_instruments
+    (id, canonical_key, market, ticker, company_name, created_at, updated_at)
+   VALUES ($1, $2, 'GPW', $3, $4, $5, $5)`,
+  [instrumentId, `gpw:ticker:${ticker}`, ticker, `Fixture ${ticker}`, now],
+);
+
+const insertFixtureReport = ({ id, sourceId, instrumentId, ticker, title, body, sourceUrl, now }) => execute(
+  `INSERT INTO espi_reports
+    (id, source, source_id, issuer_id, issuer_name, market, source_ticker,
+     report_type, published_at, source_title, title, body_text, category,
+     source_url, discovered_at, updated_at)
+   VALUES ($1, 'PAP_ESPI', $2, $3, $4, 'GPW', $5, 'CURRENT', $6,
+     $7, $7, $8, 'OTHER', $9, $10, $10)`,
+  [id, sourceId, instrumentId, `Fixture ${ticker}`, ticker, FIXTURE_PUBLISHED_AT, title, body, sourceUrl, now],
+);
+
+const insertFixtureRow = async ({ id, instrumentId, type, date, period, year, identity, now, urls }) => {
+  await execute(
+    `INSERT INTO corporate_events
+      (id, instrument_id, event_type, event_date, fiscal_period, fiscal_year, event_identity,
+       status, active, source_published_at, source_type, source_priority, discovered_at, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, 'CONFIRMED', TRUE, $8, 'ISSUER_CURRENT_REPORT', 300, $9, $9)`,
+    [id, instrumentId, type, date, period, year, identity, FIXTURE_PUBLISHED_AT, now],
+  );
+  for (const [index, url] of urls.entries()) {
+    await execute(
+      `INSERT INTO corporate_event_sources
+        (id, corporate_event_id, source_type, source_url, source_priority, discovered_at)
+       VALUES ($1, $2, 'ISSUER_CURRENT_REPORT', $3, 300, $4)`,
+      [`${id}-source-${index}`, id, url, now],
+    );
+  }
+};
+
+test("PostgreSQL: the closing day of a period is retired as an appointment, with a reversible record (LPP)", {
+  skip: !databaseUrl,
+}, async () => {
+  await useIsolatedDatabase();
+  const runId = randomUUID();
+  const ticker = `LP${runId.replaceAll("-", "").slice(0, 8).toUpperCase()}`;
+  const instrumentId = `corporate-event-instrument:gpw:ticker:${ticker}`;
+  const now = new Date().toISOString();
+  const lpp = gpwWrappedScheduleRows.find((document) => document.id === "gpw:480147");
+  assert.ok(lpp, "the LPP notice (financial year February to January) is part of the shared fixtures");
+  const staleId = `fixture-${runId}-q4-period-end`;
+  const reportId = `fixture-${runId}-lpp`;
+  try {
+    await insertFixtureInstrument(instrumentId, ticker, now);
+    // Projected by an older parser from a page that is not part of the ESPI queue at all.
+    await insertFixtureRow({ id: staleId, instrumentId, type: "QUARTERLY_REPORT", date: "2027-01-31", period: "Q4",
+      year: 2026, identity: "QUARTERLY_REPORT:Q4:2026", now, urls: [`https://fixture.invalid/${runId}/pap-page`] });
+    await insertFixtureReport({ id: reportId, sourceId: `fixture:lpp:${runId}`, instrumentId, ticker,
+      title: "Terminy publikacji raportów okresowych w 2026 roku", body: lpp.text,
+      sourceUrl: `https://fixture.invalid/${runId}/lpp-espi`, now });
+
+    const first = await synchronizeGlobalReportSchedules({ refreshSource: false, force: true });
+    assert.equal(first.errors, 0);
+    const noticeStatus = await query(
+      "SELECT report_schedule_projection_status AS status, report_schedule_review_reasons AS reasons FROM espi_reports WHERE id = $1",
+      [reportId],
+    );
+    assert.deepEqual([noticeStatus[0]?.status, noticeStatus[0]?.reasons], ["SUCCESS", []],
+      "the notice itself raises no review item");
+
+    const rows = await query(
+      `SELECT id, event_type, event_date, status, active FROM corporate_events
+       WHERE instrument_id = $1 ORDER BY event_date`, [instrumentId],
+    );
+    const stale = rows.find((row) => row.id === staleId);
+    assert.deepEqual([stale?.active, stale?.status], [false, "CANCELLED"],
+      "Q4 2026 on 31 January 2027 is the last day of that quarter, not a publication date");
+    assert.deepEqual(rows.filter((row) => row.active).map((row) => [row.event_type, row.event_date]), [
+      ["ANNUAL_REPORT", "2026-03-26"],
+      ["QUARTERLY_REPORT", "2026-06-11"],
+      ["HALF_YEAR_REPORT", "2026-09-17"],
+      ["QUARTERLY_REPORT", "2026-12-03"],
+    ]);
+
+    const changes = await query(
+      "SELECT reason, previous_row FROM corporate_event_projection_changes WHERE corporate_event_id = $1", [staleId],
+    );
+    assert.equal(changes.length, 1);
+    assert.equal(changes[0].reason, "REPORT_SCHEDULE_REPROJECTION:PERIOD_BOUNDARY_NOT_PUBLICATION");
+    assert.equal(changes[0].previous_row.active, true, "the retirement keeps the full previous row, so it is reversible");
+    assert.equal(changes[0].previous_row.event_date, "2027-01-31");
+
+    await synchronizeGlobalReportSchedules({ refreshSource: false, force: true });
+    const afterReplay = await query(
+      `SELECT (SELECT COUNT(*)::int FROM corporate_event_projection_changes WHERE corporate_event_id = $2) AS changes,
+              (SELECT COUNT(*)::int FROM corporate_events WHERE instrument_id = $1 AND active = TRUE) AS active`,
+      [instrumentId, staleId],
+    );
+    assert.deepEqual([afterReplay[0].changes, afterReplay[0].active], [1, 4],
+      "replaying the notice neither records the retirement twice nor changes the four appointments");
+  } finally {
+    await releaseIsolatedDatabase(runId, instrumentId);
+  }
+});
+
+test("PostgreSQL: a legacy row shared by two copies of one notice is retired when both publish the complete identity", {
+  skip: !databaseUrl,
+}, async () => {
+  await useIsolatedDatabase();
+  const runId = randomUUID();
+  const ticker = `SH${runId.replaceAll("-", "").slice(0, 8).toUpperCase()}`;
+  const instrumentId = `corporate-event-instrument:gpw:ticker:${ticker}`;
+  const now = new Date().toISOString();
+  const urlGpw = `https://fixture.invalid/${runId}/copy-gpw`;
+  const urlPap = `https://fixture.invalid/${runId}/copy-pap`;
+  const legacyId = `fixture-${runId}-legacy-shared`;
+  const title = "Harmonogram publikacji raportów okresowych za 2027 rok";
+  const body = "Raport kwartalny za I kwartał 2027 roku zostanie opublikowany 12 kwietnia 2027 roku.";
+  try {
+    await insertFixtureInstrument(instrumentId, ticker, now);
+    // An old row without period and year, linked to both copies: neither copy may enrich it in place.
+    await insertFixtureRow({ id: legacyId, instrumentId, type: "QUARTERLY_REPORT", date: "2027-04-12", period: null,
+      year: null, identity: "QUARTERLY_REPORT::", now, urls: [urlGpw, urlPap] });
+    await insertFixtureReport({ id: `fixture-${runId}-gpw`, sourceId: `fixture:copy-gpw:${runId}`, instrumentId, ticker,
+      title, body, sourceUrl: urlGpw, now });
+    await insertFixtureReport({ id: `fixture-${runId}-pap`, sourceId: `fixture:copy-pap:${runId}`, instrumentId, ticker,
+      title, body, sourceUrl: urlPap, now });
+
+    const first = await synchronizeGlobalReportSchedules({ refreshSource: false, force: true });
+    assert.equal(first.errors, 0);
+    const rows = await query(
+      `SELECT id, event_identity, status, active FROM corporate_events
+       WHERE instrument_id = $1 AND event_date = '2027-04-12'`, [instrumentId],
+    );
+    const legacy = rows.find((row) => row.id === legacyId);
+    assert.deepEqual([legacy?.active, legacy?.status], [false, "CANCELLED"],
+      "every source that stood behind the row now publishes its date under the complete identity");
+    assert.deepEqual(rows.filter((row) => row.active).map((row) => row.event_identity), ["QUARTERLY_REPORT:Q1:2027"]);
+    const changes = await query(
+      "SELECT reason FROM corporate_event_projection_changes WHERE corporate_event_id = $1", [legacyId],
+    );
+    assert.deepEqual(changes.map((change) => change.reason),
+      ["REPORT_SCHEDULE_REPROJECTION:ALL_SOURCES_REPUBLISH_UNDER_OTHER_IDENTITY"]);
+    const provenance = await query(
+      `SELECT COUNT(DISTINCT source.source_url)::int AS count FROM corporate_event_sources AS source
+       JOIN corporate_events AS event ON event.id = source.corporate_event_id
+       WHERE event.instrument_id = $1 AND event.active = TRUE AND event.event_date = '2027-04-12'`, [instrumentId],
+    );
+    assert.equal(provenance[0].count, 2, "the complete row keeps the provenance of both copies");
+
+    await synchronizeGlobalReportSchedules({ refreshSource: false, force: true });
+    const afterReplay = await query(
+      "SELECT COUNT(*)::int AS count FROM corporate_events WHERE instrument_id = $1 AND event_date = '2027-04-12' AND active = TRUE",
+      [instrumentId],
+    );
+    assert.equal(afterReplay[0].count, 1, "replaying the copies keeps one active row");
+  } finally {
+    await releaseIsolatedDatabase(runId, instrumentId);
   }
 });

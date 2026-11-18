@@ -277,6 +277,18 @@ const POLISH_MONTHS: Record<string, string> = {
   pazdziernika: "10",
   listopada: "11",
   grudnia: "12",
+  // Some issuers write the month in the nominative ("27 marzec 2026 r.", Izostal).
+  styczeń: "01",
+  marzec: "03",
+  kwiecień: "04",
+  maj: "05",
+  czerwiec: "06",
+  lipiec: "07",
+  sierpień: "08",
+  wrzesień: "09",
+  październik: "10",
+  listopad: "11",
+  grudzień: "12",
   january: "01",
   february: "02",
   march: "03",
@@ -389,7 +401,7 @@ const getEventType = (value: string): CorporateEventType | null => {
     return "ANNUAL_REPORT";
   }
 
-  if (/kwartaln(?:y|e|ego|ym)?|\b[ivx]{1,3}\.?\s+kwartał|\b[1-4]\.?\s+kwartał|\btrzy\s+kwartały|pierwsz\p{L}*\s+(?:3|trzy|9|dziewi\p{L}*)\s+miesi\p{L}*/iu.test(normalized)) {
+  if (/kwartaln(?:y|e|ego|ym)?|\b[ivx]{1,3}\.?\s+kwartał|\b[1-4]\.?\s+kwartał|\b(?:pierwsz|drug|trzec|czwart)\p{L}*\s+kwartał|\btrzy\s+kwartały|pierwsz\p{L}*\s+(?:3|trzy|9|dziewi\p{L}*)\s+miesi\p{L}*/iu.test(normalized)) {
     return "QUARTERLY_REPORT";
   }
 
@@ -656,6 +668,13 @@ export const getCandidateSegments = (text: string) => {
     // (A trailing "." is no such signal: "… za I kwartał 2026 r." is a label.)
     if (isReportType(getEventType(line)) && extractPolishDates(line).length === 0 && !/;\s*$/u.test(line)) {
       const next = lines[index + 1];
+      // "… raportu za trzy kwartały 2026 roku" / "na dzień" / "30 listopada 2026 roku": a bare cue line wrapped
+      // between the label and its date.
+      if (next && /^(?:na\s+dzień|w\s+dniu|dnia)\s*$/iu.test(next) && STARTS_WITH_SCHEDULE_DATE.test(lines[index + 2] ?? "")) {
+        segments.push({ text: `${line} ${next} ${lines[index + 2]}`, sectionType, sectionYear });
+        index += 2;
+        continue;
+      }
       // "1. Skonsolidowany …" is a numbered row, not a date: require a real one.
       if (next && STARTS_WITH_SCHEDULE_DATE.test(next)) {
         segments.push({ text: `${line} ${next}`, sectionType, sectionYear });
@@ -995,6 +1014,8 @@ const joinWrappedScheduleRows = (text: string) => {
 const expandQuarterAbbreviations = (text: string) =>
   text
     .replace(/\b(i{1,3}|iv|[1-4])\.?\s*kw\.?(?=\s*(?:20\d{2}|roku\b|r\b)|\s*[,;)]|\s*$)/giu, "$1 kwartał")
+    // "za Q1 2026" / "Q3/2026" is the first / third quarter of 2026.
+    .replace(/\bQ([1-4])\s*[/ ]\s*(?=20\d{2}\b)/gu, "$1 kwartał ")
     .replace(/\bSA-(Q|P|R)S?([1-4])?\s*_?(20\d{2})_?\s+(?=\d{1,2}\s+\p{L}+\s+20\d{2})/gu,
       (_match, kind: string, quarter: string | undefined, year: string) =>
         kind === "Q" && quarter ? `za ${["I", "II", "III", "IV"][Number(quarter) - 1]} kwartał ${year} roku - `
@@ -1007,8 +1028,23 @@ const SCHEDULE_PERIOD_ROW = /^(?:(?:[-–—•]|\d{1,2}[.)]|[IVX]{1,4}[.)]|[a-z
 /** A schedule row that names only its scope under a typed heading: "- jednostkowy - 29 kwietnia 2026 r.". */
 const SCHEDULE_SCOPE_ROW = /^(?:(?:[-–—•]|\d{1,2}[._)]|[a-z][._)])\s*)?(?:skonsolidowan\p{L}*|jednostkow\p{L}*)(?:\s+(?:i|oraz)\s+(?:skonsolidowan\p{L}*|jednostkow\p{L}*))?\s*[-–—:]\s*\d/iu;
 
+/**
+ * Asseco writes its schedule rows as "- Jednostkowy raport roczny - 2026-03-31". Rewrite ISO dates in the
+ * body of the report (after "Treść raportu:") to the "31.03.2026" form the date reader knows; the header's
+ * "Data sporządzenia: 2026-01-30" stays as it is, and so does every other parser lane.
+ */
+const normalizeIsoScheduleDates = (value: string) => {
+  const start = value.search(/Treść\s+raportu\s*:/iu);
+  const head = start >= 0 ? value.slice(0, start) : "";
+  const body = start >= 0 ? value.slice(start) : value;
+  return head + body
+    .replace(/\b(20\d{2})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])\b/gu, "$3.$2.$1")
+    // "30 kwietnia _czwartek_ 2026 roku": a weekday in italics between the month and the year (Eurotel).
+    .replace(/(\b\d{1,2}\s+\p{L}+)\s+_(?:poniedziałek|wtorek|środa|czwartek|piątek|sobota|niedziela)_\s+(20\d{2}\b)/giu, "$1 $2");
+};
+
 const parseReportScheduleEvents = (sourceText: string) => {
-  const text = expandShortFiscalYears(sourceText);
+  const text = expandShortFiscalYears(normalizeIsoScheduleDates(sourceText));
   const events = new Map<string, ParsedCorporateEvent>();
   const nonCalendarFiscalYears = getExplicitNonCalendarFiscalYears(text);
   const fiscalRanges = getExplicitNonCalendarFiscalRanges(text);
@@ -2389,7 +2425,8 @@ const parseReportScheduleCorrectionEvents = (text: string): ParsedCorporateEvent
     ? publicationStarts.map((start, index) => text.slice(start, publicationStarts[index + 1] ?? text.length))
     : [text];
   const clauses = chunks.flatMap((chunk) =>
-    chunk.split(/;\s*|,\s*(?=(?:zaś|natomiast|jednocześnie)(?:\s|$))/iu).map((clause) => clause.trim())
+    // A semicolon before "poprzedni termin to …" does not end the sentence about the new date.
+    chunk.split(/;(?!\s*(?:poprzedni|wcześniej|dotychczas))\s*|,\s*(?=(?:zaś|natomiast|jednocześnie)(?:\s|$))/iu).map((clause) => clause.trim())
   );
   for (const context of clauses) {
     const dateTokens = Array.from(context.matchAll(datePattern)).flatMap((match) => {
@@ -2422,7 +2459,9 @@ const parseReportScheduleCorrectionEvents = (text: string): ParsedCorporateEvent
       // replacement structure even though the source does not say "z dnia".
       const previousAppointmentReplacedByNewTerm =
         /\bna\s+(?:(?:dzień|datę|termin)\s*)?$/iu.test(beforeFirst) &&
-        /\bnow(?:y|ego|ym)\s+termin\p{L}*[\s\S]{0,120}?\b(?:na|do)\s+(?:(?:dzień|datę|termin)\s*)?$/iu.test(between);
+        (/\bnow(?:y|ego|ym)\s+termin\p{L}*[\s\S]{0,120}?\b(?:na|do)\s+(?:(?:dzień|datę|termin)\s*)?$/iu.test(between) ||
+          // "… określonego w raporcie nr 21/2026 na dzień 1 czerwca. Nowym terminem przekazania … jest dzień 20 maja."
+          /\bnow(?:y|ego|ym)\s+termin\p{L}*[\s\S]{0,160}?\b(?:jest|będzie)\s+(?:dzień\s*)?$/iu.test(between));
       const previousAppointmentReplacedByDisplacement =
         /\bna\s+(?:(?:dzień|datę|termin)\s*)?$/iu.test(beforeFirst) &&
         /\b(?:zostaj\p{L}*|zosta\p{L}*|uleg\p{L}*)\s+[\s\S]{0,120}?\bprzesuni\p{L}*[\s\S]{0,80}?\bna\s+(?:(?:dzień|datę|termin)\s*)?$/iu.test(between);
@@ -2451,9 +2490,14 @@ const parseReportScheduleCorrectionEvents = (text: string): ParsedCorporateEvent
         // "Emitent ustalił następujący termin przekazania … raportu …: 11 września"
         // and "termin … przypadał na dzień 23 listopada".
         /\bustal\w*\s+(?:nastepujac\w*\s+)?termin\w*[\s\S]{0,200}?:\s*$/iu.test(normalizedPriorDateContext) ||
-        /\bprzypad\w*\s+na\s+(?:dzien\s*)?$/iu.test(normalizedBeforeFirst);
+        /\bprzypad\w*\s+na\s+(?:dzien\s*)?$/iu.test(normalizedBeforeFirst) ||
+        // "którego pierwotny termin publikacji wyznaczono na 21 listopada 2025 r."
+        /\bwyznaczon\w*\s+na\s+(?:dzien\s*)?$/iu.test(normalizedBeforeFirst) ||
+        // "pierwotny termin publikacji … był ustalony na dzień 29 maja 2026 roku."
+        /\b(?:byl\w*\s+ustalon\w*|ustalon\w*(?:\s+byl\w*)?)\s+na\s+(?:dzien\s*)?$/iu.test(normalizedBeforeFirst);
       const replacementPublicationCue =
         /\b(?:zostanie|bedzie)\s+(?:opublikowan\w*|przekazan\w*|podan\w*)[\s\S]{0,160}\b(?:w\s+dniu|dnia|na\s+dzien)\s*$/iu.test(normalizedBetween) ||
+        /\bpublikacj\w*\s+(?:raportu\s+)?nastapi\s+(?:w\s+dniu|dnia)\s*$/iu.test(normalizedBetween) ||
         /\bnow(?:y|ego|ym)\s+termin\p{L}*[\s\S]{0,140}\b(?:jest|bedzie)\s*(?:dzien\s*)?$/iu.test(normalizedBetween) ||
         // "nowo ustalony, wcześniejszy termin przekazania … raportu … to: 28 sierpnia 2026 r."
         /\bnowo\s+ustalon\w*[\s\S]{0,40}?termin\w*[\s\S]{0,200}?\b(?:to|jest)\s*:?\s*$/iu.test(normalizedBetween) ||
@@ -2466,7 +2510,13 @@ const parseReportScheduleCorrectionEvents = (text: string): ParsedCorporateEvent
         previousAppointmentReplacedByDisplacement || priorScheduleCue) &&
         (newDateIsExplicitlyAnchored || replacementPublicationCue) &&
         (correctionVerbBindsThePair || (formerPublicationAppointment && replacementPublicationCue));
-      const isNewInsteadOfOld = /\bzamiast\b/iu.test(between);
+      // "Raport zostanie przekazany w dniu 24 listopada; poprzedni termin to 20 listopada" and "… zostaną
+      // opublikowane w dniu 20 kwietnia. Wcześniej ogłoszony … termin … ustalony był na dzień 24 kwietnia":
+      // the new date comes first, the old one follows an explicit "previously" phrase.
+      // "pierwotna data publikacji … była ustalona na dzień 31 października", "… ustalony był na dzień …", "… był dzień …"
+      const oldDateFollows = /\b(?:wcześniej|poprzedni\p{L}*|dotychczasow\p{L}*|pierwotn\p{L}*)\b[\s\S]{0,300}?\b(?:to|był\p{L}*(?:\s+ustalon\p{L}*)?|ustalon\p{L}*(?:\s+był\p{L}*)?|wynosił\p{L}*)\s*:?\s*(?:na\s+)?(?:dzień\s+)?$/iu.test(between) &&
+        /(?:\b(?:zostan\p{L}*|będ\p{L}*)\s+(?:opublikowan|przekazan)\p{L}*[\s\S]{0,60}|\bzmienion\p{L}*\s+na\s+(?:dzień\s+)?)$/iu.test(context.slice(Math.max(0, firstDate.start - 90), firstDate.start));
+      const isNewInsteadOfOld = /\bzamiast\b/iu.test(between) || oldDateFollows;
       if (!isOldToNew && !isNewInsteadOfOld) continue;
 
       // A date before “zamiast” is the announced date; the date after it is
@@ -2593,14 +2643,32 @@ const parseDirectReportScheduleCorrectionEvents = (text: string): ParsedCorporat
   return [...events.values()];
 };
 
+/** "Zmiana terminu …", "Zmiana daty publikacji …", "nowy termin publikacji": the document moves an appointment. */
+const CHANGE_NOTICE_PATTERN = /\bzmian(?:a|y|ie|ę)\s+(?:harmonogramu\s+)?(?:terminu|dat\p{L}*\s+(?:publikacji|przekazania))\b|\bnowy termin(?: publikacji)?\b/iu;
+
+/** "nr 8/2026 z dnia 30 stycznia 2026 roku" → "nr 8/2026": the date of a cited current report is not an appointment. */
+const stripReportCitationDates = (value: string) =>
+  value.replace(
+    /(\bnr\s+\d{1,3}\s*\/\s*20\d{2})\s+z\s+(?:dnia\s+)?(?:\d{1,2}\s+\p{L}+\s+20\d{2}|\d{1,2}[.\-/]\d{1,2}[.\-/]20\d{2})(?:\s*(?:roku|r)\.?)?/giu,
+    "$1"
+  ).replace(
+    // The date of the cited regulation ("Rozporządzenia Ministra Finansów z dnia 6 czerwca 2025 r.") is the legal
+    // basis, never an appointment, and must not be paired with the dates around it.
+    /(\b(?:rozporządzeni\p{L}*|ustaw\p{L}*)[^.\n,;:]{0,40}?)\s+z\s+(?:dnia\s+)?(?:\d{1,2}\s+\p{L}+\s+20\d{2}|\d{1,2}[.\-/]\d{1,2}[.\-/]20\d{2})(?:\s*(?:roku|r)\.?)?/giu,
+    "$1"
+  );
+
 export const parseCorporateEventDocument = (document: string): ParsedCorporateEvent[] => {
   const text = normalizeDocumentText(document);
   if (!text) return [];
   const events = new Map<string, ParsedCorporateEvent>();
-  const directCorrections = parseDirectReportScheduleCorrectionEvents(text);
-  const changeNotice = /\bzmian(?:a|y|ie|ę)\s+(?:harmonogramu\s+)?terminu\b|\bnowy termin(?: publikacji)?\b/iu.test(text) || directCorrections.length > 0;
+  // "w nawiązaniu do raportu bieżącego nr 8/2026 z dnia 30 stycznia 2026 roku" cites another report; its date
+  // is neither the old nor the new appointment, and it would separate the two that are.
+  const noticeText = stripReportCitationDates(text);
+  const directCorrections = parseDirectReportScheduleCorrectionEvents(noticeText);
+  const changeNotice = CHANGE_NOTICE_PATTERN.test(text) || directCorrections.length > 0;
   if (changeNotice) {
-    for (const event of parseReportScheduleCorrectionEvents(text)) {
+    for (const event of parseReportScheduleCorrectionEvents(noticeText)) {
       events.set(getCorporateEventIdentityKey(event), event);
     }
     // Do not make correction lanes mutually exclusive: one ESPI notice may
@@ -2611,7 +2679,7 @@ export const parseCorporateEventDocument = (document: string): ParsedCorporateEv
     for (const event of directCorrections) {
       events.set(getCorporateEventIdentityKey(event), event);
     }
-    const reportClause = getCandidateSegments(text).find((segment) =>
+    const reportClause = getCandidateSegments(noticeText).find((segment) =>
       isReportType(getEventType(segment.text)) && /\bzamiast\b/iu.test(segment.text)
     );
     if (events.size === 0 && reportClause) {
@@ -2649,12 +2717,15 @@ export const parseCorporateEventDocument = (document: string): ParsedCorporateEv
         events.set(getCorporateEventIdentityKey(event), event);
       }
     }
-    if (events.size === 0) {
+    {
       // Some correction notices publish a replacement schedule as a new list
       // rather than repeating every old/new date pair (“koryguje informacje…
       // kolejne raporty … w następujących terminach”). Once explicitly inside
       // that replacement section, parse its rows as the authoritative schedule;
-      // never mix in the superseded rows preceding it.
+      // never mix in the superseded rows preceding it. The list is read even
+      // when a date pair was found above (NPL Nova: the pair moves the half-year
+      // report, the list adds the third quarter); a pair already found for the
+      // same report wins.
       const replacementSchedule = text.match(
         /\b(?:koryguj\p{L}*\s+(?:informacj\p{L}*|harmonogram\p{L}*|termin\p{L}*)|aktualizuj\p{L}*\s+(?:harmonogram\p{L}*|termin\p{L}*)|(?:nowe|aktualne|skorygowane)\s+terminy\s+(?:publikacji\s+)?raport\p{L}*)/iu
       );
@@ -2662,7 +2733,26 @@ export const parseCorporateEventDocument = (document: string): ParsedCorporateEv
         const replacementEvents = parseReportScheduleEvents(text.slice(replacementSchedule.index));
         for (const event of replacementEvents) {
           const corrected = { ...event, isScheduleChange: true };
-          events.set(getCorporateEventIdentityKey(corrected), corrected);
+          // A date pair found above for the same report is more precise (it knows the previous date).
+          if (!events.has(getCorporateEventIdentityKey(corrected))) events.set(getCorporateEventIdentityKey(corrected), corrected);
+        }
+      }
+    }
+    if (events.size === 0) {
+      // A notice template used by several issuers repeats the whole row for each date: "… ustalił następujący
+      // termin: <row, old date> … nowo ustalony termin to: <row, new date>". Read the rows after the marker as the
+      // new appointments and the rows before it as the old ones they replace (matched by report identity).
+      const marker = /\bnowo\s+ustalon\p{L}*[^:]{0,160}:/iu.exec(noticeText);
+      if (marker?.index !== undefined) {
+        const oldRows = parseReportScheduleEvents(noticeText.slice(0, marker.index));
+        for (const event of parseReportScheduleEvents(noticeText.slice(marker.index + marker[0].length))) {
+          if (!event.fiscalPeriod || !event.fiscalYear) continue;
+          const previous = oldRows.find((candidate) => getCorporateEventIdentityKey(candidate) === getCorporateEventIdentityKey(event));
+          const replacement: ParsedCorporateEvent = {
+            ...event, isScheduleChange: true,
+            ...(previous && previous.eventDate !== event.eventDate ? { previousEventDate: previous.eventDate } : {}),
+          };
+          events.set(getCorporateEventIdentityKey(replacement), replacement);
         }
       }
     }
@@ -2677,12 +2767,12 @@ export const parseCorporateEventDocument = (document: string): ParsedCorporateEv
       // date and nothing else, or when they form a schedule (three or more
       // dated reports). One or two rows from a notice that also cites an old
       // date, or the date of an earlier report, are ambiguous and stay unparsed.
-      const bodyStart = text.search(/Treść\s+raportu\s*:/iu);
-      const bodyDates = new Set(extractPolishDates(bodyStart >= 0 ? text.slice(bodyStart) : text));
-      const rows = parseReportScheduleEvents(text)
+      const bodyStart = noticeText.search(/Treść\s+raportu\s*:/iu);
+      const bodyDates = new Set(extractPolishDates(bodyStart >= 0 ? noticeText.slice(bodyStart) : noticeText));
+      const rows = parseReportScheduleEvents(noticeText)
         .filter((event) => event.fiscalPeriod && event.fiscalYear && !event.requiresReview);
       if (bodyDates.size === 1 || new Set(rows.map((row) => row.eventDate)).size >= 3) {
-        const titledAsChange = /\bzmian(?:a|y|ie|ę)\s+(?:harmonogramu\s+)?terminu\b/iu.test(text.split("\n").slice(0, 3).join(" "));
+        const titledAsChange = CHANGE_NOTICE_PATTERN.test(text.split("\n").slice(0, 3).join(" "));
         for (const event of rows) {
           const row = { ...event, isScheduleChange: titledAsChange };
           events.set(getCorporateEventIdentityKey(row), row);

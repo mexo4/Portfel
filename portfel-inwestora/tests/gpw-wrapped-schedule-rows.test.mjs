@@ -127,3 +127,17 @@ test("the date of the cited regulation is a legal-act date (6 June 2025), not an
   assert.equal(dates.get("2025-06-06")?.role, "LEGAL_ACT");
   assert.equal(dates.has("2026-04-29"), false);
 });
+
+// --- a change notice names the date it replaces ----------------------------------------------------------
+
+test("each change notice carries the appointment it replaced, never a cited report's date", () => {
+  const previous = {
+    "gpw:500651": "2026-11-25", "gpw:500649": "2026-11-26", "gpw:499833": "2026-11-13", "gpw:476921": "2025-11-20",
+    "gpw:485707": "2026-04-24", "gpw:475722": "2025-10-31", "gpw:488860": "2026-06-01", "gpw:489134": "2026-05-29",
+    "gpw:488697": "2026-09-09", "gpw:475659": "2025-11-21", "gpw:485483": "2026-04-24",
+  };
+  for (const [id, date] of Object.entries(previous)) {
+    const [event] = reportEvents(fixtureText(id));
+    assert.equal(event.previousEventDate, date, id);
+  }
+});

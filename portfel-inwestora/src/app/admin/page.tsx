@@ -1,7 +1,9 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import AdminGpwCalendarHealth from "@/components/AdminGpwCalendarHealth";
 import AdminUsersPanel from "@/components/AdminUsersPanel";
 import { getAdminDashboardData } from "@/lib/server/admin";
+import { getGpwCalendarHealth } from "@/lib/server/gpw-calendar-health";
 
 export const dynamic = "force-dynamic";
 
@@ -11,6 +13,9 @@ export default async function AdminPage() {
   if (!dashboard) {
     notFound();
   }
+
+  // Read-only and optional: the admin panel must keep working when the calendar tables cannot be read.
+  const calendarHealth = await getGpwCalendarHealth().catch(() => null);
 
   return (
     <main className="page-shell">
@@ -65,6 +70,8 @@ export default async function AdminPage() {
             <strong>{dashboard.totals.sales}</strong>
           </article>
         </section>
+
+        {calendarHealth ? <AdminGpwCalendarHealth health={calendarHealth} /> : null}
 
         <AdminUsersPanel users={dashboard.users} currentUserId={dashboard.currentUserId} />
       </div>

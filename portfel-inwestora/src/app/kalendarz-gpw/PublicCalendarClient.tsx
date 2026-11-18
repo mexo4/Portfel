@@ -51,7 +51,7 @@ function EventCard({ event, agendaDate }: { event: PublicGpwCalendarEvent; agend
         <div className={styles.eventMeta}>
           {event.time ? <span>Godz. {event.time}</span> : null}
           {event.status === "PROPOSED" || event.status === "CHANGED" || event.status === "UNKNOWN"
-            ? <span className={styles.status}>{getGpwEventStatusLabel(event.status)}</span> : null}
+            ? <span className={styles.status}>{getGpwEventStatusLabel(event.status, event.kind)}</span> : null}
           {amount ? <span>{amount}</span> : null}
           {event.kind === "GENERAL_MEETING" && event.registrationDate ? <span>Rejestracja: {formatDate(event.registrationDate, { day: "numeric", month: "short" })}</span> : null}
         </div>

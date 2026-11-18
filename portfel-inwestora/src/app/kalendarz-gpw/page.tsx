@@ -97,7 +97,7 @@ export default async function PublicGpwCalendarPage({ searchParams }: PageProps)
         <div className={styles.heroCopy}>
           <div className={styles.eyebrow}><span className={styles.liveDot} aria-hidden="true" /> NARZĘDZIA INWESTORA / GPW</div>
           <h1>Rynek ma swój <span>kalendarz.</span><br />Ty masz Mexo.</h1>
-          <p>Raporty okresowe, dywidendy i walne zgromadzenia spółek z głównego rynku GPW w jednym miejscu. Sprawdzaj daty, filtruj wydarzenia i przechodź do źródłowych komunikatów.</p>
+          <p>Raporty okresowe, dywidendy i walne zgromadzenia spółek z komunikatów ESPI publikowanych przez GPW w jednym miejscu. Sprawdzaj daty, filtruj wydarzenia i przechodź do źródłowych komunikatów.</p>
           <div className={styles.heroFooter}>
             <a href="#kalendarz" className={styles.heroPrimary}>Sprawdź kalendarz <span aria-hidden="true">↗</span></a>
             <span>Dane rynkowe · Dostęp bez logowania</span>
@@ -117,7 +117,7 @@ export default async function PublicGpwCalendarPage({ searchParams }: PageProps)
       <section id="kalendarz" className={styles.calendarSection} aria-labelledby="calendar-title">
         <div className={styles.sectionHeading}>
           <div><p className={styles.kicker}>KALENDARZ RYNKOWY</p><h2 id="calendar-title">Wydarzenia <span>GPW</span></h2></div>
-          <p>Wydarzenia obecne w bazie Mexo. Kalendarz nie gwarantuje kompletności wszystkich ogłoszeń emitentów.</p>
+          <p>Wydarzenia obecne w bazie Mexo. Zestawienie obejmuje spółki, których komunikaty ESPI publikuje GPW (także część spółek z NewConnect), i nie rozróżnia jeszcze rynku głównego od NewConnect. Kalendarz nie gwarantuje kompletności wszystkich ogłoszeń emitentów.</p>
         </div>
 
         <PublicCalendarClient key={`${month.key}:${category}:${company}`} month={month} category={category} company={company} events={events} sourceUnavailable={sourceUnavailable} />

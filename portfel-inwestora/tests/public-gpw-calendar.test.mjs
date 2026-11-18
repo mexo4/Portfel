@@ -166,3 +166,11 @@ test("every in-month day is a keyboard-operable button and navigation preserves 
   assert.match(client, /router\.push\(getGpwCalendarHref\(month\.key, nextCategory, search\), \{ scroll: false \}\)/);
   assert.match(client, /getGpwCalendarHref\(getCalendarMonth\(undefined\)\.key, category, company\)/);
 });
+
+test("a report published without its year is labelled for verification, other unknown statuses stay generic", () => {
+  assert.equal(getGpwEventStatusLabel("UNKNOWN", "QUARTERLY_REPORT"), "Do weryfikacji (niespójne dane w źródle)");
+  assert.equal(getGpwEventStatusLabel("UNKNOWN", "ANNUAL_REPORT"), "Do weryfikacji (niespójne dane w źródle)");
+  assert.equal(getGpwEventStatusLabel("UNKNOWN", "UPCOMING_DIVIDEND"), "Status nieustalony");
+  assert.equal(getGpwEventStatusLabel("UNKNOWN"), "Status nieustalony");
+  assert.equal(getGpwEventStatusLabel("CONFIRMED", "QUARTERLY_REPORT"), "Potwierdzone");
+});

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { assessReportPublicationBatch } from "../src/lib/report-schedule-publication.ts";
+import { assessReportPublicationBatch, countReportReviewItems } from "../src/lib/report-schedule-publication.ts";
 import { parseCorporateEventDocument } from "../src/lib/corporate-events.ts";
 
 const report = (eventDate = "2026-11-20", overrides = {}) => ({
@@ -89,6 +89,27 @@ test("a date earlier than the announcement itself is a mistyped date, not a mist
 test("without the announcement date nothing is published without a year", () => {
   const [decision] = assessReportPublicationBatch(parseCorporateEventDocument(quarterRow("2025", "26 listopada 2026 r.")));
   assert.equal(decision.publish, false);
+});
+
+// The sync result ("reviewed") feeds the calendar's data-quality health. The PostgreSQL contract test expects a
+// late schedule to be "surfaced for review"; since 18.11.2026 such a row is published without a year (when its
+// date still lies ahead of the announcement) or held back (when it does not): both are review items.
+test("review items count held-back events and events published without a year, not clean ones", () => {
+  const announced = { sourcePublishedAt: "2026-11-10T10:00:00.000Z" };
+  const text = "Raport kwartalny za III kwartał 2025 r. zostanie opublikowany 18 listopada 2026 r.";
+  const withoutYear = assessReportPublicationBatch(parseCorporateEventDocument(text), announced);
+  assert.deepEqual(withoutYear.map(({ publish, yearWithdrawn }) => [publish, yearWithdrawn]), [[true, true]]);
+  assert.equal(countReportReviewItems(withoutYear), 1);
+
+  const heldBack = assessReportPublicationBatch(parseCorporateEventDocument(text),
+    { sourcePublishedAt: "2026-11-19T10:00:00.000Z" });
+  assert.deepEqual(heldBack.map(({ publish }) => publish), [false]);
+  assert.equal(countReportReviewItems(heldBack), 1);
+
+  const clean = assessReportPublicationBatch([report()], announced);
+  assert.equal(countReportReviewItems(clean), 0);
+  assert.equal(countReportReviewItems([...clean, ...withoutYear, ...heldBack]), 2);
+  assert.equal(countReportReviewItems([]), 0);
 });
 
 test("a contradictory year never publishes when the report type and period repeat, or for a change notice", () => {

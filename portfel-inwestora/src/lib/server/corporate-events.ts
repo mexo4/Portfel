@@ -44,7 +44,7 @@ import {
   type OtherSourceReading,
   type StoredReportProjection,
 } from "@/lib/report-schedule-reprojection";
-import { assessReportPublicationBatch } from "@/lib/report-schedule-publication";
+import { assessReportPublicationBatch, countReportReviewItems } from "@/lib/report-schedule-publication";
 import {
   DIVIDEND_PROJECTION_VERSION,
   GENERAL_MEETING_PROJECTION_VERSION,
@@ -1961,7 +1961,9 @@ export const synchronizeGlobalReportSchedules = ({ force = false, refreshSource 
         const nonPublicationDates = getReportScheduleNonPublicationDates(
           [`${report.source_title}\n${report.title}\n${report.body_text}`, ...attachmentTexts].join("\n")
         );
-        reviewed += reviewEvents.length;
+        // Events published without a year wait in the review queue as well (`reviewEvents` holds only the
+        // quarantined ones, which also protect rows and make the source incomplete).
+        reviewed += countReportReviewItems(publicationDecisions);
         if (reviewEvents.length) {
           diagnose({ provider: "global-espi-report-schedule", sourceId: report.source_id,
             phase: "semantic-validation", reviewed: reviewEvents.length,

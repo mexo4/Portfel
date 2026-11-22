@@ -6,6 +6,8 @@ import {
   parseCorporateEventDocument,
 } from "../src/lib/corporate-events.ts";
 
+import { gpwWzaConvocationCues } from "./fixtures/gpw-wza-convocation-cues-2026-11-22.mjs";
+
 const meetings = (document) =>
   parseCorporateEventDocument(document).filter((event) => event.eventType === "GENERAL_MEETING");
 
@@ -97,6 +99,91 @@ test("extracts the exact LC reschedule dates despite earlier report-publication 
       identity: "general-meeting:ZWZ:2026-06-03",
     }
   );
+});
+
+// Creotech Instruments 58/2026 (ESPI, 4 November 2026), text as stored. Its agenda moves part of the business to a
+// subsidiary ("przeniesienie do spółki zależnej"); that word is not a reschedule of the meeting. The notice was lost
+// (NO_EVENT) because the reschedule cue took it for one.
+const CREOTECH_58_2026 = `CREOTECH INSTRUMENTS SPÓŁKA AKCYJNA (58/2026) Ogłoszenie o zwołaniu Nadzwyczajnego Walnego Zgromadzenia Creotech Instruments S.A. na dzień 1 grudnia 2026 r.
+Temat
+
+Ogłoszenie o zwołaniu Nadzwyczajnego Walnego Zgromadzenia Creotech Instruments S.A.
+na dzień 1 grudnia 2026 r.
+
+Podstawa prawna
+
+Art. 56 ust. 1 pkt 2 Ustawy o ofercie - informacje bieżące i okresowe
+
+Treść raportu:
+
+Zarząd spółki pod firmą Creotech Instruments S.A. z siedzibą w Piasecznie _"Spółka"_,
+niniejszym informuje o zwołaniu Nadzwyczajnego Walnego Zgromadzenia Spółki na dzień
+1 grudnia 2026 r., na godzinę 12:00 w lokalu w Warszawie _02-823_ przy ul. Osmańskiej
+14, bud. Berlin, p. II, zgodnie z treścią ogłoszenia stanowiącego załącznik do niniejszego
+raportu bieżącego.
+Porządek obrad Nadzwyczajnego Walnego Zgromadzenia Spółki obejmuje:
+1. Otwarcie obrad Nadzwyczajnego Walnego Zgromadzenia.
+2. Wybór Przewodniczącego Nadzwyczajnego Walnego Zgromadzenia.
+3. Stwierdzenie prawidłowości zwołania Nadzwyczajnego Walnego Zgromadzenia i jego
+zdolności do podejmowania uchwał.
+4. Przyjęcie porządku obrad Nadzwyczajnego Walnego Zgromadzenia.
+5. Podjęcie uchwały w sprawie wyrażenia zgody na przeniesienie do spółki zależnej
+zorganizowanej części przedsiębiorstwa Spółki przeznaczonej do prowadzenia działalności
+w obszarze aplikacji satelitarnych i dronowych.
+6. Podjęcie uchwał w sprawie zmian statutu Spółki.
+7. Zamknięcie obrad Nadzwyczajnego Walnego Zgromadzenia.`;
+
+test("a convocation whose agenda says 'przeniesienie' of assets or the seat is still a convocation (Creotech)", () => {
+  const found = meetings(CREOTECH_58_2026);
+  assert.deepEqual(found.map((event) => ({
+    date: event.eventDate, time: event.eventTime, type: event.generalMeetingType, action: event.generalMeetingAction,
+    changed: event.isScheduleChange,
+  })), [{ date: "2026-12-01", time: "12:00", type: "NWZ", action: "CONVENING", changed: false }]);
+
+  const [split] = meetings(`CREOTECH INSTRUMENTS SPÓŁKA AKCYJNA (10/2026) Ogłoszenie o zwołaniu Nadzwyczajnego Walnego Zgromadzenia
+Zarząd spółki informuje o zwołaniu Nadzwyczajnego Walnego Zgromadzenia Spółki na dzień 5 marca 2026 r., na godzinę 11:00.
+Porządek obrad Nadzwyczajnego Walnego Zgromadzenia:
+4. Przyjęcie porządku obrad Nadzwyczajnego Walnego Zgromadzenia.
+5. Podjęcie uchwały w sprawie podziału Spółki poprzez przeniesienie części majątku Spółki na spółkę przejmującą.`);
+  assert.deepEqual([split?.eventDate, split?.generalMeetingAction], ["2026-03-05", "CONVENING"]);
+
+  const [seat] = meetings(`ACME SA (3/2026) Zwołanie Zwyczajnego Walnego Zgromadzenia
+Zarząd ACME S.A. zwołuje Zwyczajne Walne Zgromadzenie na dzień 18 czerwca 2026 r. na godzinę 10:00.
+Porządek obrad: 1. Otwarcie obrad Zwyczajnego Walnego Zgromadzenia. 2. Podjęcie uchwały w sprawie przeniesienia siedziby Spółki.`);
+  assert.deepEqual([seat?.eventDate, seat?.generalMeetingAction], ["2026-06-18", "CONVENING"]);
+});
+
+test("an announced move of the meeting itself ('przeniesienie terminu', 'zostało przeniesione na dzień') is still a reschedule", () => {
+  const [moved] = meetings(`ACME SA (7/2026) Informacja o przeniesieniu terminu Nadzwyczajnego Walnego Zgromadzenia
+Zarząd ACME S.A. informuje o przeniesieniu terminu Nadzwyczajnego Walnego Zgromadzenia z dnia 1 grudnia 2026 r. na dzień 15 grudnia 2026 r.`);
+  assert.deepEqual([moved?.generalMeetingAction, moved?.previousEventDate, moved?.eventDate], ["RESCHEDULE", "2026-12-01", "2026-12-15"]);
+
+  const [participle] = meetings(`ACME SA (8/2026) Zmiana terminu walnego zgromadzenia
+Nadzwyczajne Walne Zgromadzenie ACME S.A. zwołane na dzień 1 grudnia 2026 r. zostało przeniesione z dnia 1 grudnia 2026 r. na dzień 15 grudnia 2026 r.`);
+  assert.deepEqual([participle?.generalMeetingAction, participle?.previousEventDate, participle?.eventDate], ["RESCHEDULE", "2026-12-01", "2026-12-15"]);
+});
+
+// Real convocations (stored ESPI text) that were dropped with NO_EVENT: the date follows "odbędzie się" directly, or the
+// verb is the infinitive "postanawia zwołać na dzień ...". The expected dates and times are those printed in the notices.
+test("convocations that state the date after 'odbędzie się' or with the infinitive 'zwołać' are recognised", () => {
+  const found = (key) => {
+    const notice = gpwWzaConvocationCues[key];
+    return meetings(`${notice.sourceTitle}\n${notice.title}\n${notice.text}`)
+      .map((event) => [event.eventDate, event.eventTime, event.generalMeetingType, event.generalMeetingAction]);
+  };
+  assert.deepEqual(found("votum485695"), [["2026-05-12", "12:00", "ZWZ", "CONVENING"]]);
+  assert.deepEqual(found("larq490787"), [["2026-06-30", "10:00", "ZWZ", "CONVENING"]]);
+  assert.deepEqual(found("diagnostyka487390"), [["2026-05-25", "14:00", "ZWZ", "CONVENING"]]);
+  assert.deepEqual(found("mangataNwz481829"), [["2026-03-12", "10:00", "NWZ", "CONVENING"]]);
+  assert.deepEqual(found("mangataZwz487741").map(([date, , type]) => [date, type]), [["2026-05-28", "ZWZ"]]);
+  assert.deepEqual(found("compremum490267").map(([date, , type]) => [date, type]), [["2026-06-26", "ZWZ"]]);
+});
+
+test("'odbędzie się' without a convening notice, and a date that only mentions the past, still create no meeting", () => {
+  assert.deepEqual(meetings(`ACME SA (9/2026) Treść uchwał podjętych przez Zwyczajne Walne Zgromadzenie
+Zwyczajne Walne Zgromadzenie ACME S.A., które odbyło się 12 maja 2026 roku, podjęło uchwały w sprawie podziału zysku.`), []);
+  assert.deepEqual(meetings(`ACME SA (10/2026) Projekty uchwał na Zwyczajne Walne Zgromadzenie
+Zarząd przekazuje projekty uchwał na Zwyczajne Walne Zgromadzenie, które odbędzie się 12 maja 2026 roku.`), []);
 });
 
 test("parses the Elektrotim cancellation and targets the originally convened NWZ", () => {

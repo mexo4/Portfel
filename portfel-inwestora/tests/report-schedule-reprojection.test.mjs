@@ -176,6 +176,33 @@ test("a mistyped-year row is retired when the same document announces its date f
   assert.equal(plan.retirementReasons.typo, "DATE_REPUBLISHED_UNDER_OTHER_IDENTITY");
 });
 
+// --- the rows of a notice that a formal correction replaced (IDM 1/2026 and 1/2026/KOR) ---------------------
+
+test("rows an exclusively-owned, corrected notice announced with the typo are retired; shared and clean rows stay", () => {
+  const original = "https://www.gpw.pl/komunikat?geru_id=480804";
+  const correction = "https://www.gpw.pl/komunikat?geru_id=480817";
+  const annual = { eventType: "ANNUAL_REPORT", fiscalPeriod: "FY", fiscalYear: 2025, eventDate: "2026-04-15" };
+  const existing = [
+    row("annual", "ANNUAL_REPORT:FY:2025", [original, correction], "2026-04-15", "ANNUAL_REPORT"),
+    row("q1-typo", "QUARTERLY_REPORT:Q1:2025", [original], "2026-05-20"),
+    row("h1-yearless", "HALF_YEAR_REPORT:H1:", [original], "2026-09-23", "HALF_YEAR_REPORT"),
+    row("h1-shared", "HALF_YEAR_REPORT:H1:2026", [original, correction], "2026-09-28", "HALF_YEAR_REPORT"),
+    row("q3-typo", "QUARTERLY_REPORT:Q3:2025", [original], "2026-11-18"),
+  ];
+  // the sync passes the typo dates of the superseded notice as non-publication evidence and publishes nothing for them
+  const nonPublicationDates = ["2026-05-20", "2026-09-23", "2026-09-28", "2026-11-18"]
+    .map((date) => ({ date, role: "SUPERSEDED_BY_CORRECTION" }));
+  const plan = planReportScheduleReprojection(existing, [annual], original, true, { nonPublicationDates });
+  assert.deepEqual(plan.deactivateIds.sort(), ["h1-yearless", "q1-typo", "q3-typo"]);
+  assert.ok(plan.deactivateIds.every((id) => plan.retirementReasons[id] === "SUPERSEDED_BY_CORRECTION"));
+  assert.deepEqual(plan.retainedIds, ["annual"]);
+  assert.deepEqual(plan.ambiguousIds, ["h1-shared"], "a row the correction also stands behind is never retired by the original");
+
+  // without that evidence the same document leaves its typo rows alone (nothing refutes them)
+  const without = planReportScheduleReprojection(existing, [annual], original, true);
+  assert.deepEqual(without.deactivateIds, []);
+});
+
 // --- a period end taken for an appointment, whatever created the row ---------------------------------------
 
 import { planPeriodEndRetirements } from "../src/lib/report-schedule-reprojection.ts";

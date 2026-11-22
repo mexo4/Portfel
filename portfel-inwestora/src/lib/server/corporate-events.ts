@@ -14,6 +14,7 @@ import {
   isNonBindingDividendDraftNotice,
   isCorporateEventSourceUnavailable,
   parseCorporateEventDocument,
+  type NonPublicationDate,
   type ParsedCorporateEvent,
 } from "@/lib/corporate-events";
 import { getGpwTickerCore, isGpwSymbol, normalizeGpwSymbol } from "@/lib/ticker";
@@ -44,7 +45,11 @@ import {
   type OtherSourceReading,
   type StoredReportProjection,
 } from "@/lib/report-schedule-reprojection";
-import { assessReportPublicationBatch, countReportReviewItems } from "@/lib/report-schedule-publication";
+import {
+  assessReportPublicationBatch,
+  countReportReviewItems,
+  type KnownReportRow,
+} from "@/lib/report-schedule-publication";
 import {
   DIVIDEND_PROJECTION_VERSION,
   GENERAL_MEETING_PROJECTION_VERSION,
@@ -168,6 +173,13 @@ type ProviderEventBatch = {
   correctedSourceUrl?: string;
   /** Rows the reprojection plan retires after this batch is applied; they must not count as "already on the calendar". */
   retiringEventIds?: string[];
+  /** The issuer's active report rows, for the publication policy: a change notice is confirmed by the row it moves. */
+  knownReportRows?: readonly KnownReportRow[];
+  /**
+   * A formal correction replaced this notice. Its rows with a contradictory year are the typo the correction fixes:
+   * they are not published, not even without the year (the correction carries the right ones).
+   */
+  supersededByCorrection?: boolean;
 };
 
 type ProviderResult = {
@@ -1102,9 +1114,14 @@ const upsertParsedEvents = async (
   const reviewReasons: string[] = [];
   const blocked: BlockedReportEvent[] = [];
 
-  for (const { event: parsed, publish, reasons } of assessReportPublicationBatch(
-    batch.events, { sourcePublishedAt: batch.source.sourcePublishedAt }
+  for (const { event: parsed, publish, reasons, yearWithdrawn } of assessReportPublicationBatch(
+    batch.events, { sourcePublishedAt: batch.source.sourcePublishedAt, knownRows: batch.knownReportRows }
   )) {
+    if (yearWithdrawn && batch.supersededByCorrection) {
+      diagnose({ provider: "report-schedule-publication", sourceUrl: batch.source.sourceUrl,
+        phase: "superseded-by-correction-skipped", reasons });
+      continue;
+    }
     if (!publish) {
       reviewReasons.push(...reasons);
       blocked.push({ eventType: parsed.eventType, eventDate: parsed.eventDate, identity: getCorporateEventIdentityKey(parsed) });
@@ -1792,6 +1809,34 @@ type GlobalGeneralMeetingReportRow = {
   last_source_status: CorporateEventSourceStatus | null;
 };
 
+/** The issuer's active report rows (identity and date), read for the publication policy's change-notice check. */
+const getKnownReportRows = async (instrumentId: string): Promise<KnownReportRow[]> =>
+  (await query<{ event_identity: string; event_date: string }>(
+    `SELECT event_identity, event_date FROM corporate_events
+     WHERE instrument_id = $1 AND active = TRUE
+       AND event_type IN ('QUARTERLY_REPORT', 'HALF_YEAR_REPORT', 'ANNUAL_REPORT')`,
+    [instrumentId]
+  )).map((row) => ({ identity: row.event_identity, date: row.event_date }));
+
+/**
+ * Whether a later formal correction replaced this notice. The ESPI link `correction_of_report_id` is rarely set (the
+ * correction's title usually carries no number: 38 of 1424 corrections since January 2026), so a correction also counts
+ * when it is a later notice of the same issuer with the same report number ("1/2026" and its "1/2026/KOR").
+ */
+const isSupersededByCorrection = async (reportId: string) => (await query<{ superseded: boolean }>(
+  `SELECT EXISTS (
+     SELECT 1 FROM espi_reports AS original
+     JOIN espi_reports AS correction
+       ON correction.is_correction = TRUE AND correction.id <> original.id
+      AND correction.published_at > original.published_at
+      AND (correction.correction_of_report_id = original.id
+        OR (correction.issuer_id IS NOT NULL AND correction.issuer_id = original.issuer_id
+            AND correction.report_number IS NOT NULL AND correction.report_number = original.report_number))
+     WHERE original.id = $1 AND original.is_correction = FALSE
+   ) AS superseded`,
+  [reportId]
+))[0]?.superseded === true;
+
 const getProjectionInstrument = async (report: GlobalGeneralMeetingReportRow): Promise<CanonicalInstrument | null> => {
   if (report.issuer_id && report.canonical_key && report.ticker && report.company_name) {
     return { id: report.issuer_id, canonical_key: report.canonical_key, ticker: report.ticker,
@@ -1952,15 +1997,31 @@ export const synchronizeGlobalReportSchedules = ({ force = false, refreshSource 
               phase: "attachment", error: error instanceof Error ? error.name : "unknown" });
           }
         }
-        const publicationDecisions = assessReportPublicationBatch(
-          [...events.values()], { sourcePublishedAt: report.published_at }
+        // A change notice moves a row the issuer already has: read those rows only when there is such a notice.
+        const knownReportRows = [...events.values()].some((event) => event.isScheduleChange && event.requiresReview)
+          ? await getKnownReportRows(instrument.id) : [];
+        const assessedEvents = assessReportPublicationBatch(
+          [...events.values()], { sourcePublishedAt: report.published_at, knownRows: knownReportRows }
         );
+        // A notice that a formal correction replaced must not publish its contradictory-year rows, not even
+        // without the year: they are the typo the correction fixes. Rows they created earlier are retired below.
+        const supersededByCorrection = assessedEvents.some((decision) => decision.yearWithdrawn) &&
+          await isSupersededByCorrection(report.id);
+        const supersededTypos = supersededByCorrection ? assessedEvents.filter((decision) => decision.yearWithdrawn) : [];
+        const publicationDecisions = supersededByCorrection
+          ? assessedEvents.filter((decision) => !decision.yearWithdrawn) : assessedEvents;
         const reviewEvents = publicationDecisions.filter((decision) => !decision.publish);
         // Dates the document names only as period boundaries or preliminary-results days: evidence that a
-        // stored row on such a date is not a publication appointment.
-        const nonPublicationDates = getReportScheduleNonPublicationDates(
-          [`${report.source_title}\n${report.title}\n${report.body_text}`, ...attachmentTexts].join("\n")
-        );
+        // stored row on such a date is not a publication appointment. The typo dates of a superseded notice
+        // are such evidence too (they come last: a date named twice keeps the stronger role).
+        const nonPublicationDates = [
+          ...getReportScheduleNonPublicationDates(
+            [`${report.source_title}\n${report.title}\n${report.body_text}`, ...attachmentTexts].join("\n")
+          ),
+          ...supersededTypos.map((decision): NonPublicationDate => ({
+            date: decision.event.eventDate, role: "SUPERSEDED_BY_CORRECTION",
+          })),
+        ];
         // Events published without a year wait in the review queue as well (`reviewEvents` holds only the
         // quarantined ones, which also protect rows and make the source incomplete).
         reviewed += countReportReviewItems(publicationDecisions);
@@ -2043,6 +2104,8 @@ export const synchronizeGlobalReportSchedules = ({ force = false, refreshSource 
             reportSourceComplete: parseComplete && reviewEvents.length === 0,
             correctedSourceUrl: correctedReport?.source_url,
             retiringEventIds: [...projectionPlan.deactivateIds, ...sharedRetirements],
+            knownReportRows,
+            supersededByCorrection,
           });
           // A source conflict or a held event blocks only the rows it concerns (same report type and
           // date, or same identity); every other retirement the plan proved goes ahead.

@@ -10,6 +10,7 @@ import {
 import { expandGpwStoredCalendarEvent } from "../src/lib/public-gpw-calendar.ts";
 import { toIcalMilestones } from "../src/lib/gpw-ical.ts";
 import { gpwWrappedScheduleRows } from "./fixtures/gpw-wrapped-schedule-rows-2026-11-18.mjs";
+import { gpwLateIssuerAndCorrectionNotices } from "./fixtures/gpw-late-issuer-and-correction-notices-2026-11-22.mjs";
 
 const databaseUrl = process.env.MEXO_GPW_TEST_DATABASE_URL;
 
@@ -613,6 +614,215 @@ test("PostgreSQL: a legacy row shared by two copies of one notice is retired whe
       [instrumentId],
     );
     assert.equal(afterReplay[0].count, 1, "replaying the copies keeps one active row");
+  } finally {
+    await releaseIsolatedDatabase(runId, instrumentId);
+  }
+});
+
+// --- Late issuers, formally corrected notices and meetings with a "przeniesienie" agenda (22.11.2026) -----------------
+// Real ESPI notices from tests/fixtures/gpw-late-issuer-and-correction-notices-2026-11-22.mjs. Each notice keeps its
+// real publication time, so the sync processes them newest first, as it does in production.
+
+const insertNoticeReport = ({ id, sourceId, instrumentId, ticker, notice, sourceUrl, now, category = "OTHER" }) => execute(
+  `INSERT INTO espi_reports
+    (id, source, source_id, issuer_id, issuer_name, market, source_ticker, report_number, is_correction,
+     report_type, published_at, source_title, title, body_text, category, source_url, discovered_at, updated_at)
+   VALUES ($1, 'PAP_ESPI', $2, $3, $4, 'GPW', $5, $6, $7, 'CURRENT', $8, $9, $10, $11, $12, $13, $14, $14)`,
+  [id, sourceId, instrumentId, `Fixture ${ticker}`, ticker, notice.reportNumber, notice.isCorrection, notice.publishedAt,
+    notice.sourceTitle, notice.title, notice.text, category, sourceUrl, now],
+);
+
+const insertNoticeRow = async ({ id, instrumentId, type, date, period, year, identity, status, publishedAt, now, urls }) => {
+  await execute(
+    `INSERT INTO corporate_events
+      (id, instrument_id, event_type, event_date, fiscal_period, fiscal_year, event_identity,
+       status, active, source_published_at, source_type, source_priority, discovered_at, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, TRUE, $9, 'ISSUER_CURRENT_REPORT', 300, $10, $10)`,
+    [id, instrumentId, type, date, period, year, identity, status, publishedAt, now],
+  );
+  for (const [index, url] of urls.entries()) {
+    await execute(
+      `INSERT INTO corporate_event_sources
+        (id, corporate_event_id, source_type, source_url, source_priority, discovered_at)
+       VALUES ($1, $2, 'ISSUER_CURRENT_REPORT', $3, 300, $4)`,
+      [`${id}-source-${index}`, id, url, now],
+    );
+  }
+};
+
+test("PostgreSQL: a chronically late issuer's change notice moves the stored row and an older notice cannot roll it back (EKO EXPORT)", {
+  skip: !databaseUrl,
+}, async () => {
+  await useIsolatedDatabase();
+  const runId = randomUUID();
+  const ticker = `EE${runId.replaceAll("-", "").slice(0, 8).toUpperCase()}`;
+  const instrumentId = `corporate-event-instrument:gpw:ticker:${ticker}`;
+  const now = new Date().toISOString();
+  const { eekChange496692: september, eekChange500735: november } = gpwLateIssuerAndCorrectionNotices;
+  const septemberUrl = `https://fixture.invalid/${runId}/eex-496692`;
+  const novemberUrl = `https://fixture.invalid/${runId}/eex-500735`;
+  try {
+    await insertFixtureInstrument(instrumentId, ticker, now);
+    // The calendar as the September notice (11/2026) left it, before the publication policy held such notices back.
+    const stored = [
+      ["HALF_YEAR_REPORT", "H1", 2024, "2026-11-06"], ["QUARTERLY_REPORT", "Q3", 2024, "2026-11-20"],
+      ["ANNUAL_REPORT", "FY", 2024, "2026-12-30"], ["QUARTERLY_REPORT", "Q1", 2025, "2027-01-22"],
+      ["HALF_YEAR_REPORT", "H1", 2025, "2027-02-26"], ["QUARTERLY_REPORT", "Q3", 2025, "2027-03-12"],
+      ["ANNUAL_REPORT", "FY", 2025, "2027-04-09"], ["QUARTERLY_REPORT", "Q1", 2026, "2027-04-23"],
+      ["HALF_YEAR_REPORT", "H1", 2026, "2027-05-21"], ["QUARTERLY_REPORT", "Q3", 2026, "2027-06-04"],
+    ];
+    const rowIds = new Map();
+    for (const [index, [type, period, year, date]] of stored.entries()) {
+      const id = `fixture-${runId}-eex-${index}`;
+      rowIds.set(`${period}:${year}`, id);
+      await insertNoticeRow({ id, instrumentId, type, date, period, year, identity: `${type}:${period}:${year}`,
+        status: "UNKNOWN", publishedAt: september.publishedAt, now, urls: [septemberUrl] });
+    }
+    await insertNoticeReport({ id: `fixture-${runId}-sep`, sourceId: `fixture:eex-sep:${runId}`, instrumentId, ticker,
+      notice: september, sourceUrl: septemberUrl, now });
+    await insertNoticeReport({ id: `fixture-${runId}-nov`, sourceId: `fixture:eex-nov:${runId}`, instrumentId, ticker,
+      notice: november, sourceUrl: novemberUrl, now });
+
+    const first = await synchronizeGlobalReportSchedules({ refreshSource: false, force: true });
+    assert.equal(first.errors, 0);
+    const rows = await query(
+      `SELECT id, event_identity, event_date, status FROM corporate_events
+       WHERE instrument_id = $1 AND active = TRUE ORDER BY event_date`, [instrumentId],
+    );
+    assert.equal(rows.length, 10, "no row is added, whether or not the notice reads a report twice");
+    const q3 = rows.find((row) => row.id === rowIds.get("Q3:2024"));
+    assert.deepEqual([q3?.event_date, q3?.status], ["2026-11-30", "CHANGED"],
+      "12/2026 of 18 November moves Q3 2024 from 20 to 30 November; the label is confirmed by the stored row");
+    for (const [type, period, year, date] of stored.filter(([, period, year]) => `${period}:${year}` !== "Q3:2024")) {
+      const row = rows.find((candidate) => candidate.id === rowIds.get(`${period}:${year}`));
+      assert.equal(row?.event_date, date, `${type} ${period} ${year} keeps the date of the September notice`);
+    }
+    const history = await query(
+      "SELECT previous_event_date, next_event_date FROM corporate_event_history WHERE corporate_event_id = $1", [q3.id]);
+    assert.ok(history.some((entry) => entry.previous_event_date === "2026-11-20" && entry.next_event_date === "2026-11-30"),
+      "the move is auditable");
+
+    const statuses = await query(
+      "SELECT source_id, report_schedule_projection_status AS status, report_schedule_review_reasons AS reasons FROM espi_reports WHERE id = ANY($1::text[])",
+      [[`fixture-${runId}-sep`, `fixture-${runId}-nov`]]);
+    const novemberStatus = statuses.find((row) => row.source_id.includes("eex-nov"));
+    assert.deepEqual([novemberStatus.status, novemberStatus.reasons], ["SUCCESS", []], "the new notice leaves no review item");
+    const septemberStatus = statuses.find((row) => row.source_id.includes("eex-sep"));
+    const held = septemberStatus.reasons.filter((entry) => entry.published === false);
+    // processed after the newer notice, the September one still says Q3 2024 falls on 20 November: it no longer matches
+    // the row (now on 30 November) and is held back instead of rolling the date back
+    // (the queue has one entry per reason code, so count the events behind the entries)
+    assert.deepEqual([...new Set(held.map((entry) => `${entry.eventType}:${entry.fiscalPeriod}:${entry.eventDate}`))],
+      ["QUARTERLY_REPORT:Q3:2026-11-20"]);
+
+    await synchronizeGlobalReportSchedules({ refreshSource: false, force: true });
+    const replay = await query("SELECT event_date FROM corporate_events WHERE id = $1 AND active = TRUE", [q3.id]);
+    assert.equal(replay[0]?.event_date, "2026-11-30", "replaying both notices keeps the newest date");
+    const rowsAfterReplay = await query("SELECT COUNT(*)::int AS count FROM corporate_events WHERE instrument_id = $1 AND active = TRUE", [instrumentId]);
+    assert.equal(rowsAfterReplay[0].count, 10);
+  } finally {
+    await releaseIsolatedDatabase(runId, instrumentId);
+  }
+});
+
+test("PostgreSQL: a notice that a formal correction replaced publishes no typo rows and the ones it created are retired (IDM)", {
+  skip: !databaseUrl,
+}, async () => {
+  await useIsolatedDatabase();
+  const runId = randomUUID();
+  const ticker = `ID${runId.replaceAll("-", "").slice(0, 8).toUpperCase()}`;
+  const instrumentId = `corporate-event-instrument:gpw:ticker:${ticker}`;
+  const now = new Date().toISOString();
+  const { idmOriginal480804: original, idmCorrection480817: correction } = gpwLateIssuerAndCorrectionNotices;
+  const originalUrl = `https://fixture.invalid/${runId}/idm-480804`;
+  const correctionUrl = `https://fixture.invalid/${runId}/idm-480817`;
+  const activeRows = () => query(
+    `SELECT event_type, event_date, event_identity, status FROM corporate_events
+     WHERE instrument_id = $1 AND active = TRUE ORDER BY event_date`, [instrumentId],
+  );
+  try {
+    await insertFixtureInstrument(instrumentId, ticker, now);
+    // the correction has no `correction_of_report_id` here, as in production: only the shared report number "1/2026" ties them
+    await insertNoticeReport({ id: `fixture-${runId}-orig`, sourceId: `fixture:idm-orig:${runId}`, instrumentId, ticker,
+      notice: original, sourceUrl: originalUrl, now });
+    await insertNoticeReport({ id: `fixture-${runId}-corr`, sourceId: `fixture:idm-corr:${runId}`, instrumentId, ticker,
+      notice: correction, sourceUrl: correctionUrl, now });
+
+    const first = await synchronizeGlobalReportSchedules({ refreshSource: false, force: true });
+    assert.equal(first.errors, 0);
+    const expected = [
+      ["ANNUAL_REPORT", "2026-04-15", "ANNUAL_REPORT:FY:2025"],
+      ["QUARTERLY_REPORT", "2026-05-20", "QUARTERLY_REPORT:Q1:2026"],
+      ["HALF_YEAR_REPORT", "2026-09-23", "HALF_YEAR_REPORT:H1:2026"],
+      ["QUARTERLY_REPORT", "2026-11-18", "QUARTERLY_REPORT:Q3:2026"],
+    ];
+    assert.deepEqual((await activeRows()).map((row) => [row.event_type, row.event_date, row.event_identity]), expected,
+      "the correction's four reports only: the original's 2025 labels create no row, with or without a year");
+    const notices = await query(
+      "SELECT source_id, report_schedule_projection_status AS status, report_schedule_review_reasons AS reasons FROM espi_reports WHERE id = ANY($1::text[])",
+      [[`fixture-${runId}-orig`, `fixture-${runId}-corr`]]);
+    assert.ok(notices.every((row) => row.status === "SUCCESS" && row.reasons.length === 0),
+      "neither notice is a review item: the typo is superseded, not pending");
+
+    // the issuer then moved the half-year report to 28 September (notice 497358 of 21 September): the half-year row
+    // stands on 28 September, so the original's "H1 on 23 September" has no same-day row left to be folded into
+    await execute(
+      `UPDATE corporate_events SET event_date = '2026-09-28', status = 'CHANGED', source_published_at = $2
+       WHERE instrument_id = $1 AND event_identity = 'HALF_YEAR_REPORT:H1:2026'`,
+      [instrumentId, "2026-09-21T17:00:00.000Z"],
+    );
+    expected[2][1] = "2026-09-28";
+    // production's state before this rule: rows the original created from its typo labels, one of them without a year
+    const stale = [
+      ["stale-q1", "QUARTERLY_REPORT", "Q1", 2025, "2026-05-20", "QUARTERLY_REPORT:Q1:2025"],
+      ["stale-h1", "HALF_YEAR_REPORT", "H1", null, "2026-09-23", "HALF_YEAR_REPORT:H1:"],
+      ["stale-q3", "QUARTERLY_REPORT", "Q3", 2025, "2026-11-18", "QUARTERLY_REPORT:Q3:2025"],
+    ];
+    const staleIds = [];
+    for (const [name, type, period, year, date, identity] of stale) {
+      const id = `fixture-${runId}-${name}`;
+      staleIds.push(id);
+      await insertNoticeRow({ id, instrumentId, type, date, period, year, identity, status: "UNKNOWN",
+        publishedAt: original.publishedAt, now, urls: [originalUrl] });
+    }
+    await synchronizeGlobalReportSchedules({ refreshSource: false, force: true });
+    assert.deepEqual((await activeRows()).map((row) => [row.event_type, row.event_date, row.event_identity]), expected,
+      "the three stale rows are gone, the correction's rows stand");
+    const changes = await query(
+      "SELECT corporate_event_id, reason FROM corporate_event_projection_changes WHERE corporate_event_id = ANY($1::text[]) ORDER BY corporate_event_id",
+      [staleIds]);
+    assert.deepEqual(changes.map((change) => change.reason),
+      staleIds.slice().sort().map(() => "REPORT_SCHEDULE_REPROJECTION:SUPERSEDED_BY_CORRECTION"));
+    await synchronizeGlobalReportSchedules({ refreshSource: false, force: true });
+    assert.equal((await activeRows()).length, 4, "replaying both notices changes nothing");
+  } finally {
+    await releaseIsolatedDatabase(runId, instrumentId);
+  }
+});
+
+test("PostgreSQL: a convocation whose agenda says 'przeniesienie' becomes a general meeting (Creotech)", {
+  skip: !databaseUrl,
+}, async () => {
+  await useIsolatedDatabase();
+  const runId = randomUUID();
+  const ticker = `CR${runId.replaceAll("-", "").slice(0, 8).toUpperCase()}`;
+  const instrumentId = `corporate-event-instrument:gpw:ticker:${ticker}`;
+  const now = new Date().toISOString();
+  const { creotechConvocation500040: convocation } = gpwLateIssuerAndCorrectionNotices;
+  try {
+    await insertFixtureInstrument(instrumentId, ticker, now);
+    await insertNoticeReport({ id: `fixture-${runId}-cri`, sourceId: `fixture:cri:${runId}`, instrumentId, ticker,
+      notice: convocation, sourceUrl: `https://fixture.invalid/${runId}/cri-500040`, now, category: "GENERAL_MEETING" });
+    const sync = await synchronizeGlobalGeneralMeetings({ refreshSource: false, force: true });
+    assert.equal(sync.errors, 0);
+    const meetings = await query(
+      `SELECT event_date, event_time, general_meeting_type, status, active FROM corporate_events
+       WHERE instrument_id = $1 AND event_type = 'GENERAL_MEETING'`, [instrumentId]);
+    assert.deepEqual(meetings.map((row) => [row.event_date, row.event_time, row.general_meeting_type, row.status, row.active]),
+      [["2026-12-01", "12:00", "NWZ", "CONFIRMED", true]]);
+    const projection = await query(
+      "SELECT corporate_events_projection_status AS status FROM espi_reports WHERE id = $1", [`fixture-${runId}-cri`]);
+    assert.equal(projection[0]?.status, "SUCCESS");
   } finally {
     await releaseIsolatedDatabase(runId, instrumentId);
   }

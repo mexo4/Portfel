@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { assessReportPublicationBatch, countReportReviewItems } from "../src/lib/report-schedule-publication.ts";
-import { parseCorporateEventDocument } from "../src/lib/corporate-events.ts";
+import { getCorporateEventIdentityKey, parseCorporateEventDocument } from "../src/lib/corporate-events.ts";
+import { gpwLateIssuerAndCorrectionNotices } from "./fixtures/gpw-late-issuer-and-correction-notices-2026-11-22.mjs";
 
 const report = (eventDate = "2026-11-20", overrides = {}) => ({
   eventType: "QUARTERLY_REPORT", eventDate, fiscalPeriod: "Q3", fiscalYear: 2026,
@@ -121,6 +122,68 @@ test("a contradictory year never publishes when the report type and period repea
   assert.deepEqual(catchUp.map(({ publish }) => publish), [false, false]);
   const change = assessReportPublicationBatch([{ ...base, isScheduleChange: true }], context);
   assert.equal(change[0].publish, false);
+});
+
+// EKO EXPORT is years behind with its reports and re-dates them again and again (notices 11/2026 of 9 September and
+// 12/2026 of 18 November 2026). "Q3 2024 on 30 November 2026" is not a typo: the stored row of that very report moves.
+const noticeText = (notice) => `${notice.sourceTitle}\n${notice.title}\n${notice.text}`;
+const reportEvents = (notice) => parseCorporateEventDocument(noticeText(notice))
+  .filter((event) => event.eventType.endsWith("_REPORT"));
+const rowOf = (event, date) => ({ identity: getCorporateEventIdentityKey(event), date });
+
+test("a change notice of a chronically late issuer is published when it moves a stored row of that report", () => {
+  const notice = gpwLateIssuerAndCorrectionNotices.eekChange500735;
+  const events = reportEvents(notice);
+  const context = { sourcePublishedAt: notice.publishedAt };
+  assert.ok(events.length >= 1 && events.every((event) => event.isScheduleChange && event.previousEventDate === "2026-11-20"));
+  // nothing stored for that report: the label is unconfirmed, the notice stays held (unchanged policy)
+  assert.ok(assessReportPublicationBatch(events, context).every((decision) => !decision.publish));
+  assert.ok(assessReportPublicationBatch(events, { ...context, knownRows: [{ identity: "QUARTERLY_REPORT:Q3:2025", date: "2026-11-20" }] })
+    .every((decision) => !decision.publish), "another period on the same day confirms nothing");
+  assert.ok(assessReportPublicationBatch(events, { ...context, knownRows: [{ identity: "QUARTERLY_REPORT:Q3:2024", date: "2026-11-27" }] })
+    .every((decision) => !decision.publish), "the same report on another day confirms nothing");
+
+  // the notice reads the report twice (a ":CONSOLIDATED" twin next to the plain identity the calendar stores); once the
+  // plain reading is confirmed, the twin adds nothing to review
+  assert.deepEqual(events.map((event) => getCorporateEventIdentityKey(event)),
+    ["QUARTERLY_REPORT:Q3:2024:CONSOLIDATED", "QUARTERLY_REPORT:Q3:2024"]);
+  const decisions = assessReportPublicationBatch(events, { ...context, knownRows: [{ identity: "QUARTERLY_REPORT:Q3:2024", date: "2026-11-20" }] });
+  assert.equal(decisions.length, 1);
+  assert.ok(decisions.every((decision) => decision.publish && decision.changeConfirmedByStoredRow && decision.reasons.length === 0));
+  const [moved] = decisions;
+  assert.deepEqual([moved.event.eventDate, moved.event.previousEventDate, moved.event.fiscalPeriod, moved.event.fiscalYear,
+    moved.event.requiresReview], ["2026-11-30", "2026-11-20", "Q3", 2024, false]);
+});
+
+test("an older notice that the stored row already reflects is accepted, one that contradicts the row stays held", () => {
+  const notice = gpwLateIssuerAndCorrectionNotices.eekChange496692;
+  const events = reportEvents(notice);
+  assert.equal(events.length, 10);
+  const context = { sourcePublishedAt: notice.publishedAt };
+  // the calendar already holds the dates this notice announced: the notice confirms them
+  const applied = assessReportPublicationBatch(events, { ...context, knownRows: events.map((event) => rowOf(event, event.eventDate)) });
+  assert.ok(applied.every((decision) => decision.publish), "all ten re-dated reports are stored with their new dates");
+  // Q3 2024 has meanwhile moved on (to 30 November): this older notice no longer matches its row and cannot roll it back
+  const q3 = events.find((event) => event.fiscalPeriod === "Q3" && event.fiscalYear === 2024);
+  const knownAfterLaterNotice = events.map((event) => rowOf(event, event === q3 ? "2026-11-30" : event.eventDate));
+  const later = assessReportPublicationBatch(events, { ...context, knownRows: knownAfterLaterNotice });
+  assert.deepEqual(later.map((decision) => decision.publish), events.map((event) => event !== q3));
+});
+
+test("only a change with a complete identity can be confirmed by a stored row; schedules and typos are not affected", () => {
+  const context = { sourcePublishedAt: "2026-01-20T10:00:00.000Z" };
+  const known = [{ identity: "QUARTERLY_REPORT:Q3:", date: "2026-11-26" }, { identity: "QUARTERLY_REPORT:Q3:2025", date: "2026-11-26" }];
+  const noYear = { eventType: "QUARTERLY_REPORT", fiscalPeriod: "Q3", eventDate: "2026-11-26", previousEventDate: "2026-11-19",
+    isScheduleChange: true, requiresReview: true, reviewReasons: ["FISCAL_YEAR_NOT_EXPLICIT"] };
+  assert.equal(assessReportPublicationBatch([noYear], { ...context, knownRows: known })[0].publish, false);
+  // a plain schedule row with a contradictory year is still the typo policy's business, whatever is stored
+  const typo = { eventType: "QUARTERLY_REPORT", fiscalPeriod: "Q3", fiscalYear: 2025, eventDate: "2026-11-26",
+    requiresReview: true, reviewReasons: ["REPORT_PERIOD_MAY_BE_OVERDUE"] };
+  const [decision] = assessReportPublicationBatch([typo], { ...context, knownRows: known });
+  assert.deepEqual([decision.publish, decision.yearWithdrawn, decision.changeConfirmedByStoredRow], [true, true, undefined]);
+  // another defect than the year keeps a change notice held
+  const badDay = { ...noYear, fiscalYear: 2025, eventDate: "2026-02-30", reviewReasons: ["REPORT_PERIOD_MAY_BE_OVERDUE"] };
+  assert.equal(assessReportPublicationBatch([badDay], { ...context, knownRows: [{ identity: "QUARTERLY_REPORT:Q3:2025", date: "2026-02-30" }] })[0].publish, false);
 });
 
 test("a missing period or an invalid date is never published, whatever the year says", () => {

@@ -73,3 +73,24 @@ Testy: `npm test` 962 testy (po scaleniu kalendarza sesji i poprawce licznika), 
 - Parser nie czyta jeszcze: wiersza półrocznego z etykietą zawiniętą i cytatem rozporządzenia (Eurotel), zmian terminu bez żadnej daty w tym samym akapicie (Bumech); 81 z 671 dokumentów nadal nie daje zdarzeń (76 z nich zapisano wcześniej jako brak zdarzeń; wśród nich 17 zmian terminu z sierpnia–listopada 2026, głównie półrocznych, już minionych; z kwartalnych m.in. Sygnity i Bumech).
 - Nie wykonano: powtórki całego obrazu produkcji (671 dokumentów) w izolowanej bazie PostgreSQL oraz pomiaru recall na próbce 25 emitentów względem oficjalnych komunikatów (nie ma dostępu do gpw.pl z tej maszyny). Kontrakty PostgreSQL i HTTP E2E strony zostały uruchomione 18.11.2026 na lokalnym PostgreSQL 16 dopiero po tym, jak CI wykryło błąd licznika `reviewed`.
 - Faza 5 (poprzednia data przy „Termin zmieniony”, strefa czasowa przy godzinie) nie została zrobiona.
+
+## 7. Poprawki z 22.11.2026 (po wdrożeniu #37/#38)
+
+Cztery podejrzenia z panelu przeglądu sprawdzono na oficjalnych komunikatach (gpw.pl), publicznym feedzie ICS i bazie (tylko odczyt).
+
+| Podejrzenie | Ustalenie | Zmiana |
+|---|---|---|
+| ERG „Q3 2029” (19.11) | literówka w komunikacie ERG 1/2026 („III kwartał 2029 roku - 19 listopada 2026 roku”); kalendarz pokazuje już „Q3, do weryfikacji” | brak (polityka literówek działa) |
+| EKOEXPORT „H1 2024”, „Q3 2024” | nie błąd: zaległy emitent faktycznie przesuwa raporty z lat 2024–2026 (komunikaty 11/2026 i 12/2026). Ale brama wstrzymywała każdy komunikat zmiany z „bardzo starym okresem”, więc nowy termin Q3 2024 (30.11, komunikat z 18.11) nie docierał do kalendarza | komunikat zmiany jest publikowany, gdy jego stara albo nowa data odpowiada istniejącemu wierszowi o tej samej tożsamości (`knownRows` w `assessReportPublicationBatch`); starszy komunikat, który nie zgadza się już z wierszem, nadal jest wstrzymywany i nie cofa daty |
+| IDM „Q3 2025” i „Q3 2026” | oryginał 1/2026 miał „2025” w trzech wierszach, korekta 1/2026/KOR (godzinę później) poprawia na 2026; oryginał wciąż tworzył wiersze (także bez roku, np. „H1 23.09” po późniejszym przesunięciu na 28.09) | dokument poprawiony formalnie nie publikuje wierszy ze sprzecznym rokiem, a wiersze, które z niego powstały, są wycofywane (`SUPERSEDED_BY_CORRECTION`). „Poprawiony” = późniejsza korekta tego samego emitenta z tym samym numerem raportu albo powiązanie `correction_of_report_id` (to drugie jest ustawione tylko dla 38 z 1424 korekt od stycznia, bo tytuł korekty zwykle nie niesie numeru) |
+| WZA „za mało” | w kalendarzu jest 29 walnych w listopadzie i 31 w grudniu; brak styczniowych wynika z braku zwołań. Parser gubił jednak część zwołań | patrz niżej |
+
+Parser WZA (`src/lib/corporate-events.ts`), wszystkie trzy przyczyny to luki sprzed #37:
+- wzorzec zmiany terminu brał punkt agendy „przeniesienie do spółki zależnej” za przeniesienie walnego i odrzucał całe zwołanie (Creotech NWZ 1.12.2026 12:00 i NWZ 4.03.2026); ten sam wzorzec tworzył fałszywe „przeniesione” walne z uchwał o dywidendzie („przeniesienie zysku na kapitał”: MCI, DEKPOL, MO-BRUK, PZU). Teraz „przenieść/przełożyć” musi dotyczyć samego walnego albo jego terminu;
+- data zaraz po „odbędzie się” (Votum, LARQ, Compremum) i bezokolicznik „postanawia zwołać na dzień” (Diagnostyka, Mangata) nie dawały daty. Nowe wskazówki stoją na końcu listy, więc rozstrzygają tylko tam, gdzie żadna wcześniejsza nie dała daty; „zamierza zwołać” (zamiar, XTPL 36/2026) jest wyłączone, a „Protokół z … Walnego Zgromadzenia” jest zawiadomieniem, które nie zwołuje.
+
+Sprawdzenie: parser z `najlepsza-wersja` i obecny na wszystkich 2465 zapisanych komunikatach o zgromadzeniach i dywidendach od stycznia: różnią się 17, każdy wyjaśniony (10 odzyskanych zwołań, 5 usuniętych fałszywych „przeniesień”, VRG z daty 2016 na prawdziwe walne, XTB jak inne komunikaty o rozszerzeniu porządku obrad). Z 10 zwołań odrzucanych wcześniej odzyskano 7. Nadal brakuje: Ten Square Games (data ok. 200 znaków za słowem „zwołaniu”; poszerzenie zasięgu łączyłoby się z obcymi datami), mBank (data tylko w załączniku PDF), Investment Friends (literówka „13.02.206” w polskiej części).
+
+Wersje projekcji: raporty 12, WZA 10 (dokumenty `NO_EVENT` z wersji 9 i wstrzymane komunikaty EKOEXPORT są czytane ponownie).
+
+Znane granice: wiersze utworzone wcześniej przez błędne „przeniesienie” (np. MCI „ZWZ 30.09.2026”, data dywidendy) nie wycofują się same, bo dokument bez zdarzeń walnych jest niejednoznaczny; to daty przeszłe. Starsze komunikaty EKOEXPORT, które nie zgadzają się już z wierszami, zostają w kolejce przeglądu.

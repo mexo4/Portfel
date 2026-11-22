@@ -10,6 +10,8 @@ export type ReportPublicationDecision = {
    * as unverified instead of an impossible label, and the row waits in the review queue.
    */
   yearWithdrawn?: boolean;
+  /** A change notice published although its period is far behind its date, because a stored row of that identity confirms it. */
+  changeConfirmedByStoredRow?: boolean;
 };
 
 const isReport = (event: ParsedCorporateEvent) =>
@@ -41,9 +43,19 @@ const YEAR_CONTRADICTION_REASONS = new Set([
 export const countReportReviewItems = (decisions: ReportPublicationDecision[]) =>
   decisions.filter((decision) => !decision.publish || decision.yearWithdrawn).length;
 
+/** An active report row of the issuer: its identity ("QUARTERLY_REPORT:Q3:2024") and the date it stands on. */
+export type KnownReportRow = { identity: string; date: string };
+
 export type ReportPublicationContext = {
   /** When the official document was published. A withdrawn-year row needs it: its date must still lie ahead. */
   sourcePublishedAt?: string | null;
+  /**
+   * The issuer's active report rows. A change notice is a re-dating of a row that already exists: when its
+   * previous date (or the date it already moved the row to) belongs to a stored row of exactly the same report
+   * identity, the period and year are not a typo, however late the period is (a chronically late issuer
+   * postpones an H1 2024 report to November 2026 again and again).
+   */
+  knownRows?: readonly KnownReportRow[];
 };
 
 /** Conservative policy between parsing and persistence. The parser may surface
@@ -53,7 +65,8 @@ export type ReportPublicationContext = {
  * fiscal year (Enter Air, Pharmena, IDM and ERG state "Q3 2025"/"Q3 2029" for a day in November 2026)
  * keeps its report type, period and date and loses the year. It is published as unverified when the
  * date is unambiguous: a unique report type/period in the document, not earlier than the
- * announcement itself, and not a change notice (a change must find the row it moves by identity). */
+ * announcement itself, and not a change notice (a change must find the row it moves by identity: such a notice is
+ * published only when `context.knownRows` holds a row of the same identity on its previous or its new date). */
 export function assessReportPublicationBatch(
   events: ParsedCorporateEvent[],
   context: ReportPublicationContext = {}
@@ -69,7 +82,8 @@ export function assessReportPublicationBatch(
     reportsByTypePeriod.set(typePeriod, (reportsByTypePeriod.get(typePeriod) ?? 0) + 1);
   }
   const announcedOn = context.sourcePublishedAt ? context.sourcePublishedAt.slice(0, 10) : undefined;
-  return events.map((event) => {
+  const knownKeys = new Set((context.knownRows ?? []).map((row) => `${row.identity}:${row.date}`));
+  const decisions = events.map((event): ReportPublicationDecision => {
     const reasons: string[] = [];
     if (isReport(event)) {
       if (event.requiresReview) reasons.push(...(event.reviewReasons?.length ? event.reviewReasons : ["PARSER_REQUIRES_REVIEW"]));
@@ -80,6 +94,23 @@ export function assessReportPublicationBatch(
       if (!isValidIsoDay(event.eventDate)) reasons.push("INVALID_PUBLICATION_DATE");
     }
     const unique = [...new Set(reasons)];
+    // A change notice that moves a stored row of the very same identity: the label is confirmed by that row, so the
+    // "period is far behind the date" signal describes the issuer, not a typo. The new date is the issuer's own.
+    if (unique.length > 0 && isReport(event) && event.isScheduleChange && !event.isCancellation &&
+      event.fiscalPeriod && (event.fiscalYear || event.fiscalYearLabel) &&
+      unique.every((reason) => YEAR_CONTRADICTION_REASONS.has(reason) && reason !== "FISCAL_YEAR_NOT_EXPLICIT") &&
+      isValidIsoDay(event.eventDate)) {
+      const identity = getCorporateEventIdentityKey(event);
+      if ((event.previousEventDate && knownKeys.has(`${identity}:${event.previousEventDate}`)) ||
+        knownKeys.has(`${identity}:${event.eventDate}`)) {
+        return {
+          event: { ...event, requiresReview: false, reviewReasons: undefined },
+          publish: true,
+          reasons: [],
+          changeConfirmedByStoredRow: true,
+        };
+      }
+    }
     if (unique.length > 0 && isReport(event) && event.fiscalPeriod && !event.isScheduleChange && !event.isCancellation &&
       unique.every((reason) => YEAR_CONTRADICTION_REASONS.has(reason)) &&
       announcedOn && event.eventDate >= announcedOn &&
@@ -93,4 +124,13 @@ export function assessReportPublicationBatch(
     }
     return { event, publish: unique.length === 0, reasons: unique };
   });
+  // The same report and date can be read twice from one notice, once with a scope suffix in its identity
+  // ("QUARTERLY_REPORT:Q3:2024:CONSOLIDATED" next to "QUARTERLY_REPORT:Q3:2024"). A held reading whose twin is
+  // published adds nothing to review: the calendar already carries that appointment.
+  const baseKey = (event: ParsedCorporateEvent) =>
+    `${getCorporateEventIdentityKey(event).split(":").slice(0, 3).join(":")}:${event.eventDate}`;
+  const publishedKeys = new Set(decisions.filter((decision) => decision.publish && isReport(decision.event))
+    .map((decision) => baseKey(decision.event)));
+  return decisions.filter((decision) =>
+    decision.publish || !isReport(decision.event) || !publishedKeys.has(baseKey(decision.event)));
 }

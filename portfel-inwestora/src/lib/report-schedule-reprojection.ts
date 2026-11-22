@@ -21,6 +21,8 @@ export type ReportRetirementReason =
   | "PRELIMINARY_RESULTS_NOT_PUBLICATION"
   /** The document names the stored date only as the date of the regulation it cites. */
   | "LEGAL_ACT_DATE_NOT_PUBLICATION"
+  /** The row came from a notice with a contradictory year that a formal correction has since replaced. */
+  | "SUPERSEDED_BY_CORRECTION"
   /** Every source linked to the row now announces its date under another identity. */
   | "ALL_SOURCES_REPUBLISH_UNDER_OTHER_IDENTITY";
 
@@ -156,7 +158,8 @@ export const planReportScheduleReprojection = (
     if (role) {
       plan.deactivateIds.push(event.id);
       plan.retirementReasons[event.id] = role === "PRELIMINARY_RESULTS" ? "PRELIMINARY_RESULTS_NOT_PUBLICATION"
-        : role === "LEGAL_ACT" ? "LEGAL_ACT_DATE_NOT_PUBLICATION" : "PERIOD_BOUNDARY_NOT_PUBLICATION";
+        : role === "LEGAL_ACT" ? "LEGAL_ACT_DATE_NOT_PUBLICATION"
+          : role === "SUPERSEDED_BY_CORRECTION" ? "SUPERSEDED_BY_CORRECTION" : "PERIOD_BOUNDARY_NOT_PUBLICATION";
       continue;
     }
     plan.ambiguousIds.push(event.id);

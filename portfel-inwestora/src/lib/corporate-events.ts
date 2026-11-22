@@ -821,8 +821,10 @@ export type NonPublicationDate = {
   /**
    * PERIOD_BOUNDARY: start/end of a fiscal period or year; PRELIMINARY_RESULTS: selected-data announcement;
    * LEGAL_ACT: date of a regulation or statute cited as the legal basis ("Rozporządzenia … z dnia 6 czerwca 2025 r.").
+   * SUPERSEDED_BY_CORRECTION: set by the sync, not by the parser: a date of a notice that a formal correction replaced,
+   * for a row that notice announced with a contradictory year (the typo the correction fixes).
    */
-  role: "PERIOD_BOUNDARY" | "PRELIMINARY_RESULTS" | "LEGAL_ACT";
+  role: "PERIOD_BOUNDARY" | "PRELIMINARY_RESULTS" | "LEGAL_ACT" | "SUPERSEDED_BY_CORRECTION";
   /**
    * Set when the document states that this very date closes a named period ("IV kwartał 2026 - od 1 listopada
    * do 31 stycznia 2027"). A stored report row with exactly this identity and date is the period end taken for
@@ -1252,13 +1254,13 @@ const GENERAL_MEETING_REFERENCE =
   /waln(?:e|ego|emu|ym|ych)?\s+zgromadzeni(?:e|a|u|em)?(?:\s+akcjonariuszy)?|\b(?:wza|zwz|zwza|nwz|agm|egm)\b|\b(?:annual|extraordinary|ordinary)\s+general\s+meeting\b|\bgeneral\s+meeting\b/iu;
 
 const GENERAL_MEETING_FALSE_NOTICE =
-  /opinia\s+(?:rady\s+nadzorczej|zarzadu)[\s\S]{0,240}?(?:waln\w*\s+zgromadzeni\w*|\b(?:wza|zwz|nwz)\b)|stanowisko\s+rady\s+nadzorczej[\s\S]{0,240}?(?:waln\w*\s+zgromadzeni\w*|\b(?:wza|zwz|nwz)\b)|projekt(?:y|u|em)?\s+uchwal|zgloszeni(?:e|a)\s+projektu\s+uchwal|(?:uzupelnieni|zmian)[eaęy]?\s+porzadku\s+obrad|zadani(?:e|a)\s+akcjonariusz|zgloszeni(?:e|a)\s+kandydat|wykaz\s+akcjonariusz|lista\s+akcjonariusz[^\n.]{0,100}(?:glos|procent|%)|lista\s+akcjonariusz[^\n.]{0,120}uprawnion\w*[\s\S]{0,50}do\s+(?:udzialu|uczestnictwa)|tresc\s+uchwal\s+podjetych|uchwal(?:y|a)\s+podjet|wynik(?:i|ow)?\s+glosowa|po\s+(?:odbyciu|zakonczeniu)\s+(?:walnego|wza|zwz|nwz)|informacj[ae]\s+po\s+(?:walnym|wza|zwz|nwz)|(?:minutes|results?\s+of\s+voting|resolutions?\s+adopted|draft\s+resolutions?|candidates?\s+for\s+the\s+board|agenda\s+amendment)[^\n.]{0,100}(?:general\s+meeting|\b(?:agm|egm)\b)/iu;
+  /opinia\s+(?:rady\s+nadzorczej|zarzadu)[\s\S]{0,240}?(?:waln\w*\s+zgromadzeni\w*|\b(?:wza|zwz|nwz)\b)|stanowisko\s+rady\s+nadzorczej[\s\S]{0,240}?(?:waln\w*\s+zgromadzeni\w*|\b(?:wza|zwz|nwz)\b)|projekt(?:y|u|em)?\s+uchwal|zgloszeni(?:e|a)\s+projektu\s+uchwal|(?:uzupelnieni|zmian)[eaęy]?\s+porzadku\s+obrad|protokol\w*\s+z(?:e)?\s+(?:(?:zwyczajnego|nadzwyczajnego)\s+)?(?:waln\w*\s+zgromadzeni\w*|\b(?:wza|zwz|nwz)\b)|zadani(?:e|a)\s+akcjonariusz|zgloszeni(?:e|a)\s+kandydat|wykaz\s+akcjonariusz|lista\s+akcjonariusz[^\n.]{0,100}(?:glos|procent|%)|lista\s+akcjonariusz[^\n.]{0,120}uprawnion\w*[\s\S]{0,50}do\s+(?:udzialu|uczestnictwa)|tresc\s+uchwal\s+podjetych|uchwal(?:y|a)\s+podjet|wynik(?:i|ow)?\s+glosowa|po\s+(?:odbyciu|zakonczeniu)\s+(?:walnego|wza|zwz|nwz)|informacj[ae]\s+po\s+(?:walnym|wza|zwz|nwz)|(?:minutes|results?\s+of\s+voting|resolutions?\s+adopted|draft\s+resolutions?|candidates?\s+for\s+the\s+board|agenda\s+amendment)[^\n.]{0,100}(?:general\s+meeting|\b(?:agm|egm)\b)/iu;
 
 const GENERAL_MEETING_FORMAL_NOTICE =
   /(?:ogloszeni[ae]\s+o\s+)?zwolani[eu]\s+(?:(?:zwyczajnego|nadzwyczajnego)\s+)?walnego\s+zgromadzenia|\bzwol(?:uje|a|al|ano|anie|aniu|ane|anego|anym)(?![\p{L}\p{N}_])[\s\S]{0,260}?(?:waln\w*\s+zgromadzeni\w*|\b(?:zwz|nwz|wza)\b)|(?:waln\w*\s+zgromadzeni\w*|\b(?:zwz|nwz)\b)[\s\S]{0,180}?(?:zostanie\s+zwolan\w*|zwolan\w*\s+na)|(?:zarzad|spolka|emitent)[\s\S]{0,160}?informuje[\s\S]{0,220}?(?:waln\w*\s+zgromadzeni\w*|\b(?:zwz|nwz)\b)[\s\S]{0,100}?odbed(?:zie|a)\s+sie|(?:informacj\w*\s+o\s+terminie|notice\s+(?:of|on)\s+(?:the\s+)?date)[\s\S]{0,180}?(?:waln\w*\s+zgromadzeni\w*|\b(?:zwz|nwz|wza|agm|egm)\b)|(?:notice\s+(?:of|convening)\s+(?:the\s+)?(?:annual|extraordinary|ordinary\s+)?general\s+meeting|(?:annual|extraordinary|ordinary)\s+general\s+meeting[\s\S]{0,180}?(?:will\s+be\s+held|is\s+convened|shall\s+be\s+held)|(?:board|company|issuer)[\s\S]{0,120}?(?:convenes|hereby\s+convenes)[\s\S]{0,150}?general\s+meeting)/iu;
 
 const GENERAL_MEETING_RESCHEDULE_NOTICE =
-  /zmian(?:a|y|ie|e)\s+terminu[\s\S]{0,180}?(?:waln\w*\s+zgromadzeni\w*|\b(?:wza|zwz|nwz)\b)|(?:waln\w*\s+zgromadzeni\w*|\b(?:wza|zwz|nwz)\b)[\s\S]{0,180}?zmian(?:a|y|ie|e)\s+terminu|(?:przeloz|przenies|zmienia\s+termin)[\s\S]{0,180}?(?:waln\w*\s+zgromadzeni\w*|\b(?:wza|zwz|nwz)\b)|(?:waln\w*\s+zgromadzeni\w*|\b(?:wza|zwz|nwz)\b)[\s\S]{0,180}?(?:przeloz|przenies|zmienia\s+termin)|(?:change|reschedul|postpon)[^\n.]{0,160}(?:general\s+meeting|\b(?:agm|egm)\b)|(?:general\s+meeting|\b(?:agm|egm)\b)[^\n.]{0,160}(?:change|reschedul|postpon)/iu;
+  /zmian(?:a|y|ie|e)\s+terminu[\s\S]{0,180}?(?:waln\w*\s+zgromadzeni\w*|\b(?:wza|zwz|nwz)\b)|(?:waln\w*\s+zgromadzeni\w*|\b(?:wza|zwz|nwz)\b)[\s\S]{0,180}?zmian(?:a|y|ie|e)\s+terminu|(?:przeloz|przenies)\w*\s+(?:(?:termin|dat)\w*\s+)?(?:(?:zwyczajn|nadzwyczajn)\w*\s+)?(?:waln\w*\s+zgromadzeni\w*|\b(?:wza|zwz|nwz)\b)|(?:przeloz|przenies)\w*\s+(?:termin|dat)\w*[\s\S]{0,180}?(?:waln\w*\s+zgromadzeni\w*|\b(?:wza|zwz|nwz)\b)|zmienia\s+termin[\s\S]{0,180}?(?:waln\w*\s+zgromadzeni\w*|\b(?:wza|zwz|nwz)\b)|(?:waln\w*\s+zgromadzeni\w*|\b(?:wza|zwz|nwz)\b)[\s\S]{0,180}?(?:(?:przelozon|przeniesion)\w*[^\n.]{0,60}?\b(?:na\s+dzien|na\s+termin|z\s+dnia)|(?:przeloz|przenies)\w*\s+(?:termin|dat)|zmienia\s+termin)|(?:change|reschedul|postpon)[^\n.]{0,160}(?:general\s+meeting|\b(?:agm|egm)\b)|(?:general\s+meeting|\b(?:agm|egm)\b)[^\n.]{0,160}(?:change|reschedul|postpon)/iu;
 
 const GENERAL_MEETING_CANCELLATION_NOTICE =
   /odwolani[ae]\s+(?:(?:zwyczajnego|nadzwyczajnego)\s+)?walnego\s+zgromadzenia|odwoluj\w*[\s\S]{0,180}?(?:waln\w*\s+zgromadzeni\w*|\b(?:wza|zwz|nwz)\b)|(?:waln\w*\s+zgromadzeni\w*|\b(?:wza|zwz|nwz)\b)[\s\S]{0,260}?(?:zostalo\s+odwolan\w*|nie\s+odbedzie\s+sie|informuje\s+o\s+odwolaniu\s+(?:tego\s+)?zgromadzenia)|(?:cancel|withdraw)[^\n.]{0,180}(?:general\s+meeting|\b(?:agm|egm)\b)|(?:general\s+meeting|\b(?:agm|egm)\b)[^\n.]{0,180}(?:cancel|withdraw)/iu;
@@ -1285,11 +1287,14 @@ const getGeneralMeetingIdentity = (
 const getSemanticMeetingDate = (text: string) => {
   const keywordPatterns = [
     /\b(?:odbed(?:zie|a)\s+sie|jest\s+zwolan\w*)\s+w\s+(?:poniedzialek|wtorek|srode|czwartek|piatek|sobote|niedziele)\s*/iu,
-    /\bzwol(?:uje|al|ano|ane|anego|anym|anie|aniu)(?![\p{L}\p{N}_])[\s\S]{0,180}?\b(?:na\s+dzien|w\s+dniu|dnia)(?![\p{L}\p{N}_])/iu,
+    /\b(?:zwol(?:uje|al|ano|ane|anego|anym|anie|aniu)|(?<!zamierza\s+)(?<!zamierzamy\s+)(?<!planuje\s+)zwolac)(?![\p{L}\p{N}_])[\s\S]{0,180}?\b(?:na\s+dzien|w\s+dniu|dnia)(?![\p{L}\p{N}_])/iu,
     // Issuer notices often shorten "na dzień 14 października" to "na 14 października".
-    /\bzwol(?:uje|al|ano|ane|anego|anym|anie|aniu)(?![\p{L}\p{N}_])[\s\S]{0,180}?\bna\s+(?:dzien\s+)?/iu,
+    /\b(?:zwol(?:uje|al|ano|ane|anego|anym|anie|aniu)|(?<!zamierza\s+)(?<!zamierzamy\s+)(?<!planuje\s+)zwolac)(?![\p{L}\p{N}_])[\s\S]{0,180}?\bna\s+(?:dzien\s+)?/iu,
     /(?:waln\w*\s+zgromadzeni\w*|\b(?:wza|zwz|nwz)\b)[\s\S]{0,160}?\b(?:odbed(?:zie|a)\s+sie|zwolan\w*)\b[\s\S]{0,80}?\b(?:w\s+dniu|dnia|na\s+dzien)(?![\p{L}\p{N}_])/iu,
     /(?:waln\w*\s+zgromadzeni\w*|\b(?:wza|zwz|nwz)\b)[\s\S]{0,100}?\bw\s+dniu\b/iu,
+    // "...Walne Zgromadzenie Spółki, które odbędzie się 12 maja 2026 roku o godzinie 12:00": the date follows
+    // directly, without "w dniu"/"dnia"/"na dzień". Last among the Polish cues, so it only decides when none did.
+    /(?:waln\w*\s+zgromadzeni\w*|\b(?:wza|zwz|nwz)\b)[\s\S]{0,160}?\bodbed(?:zie|a)\s+sie\s+/iu,
     /(?:general\s+meeting|\b(?:agm|egm)\b)[\s\S]{0,180}?\b(?:will\s+be\s+held|is\s+scheduled\s+to\s+take\s+place|shall\s+be\s+held|takes\s+place)\s+(?:on\s+)?/iu,
     /\b(?:will\s+be\s+held|is\s+scheduled\s+to\s+take\s+place|shall\s+be\s+held)\s+on\s+/iu,
   ];

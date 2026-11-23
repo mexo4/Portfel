@@ -8,7 +8,7 @@ for (const name of ["DATABASE_URL", "POSTGRES_CA_CERT_PATH", "POSTGRES_CA_CERT_B
   delete process.env[name];
 }
 
-const { createProviderCooldown } = await import("../src/lib/server/provider-cooldown.ts");
+const { createProviderCooldown, stooqCooldown } = await import("../src/lib/server/provider-cooldown.ts");
 const { safeFetchText } = await import("../src/lib/server/portfolio-history.ts");
 
 test("a provider is skipped for the cooldown after it was unreachable, then asked again", () => {
@@ -25,6 +25,45 @@ test("a provider is skipped for the cooldown after it was unreachable, then aske
 
   now += 2;
   assert.equal(cooldown.isCoolingDown(), false);
+});
+
+test("one slow reply does not switch a provider off when two failures are required", () => {
+  let now = 0;
+  const cooldown = createProviderCooldown({
+    cooldownMs: 600_000,
+    failuresToOpen: 2,
+    failureWindowMs: 60_000,
+    now: () => now,
+  });
+
+  cooldown.markUnavailable();
+  assert.equal(cooldown.isCoolingDown(), false, "a single failure is not enough");
+
+  // The second failure is too late to count with the first: still not open.
+  now = 61_000;
+  cooldown.markUnavailable();
+  assert.equal(cooldown.isCoolingDown(), false);
+
+  // Two inside a minute (a burst of requests to a host that is not answering) open it.
+  now = 70_000;
+  cooldown.markUnavailable();
+  assert.equal(cooldown.isCoolingDown(), true);
+
+  now = 70_000 + 600_001;
+  assert.equal(cooldown.isCoolingDown(), false);
+});
+
+test("Stooq is one shared cooldown that opens on a burst of two failures", () => {
+  stooqCooldown.reset();
+
+  stooqCooldown.markUnavailable();
+  assert.equal(stooqCooldown.isCoolingDown(), false);
+
+  stooqCooldown.markUnavailable();
+  assert.equal(stooqCooldown.isCoolingDown(), true);
+
+  stooqCooldown.reset();
+  assert.equal(stooqCooldown.isCoolingDown(), false);
 });
 
 test("a second failure extends the cooldown and reset clears it", () => {
@@ -119,10 +158,12 @@ test("Stooq history is a short, fail-fast second source behind a cooldown", asyn
   const source = await readSource("src/lib/server/portfolio-history.ts");
 
   assert.match(source, /const STOOQ_HISTORY_TIMEOUT_MS = 4_000;/);
-  assert.match(source, /createProviderCooldown\(\{ cooldownMs: 10 \* 60 \* 1_000 \}\)/);
+  // The one cooldown every Stooq caller shares, not a private copy.
+  assert.match(source, /import \{ stooqCooldown \} from "@\/lib\/server\/provider-cooldown";/);
+  assert.doesNotMatch(source, /createProviderCooldown\(/);
   assert.match(
     source,
-    /const fetchStooqCsv = async \(url: string\) => \{\n  if \(stooqHistoryCooldown\.isCoolingDown\(\)\) return null;\n\n  return safeFetchText\(url, STOOQ_HISTORY_TIMEOUT_MS, \(\) => stooqHistoryCooldown\.markUnavailable\(\)\);/
+    /const fetchStooqCsv = async \(url: string\) => \{\n  if \(stooqCooldown\.isCoolingDown\(\)\) return null;\n\n  return safeFetchText\(url, STOOQ_HISTORY_TIMEOUT_MS, \(\) => stooqCooldown\.markUnavailable\(\)\);/
   );
   // The only Stooq history request goes through the guarded call, not the 20 s default.
   assert.equal(source.split("await fetchStooqCsv(").length - 1, 1);

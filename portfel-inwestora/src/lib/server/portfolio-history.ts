@@ -4,7 +4,7 @@ import {
   CRYPTO_COINGECKO_ID_BY_SYMBOL,
 } from "@/lib/crypto-catalog";
 import { fetchBinanceDailyCloses } from "@/lib/server/binance-history";
-import { createProviderCooldown } from "@/lib/server/provider-cooldown";
+import { stooqCooldown } from "@/lib/server/provider-cooldown";
 import {
   migrateLegacyHistoryRangeCache,
   resolveHistoryRangeCache,
@@ -622,14 +622,14 @@ const fetchYahooStockHistory = async (
 // Stooq is only the second source here (Yahoo is asked first), and a healthy
 // answer for a year or two of daily closes is a few KB, so it gets a short
 // deadline. On production it does not answer at all, which made every symbol
-// Yahoo did not know cost ~31 s; see `provider-cooldown.ts`.
+// Yahoo did not know cost ~31 s; see `provider-cooldown.ts` (the one cooldown
+// the GPW quotes share).
 const STOOQ_HISTORY_TIMEOUT_MS = 4_000;
-const stooqHistoryCooldown = createProviderCooldown({ cooldownMs: 10 * 60 * 1_000 });
 
 const fetchStooqCsv = async (url: string) => {
-  if (stooqHistoryCooldown.isCoolingDown()) return null;
+  if (stooqCooldown.isCoolingDown()) return null;
 
-  return safeFetchText(url, STOOQ_HISTORY_TIMEOUT_MS, () => stooqHistoryCooldown.markUnavailable());
+  return safeFetchText(url, STOOQ_HISTORY_TIMEOUT_MS, () => stooqCooldown.markUnavailable());
 };
 
 const fetchStooqStockHistory = async (

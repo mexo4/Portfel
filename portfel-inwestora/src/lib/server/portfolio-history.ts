@@ -4,6 +4,7 @@ import {
   CRYPTO_COINGECKO_ID_BY_SYMBOL,
 } from "@/lib/crypto-catalog";
 import { fetchBinanceDailyCloses } from "@/lib/server/binance-history";
+import { createProviderCooldown } from "@/lib/server/provider-cooldown";
 import {
   migrateLegacyHistoryRangeCache,
   resolveHistoryRangeCache,
@@ -126,7 +127,8 @@ const NBP_CHUNK_MAX_DAYS = 360;
 const fetchTextWithNodeHttps = (
   url: string,
   headers: Record<string, string>,
-  timeoutMs: number
+  timeoutMs: number,
+  onUnreachable?: () => void
 ) =>
   new Promise<string | null>((resolve) => {
     const request = https.get(
@@ -155,15 +157,24 @@ const fetchTextWithNodeHttps = (
     );
 
     request.on("timeout", () => {
+      onUnreachable?.();
       request.destroy();
       resolve(null);
     });
     request.on("error", () => {
+      onUnreachable?.();
       resolve(null);
     });
   });
 
-const safeFetchText = async (url: string, timeoutMs = 20_000) => {
+// Exported for tests only: the fail-fast behaviour is checked against a real
+// local server that hangs.
+export const safeFetchText = async (
+  url: string,
+  timeoutMs = 20_000,
+  /** Called when the host did not answer at all (timeout or network error), not when it said "no". */
+  onUnreachable?: () => void
+) => {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
   const headers = {
@@ -191,7 +202,16 @@ const safeFetchText = async (url: string, timeoutMs = 20_000) => {
 
     return await fetchTextAfterStooqVerification(url, text, response, timeoutMs);
   } catch {
-    const text = await fetchTextWithNodeHttps(url, headers, timeoutMs);
+    if (controller.signal.aborted) {
+      // The request hung until its deadline. The host is not answering, and the
+      // same request over a second client (the retry below, meant for TLS
+      // problems) hangs just as long: that retry was the other 20 s of the
+      // ~31 s a missing symbol cost on production.
+      onUnreachable?.();
+      return null;
+    }
+
+    const text = await fetchTextWithNodeHttps(url, headers, timeoutMs, onUnreachable);
     return text?.includes("/__verify") ? null : text;
   } finally {
     clearTimeout(timeoutId);
@@ -599,6 +619,19 @@ const fetchYahooStockHistory = async (
   );
 };
 
+// Stooq is only the second source here (Yahoo is asked first), and a healthy
+// answer for a year or two of daily closes is a few KB, so it gets a short
+// deadline. On production it does not answer at all, which made every symbol
+// Yahoo did not know cost ~31 s; see `provider-cooldown.ts`.
+const STOOQ_HISTORY_TIMEOUT_MS = 4_000;
+const stooqHistoryCooldown = createProviderCooldown({ cooldownMs: 10 * 60 * 1_000 });
+
+const fetchStooqCsv = async (url: string) => {
+  if (stooqHistoryCooldown.isCoolingDown()) return null;
+
+  return safeFetchText(url, STOOQ_HISTORY_TIMEOUT_MS, () => stooqHistoryCooldown.markUnavailable());
+};
+
 const fetchStooqStockHistory = async (
   symbol: string,
   startDate: string,
@@ -626,7 +659,7 @@ const fetchStooqStockHistory = async (
       async (rangeStart, rangeEnd) => {
         const rangeStartCompact = rangeStart.replaceAll("-", "");
         const rangeEndCompact = rangeEnd.replaceAll("-", "");
-        const csv = await safeFetchText(
+        const csv = await fetchStooqCsv(
           `https://stooq.pl/q/d/l/?s=${encodeURIComponent(candidate)}&d1=${rangeStartCompact}&d2=${rangeEndCompact}&i=d`
         );
         return csv ? parseStooqHistory(csv) : [];

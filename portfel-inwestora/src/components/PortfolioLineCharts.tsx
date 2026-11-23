@@ -237,15 +237,53 @@ const isPortfolioBenchmarkDefinition = (
   );
 };
 
-const readAggregateBenchmarks = (): PortfolioBenchmarkDefinition[] => {
+const parseAggregateBenchmarks = (raw: string): PortfolioBenchmarkDefinition[] => {
   try {
-    const stored = JSON.parse(
-      window.localStorage.getItem(AGGREGATE_BENCHMARKS_STORAGE_KEY) ?? "[]"
-    ) as unknown;
+    const stored = JSON.parse(raw) as unknown;
     return Array.isArray(stored) ? stored.filter(isPortfolioBenchmarkDefinition) : [];
   } catch {
     return [];
   }
+};
+
+// The all-portfolios selection lives in this browser only. It is read as an
+// external store (like the range preset below) instead of being copied into
+// state from an effect, so the first client render already shows it.
+const AGGREGATE_BENCHMARKS_EVENT = "mexo:aggregate-benchmarks-change";
+// Last known selection as JSON. It is what the chart keeps showing when browser
+// storage cannot be read or written.
+let aggregateBenchmarksMemory = "[]";
+let aggregateBenchmarksNotPersisted = false;
+const subscribeAggregateBenchmarks = (listener: () => void) => {
+  window.addEventListener("storage", listener);
+  window.addEventListener(AGGREGATE_BENCHMARKS_EVENT, listener);
+  return () => {
+    window.removeEventListener("storage", listener);
+    window.removeEventListener(AGGREGATE_BENCHMARKS_EVENT, listener);
+  };
+};
+const getAggregateBenchmarksSnapshot = (): string => {
+  if (!aggregateBenchmarksNotPersisted) {
+    try {
+      const stored = window.localStorage.getItem(AGGREGATE_BENCHMARKS_STORAGE_KEY);
+      if (stored !== null) aggregateBenchmarksMemory = stored;
+    } catch {
+      // Keep the last known selection when browser storage is disabled.
+    }
+  }
+  return aggregateBenchmarksMemory;
+};
+const getAggregateBenchmarksServerSnapshot = (): string => "[]";
+const writeAggregateBenchmarks = (benchmarks: PortfolioBenchmarkDefinition[]) => {
+  aggregateBenchmarksMemory = JSON.stringify(benchmarks);
+  try {
+    window.localStorage.setItem(AGGREGATE_BENCHMARKS_STORAGE_KEY, aggregateBenchmarksMemory);
+    aggregateBenchmarksNotPersisted = false;
+  } catch {
+    // Keep the in-memory selection usable if browser storage is unavailable.
+    aggregateBenchmarksNotPersisted = true;
+  }
+  window.dispatchEvent(new Event(AGGREGATE_BENCHMARKS_EVENT));
 };
 const RANGE_PRESET_EVENT = "mexo:chart-range-change";
 let rangePresetMemory: RangePreset = "1M";
@@ -924,9 +962,20 @@ export default function PortfolioLineCharts({
     sourceSignature: string;
     values: PortfolioBenchmarkDefinition[];
   } | null>(null);
-  const selectedBenchmarks = selectedBenchmarkOverride?.sourceSignature === benchmarkPropSignature
-    ? selectedBenchmarkOverride.values
-    : benchmarks;
+  const aggregateBenchmarksRaw = useSyncExternalStore(
+    subscribeAggregateBenchmarks,
+    getAggregateBenchmarksSnapshot,
+    getAggregateBenchmarksServerSnapshot
+  );
+  const aggregateBenchmarks = useMemo(
+    () => parseAggregateBenchmarks(aggregateBenchmarksRaw),
+    [aggregateBenchmarksRaw]
+  );
+  const selectedBenchmarks = isAggregateHistory
+    ? aggregateBenchmarks
+    : selectedBenchmarkOverride?.sourceSignature === benchmarkPropSignature
+      ? selectedBenchmarkOverride.values
+      : benchmarks;
   const selectedBenchmarkIdsSignature = selectedBenchmarks.map((benchmark) => benchmark.id).join("|");
   const [visibleBenchmarkOverride, setVisibleBenchmarkOverride] = useState<{
     selectionSignature: string;
@@ -944,14 +993,6 @@ export default function PortfolioLineCharts({
     setVisibleBenchmarkOverride({ selectionSignature, ids: next });
   };
 
-  useEffect(() => {
-    if (!isAggregateHistory) return;
-
-    setSelectedBenchmarkOverride({
-      sourceSignature: benchmarkPropSignature,
-      values: readAggregateBenchmarks(),
-    });
-  }, [benchmarkPropSignature, isAggregateHistory]);
   const [benchmarkSearchMode, setBenchmarkSearchMode] = useState<AssetSearchMode>(
     DEFAULT_BENCHMARK_SEARCH_MODE
   );
@@ -1448,14 +1489,7 @@ export default function PortfolioLineCharts({
 
   const persistBenchmarkSelection = (nextBenchmarks: PortfolioBenchmarkDefinition[]) => {
     if (isAggregateHistory) {
-      try {
-        window.localStorage.setItem(
-          AGGREGATE_BENCHMARKS_STORAGE_KEY,
-          JSON.stringify(nextBenchmarks)
-        );
-      } catch {
-        // Keep the in-memory selection usable if browser storage is unavailable.
-      }
+      writeAggregateBenchmarks(nextBenchmarks);
       return;
     }
 

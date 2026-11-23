@@ -4,6 +4,12 @@ import {
   type EodhdEtfPriceCandidate,
 } from "@/lib/server/eodhd";
 import { getMarketCachePayload, setMarketCachePayload } from "@/lib/server/market-cache";
+import {
+  isPlausibleYahooSymbol,
+  isYahooSearchListing,
+  resolveYahooEtfListing,
+  searchYahooEtfListings,
+} from "@/lib/server/yahoo-backup";
 import { getGpwTickerCore, isGpwSymbol, normalizeSymbol } from "@/lib/ticker";
 import { TICKER_ALIAS_MAP, type TickerAliasResolution } from "@/lib/ticker-aliases";
 import { normalizeText, toCurrencyCode, uniqueBy } from "@/lib/utils";
@@ -674,9 +680,9 @@ const toEodhdFallbackEtfListing = (
 };
 
 /**
- * The local alias catalogue and EODHD are ETF-only complements to OpenFIGI.
- * They are never consulted by the global asset search and are only used when
- * a source can provide a concrete provider/listing identity.
+ * The local alias catalogue, EODHD and Yahoo are ETF-only complements to
+ * OpenFIGI. They are never consulted by the global asset search and are only
+ * used when a source can provide a concrete provider/listing identity.
  */
 const getEtfFallbackListings = async (
   query: string,
@@ -709,7 +715,21 @@ const getEtfFallbackListings = async (
           .filter((listing): listing is EtfListing => Boolean(listing))
       : [];
 
-  return uniqueBy([...catalogListings, ...eodhdListings], (listing) => listing.listingId);
+  // Yahoo is the very last resort: OpenFIGI (no hit, or an error such as an
+  // exhausted limit), the catalogue and EODHD all came back empty. Its listings
+  // have no FIGI and no confirmed currency; `resolveEtfListingPriceSource`
+  // settles both when the user picks one.
+  const yahooListings =
+    primaryListings.length === 0 &&
+    catalogListings.length === 0 &&
+    eodhdListings.length === 0
+      ? await searchYahooEtfListings(query)
+      : [];
+
+  return uniqueBy(
+    [...catalogListings, ...eodhdListings, ...yahooListings],
+    (listing) => listing.listingId
+  );
 };
 
 const localSearchCache = new Map<string, { groups: EtfSearchGroup[]; expiresAt: number }>();
@@ -950,13 +970,23 @@ const hasVerifiedEtfProviderMapping = (listing: EtfListing) => {
 
 /**
  * Resolves an EODHD price source only for an unambiguous, venue-aware match.
- * A selected ETF without such a match remains a valid historical transaction.
+ * When EODHD cannot (not listed, ambiguous, or its limit is used up), Yahoo is
+ * asked with the same strictness. A selected ETF without any match remains a
+ * valid historical transaction.
  */
 export const resolveEtfListingPriceSource = async (
   listing: EtfListing,
   findCandidates: (query: string) => Promise<EodhdEtfPriceCandidate[]> =
-    searchEodhdEtfPriceCandidates
+    searchEodhdEtfPriceCandidates,
+  resolveViaYahoo: (listing: EtfListing) => Promise<EtfListing | null> =
+    resolveYahooEtfListing
 ): Promise<EtfListing> => {
+  // A listing discovered through Yahoo search has no other identity than its
+  // Yahoo symbol, so Yahoo itself has to confirm it and supply its currency.
+  if (isYahooSearchListing(listing)) {
+    return (await resolveViaYahoo(listing)) ?? unavailablePriceListing(listing);
+  }
+
   // A controlled ETF-catalog fallback can already provide an exact,
   // provider-specific price symbol (for example a GPW `.WA` listing).  Do not
   // erase that identity merely because EODHD cannot independently resolve it.
@@ -972,7 +1002,10 @@ export const resolveEtfListingPriceSource = async (
     };
   }
 
-  const candidates = await findCandidates(listing.symbol);
+  // An EODHD failure (limit, cache outage) must not stop the Yahoo fallback.
+  const candidates = await findCandidates(listing.symbol).catch(
+    (): EodhdEtfPriceCandidate[] => []
+  );
   const rankedCandidates = uniqueBy(candidates, (candidate) => candidate.providerId)
     .flatMap((candidate) => {
       const ranked = rankPriceCandidate(listing, candidate);
@@ -988,7 +1021,7 @@ export const resolveEtfListingPriceSource = async (
     best !== undefined && rankedCandidates.filter((candidate) => candidate.score === best.score).length > 1;
 
   if (!best || hasTiedBestCandidate) {
-    return unavailablePriceListing(listing);
+    return (await resolveViaYahoo(listing)) ?? unavailablePriceListing(listing);
   }
 
   return {
@@ -1037,11 +1070,22 @@ export const sanitiseEtfListing = (value: unknown): EtfListing | null => {
   const listingPriceSymbol = text(listing.providerPriceSymbol).slice(0, 160) || undefined;
   const identityPriceSymbol = text(identity.providerPriceSymbol).slice(0, 160) || undefined;
   const isin = text(listing.isin).replace(/\s+/g, "").toUpperCase().slice(0, 32) || undefined;
+  // A listing found through Yahoo search has a venue-qualified Yahoo symbol but
+  // no FIGI or ISIN. It is kept only so the resolver can confirm that symbol
+  // with a live Yahoo quote; nothing is trusted until that quote answers.
+  const isUnconfirmedYahooListing =
+    isYahooSearchListing({
+      listingId: normaliseFigi(text(listing.listingId)),
+      provider,
+      providerId,
+    }) &&
+    Boolean(exchangeCode) &&
+    isPlausibleYahooSymbol(normalizeSymbol(providerId ?? ""));
   const hasConsistentProviderMapping =
     Boolean(providerId) &&
     normalizeSymbol(providerId ?? "") === normalizeSymbol(listingPriceSymbol ?? "") &&
     normalizeSymbol(providerId ?? "") === normalizeSymbol(identityPriceSymbol ?? "") &&
-    Boolean(figi || (isin && (exchangeCode || mic)));
+    Boolean(figi || (isin && (exchangeCode || mic)) || isUnconfirmedYahooListing);
   // The resolver route receives a browser payload, so retain a price source
   // only when all three copies of the provider symbol agree and the selected
   // ETF has a stable FIGI or ISIN+venue identity. This keeps catalog-proven

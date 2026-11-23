@@ -508,11 +508,28 @@ test("retains an OpenFIGI failure when no ETF-specific fallback can identify a l
       throw new OpenFigiSearchError("network");
     },
   };
+  const originalFetch = globalThis.fetch;
+  const requestedHosts = [];
 
-  await assert.rejects(
-    () => searchEtfInstruments(`NOETF${Date.now()}`, unavailableProvider),
-    (error) => error instanceof OpenFigiSearchError && error.code === "network"
-  );
+  // Yahoo is the last ETF fallback, so it is consulted too. Here it knows no
+  // ETF either, which keeps the suite offline and the outcome deterministic.
+  globalThis.fetch = async (url) => {
+    requestedHosts.push(new URL(String(url)).hostname);
+    return new Response(JSON.stringify({ quotes: [] }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  };
+
+  try {
+    await assert.rejects(
+      () => searchEtfInstruments(`NOETF${Date.now()}`, unavailableProvider),
+      (error) => error instanceof OpenFigiSearchError && error.code === "network"
+    );
+    assert.ok(requestedHosts.includes("query2.finance.yahoo.com"));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("uses a verified existing ETF catalogue identity when OpenFIGI truncates a GPW ticker", async () => {
@@ -662,22 +679,27 @@ test("resolves an ETF price only with exact ticker and validated venue, never a 
   assert.equal(resolved.priceStatus, "available");
   assert.equal(resolved.providerPriceSymbol, "VWCE.XETRA");
 
-  const ambiguous = await resolveEtfListingPriceSource(selected, async () => [
-    {
-      symbol: "VWCE.DE",
-      providerId: "VWCE.XETRA",
-      name: "Vanguard All-World ETF",
-      exchange: "XETRA",
-      marketCurrency: "EUR",
-    },
-    {
-      symbol: "VWCE.DE2",
-      providerId: "VWCE.XETRA-ALT",
-      name: "Vanguard All-World ETF",
-      exchange: "XETRA",
-      marketCurrency: "EUR",
-    },
-  ]);
+  // The third argument is the Yahoo fallback; here Yahoo cannot settle it either.
+  const ambiguous = await resolveEtfListingPriceSource(
+    selected,
+    async () => [
+      {
+        symbol: "VWCE.DE",
+        providerId: "VWCE.XETRA",
+        name: "Vanguard All-World ETF",
+        exchange: "XETRA",
+        marketCurrency: "EUR",
+      },
+      {
+        symbol: "VWCE.DE2",
+        providerId: "VWCE.XETRA-ALT",
+        name: "Vanguard All-World ETF",
+        exchange: "XETRA",
+        marketCurrency: "EUR",
+      },
+    ],
+    async () => null
+  );
 
   assert.equal(ambiguous.priceStatus, "unavailable");
   assert.equal(ambiguous.providerPriceSymbol, undefined);

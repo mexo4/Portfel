@@ -8,6 +8,10 @@ import type { PortfolioHistoryProgressUpdate } from "@/lib/portfolio-history-pro
 import { fetchFxRatesServer } from "@/lib/server/market-data";
 import { fetchTreasuryBondQuoteSeriesServer } from "@/lib/server/treasury-bonds";
 import { normalizeYahooMoneyUnit } from "@/lib/server/yahoo";
+import {
+  fetchYahooCryptoHistoryPoints,
+  toYahooCryptoSymbol,
+} from "@/lib/server/yahoo-backup";
 import { isGpwTradingDay, shiftCalendarDate } from "@/lib/gpw-market-calendar";
 import { isXetraTradingDay } from "@/lib/market-session-calendar";
 import { FALLBACK_FX_RATES } from "@/lib/constants";
@@ -808,6 +812,40 @@ const fetchCoinGeckoHistory = async (
   );
 };
 
+/**
+ * Backup for `fetchCoinGeckoHistory`: Yahoo's `<COIN>-USD` daily closes. It
+ * keeps its own cache key family, so a backup series is never mixed into a
+ * CoinGecko range, and an empty answer is cached briefly like any other.
+ */
+const fetchYahooCryptoHistory = async (
+  symbol: string,
+  providerId: string | undefined,
+  startDate: string,
+  endDate: string
+) => {
+  const yahooSymbol = toYahooCryptoSymbol(symbol);
+
+  if (!yahooSymbol) {
+    return [];
+  }
+
+  return getCachedOrFetchHistoryRange<PricePoint>(
+    // Yahoo's coin is confirmed against the saved CoinGecko id (tickers
+    // collide), so that id is part of the key: another coin with the same
+    // ticker must not read this series from the cache.
+    `portfolio-history:v2:yahoo-crypto:${yahooSymbol}:${(providerId ?? "none").toLowerCase()}:${startDate}`,
+    startDate,
+    endDate,
+    (rangeStart, rangeEnd) =>
+      fetchYahooCryptoHistoryPoints({
+        symbol,
+        providerId,
+        startDate: rangeStart,
+        endDate: rangeEnd,
+      })
+  );
+};
+
 const getHistoryLookupSymbols = ({
   symbol,
   kind,
@@ -954,29 +992,38 @@ const fetchInstrumentHistory = async ({
         resolvedSymbol,
         resolvedProviderId
       );
+      const isInRange = (point: PricePoint) =>
+        point.date >= startDate && point.date <= endDate;
+      const coinGeckoPoints = coinGeckoProviderId
+        ? (await fetchCoinGeckoHistory(coinGeckoProviderId, startDate, endDate)).filter(
+            isInRange
+          )
+        : [];
+      // No CoinGecko id for this coin, or CoinGecko came back empty (outage,
+      // exhausted limit, or a range its free plan refuses). Yahoo is asked only
+      // then, never in parallel, so it costs nothing while CoinGecko works.
+      const filteredPoints =
+        coinGeckoPoints.length > 0
+          ? coinGeckoPoints
+          : (
+              await fetchYahooCryptoHistory(
+                resolvedSymbol,
+                coinGeckoProviderId ?? resolvedProviderId,
+                startDate,
+                endDate
+              )
+            ).filter(isInRange);
 
-      if (!coinGeckoProviderId) {
-        return {
-          points: [],
-          warning: `Krypto ${symbol} nie ma providerId CoinGecko; uzyto fallbacku z danych zakupu.`,
-        };
+      if (filteredPoints.length > 0) {
+        return { points: filteredPoints };
       }
 
-      const points = await fetchCoinGeckoHistory(
-        coinGeckoProviderId,
-        startDate,
-        endDate
-      );
-      const filteredPoints = points.filter(
-        (point) => point.date >= startDate && point.date <= endDate
-      );
-
-      return filteredPoints.length > 0
-        ? { points: filteredPoints }
-        : {
-            points: [],
-            warning: `Nie udalo sie pobrac pelnej historii cen dla krypto ${symbol}; uzyto fallbacku z danych zakupu.`,
-          };
+      return {
+        points: [],
+        warning: coinGeckoProviderId
+          ? `Nie udalo sie pobrac pelnej historii cen dla krypto ${symbol}; uzyto fallbacku z danych zakupu.`
+          : `Krypto ${symbol} nie ma providerId CoinGecko; uzyto fallbacku z danych zakupu.`,
+      };
     }
 
     return {

@@ -1,3 +1,4 @@
+import { fetchYahooBenchmarkPoints } from "@/lib/server/yahoo-backup";
 import { round } from "@/lib/utils";
 import type {
   BenchmarkComparison,
@@ -18,6 +19,11 @@ type BenchmarkDefinition = {
   label: string;
   source: "stooq" | "coingecko";
   symbol: string;
+  /**
+   * The same benchmark at Yahoo, used when the primary source returns nothing.
+   * Left out when Yahoo has no usable daily history for it.
+   */
+  yahooSymbol?: string;
 };
 
 type BenchmarkValueHistorySeries = {
@@ -35,26 +41,33 @@ const BENCHMARKS: BenchmarkDefinition[] = [
     label: "S&P 500",
     source: "stooq",
     symbol: "spy.us",
+    yahooSymbol: "SPY",
   },
   {
     id: "nasdaq100",
     label: "Nasdaq 100",
     source: "stooq",
     symbol: "qqq.us",
+    yahooSymbol: "QQQ",
   },
   {
     id: "wig20",
     label: "WIG20",
     source: "stooq",
     symbol: "wig20",
+    // Yahoo's WIG20.WA returns only the current day, no daily history, so it
+    // cannot back this benchmark. When Stooq has nothing, WIG20 is omitted.
   },
   {
     id: "bitcoin",
     label: "Bitcoin",
     source: "coingecko",
     symbol: "bitcoin",
+    yahooSymbol: "BTC-USD",
   },
 ];
+
+const BENCHMARK_HISTORY_START_DATE = "2000-01-01";
 
 const formatDateOnly = (value: Date) => value.toISOString().slice(0, 10);
 
@@ -138,11 +151,23 @@ const fetchCoinGeckoBenchmarkSeries = async (coinId: string): Promise<PricePoint
 };
 
 const fetchBenchmarkSeries = async (benchmark: BenchmarkDefinition) => {
-  if (benchmark.source === "coingecko") {
-    return fetchCoinGeckoBenchmarkSeries(benchmark.symbol);
+  // A failed request counts as "no data", like an empty answer: Stooq's daily
+  // call limit and CoinGecko's rate limit both end up here.
+  const primarySeries = await (
+    benchmark.source === "coingecko"
+      ? fetchCoinGeckoBenchmarkSeries(benchmark.symbol)
+      : fetchStooqBenchmarkSeries(benchmark.symbol)
+  ).catch((): PricePoint[] => []);
+
+  if (primarySeries.length > 0 || !benchmark.yahooSymbol) {
+    return primarySeries;
   }
 
-  return fetchStooqBenchmarkSeries(benchmark.symbol);
+  return fetchYahooBenchmarkPoints({
+    yahooSymbol: benchmark.yahooSymbol,
+    startDate: BENCHMARK_HISTORY_START_DATE,
+    endDate: formatDateOnly(new Date()),
+  });
 };
 
 const findPointForDate = (series: PricePoint[], targetDate: string) => {

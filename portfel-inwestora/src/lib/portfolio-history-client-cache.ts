@@ -1,5 +1,6 @@
 import { fetchPortfolioHistory } from "@/lib/api";
 import type { PortfolioHistoryProgress } from "@/lib/portfolio-history-progress";
+import { PORTFOLIO_HISTORY_RESPONSE_TTL_MS } from "@/lib/server/portfolio-history-cache-policy";
 import type { PortfolioHistoryResponse } from "@/types/portfolio";
 
 export type PortfolioHistoryRequest = Omit<Parameters<typeof fetchPortfolioHistory>[0], "signal">;
@@ -9,7 +10,8 @@ export type PortfolioHistoryRequestDescriptor = {
   payload: PortfolioHistoryRequest;
 };
 
-const HISTORY_REQUEST_CACHE_TTL_MS = 30 * 60 * 1_000;
+// Same window as the server's stored copy: a reload inside it needs no API call.
+const HISTORY_REQUEST_CACHE_TTL_MS = PORTFOLIO_HISTORY_RESPONSE_TTL_MS;
 const HISTORY_REQUEST_CACHE_MAX_ENTRIES = 8;
 const SESSION_CACHE_STORAGE_KEY = "mexo.portfolio-history.v1";
 const SESSION_CACHE_MAX_CHARS = 1_500_000;
@@ -21,6 +23,19 @@ const historyProgressListeners = new Map<
 const historyProgressAbortControllers = new Set<AbortController>();
 
 type PersistentCacheStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
+
+/** SHA-256 of a request key, or `null` where Web Crypto is unavailable (then nothing is persisted). */
+const hashRequestKey = async (key: string): Promise<string | null> => {
+  try {
+    const subtle = globalThis.crypto?.subtle;
+    if (!subtle) return null;
+
+    const digest = await subtle.digest("SHA-256", new TextEncoder().encode(key));
+    return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+  } catch {
+    return null;
+  }
+};
 
 const getBrowserSessionStorage = (): PersistentCacheStorage | undefined => {
   if (typeof window === "undefined") return undefined;
@@ -39,6 +54,10 @@ const withoutLiveQuoteFields = <T extends PortfolioHistoryRequest["assets"][numb
   delete historyAsset.latestPriceFetchedAt;
   delete historyAsset.previousClose;
   delete historyAsset.lastUpdatedAt;
+  // The quote refresh rewrites this to "AUTOMATIC" on every asset, while the
+  // stored copy has none, so a page load built two different request keys (and
+  // a reload never matched the previous one). The history never reads it.
+  delete historyAsset.priceSource;
   return historyAsset;
 };
 
@@ -76,6 +95,10 @@ export const createPortfolioHistoryRequestDescriptor = ({
     })),
   };
 
+  // After an explicit refresh the server must build again; the first load of a
+  // page (revision 0) may be answered from a stored history.
+  if (refreshRevision > 0) normalizedPayload.forceRefresh = true;
+
   return {
     key: JSON.stringify({ userId, refreshRevision, request: normalizedPayload }),
     payload: normalizedPayload,
@@ -109,7 +132,9 @@ export const createPortfolioHistoryRequestCache = <TResponse>({
   const entries = new Map<string, { promise: Promise<TResponse>; expiresAt: number | null }>();
   const getStorage = () => storage === null ? undefined : storage ?? getBrowserSessionStorage();
 
-  const readPersistent = (key: string): { response: TResponse; expiresAt: number } | undefined => {
+  const readPersistent = async (
+    key: string
+  ): Promise<{ response: TResponse; expiresAt: number } | undefined> => {
     const sessionStorage = getStorage();
     if (!sessionStorage) return undefined;
 
@@ -117,20 +142,23 @@ export const createPortfolioHistoryRequestCache = <TResponse>({
       const serialized = sessionStorage.getItem(SESSION_CACHE_STORAGE_KEY);
       if (!serialized) return undefined;
       const record = JSON.parse(serialized) as {
-        key?: unknown;
+        keyHash?: unknown;
         expiresAt?: unknown;
         response?: TResponse;
       };
       if (
-        typeof record.key !== "string" ||
+        typeof record.keyHash !== "string" ||
         typeof record.expiresAt !== "number" ||
         record.expiresAt <= now() ||
-        record.key !== key ||
         record.response === undefined
       ) {
+        // A record from the older format (it carried the whole key), or an expired one.
         sessionStorage.removeItem(SESSION_CACHE_STORAGE_KEY);
         return undefined;
       }
+      // A different request (another portfolio scope) is simply not this one; its
+      // record stays until a new response replaces it.
+      if (record.keyHash !== (await hashRequestKey(key))) return undefined;
       return { response: record.response, expiresAt: record.expiresAt };
     } catch {
       try {
@@ -142,12 +170,17 @@ export const createPortfolioHistoryRequestCache = <TResponse>({
     }
   };
 
-  const writePersistent = (key: string, response: TResponse, expiresAt: number) => {
+  const writePersistent = async (key: string, response: TResponse, expiresAt: number) => {
     const sessionStorage = getStorage();
     if (!sessionStorage) return;
 
     try {
-      const serialized = JSON.stringify({ key, expiresAt, response });
+      const keyHash = await hashRequestKey(key);
+      // The key is the whole request (every asset and operation), which alone
+      // took 1.26 MB of the 1.5 MB allowed and would have stopped the record
+      // being saved at all once the portfolio grew. Only its hash is kept.
+      if (!keyHash) return;
+      const serialized = JSON.stringify({ keyHash, expiresAt, response });
       if (serialized.length > SESSION_CACHE_MAX_CHARS) return;
       sessionStorage.setItem(SESSION_CACHE_STORAGE_KEY, serialized);
     } catch {
@@ -179,7 +212,7 @@ export const createPortfolioHistoryRequestCache = <TResponse>({
       let responseExpiresAt: number | null = null;
       const entry: { promise: Promise<TResponse>; expiresAt: number | null } = {
         promise: Promise.resolve().then(async () => {
-          const persistentResponse = readPersistent(key);
+          const persistentResponse = await readPersistent(key);
           if (persistentResponse) {
             responseExpiresAt = persistentResponse.expiresAt;
             return persistentResponse.response;
@@ -187,7 +220,7 @@ export const createPortfolioHistoryRequestCache = <TResponse>({
 
           const response = await load();
           responseExpiresAt = now() + ttlMs;
-          writePersistent(key, response, responseExpiresAt);
+          await writePersistent(key, response, responseExpiresAt);
           return response;
         }),
         expiresAt: null,

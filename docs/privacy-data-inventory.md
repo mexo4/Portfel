@@ -18,6 +18,7 @@ This inventory describes tables defined by `src/lib/server/db.ts`. Recheck the l
 | `core_sub_portfolios`, `core_accounts`, `core_instruments`, `core_operations`, `core_tags`, `core_tag_assignments`, `core_benchmarks` | portfolio children cascade from `core_portfolios`; account/asset/tag links also cascade or SET NULL as declared | Included with raw stored values and IDs |
 | `portfolio_asset_quotes` | `portfolio_id -> core_portfolios ON DELETE CASCADE`; stores user manual overrides and provider quote snapshots | Only manual price, listing currency, asset/portfolio IDs and timestamps are included; provider data/fallback omitted |
 | `portfolio_engine_cache` | indexed by `portfolio_id` but **no FK** | Derived cache excluded and explicitly removed before account deletion |
+| `user_portfolio_history_cache` | `user_id -> users ON DELETE CASCADE`; the calculated portfolio history (values, returns, benchmark series) kept for 60 minutes so a page reload does not rebuild it; at most 8 rows per user, older rows pruned on every write | Derived cache excluded (reconstructible); removed with the account by the cascade. Deliberately not in the shared `market_cache` |
 
 ## Shared/non-user data (must not be removed with an account)
 

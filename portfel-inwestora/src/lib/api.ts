@@ -1088,6 +1088,7 @@ export const fetchPortfolioHistory = async ({
   portfolioScopes,
   presentationCurrency,
   progressId,
+  forceRefresh,
   signal,
 }: {
   assets: PortfolioAsset[];
@@ -1100,11 +1101,13 @@ export const fetchPortfolioHistory = async ({
   portfolioScopes?: PortfolioHistoryScope[];
   presentationCurrency?: CurrencyCode;
   progressId?: string;
+  /** An explicit "refresh data": the server builds again instead of reusing a stored history. */
+  forceRefresh?: boolean;
   signal?: AbortSignal;
 }) => {
   const body = portfolioScopes !== undefined
-    ? { portfolioScopeIds: portfolioScopes.map(({ portfolioId }) => portfolioId), benchmarks, presentationCurrency, progressId }
-    : { assets, sales, realizedAdjustments, operations, accounts, accountType, benchmarks, presentationCurrency, progressId };
+    ? { portfolioScopeIds: portfolioScopes.map(({ portfolioId }) => portfolioId), benchmarks, presentationCurrency, progressId, forceRefresh }
+    : { assets, sales, realizedAdjustments, operations, accounts, accountType, benchmarks, presentationCurrency, progressId, forceRefresh };
   return requestJson<PortfolioHistoryResponse>("/api/portfolio-history", {
     method: "POST",
     signal,

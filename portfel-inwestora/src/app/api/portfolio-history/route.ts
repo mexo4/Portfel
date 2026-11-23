@@ -7,6 +7,10 @@ import {
   getCachedPortfolioHistoryResponse,
   setCachedPortfolioHistoryResponse,
 } from "@/lib/server/portfolio-history-response-cache";
+import {
+  readStoredPortfolioHistory,
+  storePortfolioHistory,
+} from "@/lib/server/portfolio-history-store";
 import { getSortedPortfolioRealizedAdjustments } from "@/lib/portfolio-state";
 import { ensurePortfolioCoreModel } from "@/lib/operation-engine";
 import { getAuthorizedPortfolioScopeIds } from "@/lib/portfolio-selection";
@@ -45,25 +49,93 @@ const buildHistoryOnce = (
   return pending;
 };
 
-const historyBuildKey = (userId: string, revision: number, input: unknown) =>
-  `${userId}:${revision}:${createHash("sha256").update(JSON.stringify(input)).digest("hex")}`;
+type HistoryCacheStatus = "hit" | "stored" | "miss" | "shared";
+
+/**
+ * `key` identifies a calculation in memory; `storeKey` is the same identity
+ * without the user, because the stored copy has its own user column.
+ */
+const historyBuildKeys = (userId: string, revision: number, input: unknown) => {
+  const storeKey = `${revision}:${createHash("sha256").update(JSON.stringify(input)).digest("hex")}`;
+  return { key: `${userId}:${storeKey}`, storeKey };
+};
+
+// Fields a quote refresh rewrites and the history calculation never reads. The
+// browser rewrites `priceSource` to "AUTOMATIC" after its first quote refresh
+// (the database copy has none), which gave every page load two different keys.
+const HISTORY_IRRELEVANT_ASSET_FIELDS = [
+  "priceSource",
+  "latestPrice",
+  "latestPriceDate",
+  "latestPriceMarketTimestamp",
+  "latestPriceFetchedAt",
+  "previousClose",
+  "lastUpdatedAt",
+] as const;
+
+const withoutHistoryIrrelevantFields = <T extends object>(asset: T): T => {
+  const copy = { ...asset } as Record<string, unknown>;
+
+  for (const field of HISTORY_IRRELEVANT_ASSET_FIELDS) {
+    delete copy[field];
+  }
+
+  return copy as T;
+};
+
+const logHistoryStoreFailure = (error: unknown) => {
+  console.warn(
+    "[portfolio-history] stored history unavailable:",
+    error instanceof Error ? error.message : "unknown error"
+  );
+};
 
 const getOrBuildHistoryResponse = async (
-  key: string,
+  { userId, key, storeKey, forceRefresh }: {
+    userId: string;
+    key: string;
+    storeKey: string;
+    /** A manual refresh must not be answered from either copy. */
+    forceRefresh: boolean;
+  },
   build: () => Promise<PortfolioHistoryResponse>
 ) => {
-  const cached = getCachedPortfolioHistoryResponse(key);
-  if (cached) return { response: cached, cacheStatus: "hit" as const };
+  if (!forceRefresh) {
+    const cached = getCachedPortfolioHistoryResponse(key);
+    if (cached) return { response: cached, cacheStatus: "hit" as HistoryCacheStatus };
+  }
 
   const alreadyBuilding = historyBuildsInFlight.has(key);
+  let fromStore = false;
   const response = await buildHistoryOnce(key, async () => {
-    const cachedAfterRace = getCachedPortfolioHistoryResponse(key);
-    if (cachedAfterRace) return cachedAfterRace;
+    if (!forceRefresh) {
+      const cachedAfterRace = getCachedPortfolioHistoryResponse(key);
+      if (cachedAfterRace) return cachedAfterRace;
+
+      // The in-memory copy is gone after a restart or on another process; the
+      // stored one is not. A broken database is just a miss.
+      const stored = await readStoredPortfolioHistory(userId, storeKey).catch((error) => {
+        logHistoryStoreFailure(error);
+        return null;
+      });
+      if (stored) {
+        fromStore = true;
+        setCachedPortfolioHistoryResponse(key, stored);
+        return stored;
+      }
+    }
+
     const built = await build();
     setCachedPortfolioHistoryResponse(key, built);
+    void storePortfolioHistory(userId, storeKey, built).catch(logHistoryStoreFailure);
     return built;
   });
-  return { response, cacheStatus: alreadyBuilding ? "shared" as const : "miss" as const };
+  const cacheStatus: HistoryCacheStatus = fromStore
+    ? "stored"
+    : alreadyBuilding
+      ? "shared"
+      : "miss";
+  return { response, cacheStatus };
 };
 
 const currentHistoryDate = () => new Date().toISOString().slice(0, 10);
@@ -75,7 +147,7 @@ const respondWithTiming = (
   authMs: number,
   buildMs: number,
   scopeCount: number,
-  cacheStatus: "hit" | "miss" | "shared" = "miss"
+  cacheStatus: HistoryCacheStatus = "miss"
 ) => {
   const response = NextResponse.json(body, { status });
   response.headers.set("Cache-Control", "private, no-store");
@@ -138,8 +210,11 @@ export async function POST(request: Request) {
       portfolioScopeIds?: string[];
       presentationCurrency?: string;
       progressId?: string;
+      /** Set by an explicit "refresh data": build again instead of reusing a copy. */
+      forceRefresh?: boolean;
     };
     progressId = typeof payload.progressId === "string" ? payload.progressId : undefined;
+    const forceRefresh = payload.forceRefresh === true;
     const presentationCurrency = toCurrencyCode(payload.presentationCurrency, "PLN");
     const benchmarks = Array.isArray(payload.benchmarks) ? payload.benchmarks : [];
     const rawScopes = Array.isArray(payload.portfolioScopes) ? payload.portfolioScopes : [];
@@ -185,7 +260,7 @@ export async function POST(request: Request) {
         }];
       });
       const historyStartedAt = performance.now();
-      const historyKey = historyBuildKey(accountData.user.id, accountData.portfolioRevision, {
+      const { key: historyKey, storeKey } = historyBuildKeys(accountData.user.id, accountData.portfolioRevision, {
         ids: [...authorizedIds].sort(),
         benchmarks,
         presentationCurrency,
@@ -199,7 +274,7 @@ export async function POST(request: Request) {
         historyBuildsInFlight.has(historyKey),
       );
       const { response: history, cacheStatus } = await getOrBuildHistoryResponse(
-        historyKey,
+        { userId: accountData.user.id, key: historyKey, storeKey, forceRefresh },
         () => buildAggregatePortfolioHistory({
           portfolioScopes,
           benchmarks,
@@ -238,8 +313,8 @@ export async function POST(request: Request) {
     const operations = Array.isArray(payload.operations) ? payload.operations : [];
     const accounts = Array.isArray(payload.accounts) ? payload.accounts : [];
     const historyStartedAt = performance.now();
-    const historyKey = historyBuildKey(accountData.user.id, accountData.portfolioRevision, {
-      assets: portfolioState.assets,
+    const { key: historyKey, storeKey } = historyBuildKeys(accountData.user.id, accountData.portfolioRevision, {
+      assets: portfolioState.assets.map(withoutHistoryIrrelevantFields),
       sales: portfolioState.sales,
       realizedAdjustments: effectiveRealizedAdjustments,
       operations,
@@ -256,7 +331,7 @@ export async function POST(request: Request) {
       historyBuildsInFlight.has(historyKey),
     );
     const { response: history, cacheStatus } = await getOrBuildHistoryResponse(
-      historyKey,
+      { userId: accountData.user.id, key: historyKey, storeKey, forceRefresh },
       () => buildPortfolioHistory({
         assets: portfolioState.assets,
         sales: portfolioState.sales,

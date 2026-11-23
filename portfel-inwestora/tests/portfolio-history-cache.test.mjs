@@ -7,6 +7,7 @@ import {
 } from "../src/lib/server/portfolio-history-response-cache.ts";
 import {
   EMPTY_HISTORY_CACHE_TTL_MS,
+  PORTFOLIO_HISTORY_RESPONSE_TTL_MS,
   isReusableHistoryCacheEntry,
 } from "../src/lib/server/portfolio-history-cache-policy.ts";
 
@@ -28,13 +29,23 @@ test("empty provider histories are cached briefly to avoid repeating slow unsupp
   assert.equal(isReusableHistoryCacheEntry([], "invalid", now), false);
 });
 
-test("calculated history response cache reuses fresh output and expires it", () => {
+test("calculated history response cache reuses fresh output for an hour and then expires it", () => {
   clearPortfolioHistoryResponseCache();
   const cached = history(1_234);
   setCachedPortfolioHistoryResponse("user-a:revision-4:scope-1:PLN", cached, 1_000);
 
+  assert.equal(PORTFOLIO_HISTORY_RESPONSE_TTL_MS, 60 * 60 * 1_000);
   assert.equal(getCachedPortfolioHistoryResponse("user-a:revision-4:scope-1:PLN", 2_000), cached);
-  assert.equal(getCachedPortfolioHistoryResponse("user-a:revision-4:scope-1:PLN", 181_001), undefined);
+  // Just inside the hour, a reload is still answered from the cache...
+  assert.equal(
+    getCachedPortfolioHistoryResponse("user-a:revision-4:scope-1:PLN", 1_000 + PORTFOLIO_HISTORY_RESPONSE_TTL_MS - 1),
+    cached
+  );
+  // ...and just after it, it is built again.
+  assert.equal(
+    getCachedPortfolioHistoryResponse("user-a:revision-4:scope-1:PLN", 1_000 + PORTFOLIO_HISTORY_RESPONSE_TTL_MS + 1),
+    undefined
+  );
 });
 
 test("history responses remain isolated by user, revision, scope, and presentation currency key", () => {

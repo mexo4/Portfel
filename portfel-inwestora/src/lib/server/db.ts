@@ -135,6 +135,19 @@ const schemaStatements = [
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     )
   `,
+  // Calculated portfolio history, kept so a reload within the hour does not
+  // rebuild it. Derived from the user's portfolio, so it belongs to the user:
+  // it goes with the account (cascade) and is not exported (reconstructible).
+  `
+    CREATE TABLE IF NOT EXISTS user_portfolio_history_cache (
+      user_id TEXT NOT NULL,
+      cache_key TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (user_id, cache_key),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+  `,
   `
     CREATE TABLE IF NOT EXISTS auth_accounts (
       id TEXT PRIMARY KEY,

@@ -270,6 +270,15 @@ export type AssetQuote = {
   priceScale?: number;
   previousClose?: number;
   bondMeta?: TreasuryBondSeries;
+  /**
+   * Set when a backup provider supplied this price because the instrument's own
+   * provider had no data or had hit its limit. The quote then describes the
+   * price only: `provider`, `providerId`, `marketCurrency`, `priceScale` and
+   * `symbol` repeat the stored mapping that was requested, and `name` and
+   * `instrumentType` are left out. The client copies those fields into the
+   * saved asset, so a temporary outage must not rewrite its identity.
+   */
+  backupSource?: QuoteProvider;
 };
 
 export type TreasuryBondQuote = AssetQuote & {

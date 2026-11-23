@@ -1,4 +1,5 @@
 import { getMarketCachePayload, setMarketCachePayload } from "@/lib/server/market-cache";
+import { isProviderLimitStatus, logProviderHttpFailure } from "@/lib/server/provider-diagnostics";
 import { normalizeSymbol } from "@/lib/ticker";
 import { normalizeText, round, toCurrencyCode, uniqueBy } from "@/lib/utils";
 import type {
@@ -159,7 +160,15 @@ const hasEodhdApiKey = () => Boolean(EODHD_API_KEY);
 const getCachedPayload = getMarketCachePayload;
 const setCachedPayload = setMarketCachePayload;
 
-const fetchJson = async <T,>(url: string, timeoutMs = 15_000): Promise<T | null> => {
+/**
+ * `status` is the HTTP status when the server answered, and `null` for a
+ * network error, timeout or unreadable body. Callers that only need the data
+ * use `fetchJson`; the status lets a caller tell "limit reached" from "no data".
+ */
+const fetchJsonWithStatus = async <T,>(
+  url: string,
+  timeoutMs = 15_000
+): Promise<{ data: T | null; status: number | null }> => {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -173,16 +182,20 @@ const fetchJson = async <T,>(url: string, timeoutMs = 15_000): Promise<T | null>
     });
 
     if (!response.ok) {
-      return null;
+      logProviderHttpFailure("eodhd", response.status, url);
+      return { data: null, status: response.status };
     }
 
-    return (await response.json()) as T;
+    return { data: (await response.json()) as T, status: response.status };
   } catch {
-    return null;
+    return { data: null, status: null };
   } finally {
     clearTimeout(timeoutId);
   }
 };
+
+const fetchJson = async <T,>(url: string, timeoutMs = 15_000): Promise<T | null> =>
+  (await fetchJsonWithStatus<T>(url, timeoutMs)).data;
 
 const normalizeMoneyUnit = (value?: string) => {
   const normalized = toCurrencyCode(value, "USD");
@@ -796,7 +809,7 @@ export const fetchEodhdQuote = async ({
     return cachedQuote;
   }
 
-  const realtimeQuote = await fetchJson<EodhdQuoteResponse>(
+  const { data: realtimeQuote, status: realtimeStatus } = await fetchJsonWithStatus<EodhdQuoteResponse>(
     `${EODHD_API_ROOT}/real-time/${encodeURIComponent(normalizedProviderId)}?api_token=${encodeURIComponent(EODHD_API_KEY)}&fmt=json`
   );
   const realtimePrice =
@@ -829,6 +842,12 @@ export const fetchEodhdQuote = async ({
     };
     setCachedQuote(normalizedProviderId, quote);
     return quote;
+  }
+
+  // The daily quota or the rate limit is used up: the `/eod/` call below would
+  // be refused too, so skip it instead of spending another request.
+  if (isProviderLimitStatus(realtimeStatus)) {
+    return null;
   }
 
   const dateTo = new Date().toISOString().slice(0, 10);

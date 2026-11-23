@@ -1,3 +1,4 @@
+import { ETF_PRICE_SOURCE_EXCHANGE_CODES } from "@/lib/etf-price-venues";
 import { normalizeGpwSymbol, normalizeSymbol } from "@/lib/ticker";
 import { normalizeText } from "@/lib/utils";
 import type {
@@ -131,12 +132,38 @@ const getExternalSearchScore = (result: AssetSearchResult, query: string) => {
   return 8;
 };
 
+const getEtfExchangeCode = (result: AssetSearchResult) =>
+  normalizeSymbol(result.instrumentIdentity?.exchangeCode ?? "");
+
+/**
+ * An OpenFIGI ETF listing has no price-provider id; it gets one only when its
+ * venue can be translated (see `ETF_PRICE_SOURCE_EXCHANGE_CODES`). Listings that
+ * already carry a `providerId` (catalogue, EODHD, Yahoo) need no translation.
+ */
+export const needsEtfPriceSourceResolution = (result: AssetSearchResult) =>
+  result.kind === "etf" && !result.providerId?.trim() && Boolean(result.instrumentIdentity);
+
+/**
+ * A benchmark needs a price series, so a listing whose venue can never be given
+ * a price source is a dead choice. They are kept (the user may still look for
+ * that ticker) but always after the listings that can work.
+ */
+export const hasUnresolvableEtfVenue = (result: AssetSearchResult) =>
+  needsEtfPriceSourceResolution(result) &&
+  !ETF_PRICE_SOURCE_EXCHANGE_CODES.has(getEtfExchangeCode(result));
+
 const getResultIdentity = (result: AssetSearchResult) =>
   [
     result.kind,
     result.provider,
     normalizeSymbol(result.providerId ?? result.symbol),
     result.marketCurrency,
+    // One fund is listed on many venues, often in one currency. They are
+    // different price sources, so a venue that can work must not be hidden
+    // behind another listing of the same ticker. Dead venues collapse to one.
+    needsEtfPriceSourceResolution(result) && !hasUnresolvableEtfVenue(result)
+      ? getEtfExchangeCode(result)
+      : "",
   ].join(":");
 
 /**
@@ -161,14 +188,29 @@ export const rankBenchmarkSearchResults = (
     score: getExternalSearchScore(result, query),
   }));
 
+  const ranked = [...rankedCore, ...rankedExternal];
+  // A ticker that has at least one workable venue does not also list its dead
+  // venues: with a dozen MTF codes per fund they would crowd out the real
+  // results and the cap below would cut the workable listing off.
+  const workableEtfSymbols = new Set(
+    ranked
+      .filter(({ result }) => needsEtfPriceSourceResolution(result) && !hasUnresolvableEtfVenue(result))
+      .map(({ result }) => normalizeSymbol(result.symbol))
+  );
   const seen = new Set<string>();
 
-  return [...rankedCore, ...rankedExternal]
+  return ranked
+    .filter(
+      ({ result }) =>
+        !hasUnresolvableEtfVenue(result) || !workableEtfSymbols.has(normalizeSymbol(result.symbol))
+    )
     .sort(
       (left, right) =>
         left.score - right.score ||
+        Number(hasUnresolvableEtfVenue(left.result)) - Number(hasUnresolvableEtfVenue(right.result)) ||
         left.result.name.localeCompare(right.result.name, "pl") ||
-        left.result.symbol.localeCompare(right.result.symbol)
+        left.result.symbol.localeCompare(right.result.symbol) ||
+        getEtfExchangeCode(left.result).localeCompare(getEtfExchangeCode(right.result))
     )
     .filter(({ result }) => {
       const identity = getResultIdentity(result);

@@ -72,8 +72,13 @@ test("all-portfolios history returns benchmark data and keeps its selection in t
   );
   assert.match(historySource, /const benchmarkSeries = histories\.find\([\s\S]*?\?\.benchmarkSeries/);
   assert.match(chartSource, /AGGREGATE_BENCHMARKS_STORAGE_KEY = "mexo\.lineCharts\.aggregateBenchmarks"/);
-  assert.match(chartSource, /readAggregateBenchmarks\(\)/);
+  // The selection is read as an external store; copying it into state from an
+  // effect is what `react-hooks/set-state-in-effect` rejects (and CI lints).
+  assert.match(chartSource, /useSyncExternalStore\(\s*subscribeAggregateBenchmarks,\s*getAggregateBenchmarksSnapshot,/);
+  assert.match(chartSource, /parseAggregateBenchmarks\(aggregateBenchmarksRaw\)/);
   assert.match(chartSource, /window\.localStorage\.setItem\([\s\S]*?AGGREGATE_BENCHMARKS_STORAGE_KEY/);
+  assert.match(chartSource, /if \(isAggregateHistory\) \{\s*writeAggregateBenchmarks\(nextBenchmarks\);/);
+  assert.doesNotMatch(chartSource, /setSelectedBenchmarkOverride\(\{\s*sourceSignature: benchmarkPropSignature,\s*values: readAggregateBenchmarks/);
 });
 
 test("daily investment-result values are cash-flow neutral P/L deltas", () => {

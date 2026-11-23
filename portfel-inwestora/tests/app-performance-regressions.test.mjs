@@ -40,3 +40,20 @@ test("dashboard widget and ESPI links do not eagerly prefetch unseen destination
   assert.match(dashboard, /<Link href=\{href\} prefetch=\{false\}>Zobacz<\/Link>/);
   assert.match(dashboard, /getReadHref\(`\/market\/espi\/\$\{report\.id\}`\)\} prefetch=\{false\}/);
 });
+
+test("a price update does not restart the quote refresh (no back-to-back full quote passes)", async () => {
+  const app = await readSource("src/components/PortfolioApp.tsx");
+  const syncQuotes = app.match(/const syncQuotes = useCallback\(async \([\s\S]*?\n  \}, \[([^\]]*)\]\);/);
+
+  assert.ok(syncQuotes, "syncQuotes useCallback not found");
+  // `selectedPortfolioIds` is a new array after every `portfolios` change, i.e.
+  // after every applied quote. As a dependency it re-created `syncQuotes`,
+  // re-ran the refresh effect and started another full pass of provider calls
+  // right after each pass that changed a price.
+  assert.doesNotMatch(syncQuotes[1], /selectedPortfolioIds/);
+  assert.match(syncQuotes[0], /new Set\(selectedPortfolioIdsRef\.current\)/);
+  assert.doesNotMatch(syncQuotes[0], /new Set\(selectedPortfolioIds\)/);
+
+  // A changed selection must still refresh, through its string key.
+  assert.match(app, /\}, \[activePortfolioId, assets\.length, operationScopeKey, syncQuotes\]\);/);
+});

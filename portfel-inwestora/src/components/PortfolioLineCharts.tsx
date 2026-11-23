@@ -43,7 +43,7 @@ import {
   type ChartViewport,
 } from "@/lib/chart-viewport";
 import { SEARCH_DEBOUNCE_MS, VISIBLE_SEARCH_MODE_OPTIONS } from "@/lib/constants";
-import { searchAssets, searchEtfInstruments } from "@/lib/api";
+import { resolveEtfListingPrice, searchAssets, searchEtfInstruments } from "@/lib/api";
 import {
   createPortfolioHistoryRequestDescriptor,
   getPortfolioHistoryCached,
@@ -54,6 +54,7 @@ import type { PortfolioHistoryProgress } from "@/lib/portfolio-history-progress"
 import {
   createPortfolioBenchmarkDefinition,
   hasExactCoreBenchmarkMatch,
+  needsEtfPriceSourceResolution,
   rankBenchmarkSearchResults,
 } from "@/lib/benchmark-search";
 import { buildPortfolioDailyMetricPoints } from "@/lib/portfolio-daily-metrics";
@@ -80,6 +81,7 @@ import type {
   AssetSearchMode,
   AssetSearchResult,
   CurrencyCode,
+  EtfListing,
   FxRates,
   PortfolioAsset,
   PortfolioAccount,
@@ -203,6 +205,16 @@ type FallbackHistoryState = {
 type ManualChartViewport = ChartViewport | "full" | null;
 
 const DEFAULT_BENCHMARK_SEARCH_MODE: AssetSearchMode = "etf";
+
+// One ETF is listed on many venues, so symbol alone does not tell two search
+// results apart (it is also not unique as a React key).
+const getBenchmarkResultKey = (result: AssetSearchResult) =>
+  [
+    result.provider,
+    result.providerId ?? result.symbol,
+    result.instrumentIdentity?.figi ?? result.instrumentIdentity?.exchangeCode ?? "",
+    result.marketCurrency,
+  ].join(":");
 const RANGE_PRESET_STORAGE_KEY = "mexo.lineCharts.rangePreset";
 const AGGREGATE_BENCHMARKS_STORAGE_KEY = "mexo.lineCharts.aggregateBenchmarks";
 
@@ -225,15 +237,53 @@ const isPortfolioBenchmarkDefinition = (
   );
 };
 
-const readAggregateBenchmarks = (): PortfolioBenchmarkDefinition[] => {
+const parseAggregateBenchmarks = (raw: string): PortfolioBenchmarkDefinition[] => {
   try {
-    const stored = JSON.parse(
-      window.localStorage.getItem(AGGREGATE_BENCHMARKS_STORAGE_KEY) ?? "[]"
-    ) as unknown;
+    const stored = JSON.parse(raw) as unknown;
     return Array.isArray(stored) ? stored.filter(isPortfolioBenchmarkDefinition) : [];
   } catch {
     return [];
   }
+};
+
+// The all-portfolios selection lives in this browser only. It is read as an
+// external store (like the range preset below) instead of being copied into
+// state from an effect, so the first client render already shows it.
+const AGGREGATE_BENCHMARKS_EVENT = "mexo:aggregate-benchmarks-change";
+// Last known selection as JSON. It is what the chart keeps showing when browser
+// storage cannot be read or written.
+let aggregateBenchmarksMemory = "[]";
+let aggregateBenchmarksNotPersisted = false;
+const subscribeAggregateBenchmarks = (listener: () => void) => {
+  window.addEventListener("storage", listener);
+  window.addEventListener(AGGREGATE_BENCHMARKS_EVENT, listener);
+  return () => {
+    window.removeEventListener("storage", listener);
+    window.removeEventListener(AGGREGATE_BENCHMARKS_EVENT, listener);
+  };
+};
+const getAggregateBenchmarksSnapshot = (): string => {
+  if (!aggregateBenchmarksNotPersisted) {
+    try {
+      const stored = window.localStorage.getItem(AGGREGATE_BENCHMARKS_STORAGE_KEY);
+      if (stored !== null) aggregateBenchmarksMemory = stored;
+    } catch {
+      // Keep the last known selection when browser storage is disabled.
+    }
+  }
+  return aggregateBenchmarksMemory;
+};
+const getAggregateBenchmarksServerSnapshot = (): string => "[]";
+const writeAggregateBenchmarks = (benchmarks: PortfolioBenchmarkDefinition[]) => {
+  aggregateBenchmarksMemory = JSON.stringify(benchmarks);
+  try {
+    window.localStorage.setItem(AGGREGATE_BENCHMARKS_STORAGE_KEY, aggregateBenchmarksMemory);
+    aggregateBenchmarksNotPersisted = false;
+  } catch {
+    // Keep the in-memory selection usable if browser storage is unavailable.
+    aggregateBenchmarksNotPersisted = true;
+  }
+  window.dispatchEvent(new Event(AGGREGATE_BENCHMARKS_EVENT));
 };
 const RANGE_PRESET_EVENT = "mexo:chart-range-change";
 let rangePresetMemory: RangePreset = "1M";
@@ -912,9 +962,20 @@ export default function PortfolioLineCharts({
     sourceSignature: string;
     values: PortfolioBenchmarkDefinition[];
   } | null>(null);
-  const selectedBenchmarks = selectedBenchmarkOverride?.sourceSignature === benchmarkPropSignature
-    ? selectedBenchmarkOverride.values
-    : benchmarks;
+  const aggregateBenchmarksRaw = useSyncExternalStore(
+    subscribeAggregateBenchmarks,
+    getAggregateBenchmarksSnapshot,
+    getAggregateBenchmarksServerSnapshot
+  );
+  const aggregateBenchmarks = useMemo(
+    () => parseAggregateBenchmarks(aggregateBenchmarksRaw),
+    [aggregateBenchmarksRaw]
+  );
+  const selectedBenchmarks = isAggregateHistory
+    ? aggregateBenchmarks
+    : selectedBenchmarkOverride?.sourceSignature === benchmarkPropSignature
+      ? selectedBenchmarkOverride.values
+      : benchmarks;
   const selectedBenchmarkIdsSignature = selectedBenchmarks.map((benchmark) => benchmark.id).join("|");
   const [visibleBenchmarkOverride, setVisibleBenchmarkOverride] = useState<{
     selectionSignature: string;
@@ -932,14 +993,6 @@ export default function PortfolioLineCharts({
     setVisibleBenchmarkOverride({ selectionSignature, ids: next });
   };
 
-  useEffect(() => {
-    if (!isAggregateHistory) return;
-
-    setSelectedBenchmarkOverride({
-      sourceSignature: benchmarkPropSignature,
-      values: readAggregateBenchmarks(),
-    });
-  }, [benchmarkPropSignature, isAggregateHistory]);
   const [benchmarkSearchMode, setBenchmarkSearchMode] = useState<AssetSearchMode>(
     DEFAULT_BENCHMARK_SEARCH_MODE
   );
@@ -950,6 +1003,10 @@ export default function PortfolioLineCharts({
     error: string | null;
     loading: boolean;
   } | null>(null);
+  // Adding an ETF benchmark first asks the server for its price source, which
+  // takes a moment and can fail; the picker shows both states.
+  const [pendingBenchmarkResultKey, setPendingBenchmarkResultKey] = useState<string | null>(null);
+  const [benchmarkAddError, setBenchmarkAddError] = useState<string | null>(null);
   const [serverHistory, setServerHistory] = useState<PortfolioHistoryResponse>(EMPTY_HISTORY);
   const [serverHistorySignature, setServerHistorySignature] = useState("");
   const [historyWarningsState, setHistoryWarningsState] = useState<{ signature: string; values: string[] }>({ signature: "", values: [] });
@@ -1432,14 +1489,7 @@ export default function PortfolioLineCharts({
 
   const persistBenchmarkSelection = (nextBenchmarks: PortfolioBenchmarkDefinition[]) => {
     if (isAggregateHistory) {
-      try {
-        window.localStorage.setItem(
-          AGGREGATE_BENCHMARKS_STORAGE_KEY,
-          JSON.stringify(nextBenchmarks)
-        );
-      } catch {
-        // Keep the in-memory selection usable if browser storage is unavailable.
-      }
+      writeAggregateBenchmarks(nextBenchmarks);
       return;
     }
 
@@ -1448,7 +1498,38 @@ export default function PortfolioLineCharts({
     }
   };
 
-  const handleAddBenchmark = (result: AssetSearchResult) => {
+  const handleAddBenchmark = async (searchResult: AssetSearchResult) => {
+    if (pendingBenchmarkResultKey) return;
+
+    let result = searchResult;
+    setBenchmarkAddError(null);
+
+    // An ETF found through OpenFIGI names only its venue. Without a price source
+    // the benchmark would be saved but never get a series ("pominięto go na
+    // wykresie"), so the source is settled first, exactly like when an ETF is
+    // added to a portfolio. A listing that cannot get one is not added at all.
+    if (needsEtfPriceSourceResolution(searchResult)) {
+      setPendingBenchmarkResultKey(getBenchmarkResultKey(searchResult));
+
+      try {
+        const resolvedListing = await resolveEtfListingPrice(searchResult as EtfListing);
+
+        if (resolvedListing.priceStatus === "unavailable" || !resolvedListing.providerId) {
+          setBenchmarkAddError(
+            `Brak notowań dla ${searchResult.symbol} na tej giełdzie, więc nie da się z niego zrobić benchmarku. Wybierz inną giełdę lub ETF.`
+          );
+          return;
+        }
+
+        result = resolvedListing;
+      } catch {
+        setBenchmarkAddError("Nie udało się sprawdzić źródła notowań tego ETF. Spróbuj ponownie.");
+        return;
+      } finally {
+        setPendingBenchmarkResultKey(null);
+      }
+    }
+
     const benchmark = createPortfolioBenchmarkDefinition(result, benchmarkSearchMode);
     const nextBenchmarks = selectedBenchmarks.some((item) => item.id === benchmark.id)
       ? selectedBenchmarks
@@ -3108,7 +3189,10 @@ export default function PortfolioLineCharts({
             <input
               type="text"
               value={benchmarkQuery}
-              onChange={(event) => setBenchmarkQuery(event.target.value)}
+              onChange={(event) => {
+                setBenchmarkAddError(null);
+                setBenchmarkQuery(event.target.value);
+              }}
               placeholder={getSearchPlaceholder(benchmarkSearchMode)}
             />
           </label>
@@ -3184,24 +3268,32 @@ export default function PortfolioLineCharts({
                 <p className="field-note">Brak wynikow</p>
               ) : null}
 
+              {benchmarkAddError ? (
+                <p className="field-note field-note-error" role="alert">{benchmarkAddError}</p>
+              ) : null}
+
               {benchmarkResults.length > 0 ? (
                 <div className="search-result-list">
                   {benchmarkResults.map((result) => {
                     const benchmark = createPortfolioBenchmarkDefinition(result, benchmarkSearchMode);
+                    const resultKey = getBenchmarkResultKey(result);
                     const isSelected = selectedBenchmarks.some(
                       (selectedItem) => selectedItem.id === benchmark.id
                     );
+                    const isResolving = pendingBenchmarkResultKey === resultKey;
 
                     return (
                       <button
-                        key={`${benchmark.id}:${result.symbol}`}
+                        key={`${benchmark.id}:${resultKey}`}
                         type="button"
                         className="search-result-card text-left"
-                        onClick={() => handleAddBenchmark(result)}
+                        disabled={Boolean(pendingBenchmarkResultKey)}
+                        onClick={() => void handleAddBenchmark(result)}
                       >
                         <TruncatedText as="p" className="search-result-title" text={result.name} />
                         <p className="search-result-meta">
                           {result.subtitle ?? result.marketCurrency} · {result.symbol}
+                          {isResolving ? " | sprawdzam notowania…" : ""}
                           {isSelected ? " | dodany" : ""}
                         </p>
                       </button>

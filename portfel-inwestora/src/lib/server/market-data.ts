@@ -6,6 +6,10 @@ import {
 } from "@/lib/server/eodhd";
 import { fetchYahooQuote, searchYahooStocks } from "@/lib/server/yahoo";
 import {
+  fetchYahooBackupCryptoQuote,
+  fetchYahooBackupEtfQuote,
+} from "@/lib/server/yahoo-backup";
+import {
   findGpwCatalogEntry,
   searchGpwCatalog,
   warmGpwCatalog,
@@ -216,6 +220,9 @@ const FINNHUB_SEARCH_TIMEOUT_MS = 3_500;
 const COINGECKO_SEARCH_CACHE_TTL_MS = 60_000;
 const CRYPTO_QUOTE_CACHE_TTL_MS = 5_000;
 const CRYPTO_MAX_QUOTE_AGE_MS = 20_000;
+// The Yahoo backup only runs after Binance and CoinGecko failed, and its
+// timestamps lag a little more. The client still refreshes crypto every 15 s.
+const CRYPTO_BACKUP_MAX_QUOTE_AGE_MS = 60_000;
 const COINGECKO_HEADERS = {
   Accept: "application/json",
   "User-Agent": "PortfelInwestora/0.1 price-sync",
@@ -1327,13 +1334,17 @@ const toProviderMarketTimestamp = (value: unknown) => {
  * Crypto trades continuously, so its freshness is deliberately independent
  * from the completed-session policy used for GPW and other listed assets.
  */
-export const isFreshCryptoQuote = (quote: AssetQuote, now = Date.now()) => {
+export const isFreshCryptoQuote = (
+  quote: AssetQuote,
+  now = Date.now(),
+  maxAgeMs = CRYPTO_MAX_QUOTE_AGE_MS
+) => {
   const marketTime = Date.parse(quote.marketTimestamp ?? "");
 
   return (
     Number.isFinite(marketTime) &&
     marketTime <= now + 5_000 &&
-    now - marketTime <= CRYPTO_MAX_QUOTE_AGE_MS
+    now - marketTime <= maxAgeMs
   );
 };
 
@@ -1847,7 +1858,24 @@ export const fetchAssetQuoteServer = async ({
   });
 
   if (resolvedKind === "crypto") {
-    return fetchCoinGeckoQuote(normalizedSymbol, resolvedProviderId);
+    const cryptoQuote = await fetchCoinGeckoQuote(normalizedSymbol, resolvedProviderId);
+
+    if (cryptoQuote) {
+      return cryptoQuote;
+    }
+
+    // Binance and CoinGecko both came back empty (no coin, outage or an
+    // exhausted limit). Yahoo supplies the price only; the asset keeps its own
+    // provider mapping.
+    return fetchYahooBackupCryptoQuote({
+      requestedSymbol: normalizedSymbol,
+      marketCurrency: resolvedMarketCurrency,
+      provider: resolvedProvider,
+      providerId: resolvedProviderId,
+      priceScale: resolvedPriceScale,
+      isFresh: (quote) =>
+        isFreshCryptoQuote(quote, Date.now(), CRYPTO_BACKUP_MAX_QUOTE_AGE_MS),
+    });
   }
 
   if (resolvedProvider === "eodhd" && (resolvedKind === "stock" || resolvedKind === "etf")) {
@@ -1858,7 +1886,17 @@ export const fetchAssetQuoteServer = async ({
     }
 
     if (resolvedKind === "etf") {
-      return null;
+      // EODHD had no quote (not listed, outage or an exhausted limit). Yahoo is
+      // asked only for the spelling of this listing's own provider id, never
+      // for the bare ticker, and only its price is used.
+      return fetchYahooBackupEtfQuote({
+        requestedSymbol: normalizedSymbol,
+        providerIds: [identity.providerId, alias?.providerId, providerId],
+        marketCurrency: resolvedMarketCurrency,
+        provider: resolvedProvider,
+        providerId: resolvedProviderId,
+        priceScale: resolvedPriceScale,
+      });
     }
 
     let yahooQuote: AssetQuote | null = null;

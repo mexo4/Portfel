@@ -1,5 +1,6 @@
 import { inferCurrencyFromSymbol, normalizeSymbol } from "@/lib/ticker";
 import { normalizeProviderInstrumentType } from "@/lib/instrument-classification";
+import { logProviderHttpFailure } from "@/lib/server/provider-diagnostics";
 import { normalizeText, round, toCurrencyCode, uniqueBy } from "@/lib/utils";
 import type { AssetQuote, AssetSearchResult, CurrencyCode } from "@/types/portfolio";
 
@@ -75,11 +76,21 @@ type YahooMoneyUnit = {
   priceScale: number;
 };
 
+/**
+ * ISO 4217 "no currency". Pass it as `fallbackCurrency` to make
+ * `fetchYahooQuote` return `null` when Yahoo does not state a currency, instead
+ * of silently labelling the price with a guessed one.
+ */
+export const YAHOO_UNKNOWN_CURRENCY: CurrencyCode = "XXX";
+
 const YAHOO_SEARCH_CACHE_TTL_MS = 60_000;
 const YAHOO_QUOTE_CACHE_TTL_MS = 30_000;
 const YAHOO_SEARCH_TIMEOUT_MS = 3_000;
 const YAHOO_QUOTE_TIMEOUT_MS = 2_500;
+const YAHOO_HISTORY_TIMEOUT_MS = 20_000;
 const MAX_YAHOO_RESPONSE_BYTES = 1_000_000;
+// A daily series since 2000 carries open/high/low/close/volume for ~6,900 days.
+const MAX_YAHOO_HISTORY_BYTES = 4_000_000;
 
 const searchCache = new Map<string, { results: AssetSearchResult[]; expiresAt: number }>();
 const quoteCache = new Map<string, { quote: AssetQuote; expiresAt: number }>();
@@ -112,7 +123,11 @@ export const normalizeYahooMoneyUnit = (
   };
 };
 
-const safeFetchJson = async <T,>(url: string, timeoutMs: number) => {
+const safeFetchJson = async <T,>(
+  url: string,
+  timeoutMs: number,
+  maxBytes = MAX_YAHOO_RESPONSE_BYTES
+) => {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -125,12 +140,19 @@ const safeFetchJson = async <T,>(url: string, timeoutMs: number) => {
       signal: controller.signal,
     });
 
-    if (!response.ok || !response.body) {
+    if (!response.ok) {
+      // A 429 here means Yahoo is throttling this server, not that the symbol
+      // is unknown. Callers still see `null`; the status is only logged.
+      logProviderHttpFailure("yahoo", response.status, url);
+      return null;
+    }
+
+    if (!response.body) {
       return null;
     }
 
     const contentLength = Number(response.headers.get("content-length") ?? 0);
-    if (Number.isFinite(contentLength) && contentLength > MAX_YAHOO_RESPONSE_BYTES) {
+    if (Number.isFinite(contentLength) && contentLength > maxBytes) {
       controller.abort();
       return null;
     }
@@ -145,7 +167,7 @@ const safeFetchJson = async <T,>(url: string, timeoutMs: number) => {
       if (!value) continue;
 
       receivedBytes += value.byteLength;
-      if (receivedBytes > MAX_YAHOO_RESPONSE_BYTES) {
+      if (receivedBytes > maxBytes) {
         controller.abort();
         return null;
       }
@@ -391,6 +413,14 @@ const fetchYahooQuoteUncached = async ({
     return null;
   }
 
+  // A caller that passes the "unknown currency" sentinel wants Yahoo's own
+  // currency or nothing. A quote that fell back to the sentinel is neither
+  // cached (the cache is shared with callers that use a real fallback) nor
+  // returned.
+  if (quote.marketCurrency === YAHOO_UNKNOWN_CURRENCY) {
+    return null;
+  }
+
   candidates.forEach((candidate) => setCachedQuote(candidate, quote));
   setCachedQuote(quote.providerId ?? requestedSymbol, quote);
 
@@ -573,4 +603,137 @@ export const fetchYahooQuote = async ({
 
   const quote = await quotePromise;
   return quote ? { ...quote, symbol: normalizeSymbol(symbol) } : null;
+};
+
+export type YahooEtfSearchItem = {
+  symbol: string;
+  name: string;
+  exchange?: string;
+  exchangeDisplay?: string;
+};
+
+const etfSearchCache = new Map<string, { items: YahooEtfSearchItem[]; expiresAt: number }>();
+
+/**
+ * ETF-only counterpart of `searchYahooStocks`, which keeps EQUITY results only.
+ * A failed request returns `[]` and is not cached, so a throttled response
+ * never hides ETFs for the next minute.
+ */
+export const searchYahooEtfs = async (query: string): Promise<YahooEtfSearchItem[]> => {
+  const trimmedQuery = query.trim();
+
+  if (!trimmedQuery) {
+    return [];
+  }
+
+  const cacheKey = normalizeText(trimmedQuery);
+  const cachedEntry = etfSearchCache.get(cacheKey);
+
+  if (cachedEntry && cachedEntry.expiresAt > Date.now()) {
+    return cachedEntry.items;
+  }
+
+  const payload = await safeFetchJson<YahooSearchResponse>(
+    `https://query2.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(
+      trimmedQuery
+    )}&quotesCount=24&newsCount=0`,
+    YAHOO_SEARCH_TIMEOUT_MS
+  );
+
+  if (!payload) {
+    return [];
+  }
+
+  const items = uniqueBy(
+    (payload.quotes ?? [])
+      .filter((item) => item.symbol && normalizeSymbol(item.quoteType ?? "") === "ETF")
+      .map((item) => {
+        const symbol = normalizeSymbol(item.symbol ?? "");
+
+        return {
+          symbol,
+          name: item.longname?.trim() || item.shortname?.trim() || symbol,
+          exchange: item.exchange?.trim() || undefined,
+          exchangeDisplay: item.exchDisp?.trim() || undefined,
+        };
+      }),
+    (item) => item.symbol
+  ).slice(0, 16);
+
+  etfSearchCache.set(cacheKey, {
+    items,
+    expiresAt: Date.now() + YAHOO_SEARCH_CACHE_TTL_MS,
+  });
+
+  return items;
+};
+
+export type YahooDailyHistory = {
+  points: Array<{ date: string; close: number }>;
+  currency?: string;
+  instrumentType?: string;
+  /** Yahoo's own name for the symbol, e.g. "Chainlink USD". */
+  name?: string;
+};
+
+/**
+ * Daily closes for one Yahoo symbol. It deliberately returns the raw `close`,
+ * not `adjclose`: Stooq, the other benchmark source, is not dividend-adjusted.
+ * `null` means the request failed; an empty `points` array means no data.
+ */
+export const fetchYahooDailyHistory = async ({
+  symbol,
+  startDate,
+  endDate,
+}: {
+  symbol: string;
+  startDate: string;
+  endDate: string;
+}): Promise<YahooDailyHistory | null> => {
+  const period1 = Math.floor(Date.parse(`${startDate}T00:00:00.000Z`) / 1_000);
+  const period2 = Math.floor(Date.parse(`${endDate}T23:59:59.000Z`) / 1_000);
+
+  if (!Number.isFinite(period1) || !Number.isFinite(period2) || period2 < period1) {
+    return null;
+  }
+
+  const payload = await safeFetchJson<YahooChartResponse>(
+    `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(
+      symbol
+    )}?period1=${period1}&period2=${period2}&interval=1d&includePrePost=false&events=div%2Csplits`,
+    YAHOO_HISTORY_TIMEOUT_MS,
+    MAX_YAHOO_HISTORY_BYTES
+  );
+  const result = payload?.chart?.result?.[0];
+
+  if (!result) {
+    return null;
+  }
+
+  const timestamps = result.timestamp ?? [];
+  const closes = result.indicators?.quote?.[0]?.close ?? [];
+  const closeByDate = new Map<string, number>();
+
+  timestamps.forEach((timestamp, index) => {
+    const close = closes[index];
+
+    if (
+      typeof timestamp === "number" &&
+      Number.isFinite(timestamp) &&
+      typeof close === "number" &&
+      Number.isFinite(close) &&
+      close > 0
+    ) {
+      closeByDate.set(new Date(timestamp * 1_000).toISOString().slice(0, 10), close);
+    }
+  });
+
+  return {
+    points: Array.from(closeByDate, ([date, close]) => ({ date, close })).sort(
+      (left, right) => left.date.localeCompare(right.date)
+    ),
+    currency: result.meta?.currency,
+    instrumentType: result.meta?.instrumentType,
+    name: result.meta?.longName?.trim() || result.meta?.shortName?.trim() || undefined,
+  };
 };

@@ -78,6 +78,29 @@ test("privacy export and account deletion use isolated PostgreSQL with owned-dat
     await execute(`INSERT INTO portfolio_engine_cache (key,portfolio_id,payload_json,updated_at) VALUES ('cache-main','p-main','{}',$1)`, [now]);
     await execute(`INSERT INTO market_cache (key,payload_json,updated_at) VALUES ('shared-fixture','{"kept":true}',$1)`, [now]);
 
+    // The stored portfolio history is the user's own derived data: private to the
+    // user, bounded, left out of the export and gone with the account.
+    const { readStoredPortfolioHistory, storePortfolioHistory, MAX_STORED_HISTORIES_PER_USER } = await import("../src/lib/server/portfolio-history-store.ts");
+    const historyFixture = (marker) => ({ points: [{ date: "2026-11-23", portfolioValuePln: marker }], warnings: [], assetSeries: [], benchmarkSeries: [] });
+    await storePortfolioHistory("privacy-user", "1:aaa", historyFixture(1));
+    assert.deepEqual(await readStoredPortfolioHistory("privacy-user", "1:aaa"), historyFixture(1));
+    assert.equal(await readStoredPortfolioHistory("privacy-other", "1:aaa"), null, "another user never reads it");
+    await storePortfolioHistory("privacy-user", "1:aaa", historyFixture(2));
+    assert.deepEqual(await readStoredPortfolioHistory("privacy-user", "1:aaa"), historyFixture(2), "same key is replaced, not duplicated");
+    assert.equal((await query("SELECT cache_key FROM user_portfolio_history_cache WHERE user_id='privacy-user'")).length, 1);
+    await execute(`INSERT INTO user_portfolio_history_cache (user_id,cache_key,payload_json,updated_at) VALUES ('privacy-user','0:too-old',$1,$2)`,
+      [JSON.stringify(historyFixture(0)), new Date(Date.now() - 2 * 60 * 60_000).toISOString()]);
+    assert.equal(await readStoredPortfolioHistory("privacy-user", "0:too-old"), null, "older than the hour is a miss");
+    for (let index = 0; index < MAX_STORED_HISTORIES_PER_USER + 2; index += 1) {
+      await storePortfolioHistory("privacy-user", `2:${index}`, historyFixture(index), Date.now() + index * 1_000);
+    }
+    const keptKeys = (await query("SELECT cache_key FROM user_portfolio_history_cache WHERE user_id='privacy-user'")).map((row) => row.cache_key);
+    assert.equal(keptKeys.length, MAX_STORED_HISTORIES_PER_USER, "only the newest few remain");
+    assert.equal(keptKeys.includes(`2:${MAX_STORED_HISTORIES_PER_USER + 1}`), true, "the newest is kept");
+    assert.equal(keptKeys.includes("2:0") || keptKeys.includes("0:too-old") || keptKeys.includes("1:aaa"), false, "the oldest and the expired are pruned");
+    await storePortfolioHistory("privacy-other", "1:other", historyFixture(5));
+    assert.equal((await query("SELECT cache_key FROM user_portfolio_history_cache WHERE user_id='privacy-other'")).length, 1, "pruning one user never touches another");
+
     const archive = await createAccountDataExport("privacy-user");
     assert.ok(archive instanceof Uint8Array);
     const archiveEntries = unzipSync(archive);
@@ -118,6 +141,7 @@ test("privacy export and account deletion use isolated PostgreSQL with owned-dat
     assert.equal(wholeArchive.includes("RAW-CALENDAR-SECRET"), false);
     assert.equal(wholeArchive.includes("HASH-CALENDAR-SECRET"), false);
     assert.equal(wholeArchive.includes("other-private@example.invalid"), false);
+    assert.equal(wholeArchive.includes("portfolioValuePln"), false, "the derived history cache is not exported");
     const emptyExport = await createAccountDataExport("privacy-empty");
     const emptyFiles = Object.fromEntries(Object.entries(unzipSync(emptyExport)).map(([name, bytes]) => [name, strFromU8(bytes)]));
     assert.deepEqual(JSON.parse(emptyFiles["portfolios.json"]), []);
@@ -172,6 +196,8 @@ test("privacy export and account deletion use isolated PostgreSQL with owned-dat
     assert.equal((await query("SELECT key FROM portfolio_engine_cache WHERE key='cache-main'")).length, 0);
     assert.equal((await query("SELECT id FROM sessions WHERE id='session-main'")).length, 0);
     assert.equal((await query("SELECT key FROM market_cache WHERE key='shared-fixture'")).length, 1);
+    assert.equal((await query("SELECT cache_key FROM user_portfolio_history_cache WHERE user_id='privacy-user'")).length, 0, "the stored history goes with the account");
+    assert.equal((await query("SELECT cache_key FROM user_portfolio_history_cache WHERE user_id='privacy-other'")).length, 1, "another account's stored history stays");
     assert.equal((await query("SELECT id FROM users WHERE id='privacy-other'")).length, 1);
     await assert.rejects(deleteAccountAfterReauthentication("privacy-user", challenge.token), /Konto/);
 

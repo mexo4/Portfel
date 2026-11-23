@@ -1,6 +1,7 @@
+import { PORTFOLIO_HISTORY_RESPONSE_TTL_MS } from "@/lib/server/portfolio-history-cache-policy";
 import type { PortfolioHistoryResponse } from "@/types/portfolio";
 
-const HISTORY_RESPONSE_CACHE_TTL_MS = 3 * 60 * 1_000;
+const HISTORY_RESPONSE_CACHE_TTL_MS = PORTFOLIO_HISTORY_RESPONSE_TTL_MS;
 const HISTORY_RESPONSE_CACHE_MAX_ENTRIES = 24;
 const HISTORY_RESPONSE_CACHE_MAX_ENTRY_BYTES = 4 * 1024 * 1024;
 const HISTORY_RESPONSE_CACHE_MAX_TOTAL_BYTES = 32 * 1024 * 1024;

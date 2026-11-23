@@ -14,12 +14,13 @@ export const APP_DESCRIPTION =
   "MVP do sledzenia akcji, ETF-ow i obligacji z wycena w PLN.";
 
 /**
- * Temporary product capability, deliberately kept in one place.  It gates
- * only entry/search/import UI for new crypto activity; it never alters
- * persisted holdings, operations, valuation or historical performance.
- * Flip to `true` when the crypto workflow is ready to be offered again.
+ * Product capability switch, deliberately kept in one place.  It gates only
+ * entry/search/import UI for new crypto activity; it never alters persisted
+ * holdings, operations, valuation or historical performance.  On since
+ * 2026-11-23, when the add-asset search got a catalogue of coins that all have
+ * a price source (`crypto-catalog.ts`); set to `false` to hide crypto again.
  */
-export const CRYPTO_UI_ENABLED = false;
+export const CRYPTO_UI_ENABLED = true;
 
 export const BASE_CURRENCY: CurrencyCode = "PLN";
 export const AUTO_REFRESH_INTERVAL_MS = 30_000;

@@ -4,6 +4,10 @@ import {
   searchEodhdEtfs,
   searchEodhdStocks,
 } from "@/lib/server/eodhd";
+import {
+  CRYPTO_BINANCE_PAIR_BY_COINGECKO_ID,
+  CRYPTO_COINGECKO_ID_BY_SYMBOL,
+} from "@/lib/crypto-catalog";
 import { fetchYahooQuote, searchYahooStocks } from "@/lib/server/yahoo";
 import {
   fetchYahooBackupCryptoQuote,
@@ -77,6 +81,8 @@ type CoinGeckoSearchResponse = {
     id?: string;
     name?: string;
     symbol?: string;
+    /** Absent for coins without a market cap, i.e. nothing that is really traded. */
+    market_cap_rank?: number | null;
   }>;
 };
 
@@ -84,6 +90,7 @@ type CoinGeckoCoin = {
   id: string;
   name: string;
   symbol: string;
+  marketCapRank?: number;
 };
 
 type CoinGeckoSimplePrice = Record<
@@ -219,6 +226,7 @@ const GPW_SEARCH_FALLBACK_TIMEOUT_MS = 1_500;
 const FINNHUB_SEARCH_TIMEOUT_MS = 3_500;
 const COINGECKO_SEARCH_CACHE_TTL_MS = 60_000;
 const CRYPTO_QUOTE_CACHE_TTL_MS = 5_000;
+const CRYPTO_PRICE_DECIMALS = 8;
 const CRYPTO_MAX_QUOTE_AGE_MS = 20_000;
 // The Yahoo backup only runs after Binance and CoinGecko failed, and its
 // timestamps lag a little more. The client still refreshes crypto every 15 s.
@@ -843,31 +851,9 @@ const getCoinGeckoMatchScore = (query: string, coin: CoinGeckoCoin) => {
   return 6;
 };
 
-const COINGECKO_SYMBOL_PROVIDER_IDS: Record<string, string> = {
-  BTC: "bitcoin",
-  ETH: "ethereum",
-  BNB: "binancecoin",
-  SOL: "solana",
-  XRP: "ripple",
-  ADA: "cardano",
-  DOGE: "dogecoin",
-  DOT: "polkadot",
-  TRX: "tron",
-  AVAX: "avalanche-2",
-};
-
-const CRYPTO_SPOT_PAIRS: Record<string, string> = {
-  BTC: "BTCUSDT",
-  ETH: "ETHUSDT",
-  BNB: "BNBUSDT",
-  SOL: "SOLUSDT",
-  XRP: "XRPUSDT",
-  ADA: "ADAUSDT",
-  DOGE: "DOGEUSDT",
-  DOT: "DOTUSDT",
-  TRX: "TRXUSDT",
-  AVAX: "AVAXUSDT",
-};
+// A bare symbol is resolved only to a coin in the catalogue, whose CoinGecko id
+// and Binance pair are known to belong together (see `crypto-catalog.ts`).
+const COINGECKO_SYMBOL_PROVIDER_IDS = CRYPTO_COINGECKO_ID_BY_SYMBOL;
 
 const normalizeCoinGeckoProviderId = (symbol: string, providerId?: string) => {
   const normalizedSymbol = normalizeSymbol(symbol);
@@ -910,17 +896,31 @@ const fetchCoinGeckoCoins = async (query: string): Promise<CoinGeckoCoin[]> => {
   const payload: CoinGeckoSearchResponse = await response.json();
   const coins = (payload.coins ?? [])
     .filter(
-      (coin): coin is { id: string; name?: string; symbol?: string } => Boolean(coin.id)
+      (coin): coin is {
+        id: string;
+        name?: string;
+        symbol?: string;
+        market_cap_rank?: number | null;
+      } => Boolean(coin.id)
     )
     .map((coin) => ({
       id: coin.id,
       name: coin.name || coin.id,
       symbol: normalizeSymbol(coin.symbol || coin.id),
+      marketCapRank:
+        typeof coin.market_cap_rank === "number" && coin.market_cap_rank > 0
+          ? coin.market_cap_rank
+          : undefined,
     }));
 
+  // Among equally good matches the established coin comes first: "pepe" has a
+  // dozen coins with exactly that symbol, and alphabetical order put "Based
+  // Pepe" before the real one. A coin without a market cap goes last.
   const rankedCoins = [...coins].sort(
     (left, right) =>
       getCoinGeckoMatchScore(query, left) - getCoinGeckoMatchScore(query, right) ||
+      (left.marketCapRank ?? Number.POSITIVE_INFINITY) -
+        (right.marketCapRank ?? Number.POSITIVE_INFINITY) ||
       left.name.localeCompare(right.name, "pl")
   );
 
@@ -1374,7 +1374,11 @@ const fetchBinanceSpotQuote = async (
   providerId: string
 ): Promise<AssetQuote | null> => {
   const normalizedSymbol = normalizeSymbol(symbol);
-  const pair = CRYPTO_SPOT_PAIRS[normalizedSymbol];
+  // The pair belongs to a coin id, not to a ticker: another coin that shares the
+  // ticker (a "BTC" or "PEPE" that is not Bitcoin or Pepe) must not get this price.
+  const pair = Object.hasOwn(CRYPTO_BINANCE_PAIR_BY_COINGECKO_ID, providerId.toLowerCase())
+    ? CRYPTO_BINANCE_PAIR_BY_COINGECKO_ID[providerId.toLowerCase()]
+    : undefined;
 
   if (!pair) {
     return null;
@@ -1447,7 +1451,9 @@ const fetchBinanceSpotQuote = async (
 
   const quote: AssetQuote = {
     symbol: normalizedSymbol,
-    price: round(price, 4),
+    // Eight decimals, as the stored price and the history use: at four, PEPE,
+    // SHIB, BONK and FLOKI (a few millionths of a dollar) came out as 0.
+    price: round(price, CRYPTO_PRICE_DECIMALS),
     marketCurrency: "USD",
     provider: "binance",
     providerId,
@@ -1456,7 +1462,7 @@ const fetchBinanceSpotQuote = async (
     priceDate: marketTimestamp.slice(0, 10),
     previousClose:
       Number.isFinite(previousClose) && previousClose > 0
-        ? round(previousClose, 4)
+        ? round(previousClose, CRYPTO_PRICE_DECIMALS)
         : undefined,
   };
 
@@ -1544,7 +1550,7 @@ const fetchCoinGeckoFallbackQuote = async (
 
   const quote: AssetQuote = {
     symbol: normalizeSymbol(symbol),
-    price: round(price, 4),
+    price: round(price, CRYPTO_PRICE_DECIMALS),
     marketCurrency: "USD",
     provider: "coingecko",
     providerId: coinId,

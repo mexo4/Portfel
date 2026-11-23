@@ -3,6 +3,7 @@ import {
   LOCAL_STOCK_CATALOG,
   SEARCH_MODE_OPTIONS,
 } from "@/lib/constants";
+import { CRYPTO_ASSET_CATALOG } from "@/lib/crypto-catalog";
 import {
   getGpwTickerCore,
   inferCurrencyFromSymbol,
@@ -72,6 +73,10 @@ const getCatalogEntries = (
     return [];
   }
 
+  if (kind === "crypto") {
+    return CRYPTO_ASSET_CATALOG;
+  }
+
   if (kind !== "stock") {
     return [];
   }
@@ -132,9 +137,13 @@ export const searchCatalogAssets = (
 
   return getCatalogEntries(kind, mode)
     .filter((item) => {
+      // A crypto subtitle only names the price source ("Binance · CoinGecko"),
+      // so matching on it would make a query like "bin" return every coin.
       const haystack = normalizeText(
-        [item.name, item.symbol, item.subtitle, ...item.searchTerms, ...getGpwAliasTerms(item.symbol)]
-          .join(" ")
+        (item.kind === "crypto"
+          ? [item.name, item.symbol, ...item.searchTerms]
+          : [item.name, item.symbol, item.subtitle, ...item.searchTerms, ...getGpwAliasTerms(item.symbol)]
+        ).join(" ")
       );
 
       return haystack.includes(normalizedQuery);

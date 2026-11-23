@@ -1,5 +1,10 @@
 import { getMarketCacheEntry, setMarketCachePayloadIfNewer } from "@/lib/server/market-cache";
 import {
+  CRYPTO_BINANCE_PAIR_BY_COINGECKO_ID,
+  CRYPTO_COINGECKO_ID_BY_SYMBOL,
+} from "@/lib/crypto-catalog";
+import { fetchBinanceDailyCloses } from "@/lib/server/binance-history";
+import {
   migrateLegacyHistoryRangeCache,
   resolveHistoryRangeCache,
 } from "@/lib/portfolio-history-range-cache";
@@ -752,18 +757,9 @@ const fetchEodhdHistory = async (
   );
 };
 
-const COINGECKO_SYMBOL_PROVIDER_IDS: Record<string, string> = {
-  BTC: "bitcoin",
-  ETH: "ethereum",
-  BNB: "binancecoin",
-  SOL: "solana",
-  XRP: "ripple",
-  ADA: "cardano",
-  DOGE: "dogecoin",
-  DOT: "polkadot",
-  TRX: "tron",
-  AVAX: "avalanche-2",
-};
+// Same symbol -> CoinGecko id table the quotes use, so a coin that is priced
+// also gets its history.
+const COINGECKO_SYMBOL_PROVIDER_IDS = CRYPTO_COINGECKO_ID_BY_SYMBOL;
 
 const normalizeCoinGeckoHistoryProviderId = (symbol: string, providerId?: string) => {
   const normalizedSymbol = normalizeSymbol(symbol);
@@ -843,6 +839,36 @@ const fetchYahooCryptoHistory = async (
         startDate: rangeStart,
         endDate: rangeEnd,
       })
+  );
+};
+
+/**
+ * Second source for a catalogue coin, between CoinGecko and the Yahoo backup.
+ * The pair is looked up by CoinGecko id, so a coin that merely shares a ticker
+ * with a listed one never reads its series. Keyed by pair in its own cache
+ * family, so it is never mixed into a CoinGecko range.
+ */
+const fetchBinanceCryptoHistory = async (
+  coinGeckoId: string | undefined,
+  startDate: string,
+  endDate: string
+) => {
+  const coinId = coinGeckoId?.toLowerCase();
+  const pair =
+    coinId && Object.hasOwn(CRYPTO_BINANCE_PAIR_BY_COINGECKO_ID, coinId)
+      ? CRYPTO_BINANCE_PAIR_BY_COINGECKO_ID[coinId]
+      : undefined;
+
+  if (!pair) {
+    return [];
+  }
+
+  return getCachedOrFetchHistoryRange<PricePoint>(
+    `portfolio-history:v2:binance:${pair}:${startDate}`,
+    startDate,
+    endDate,
+    (rangeStart, rangeEnd) =>
+      fetchBinanceDailyCloses({ pair, startDate: rangeStart, endDate: rangeEnd })
   );
 };
 
@@ -1000,19 +1026,29 @@ const fetchInstrumentHistory = async ({
           )
         : [];
       // No CoinGecko id for this coin, or CoinGecko came back empty (outage,
-      // exhausted limit, or a range its free plan refuses). Yahoo is asked only
-      // then, never in parallel, so it costs nothing while CoinGecko works.
+      // exhausted limit, or a range its free plan refuses). The backups are asked
+      // only then, one after the other, so they cost nothing while CoinGecko
+      // works: Binance for a catalogue coin first (its pair is tied to the coin
+      // id), then Yahoo.
+      const binancePoints =
+        coinGeckoPoints.length > 0
+          ? []
+          : (await fetchBinanceCryptoHistory(coinGeckoProviderId, startDate, endDate)).filter(
+              isInRange
+            );
       const filteredPoints =
         coinGeckoPoints.length > 0
           ? coinGeckoPoints
-          : (
-              await fetchYahooCryptoHistory(
-                resolvedSymbol,
-                coinGeckoProviderId ?? resolvedProviderId,
-                startDate,
-                endDate
-              )
-            ).filter(isInRange);
+          : binancePoints.length > 0
+            ? binancePoints
+            : (
+                await fetchYahooCryptoHistory(
+                  resolvedSymbol,
+                  coinGeckoProviderId ?? resolvedProviderId,
+                  startDate,
+                  endDate
+                )
+              ).filter(isInRange);
 
       if (filteredPoints.length > 0) {
         return { points: filteredPoints };

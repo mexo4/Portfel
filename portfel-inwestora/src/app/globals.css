@@ -1554,6 +1554,11 @@ textarea {
     linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(238, 246, 244, 0.92));
 }
 
+.line-visual-benchmark-card-note {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
 .line-visual-benchmark-card-main {
   display: grid;
   gap: 4px;

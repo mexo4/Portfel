@@ -1754,11 +1754,12 @@ const buildBenchmarkReturnSeries = ({
       const marketCurrency = toCurrencyCode(benchmark.marketCurrency);
 
       if (historyPoints.length === 0 || dates.length === 0) {
-        if (!history?.warning) {
-          warnings.add(
-            `Nie udalo sie pobrac historii dla benchmarku ${benchmark.name}; pominieto go na wykresie.`
-          );
-        }
+        // Always said, even when the instrument history carries its own warning:
+        // that one ("uzyto fallbacku z danych zakupu") is about holdings, the UI
+        // hides it, and a benchmark with no series then vanished without a word.
+        warnings.add(
+          `Nie udalo sie pobrac historii dla benchmarku ${benchmark.name}; pominieto go na wykresie.`
+        );
         return null;
       }
 
@@ -2026,8 +2027,13 @@ export const buildPortfolioHistory = async ({
     instrumentHistoryEntries
   );
 
-  for (const [, history] of instrumentHistoryEntries) {
-    if (history.warning) {
+  // A benchmark that is not also a holding has no purchase to fall back to, so
+  // the "used the purchase data" wording would be wrong for it; it gets its own
+  // warning from `buildBenchmarkReturnSeries`.
+  const holdingHistoryKeys = new Set(segments.map((segment) => segment.historyKey));
+
+  for (const [historyKey, history] of instrumentHistoryEntries) {
+    if (history.warning && holdingHistoryKeys.has(historyKey)) {
       warnings.add(history.warning);
     }
   }

@@ -51,6 +51,7 @@ import {
   type PortfolioHistoryRequest,
 } from "@/lib/portfolio-history-client-cache";
 import type { PortfolioHistoryProgress } from "@/lib/portfolio-history-progress";
+import { isRepairableEtfBenchmark, repairEtfBenchmark } from "@/lib/benchmark-repair";
 import {
   createPortfolioBenchmarkDefinition,
   hasExactCoreBenchmarkMatch,
@@ -1369,6 +1370,35 @@ export default function PortfolioLineCharts({
     () => new Map(displayBenchmarkSeries.map((series) => [series.id, series] as const)),
     [displayBenchmarkSeries]
   );
+  // A benchmark in the list that has no series once the history has loaded. It
+  // used to disappear without a word: the only warning the server gave was the
+  // purchase-data one, which this screen hides.
+  const isBenchmarkHistoryReady =
+    hasHistoryInputs && !isHistoryPending && !error && serverHistorySignature === historyRequestSignature;
+  const benchmarkIdsWithoutSeries = useMemo(
+    () =>
+      new Set(
+        isBenchmarkHistoryReady
+          ? selectedBenchmarks
+              .filter((benchmark) => !benchmarkSeriesById.has(benchmark.id))
+              .map((benchmark) => benchmark.id)
+          : []
+      ),
+    [benchmarkSeriesById, isBenchmarkHistoryReady, selectedBenchmarks]
+  );
+  const repairableBenchmarkIdsSignature = selectedBenchmarks
+    .filter(
+      (benchmark) =>
+        benchmarkIdsWithoutSeries.has(benchmark.id) && isRepairableEtfBenchmark(benchmark)
+    )
+    .map((benchmark) => benchmark.id)
+    .join("|");
+  const benchmarkRepairAttemptedIdsRef = useRef<Set<string>>(new Set());
+  const isChartMountedRef = useRef(true);
+  const benchmarkRepairContextRef = useRef<{
+    selectedBenchmarks: PortfolioBenchmarkDefinition[];
+    apply: (deadId: string, repaired: PortfolioBenchmarkDefinition) => void;
+  }>({ selectedBenchmarks: [], apply: () => undefined });
 
   useEffect(() => {
     if (!shouldSearchBenchmarks || hasBenchmarkCoreExactMatch || !benchmarkSearchKind) return;
@@ -1497,6 +1527,65 @@ export default function PortfolioLineCharts({
       void onBenchmarksChange(nextBenchmarks).catch(() => undefined);
     }
   };
+
+  // Replaces a repaired entry in place, in the same store the picker writes to.
+  const applyBenchmarkRepair = (deadId: string, repaired: PortfolioBenchmarkDefinition) => {
+    if (!selectedBenchmarks.some((benchmark) => benchmark.id === deadId)) return;
+
+    const replaced = selectedBenchmarks.map((benchmark) =>
+      benchmark.id === deadId ? repaired : benchmark
+    );
+    const nextBenchmarks = replaced.filter(
+      (benchmark, index) => replaced.findIndex((other) => other.id === benchmark.id) === index
+    );
+
+    setSelectedBenchmarkOverride({ sourceSignature: benchmarkPropSignature, values: nextBenchmarks });
+    persistBenchmarkSelection(nextBenchmarks);
+  };
+
+  useEffect(() => {
+    benchmarkRepairContextRef.current = { selectedBenchmarks, apply: applyBenchmarkRepair };
+  });
+
+  useEffect(() => {
+    isChartMountedRef.current = true;
+    return () => {
+      isChartMountedRef.current = false;
+    };
+  }, []);
+
+  // An ETF saved without a price source by the old picker (a venue with no
+  // prices) is looked up again and replaced by a venue that has them. One try
+  // per entry per page load, and only once the history showed it has no series.
+  useEffect(() => {
+    if (!repairableBenchmarkIdsSignature) return;
+
+    void (async () => {
+      for (const benchmarkId of repairableBenchmarkIdsSignature.split("|")) {
+        if (benchmarkRepairAttemptedIdsRef.current.has(benchmarkId)) continue;
+        benchmarkRepairAttemptedIdsRef.current.add(benchmarkId);
+
+        const benchmark = benchmarkRepairContextRef.current.selectedBenchmarks.find(
+          (item) => item.id === benchmarkId
+        );
+        if (!benchmark) continue;
+
+        try {
+          const repaired = await repairEtfBenchmark({
+            benchmark,
+            searchEtfs: (query) => searchEtfInstruments({ query }),
+            resolvePrice: resolveEtfListingPrice,
+          });
+
+          if (repaired && isChartMountedRef.current) {
+            benchmarkRepairContextRef.current.apply(benchmarkId, repaired);
+          }
+        } catch {
+          // The note on the card stays; the user can remove and add it again.
+        }
+      }
+    })();
+  }, [repairableBenchmarkIdsSignature]);
 
   const handleAddBenchmark = async (searchResult: AssetSearchResult) => {
     if (pendingBenchmarkResultKey) return;
@@ -3232,6 +3321,15 @@ export default function PortfolioLineCharts({
                     >
                       Usun
                     </button>
+                    {benchmarkIdsWithoutSeries.has(benchmark.id) ? (
+                      <p
+                        className="field-note field-note-error line-visual-benchmark-card-note"
+                        role="status"
+                      >
+                        Brak notowań dla tego benchmarku, więc nie ma go na wykresie. Usuń go
+                        i dodaj ponownie, wybierając giełdę z notowaniami.
+                      </p>
+                    ) : null}
                   </article>
                 );
               })}

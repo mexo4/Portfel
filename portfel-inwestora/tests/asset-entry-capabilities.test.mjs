@@ -11,14 +11,14 @@ import {
 const readSource = (relativePath) =>
   readFile(new URL(`../${relativePath}`, import.meta.url), "utf8");
 
-test("temporary crypto capability hides new entry options without removing the underlying type", () => {
-  assert.equal(CRYPTO_UI_ENABLED, false);
-  assert.equal(isAssetEntryModeEnabled("crypto"), false);
-  assert.equal(VISIBLE_SEARCH_MODE_OPTIONS.some((option) => option.kind === "crypto"), false);
-  assert.equal(VISIBLE_ASSET_ENTRY_MODE_OPTIONS.some((option) => option.value === "crypto"), false);
+test("crypto can be added to a portfolio like stocks and ETFs", () => {
+  assert.equal(CRYPTO_UI_ENABLED, true);
+  assert.equal(isAssetEntryModeEnabled("crypto"), true);
+  assert.equal(VISIBLE_SEARCH_MODE_OPTIONS.some((option) => option.kind === "crypto"), true);
+  assert.equal(VISIBLE_ASSET_ENTRY_MODE_OPTIONS.some((option) => option.value === "crypto"), true);
 });
 
-test("crypto entry stays gated while historical broker imports remain lossless", async () => {
+test("the crypto capability switch still gates entry while historical broker imports remain lossless", async () => {
   const importPanel = await readSource("src/components/BrokerImportPanel.tsx");
   const platformPicker = await readSource("src/components/ImportPlatformPicker.tsx");
   const portfolioApp = await readSource("src/components/PortfolioApp.tsx");

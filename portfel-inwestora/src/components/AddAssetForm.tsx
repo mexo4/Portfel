@@ -308,7 +308,7 @@ export default function AddAssetForm({
           <input
             type="number"
             min="0"
-            step="0.0001"
+            step={draft.kind === "crypto" ? "any" : "0.0001"}
             value={draft.quantityInput}
             onChange={(event) =>
               onDraftChange({
@@ -325,7 +325,7 @@ export default function AddAssetForm({
           <input
             type="number"
             min="0"
-            step="0.0001"
+            step={draft.kind === "crypto" ? "any" : "0.0001"}
             value={draft.purchasePriceInput}
             onChange={(event) =>
               onDraftChange({

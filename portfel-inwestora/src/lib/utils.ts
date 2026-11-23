@@ -54,11 +54,17 @@ export const toDateInputValue = (
 };
 
 export const formatCurrency = (value: number, currency: CurrencyCode = "PLN") => {
+  // A unit price of a few millionths (PEPE, SHIB, BONK) would print as 0,0000.
+  // Below one cent keep three significant digits instead of fixed decimals.
+  const isSubCent = Number.isFinite(value) && value !== 0 && Math.abs(value) < 0.01;
+
   try {
     return new Intl.NumberFormat("pl-PL", {
       style: "currency",
       currency,
-      maximumFractionDigits: currency === "PLN" ? 2 : 4,
+      ...(isSubCent
+        ? { maximumSignificantDigits: 3 }
+        : { maximumFractionDigits: currency === "PLN" ? 2 : 4 }),
     }).format(value);
   } catch {
     return `${new Intl.NumberFormat("pl-PL", {

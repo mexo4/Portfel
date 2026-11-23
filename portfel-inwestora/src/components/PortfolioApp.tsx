@@ -2807,7 +2807,11 @@ export default function PortfolioApp({
       // Other portfolios keep their persisted last-known-good snapshots until
       // the user opens them. The virtual all-portfolios read model is the one
       // intentional exception, because it displays every position together.
-      const selectedIds = new Set(selectedPortfolioIds);
+      // Read through the ref: `selectedPortfolioIds` gets a new identity on every
+      // `portfolios` change (each applied quote), and a dependency on it made
+      // `syncQuotes` change identity too, which re-ran the refresh effect below
+      // and started another full pass right after every pass that changed a price.
+      const selectedIds = new Set(selectedPortfolioIdsRef.current);
       const visiblePortfolios = currentPortfolios.filter((portfolio) => selectedIds.has(portfolio.id));
       const visibleAssets = visiblePortfolios.flatMap((portfolio) => portfolio.assets);
       const assetsToRefresh =
@@ -2938,7 +2942,7 @@ export default function PortfolioApp({
         quoteRefreshInFlightRef.current = null;
       }
     }
-  }, [replaceWorkspace, selectedPortfolioIds]);
+  }, [replaceWorkspace]);
 
   const handleRefreshPortfolioData = async () => {
     setIsRefreshing(true);
@@ -2974,7 +2978,9 @@ export default function PortfolioApp({
     }, AUTO_REFRESH_INTERVAL_MS);
 
     return () => window.clearInterval(intervalId);
-  }, [activePortfolioId, assets.length, syncQuotes]);
+    // `operationScopeKey` is a string of the selected portfolio ids, so a changed
+    // selection still triggers a refresh while a price update does not.
+  }, [activePortfolioId, assets.length, operationScopeKey, syncQuotes]);
 
   const hasCryptoAssets = useMemo(
     () =>

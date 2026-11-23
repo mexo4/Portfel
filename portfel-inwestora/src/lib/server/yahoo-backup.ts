@@ -72,7 +72,7 @@ const YAHOO_SUFFIX_BY_EODHD_EXCHANGE: Readonly<Record<string, string>> = {
 };
 
 /** Bloomberg (OpenFIGI) exchange code -> Yahoo ticker suffix. */
-const YAHOO_SUFFIX_BY_OPENFIGI_EXCHANGE: Readonly<Record<string, string>> = {
+export const YAHOO_SUFFIX_BY_OPENFIGI_EXCHANGE: Readonly<Record<string, string>> = {
   US: "",
   GR: ".DE",
   GY: ".F",

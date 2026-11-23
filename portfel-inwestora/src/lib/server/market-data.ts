@@ -8,6 +8,7 @@ import {
   CRYPTO_BINANCE_PAIR_BY_COINGECKO_ID,
   CRYPTO_COINGECKO_ID_BY_SYMBOL,
 } from "@/lib/crypto-catalog";
+import { stooqCooldown } from "@/lib/server/provider-cooldown";
 import { fetchYahooQuote, searchYahooStocks } from "@/lib/server/yahoo";
 import {
   fetchYahooBackupCryptoQuote,
@@ -265,6 +266,24 @@ const safeFetch = async (
   } finally {
     clearTimeout(timeoutId);
   }
+};
+
+/**
+ * Every Stooq request. Stooq does not answer from the production server, and a
+ * GPW quote used to ask it through several calls (1 s each, per symbol
+ * spelling) before EODHD or Yahoo could answer: ~5.4 s for a position. A
+ * request that gets no response counts towards the shared cooldown, and while
+ * it is open Stooq is not asked at all, so the quote comes from the next
+ * source at once. A response of any kind, even a refusal, is not "no answer".
+ */
+const safeFetchStooq = async (url: string, init?: RequestInit, timeoutMs?: number) => {
+  if (stooqCooldown.isCoolingDown()) return null;
+
+  const response = await safeFetch(url, init, timeoutMs);
+
+  if (!response) stooqCooldown.markUnavailable();
+
+  return response;
 };
 
 const logStooqDiagnostic = (payload: {
@@ -595,7 +614,7 @@ const fetchStooqHistoryQuoteForRequestSymbol = async (
     `${today.slice(0, 4)}-${today.slice(4, 6)}-${today.slice(6, 8)}`,
     -35
   ).replaceAll("-", "");
-  const response = await safeFetch(
+  const response = await safeFetchStooq(
     `https://stooq.pl/q/d/l/?s=${encodeURIComponent(requestSymbol)}&d1=${historyStart}&d2=${today}&i=d`,
     {
       headers: {
@@ -659,7 +678,7 @@ const fetchStooqLiveCsvQuote = async (
   const requestSymbols = getStooqSymbolCandidates(symbol);
 
   for (const requestSymbol of requestSymbols) {
-    const response = await safeFetch(
+    const response = await safeFetchStooq(
       `https://stooq.pl/q/l/?s=${encodeURIComponent(requestSymbol)}&f=sd2t2ohlcv&e=csv`,
       {
         headers: {
@@ -1029,7 +1048,7 @@ const fetchStooqQuote = async (
 
   for (const requestSymbol of requestSymbols) {
     for (const domain of STOOQ_DOMAINS) {
-      const liveResponse = await safeFetch(
+      const liveResponse = await safeFetchStooq(
         `${domain}/q/l/?s=${encodeURIComponent(requestSymbol)}&f=sd2t2ohlcv&h&e=json`,
         {
           headers: {
@@ -1086,7 +1105,7 @@ const fetchStooqQuote = async (
         });
       }
 
-      const csvLiveResponse = await safeFetch(
+      const csvLiveResponse = await safeFetchStooq(
         `${domain}/q/l/?s=${encodeURIComponent(requestSymbol)}&f=sd2t2ohlcv&e=csv`,
         {
           headers: {
@@ -1153,7 +1172,7 @@ const fetchStooqQuote = async (
         `${today.slice(0, 4)}-${today.slice(4, 6)}-${today.slice(6, 8)}`,
         -35
       ).replaceAll("-", "");
-      const historyResponse = await safeFetch(
+      const historyResponse = await safeFetchStooq(
         `${domain}/q/d/l/?s=${encodeURIComponent(requestSymbol)}&d1=${historyStart}&d2=${today}&i=d`,
         {
           headers: {

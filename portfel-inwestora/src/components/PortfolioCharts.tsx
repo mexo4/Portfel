@@ -133,7 +133,7 @@ export default function PortfolioCharts({
           setBenchmarkState({
             signature: benchmarkSignature,
             comparisons: [],
-            error: error instanceof Error ? error.message : "Nie udalo sie pobrac benchmarkow.",
+            error: error instanceof Error ? error.message : "Nie udało się pobrać benchmarków.",
           });
         }
       }
@@ -205,7 +205,7 @@ export default function PortfolioCharts({
 
   const portfolioComparison: BenchmarkComparison = {
     id: "portfolio",
-    label: "Twoj portfel",
+    label: "Twój portfel",
     investedPln: comparisonInvested,
     currentValuePln: round(totalValue),
     profitLossPln: combinedProfitLoss,
@@ -302,7 +302,7 @@ export default function PortfolioCharts({
 
       {view !== "benchmarks" ? <section className="panel chart-card">
         <p className="eyebrow">Struktura</p>
-        <h2 className="section-title">Najwieksze pozycje portfela</h2>
+        <h2 className="section-title">Największe pozycje portfela</h2>
         <p className="section-copy">
           Szybko widzisz, ktore aktywa dominuja w wartosci calego portfela.
         </p>
@@ -342,7 +342,7 @@ export default function PortfolioCharts({
 
       {view !== "benchmarks" ? <section className="panel chart-card">
         <p className="eyebrow">Dywersyfikacja</p>
-        <h2 className="section-title">Udzial klas aktywow</h2>
+        <h2 className="section-title">Udział klas aktywów</h2>
         <p className="section-copy">
           Podzial portfela na aktywa inwestycyjne i gotowke.
         </p>

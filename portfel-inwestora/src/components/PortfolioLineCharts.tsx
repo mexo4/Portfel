@@ -1688,7 +1688,7 @@ export default function PortfolioLineCharts({
           stats: [],
           yAxisTickFormatter: (value) => formatCompactCurrency(value, baseCurrency),
           emptyTitle: "Brakuje historii do wykresu wartości",
-          emptyCopy: "Dodaj aktywa albo poczekaj, az pojawi sie seria dziennych punktow.",
+          emptyCopy: "Dodaj aktywa albo poczekaj, aż pojawi się seria dziennych punktów.",
         };
       }
 
@@ -1746,7 +1746,7 @@ export default function PortfolioLineCharts({
         yAxisDomain,
         yAxisTickFormatter: (value) => formatCompactCurrency(value, baseCurrency),
         emptyTitle: "Brakuje historii do wykresu wartości",
-        emptyCopy: "Dodaj aktywa albo poczekaj, az pojawi sie seria dziennych punktow.",
+        emptyCopy: "Dodaj aktywa albo poczekaj, aż pojawi się seria dziennych punktów.",
       };
     }
 
@@ -1760,7 +1760,7 @@ export default function PortfolioLineCharts({
       if (!firstPoint || !lastPoint) {
         return {
           title: "Zwrot procentowy",
-          copy: "Wynik portfela liczony jako procent kapitalu netto.",
+          copy: "Wynik portfela liczony jako procent kapitału netto.",
           data: [],
           lines: [],
           summaryLabel: "Brak danych",
@@ -1783,7 +1783,7 @@ export default function PortfolioLineCharts({
 
       return {
         title: "Zwrot procentowy",
-        copy: "Ten widok pokazuje, jaki procent kapitalu netto stanowi biezacy wynik portfela.",
+        copy: "Ten widok pokazuje, jaki procent kapitału netto stanowi bieżący wynik portfela.",
         data: visibleReturnPoints,
         lines: [
           {
@@ -1833,19 +1833,19 @@ export default function PortfolioLineCharts({
       if (!firstPoint || !lastPoint) {
         return {
           title: "Drawdown",
-          copy: "Spadek od najwyzszego punktu do biezacej wyceny.",
+          copy: "Spadek od najwyższego punktu do bieżącej wyceny.",
           data: [],
           lines: [],
           summaryLabel: "Brak danych",
           summaryValue: "0,00%",
-          deltaLabel: "Najglebszy spadek",
+          deltaLabel: "Najgłębszy spadek",
           deltaValue: "0,00%",
           deltaTone: "tone-neutral",
           stats: [],
           referenceValue: 0,
           yAxisTickFormatter: formatAxisPercent,
           emptyTitle: "Brakuje danych do drawdownu",
-          emptyCopy: "Drawdown potrzebuje ciaglej serii wycen portfela.",
+          emptyCopy: "Drawdown potrzebuje ciągłej serii wycen portfela.",
         };
       }
 
@@ -1856,7 +1856,7 @@ export default function PortfolioLineCharts({
 
       return {
         title: "Drawdown",
-        copy: "Widok ryzyka w stylu TradingView: ile portfel oddal od ostatniego maksimum.",
+        copy: "Widok ryzyka w stylu TradingView: ile portfel oddał od ostatniego maksimum.",
         data: visibleDrawdownPoints,
         lines: [
           {
@@ -1871,9 +1871,9 @@ export default function PortfolioLineCharts({
                 : null,
           },
         ],
-        summaryLabel: "Biezacy drawdown",
+        summaryLabel: "Bieżący drawdown",
         summaryValue: formatPercent(lastPoint.drawdownPercent),
-        deltaLabel: "Najglebszy spadek",
+        deltaLabel: "Najgłębszy spadek",
         deltaValue: formatPercent(worstDrawdown),
         deltaTone: getToneClass(worstDrawdown),
         stats: [
@@ -1886,7 +1886,7 @@ export default function PortfolioLineCharts({
             value: formatCurrency(lastPoint.runningPeakPln, baseCurrency),
           },
           {
-            label: "Odbicie od dolka",
+            label: "Odbicie od dołka",
             value: formatPercent(lastRecoveryPercent),
             tone: getToneClass(lastRecoveryPercent - 100),
           },
@@ -1894,7 +1894,7 @@ export default function PortfolioLineCharts({
         referenceValue: 0,
         yAxisTickFormatter: formatAxisPercent,
         emptyTitle: "Brakuje danych do drawdownu",
-        emptyCopy: "Drawdown potrzebuje ciaglej serii wycen portfela.",
+        emptyCopy: "Drawdown potrzebuje ciągłej serii wycen portfela.",
       };
     }
 
@@ -1902,7 +1902,7 @@ export default function PortfolioLineCharts({
       if (selectedBenchmarks.length === 0 || comparisonPoints.length === 0) {
         return {
           title: "Portfel vs benchmark",
-          copy: "Porownanie stopy zwrotu portfela z benchmarkami w stylu myfund.",
+          copy: "Porównanie stopy zwrotu portfela z benchmarkami w stylu myfund.",
           data: [],
           lines: [],
           summaryLabel: "Dodaj benchmark",
@@ -2079,7 +2079,7 @@ export default function PortfolioLineCharts({
       if (visibleBenchmarkDefinitions.length === 0) {
         return {
           title: "Portfel vs benchmark",
-          copy: "Dodane benchmarki sa ukryte, a portfel zostaje widoczny jako zmiana procentowa.",
+          copy: "Dodane benchmarki są ukryte, a portfel zostaje widoczny jako zmiana procentowa.",
           data,
           lines: [portfolioLine],
           summaryLabel: "Portfel w zakresie",
@@ -2117,7 +2117,7 @@ export default function PortfolioLineCharts({
       if (visibleBenchmarkModels.length === 0) {
         return {
           title: "Portfel vs benchmark",
-          copy: "Portfel jest widoczny, ale wybrane benchmarki nie zwrocily uzywalnej historii kursu.",
+          copy: "Portfel jest widoczny, ale wybrane benchmarki nie zwróciły używalnej historii kursu.",
           data,
           lines: [portfolioLine],
           summaryLabel: "Portfel w zakresie",
@@ -2219,7 +2219,7 @@ export default function PortfolioLineCharts({
         stats,
         referenceValue: 0,
         yAxisTickFormatter: formatAxisPercent,
-        emptyTitle: "Brakuje serii benchmarkow",
+        emptyTitle: "Brakuje serii benchmarków",
         emptyCopy:
           "Ten tryb potrzebuje historii kursu benchmarku do policzenia stopy zwrotu.",
       };
@@ -2231,7 +2231,7 @@ export default function PortfolioLineCharts({
     if (!firstPoint || !lastPoint) {
       return {
         title: "Zmiana dzienna",
-        copy: "Dzien do dnia, z szybkim odczytem rytmu portfela.",
+        copy: "Dzień do dnia, z szybkim odczytem rytmu portfela.",
         data: [],
         lines: [],
         summaryLabel: "Brak danych",
@@ -2243,7 +2243,7 @@ export default function PortfolioLineCharts({
         referenceValue: 0,
         yAxisTickFormatter: (value) => formatCompactCurrency(value, baseCurrency),
         emptyTitle: "Brakuje danych do zmian dziennych",
-        emptyCopy: "Zmiana dzienna pojawi sie po zebraniu kolejnych punktow historii.",
+        emptyCopy: "Zmiana dzienna pojawi się po zebraniu kolejnych punktów historii.",
       };
     }
 
@@ -2256,7 +2256,7 @@ export default function PortfolioLineCharts({
 
     return {
       title: "Zmiana dzienna",
-      copy: "Szybki widok sesja do sesji, dobry do oceny zmiennosci i tempa portfela.",
+      copy: "Szybki widok sesja do sesji, dobry do oceny zmienności i tempa portfela.",
       data: visibleDailyChangePoints,
       lines: [
         {
@@ -2278,12 +2278,12 @@ export default function PortfolioLineCharts({
       deltaTone: getToneClass(lastPoint.dailyChangePercent),
       stats: [
         {
-          label: "Najlepszy dzien",
+          label: "Najlepszy dzień",
           value: formatSignedCurrency(bestDayPln, baseCurrency),
           tone: getToneClass(bestDayPln),
         },
         {
-            label: "Najslabszy dzien",
+            label: "Najsłabszy dzień",
           value: formatSignedCurrency(worstDayPln, baseCurrency),
           tone: getToneClass(worstDayPln),
         },
@@ -2298,7 +2298,7 @@ export default function PortfolioLineCharts({
       referenceValue: 0,
       yAxisTickFormatter: (value) => formatCompactCurrency(value, baseCurrency),
       emptyTitle: "Brakuje danych do zmian dziennych",
-      emptyCopy: "Zmiana dzienna pojawi sie po zebraniu kolejnych punktow historii.",
+      emptyCopy: "Zmiana dzienna pojawi się po zebraniu kolejnych punktów historii.",
     };
   }, [
     benchmarkSeriesById,
@@ -2887,7 +2887,7 @@ export default function PortfolioLineCharts({
           disabled={!hasRenderableData}
           onClick={handleOpenChartModal}
         >
-          Powieksz
+          Powiększ
         </button>
       )}
     </div>
@@ -2910,7 +2910,7 @@ export default function PortfolioLineCharts({
           disabled={!hasDailyInvestmentResultData}
           onClick={handleOpenChartModal}
         >
-          Powieksz
+          Powiększ
         </button>
       )}
     </div>
@@ -3507,7 +3507,7 @@ export default function PortfolioLineCharts({
             aria-label={
               mode === "daily-investment-result"
                 ? "Powiększony inwestycyjny wynik dzień po dniu"
-                : "Powiekszony wykres liniowy"
+                : "Powiększony wykres liniowy"
             }
             className={
               mode === "daily-investment-result"

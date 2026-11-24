@@ -307,6 +307,13 @@ const getRangePresetSnapshot = (): RangePreset => {
 };
 const getRangePresetServerSnapshot = (): RangePreset => "1M";
 
+// False while the server renders and while React hydrates, true afterwards. A portal
+// cannot be hydrated, and the history progress overlay is wanted from the first
+// render, so it must wait for this instead of testing `typeof document`.
+const subscribeToMount = () => () => undefined;
+const getMountedSnapshot = () => true;
+const getServerMountedSnapshot = () => false;
+
 const MODE_OPTIONS: Array<{
   value: ChartMode;
   label: string;
@@ -941,6 +948,11 @@ export default function PortfolioLineCharts({
     subscribeRangePreset,
     getRangePresetSnapshot,
     getRangePresetServerSnapshot
+  );
+  const isMounted = useSyncExternalStore(
+    subscribeToMount,
+    getMountedSnapshot,
+    getServerMountedSnapshot
   );
   const setRangePreset = useCallback((nextPreset: RangePreset) => {
     rangePresetMemory = nextPreset;
@@ -3456,7 +3468,7 @@ export default function PortfolioLineCharts({
       )}
       </section>
 
-      {isHistoryPending && typeof document !== "undefined"
+      {isHistoryPending && isMounted
         ? createPortal(
             <div className="portfolio-history-progress" role="status" aria-live="polite">
               <div className="portfolio-history-progress-heading">

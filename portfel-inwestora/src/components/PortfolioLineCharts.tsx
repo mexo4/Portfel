@@ -314,13 +314,13 @@ const MODE_OPTIONS: Array<{
 }> = [
   {
     value: "value",
-    label: "Wartosc portfela",
-    copy: "glowna linia wartosci i kapital netto",
+    label: "Wartość portfela",
+    copy: "główna linia wartości i kapitał netto",
   },
   {
     value: "return",
     label: "Zwrot procentowy",
-    copy: "wynik od poczatku w %",
+    copy: "wynik od początku w %",
   },
   {
     value: "drawdown",

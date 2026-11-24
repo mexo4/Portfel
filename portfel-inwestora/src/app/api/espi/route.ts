@@ -26,8 +26,8 @@ export async function GET(request: Request) {
       await synchronizePapEspi({ backfillPages: 2 });
     } else if (sync.isStale && !sync.isRefreshing) {
       // Existing records are returned immediately. Next.js keeps this task
-      // alive after the response, which gives Netlify a true stale-while-
-      // revalidate path without one external request per user.
+      // alive after the response, which gives a true stale-while-revalidate
+      // path without one external request per user.
       after(async () => {
         await synchronizePapEspi();
       });

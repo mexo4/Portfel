@@ -5,8 +5,11 @@ import { getUserDashboardLayouts, saveUserDashboardLayouts } from "@/lib/server/
 
 export const runtime = "nodejs";
 
+// Only the portfolio ids are needed to authorise a scope, so skip the issuer-country lookup.
+const ONLY_PORTFOLIO_IDS = { enrichIssuerCountries: false } as const;
+
 export async function GET(request: Request) {
-  const account = await getCurrentAccountData();
+  const account = await getCurrentAccountData(ONLY_PORTFOLIO_IDS);
   if (!account) return NextResponse.json({ error: "Brak autoryzacji." }, { status: 401 });
 
   const scopeKey = getAuthorizedDashboardScope(request, new Set(account.portfolios.map((item) => item.id)));
@@ -16,7 +19,7 @@ export async function GET(request: Request) {
 }
 
 export async function PUT(request: Request) {
-  const account = await getCurrentAccountData();
+  const account = await getCurrentAccountData(ONLY_PORTFOLIO_IDS);
   if (!account) return NextResponse.json({ error: "Brak autoryzacji." }, { status: 401 });
 
   const scopeKey = getAuthorizedDashboardScope(request, new Set(account.portfolios.map((item) => item.id)));

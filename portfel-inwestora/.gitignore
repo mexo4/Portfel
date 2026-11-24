@@ -44,3 +44,10 @@ next-env.d.ts
 /dist/
 .vinext/
 .wrangler/
+
+# local SQLite database from before the PostgreSQL migration: holds accounts and
+# password hashes, never commit it (the migration script still reads it from here)
+/.data/
+
+# local dev-server logs
+*.log

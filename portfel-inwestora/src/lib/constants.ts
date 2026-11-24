@@ -11,7 +11,7 @@ import type {
 
 export const APP_NAME = "Portfel inwestora";
 export const APP_DESCRIPTION =
-  "MVP do sledzenia akcji, ETF-ow i obligacji z wycena w PLN.";
+  "Prywatny panel do śledzenia akcji, ETF-ów, obligacji i kryptowalut z wyceną w PLN.";
 
 /**
  * Product capability switch, deliberately kept in one place.  It gates only

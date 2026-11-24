@@ -10090,6 +10090,12 @@ textarea {
   gap: 16px;
 }
 
+/* The implicit auto column took the min-content width of the chart card (880 px),
+   so on a phone the whole analysis page was wider than the screen. */
+.workspace-analysis-page {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .workspace-page-actions {
   border-bottom: 1px solid rgba(20, 35, 48, .07);
   padding: 0 0 13px;
@@ -10542,7 +10548,10 @@ textarea {
 
 @media (max-width: 860px) {
   .workspace-mobile-header {
-    grid-template-columns: 34px minmax(0, 1fr) 38px;
+    /* Four children: brand, portfolio switcher, currency select, quick action. The
+       currency column had been dropped here, so the quick action wrapped to a
+       second row and the 68 px select overflowed the 38 px track past the edge. */
+    grid-template-columns: 34px minmax(0, 1fr) auto 38px;
     min-height: 62px;
     gap: 10px;
     padding: max(8px, env(safe-area-inset-top)) 12px 8px;
@@ -10925,4 +10934,20 @@ textarea {
   .aggregate-operation-values > strong { white-space: normal; }
   .aggregate-operation-detail-grid { grid-template-columns: minmax(0, 1fr); }
   .aggregate-operation-detail-grid > .aggregate-operation-note { grid-column: auto; }
+}
+
+/* Touch screens: text links such as the legal links in the footer, "Nie pamiętasz
+   hasła?" and "Utwórz konto" are only 18-24 px tall, which is hard to hit with a
+   thumb. Vertical padding with an equal negative margin enlarges the hit area
+   to about 44 px without moving anything on the page. */
+@media (pointer: coarse) {
+  .public-legal-links a,
+  .marketing-nav-legal,
+  .auth-inline-link a,
+  .auth-switch-copy a,
+  .auth-link {
+    display: inline-block;
+    padding-block: 12px;
+    margin-block: -12px;
+  }
 }

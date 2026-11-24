@@ -411,6 +411,22 @@ export const getCurrentAuthenticatedUser = async () => {
   return sessionUser ? toAuthenticatedUser(sessionUser) : null;
 };
 
+/**
+ * The signed-in user together with their profile, for endpoints that never
+ * look at the portfolio.  Same shape as the `user` and `profile` of
+ * getCurrentAccountData, without parsing the portfolio, merging quote snapshots
+ * or enriching issuer countries on every call.
+ */
+export const getCurrentAccountIdentity = async () => {
+  const sessionUser = await getCurrentSessionUser();
+  if (!sessionUser) return null;
+
+  return {
+    user: toAuthenticatedUser(sessionUser),
+    profile: parseUserProfile(sessionUser),
+  };
+};
+
 export const isGoogleAccountLinkedToUser = async (userId: string, providerAccountId: string) => {
   const linked = await queryOne<{ user_id: string }>(
     `SELECT user_id FROM auth_accounts

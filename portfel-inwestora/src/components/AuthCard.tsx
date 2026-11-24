@@ -89,7 +89,7 @@ export default function AuthCard({
     const submittedPassword = passwordRef.current?.value ?? password;
 
     if (isRegister && submittedDisplayName.trim().length < 2) {
-      setError("Podaj nazwe uzytkownika zlozona z co najmniej 2 znakow.");
+      setError("Podaj nazwę użytkownika złożoną z co najmniej 2 znaków.");
       displayNameRef.current?.focus();
       return;
     }
@@ -101,7 +101,7 @@ export default function AuthCard({
     }
 
     if (submittedPassword.length < 8) {
-      setError("Haslo musi miec co najmniej 8 znakow.");
+      setError("Hasło musi mieć co najmniej 8 znaków.");
       passwordRef.current?.focus();
       return;
     }
@@ -123,8 +123,8 @@ export default function AuthCard({
 
         setNotice(
           response.verificationSent
-            ? "Konto utworzone. Wyslalismy email z linkiem potwierdzajacym."
-            : "Konto utworzone. Potwierdz adres email, aby sie zalogowac."
+            ? "Konto utworzone. Wysłaliśmy email z linkiem potwierdzającym."
+            : "Konto utworzone. Potwierdź adres email, aby się zalogować."
         );
         setVerificationPreviewUrl(response.previewUrl);
         return;
@@ -139,14 +139,14 @@ export default function AuthCard({
       if (verificationPayload) {
         setNotice(
           verificationPayload.verificationSent
-            ? "Wyslalismy nowy link potwierdzajacy email."
-            : "Potwierdz email przed logowaniem."
+            ? "Wysłaliśmy nowy link potwierdzający email."
+            : "Potwierdź email przed logowaniem."
         );
         setVerificationPreviewUrl(verificationPayload.previewUrl ?? null);
       }
 
       setError(
-        submitError instanceof Error ? submitError.message : "Nie udalo sie zapisac formularza."
+        submitError instanceof Error ? submitError.message : "Nie udało się zapisać formularza."
       );
     } finally {
       if (!shouldKeepSubmitting) {
@@ -159,7 +159,7 @@ export default function AuthCard({
     <main className="auth-page">
       <div className="auth-layout">
         <section className="auth-brand" aria-labelledby="auth-brand-heading">
-          <Link className="auth-logo" href="/" aria-label="Mexo - strona glowna">
+          <Link className="auth-logo" href="/" aria-label="Mexo - strona główna">
             Mexo
           </Link>
           <div className="auth-brand-copy">
@@ -171,10 +171,10 @@ export default function AuthCard({
         <section className="auth-surface" aria-labelledby="auth-heading">
           <div className="auth-heading-group">
             <p className="auth-section-label">{isRegister ? "Nowe konto" : "Witaj ponownie"}</p>
-            <h2 id="auth-heading">{isRegister ? "Utworz konto" : "Zaloguj sie"}</h2>
+            <h2 id="auth-heading">{isRegister ? "Utwórz konto" : "Zaloguj się"}</h2>
             <p>
               {isRegister
-                ? "Zacznij korzystac z portfela Mexo."
+                ? "Zacznij korzystać z portfela Mexo."
                 : "Kontynuuj do swojego portfela."}
             </p>
           </div>
@@ -186,10 +186,10 @@ export default function AuthCard({
             </a>
           ) : (
             <aside className="auth-local-oauth-notice" aria-label="Lokalne logowanie Google">
-              <strong>Logowanie Google jest niedostepne lokalnie</strong>
+              <strong>Logowanie Google jest niedostępne lokalnie</strong>
               <p>
-                Uzyj emailu i hasla. Konto zalozone przez Google moze ustawic lokalne
-                haslo przez <Link href="/forgot-password">reset hasla</Link> — w trybie
+                Użyj emailu i hasła. Konto założone przez Google może ustawić lokalne
+                hasło przez <Link href="/forgot-password">reset hasła</Link> — w trybie
                 developerskim otrzymasz jednorazowy link na tej stronie.
               </p>
             </aside>
@@ -204,7 +204,7 @@ export default function AuthCard({
           <form className="auth-form" onSubmit={handleSubmit} noValidate>
             {isRegister ? (
               <label className="field">
-                <span>Nazwa uzytkownika</span>
+                <span>Nazwa użytkownika</span>
                 <input
                   ref={displayNameRef}
                   value={displayName}
@@ -230,18 +230,18 @@ export default function AuthCard({
             </label>
 
             <PasswordField
-              label="Haslo"
+              label="Hasło"
               value={password}
               inputRef={passwordRef}
               autoComplete={isRegister ? "new-password" : "current-password"}
               disabled={!isHydrated || isSubmitting}
               onChange={setPassword}
-              placeholder="Minimum 8 znakow"
+              placeholder="Minimum 8 znaków"
             />
 
             {!isRegister ? (
               <p className="auth-inline-link">
-                <Link href="/forgot-password">Nie pamietasz hasla?</Link>
+                <Link href="/forgot-password">Nie pamiętasz hasła?</Link>
               </p>
             ) : null}
 
@@ -259,7 +259,7 @@ export default function AuthCard({
               <p className="field-note">
                 Tryb developerski: {" "}
                 <a className="auth-link" href={verificationPreviewUrl}>
-                  otworz link weryfikacyjny
+                  otwórz link weryfikacyjny
                 </a>
               </p>
             ) : null}
@@ -275,15 +275,15 @@ export default function AuthCard({
                   ? "Tworzenie konta..."
                   : "Logowanie..."
                 : isRegister
-                  ? "Utworz konto"
-                  : "Zaloguj sie"}
+                  ? "Utwórz konto"
+                  : "Zaloguj się"}
             </button>
           </form>
 
           <p className="auth-switch-copy">
-            {isRegister ? "Masz juz konto?" : "Nie masz jeszcze konta?"}{" "}
+            {isRegister ? "Masz już konto?" : "Nie masz jeszcze konta?"}{" "}
             <Link href={isRegister ? "/login" : "/register"}>
-              {isRegister ? "Zaloguj sie" : "Utworz konto"}
+              {isRegister ? "Zaloguj się" : "Utwórz konto"}
             </Link>
           </p>
           <nav className="public-legal-links auth-legal-links" aria-label="Dokumenty Mexo">

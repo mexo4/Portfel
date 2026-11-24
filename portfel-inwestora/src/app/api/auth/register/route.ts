@@ -4,6 +4,7 @@ import {
   sendEmailVerificationForUser,
 } from "@/lib/server/auth";
 import { applyAuthRateLimit } from "@/lib/server/auth-rate-limit-response";
+import { getPublicOrigin } from "@/lib/server/public-origin";
 
 export const runtime = "nodejs";
 
@@ -24,8 +25,7 @@ export async function POST(request: Request) {
       password: payload.password ?? "",
     });
 
-    const baseUrl = request.headers.get("origin") ?? new URL(request.url).origin;
-    const verification = await sendEmailVerificationForUser(user.id, baseUrl);
+    const verification = await sendEmailVerificationForUser(user.id, getPublicOrigin(request));
 
     return NextResponse.json({
       user,

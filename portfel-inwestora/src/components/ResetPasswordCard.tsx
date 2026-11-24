@@ -20,12 +20,12 @@ export default function ResetPasswordCard({ token }: ResetPasswordCardProps) {
 
   const handleSubmit = async () => {
     if (!token.trim()) {
-      setError("Brakuje tokenu resetu hasla.");
+      setError("Brakuje tokenu resetu hasła.");
       return;
     }
 
     if (password.length < 8) {
-      setError("Nowe haslo musi miec co najmniej 8 znakow.");
+      setError("Nowe hasło musi mieć co najmniej 8 znaków.");
       passwordRef.current?.focus();
       return;
     }
@@ -41,10 +41,10 @@ export default function ResetPasswordCard({ token }: ResetPasswordCardProps) {
 
     try {
       await resetPassword({ token, password });
-      setSuccess("Haslo zostalo zmienione. Mozesz zalogowac sie nowym haslem.");
+      setSuccess("Hasło zostało zmienione. Możesz zalogować się nowym hasłem.");
     } catch (submitError) {
       setError(
-        submitError instanceof Error ? submitError.message : "Nie udalo sie zmienic hasla."
+        submitError instanceof Error ? submitError.message : "Nie udało się zmienić hasła."
       );
     } finally {
       setIsSubmitting(false);
@@ -55,30 +55,30 @@ export default function ResetPasswordCard({ token }: ResetPasswordCardProps) {
     <main className="page-shell">
       <div className="auth-shell">
         <section className="panel auth-card">
-          <p className="eyebrow">Nowe haslo</p>
-          <h1 className="auth-title">Ustaw nowe haslo</h1>
+          <p className="eyebrow">Nowe hasło</p>
+          <h1 className="auth-title">Ustaw nowe hasło</h1>
           <p className="section-copy">
-            Link resetu jest jednorazowy i po zmianie hasla wylogowujemy wszystkie stare
+            Link resetu jest jednorazowy i po zmianie hasła wylogowujemy wszystkie stare
             sesje tego konta.
           </p>
 
           <div className="auth-form mt-6">
             <PasswordField
-              label="Nowe haslo"
+              label="Nowe hasło"
               value={password}
               inputRef={passwordRef}
               autoComplete="new-password"
               onChange={setPassword}
-              placeholder="Minimum 8 znakow"
+              placeholder="Minimum 8 znaków"
             />
 
             <PasswordField
-              label="Powtorz haslo"
+              label="Powtórz hasło"
               value={confirmPassword}
               inputRef={confirmPasswordRef}
               autoComplete="new-password"
               onChange={setConfirmPassword}
-              placeholder="Wpisz to samo haslo jeszcze raz"
+              placeholder="Wpisz to samo hasło jeszcze raz"
             />
 
             {success ? <p className="field-note">{success}</p> : null}
@@ -92,13 +92,13 @@ export default function ResetPasswordCard({ token }: ResetPasswordCardProps) {
               }}
               disabled={isSubmitting || Boolean(success)}
             >
-              {isSubmitting ? "Zmieniam haslo..." : "Zapisz nowe haslo"}
+              {isSubmitting ? "Zmieniam hasło..." : "Zapisz nowe hasło"}
             </button>
           </div>
 
           <p className="section-copy mt-6">
             <Link href="/login" className="auth-link">
-              Wroc do logowania
+              Wróć do logowania
             </Link>
           </p>
         </section>

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import {
-  getCurrentAccountData,
+  getCurrentAccountIdentity,
   updateCurrentUserProfile,
 } from "@/lib/server/auth";
 import type { UserProfile } from "@/types/portfolio";
@@ -8,7 +8,7 @@ import type { UserProfile } from "@/types/portfolio";
 export const runtime = "nodejs";
 
 export async function GET() {
-  const accountData = await getCurrentAccountData();
+  const accountData = await getCurrentAccountIdentity();
 
   if (!accountData) {
     return NextResponse.json({ error: "Brak autoryzacji." }, { status: 401 });
@@ -21,7 +21,7 @@ export async function GET() {
 }
 
 export async function PUT(request: Request) {
-  const accountData = await getCurrentAccountData();
+  const accountData = await getCurrentAccountIdentity();
 
   if (!accountData) {
     return NextResponse.json({ error: "Brak autoryzacji." }, { status: 401 });

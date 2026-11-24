@@ -10,6 +10,8 @@ const workspaceRoot = path.resolve(configDirectory, "..");
 const releaseRevision = process.env.MEXO_BUILD_REVISION?.trim() || "local";
 
 const nextConfig: NextConfig = {
+  // The framework name and version are not information a visitor needs.
+  poweredByHeader: false,
   // Production deploys build into a separate directory and atomically switch
   // the runtime .next symlink only after the staged build has passed checks.
   distDir: process.env.MEXO_BUILD_DIST_DIR?.trim() || ".next",

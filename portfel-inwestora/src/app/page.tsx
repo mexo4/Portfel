@@ -3,9 +3,9 @@ import { getCurrentAccountData } from "@/lib/server/auth";
 import PublicLegalLinks from "@/components/PublicLegalLinks";
 
 const featureItems = [
-  "Akcje, ETF-y i obligacje skarbowe w jednym portfelu",
-  "Wycena w PLN z kursami FX i historia sprzedazy",
-  "Wykresy struktury, wyniku i porownania z benchmarkami",
+  "Akcje, ETF-y, obligacje skarbowe i kryptowaluty w jednym portfelu",
+  "Wycena w PLN z kursami FX i historią sprzedaży",
+  "Wykresy struktury, wyniku i porównania z benchmarkami",
 ];
 
 export default async function HomePage() {
@@ -26,7 +26,7 @@ export default async function HomePage() {
           </Link>
           {accountData ? (
             <Link href="/app" className="primary-button">
-              Otworz aplikacje
+              Otwórz aplikację
             </Link>
           ) : (
             <Link href="/login" className="ghost-button">
@@ -41,12 +41,12 @@ export default async function HomePage() {
           <p className="eyebrow">Portfolio tracker dla inwestora</p>
           <h1>Portfel Inwestora</h1>
           <p>
-            Prywatny panel do sledzenia aktywow, transakcji, obligacji i wyniku w PLN.
-            Możesz zacząć bezpłatnie. Obsługa nowych kryptowalut jest tymczasowo wyłączona.
+            Prywatny panel do śledzenia aktywów, transakcji, obligacji i wyniku w PLN.
+            Możesz zacząć bezpłatnie.
           </p>
           <div className="marketing-actions">
             <Link href={appHref} className="primary-button">
-              {accountData ? "Przejdz do portfela" : "Zaloz darmowe konto"}
+              {accountData ? "Przejdź do portfela" : "Załóż darmowe konto"}
             </Link>
             <Link href="/pricing" className="ghost-button">
               Zobacz plany
@@ -62,7 +62,7 @@ export default async function HomePage() {
           </div>
           <div className="shot-grid">
             <div className="shot-main-metric">
-              <span>Wartosc portfela</span>
+              <span>Wartość portfela</span>
               <strong>128 420 PLN</strong>
             </div>
             <div className="shot-small-metric tone-positive">+12.8%</div>

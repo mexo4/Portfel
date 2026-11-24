@@ -30,3 +30,6 @@ next-env.d.ts
 
 # generated deterministic GPW audit reports (uploaded by CI, never committed)
 portfel-inwestora/artifacts/gpw-quality/
+
+# ad-hoc mobile review screenshots
+mobile-screenshots-*/

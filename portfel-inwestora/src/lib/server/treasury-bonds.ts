@@ -1,3 +1,4 @@
+import { createInFlightDeduper } from "@/lib/server/in-flight";
 import { getMarketCachePayload, setMarketCachePayload } from "@/lib/server/market-cache";
 import {
   addUtcYears,
@@ -333,28 +334,36 @@ const buildRateSchedule = async (series: TreasuryBondSeries) => {
   return rateSchedule;
 };
 
-export const resolveTreasuryBondSeries = async (code: string) => {
+// /api/bonds/series asks for the series and for a quote at once, and the quote
+// resolves the same series again. Both used to miss the cache together and each
+// scraped the official offer page (and its issue letter) on its own.
+const seriesResolutions = createInFlightDeduper<TreasuryBondSeries>();
+
+export const resolveTreasuryBondSeries = (code: string): Promise<TreasuryBondSeries> => {
   const normalizedCode = normalizeSymbol(code);
-  const cacheKey = `${SERIES_CACHE_PREFIX}${normalizedCode}`;
-  const cachedSeries = await getCachedPayload<TreasuryBondSeries>(
-    cacheKey,
-    SERIES_CACHE_TTL_MS
-  );
 
-  if (cachedSeries) {
-    return cachedSeries;
-  }
+  return seriesResolutions(normalizedCode, async () => {
+    const cacheKey = `${SERIES_CACHE_PREFIX}${normalizedCode}`;
+    const cachedSeries = await getCachedPayload<TreasuryBondSeries>(
+      cacheKey,
+      SERIES_CACHE_TTL_MS
+    );
 
-  const baseSeries = await parseSeriesMetadata(normalizedCode);
-  const rateSchedule = await buildRateSchedule(baseSeries);
-  const resolvedSeries = {
-    ...baseSeries,
-    rateSchedule,
-    resolvedAt: new Date().toISOString(),
-  } satisfies TreasuryBondSeries;
+    if (cachedSeries) {
+      return cachedSeries;
+    }
 
-  await setCachedPayload(cacheKey, resolvedSeries);
-  return resolvedSeries;
+    const baseSeries = await parseSeriesMetadata(normalizedCode);
+    const rateSchedule = await buildRateSchedule(baseSeries);
+    const resolvedSeries = {
+      ...baseSeries,
+      rateSchedule,
+      resolvedAt: new Date().toISOString(),
+    } satisfies TreasuryBondSeries;
+
+    await setCachedPayload(cacheKey, resolvedSeries);
+    return resolvedSeries;
+  });
 };
 
 const getRateForYear = (series: TreasuryBondSeries, yearIndex: number) =>

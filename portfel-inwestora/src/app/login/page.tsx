@@ -21,7 +21,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
   const params = await searchParams;
   const initialNotice =
     params.oauthNotice ??
-    (params.verified ? "Email potwierdzony. Mozesz sie zalogowac." : null);
+    (params.verified ? "Email potwierdzony. Możesz się zalogować." : null);
   const googleOAuthConfiguration = getGoogleOAuthConfigurationPresence();
   const googleOAuthAvailable =
     process.env.NODE_ENV === "production" ||

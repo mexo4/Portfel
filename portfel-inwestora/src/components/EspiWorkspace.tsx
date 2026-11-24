@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePortfolioWorkspace } from "@/components/PortfolioWorkspaceContext";
-import { fetchEspiFeed, refreshEspi } from "@/lib/api";
+import { ApiError, fetchEspiFeed, refreshEspi } from "@/lib/api";
 import {
   ESPI_CATEGORIES,
   ESPI_CATEGORY_LABELS,
@@ -137,6 +137,8 @@ export default function EspiWorkspace() {
     identity: string;
     feed: EspiFeedResponse | null;
     error: string | null;
+    /** The API answered 403: this account has no ESPI access. Not an application error. */
+    denied?: boolean;
   } | null>(null);
   const [loadingMoreIdentity, setLoadingMoreIdentity] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -147,9 +149,12 @@ export default function EspiWorkspace() {
   const requestIdentityRef = useRef(requestIdentity);
   requestIdentityRef.current = requestIdentity;
   const feed = feedState?.identity === requestIdentity ? feedState.feed : null;
-  const applicationError = feedState?.identity === requestIdentity
-    ? feedState.error
-    : refreshError?.identity === requestIdentity ? refreshError.message : null;
+  const accessDenied = feedState?.identity === requestIdentity && feedState.denied === true;
+  const applicationError = accessDenied
+    ? null
+    : feedState?.identity === requestIdentity
+      ? feedState.error
+      : refreshError?.identity === requestIdentity ? refreshError.message : null;
   const isLoading = feedState?.identity !== requestIdentity;
   const isLoadingMore = loadingMoreIdentity === requestIdentity;
 
@@ -188,6 +193,7 @@ export default function EspiWorkspace() {
           identity: requestIdentity,
           feed: current?.identity === requestIdentity ? current.feed : null,
           error: error instanceof Error ? error.message : "Nie udało się odczytać raportów ESPI.",
+          denied: error instanceof ApiError && error.status === 403,
         }));
       }
     } finally {
@@ -266,6 +272,7 @@ export default function EspiWorkspace() {
       </form>
 
       {sourceUnavailable ? <div className="espi-source-notice" role="status"><strong>Źródło ESPI jest chwilowo niedostępne.</strong><span>Pokazujemy ostatnie poprawnie zapisane raporty; istniejące dane nie zostały usunięte.</span></div> : null}
+      {accessDenied ? <div className="espi-source-notice" role="status"><strong>Moduł ESPI nie jest dostępny dla tego konta.</strong><span>Raporty ESPI włącza administrator. Reszta aplikacji działa bez zmian.</span></div> : null}
       {applicationError ? <div className="espi-error-state" role="alert"><strong>Błąd aplikacji</strong><span>{applicationError}</span><button type="button" className="ghost-button" onClick={() => void load()}>Spróbuj ponownie</button></div> : null}
 
       {isLoading && !feed ? <div className="espi-feed-loading" aria-label="Wczytywanie raportów ESPI">{Array.from({ length: 5 }, (_, index) => <div key={index} />)}</div> : null}

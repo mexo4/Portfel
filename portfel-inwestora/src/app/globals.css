@@ -4911,8 +4911,7 @@ textarea {
   gap: 10px;
 }
 
-.performance-metric-loading,
-.performance-metric-unavailable {
+.performance-metric-loading {
   color: var(--muted);
   font-weight: 650;
 }
@@ -5022,9 +5021,11 @@ textarea {
   color: var(--accent);
 }
 
+/* Cards fill every row, so a last row with fewer cards stretches instead of leaving an
+   empty cell. The 1px gaps over the grid's own background are the hairlines. */
 .risk-metric-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  display: flex;
+  flex-wrap: wrap;
   gap: 1px;
   border: 1px solid var(--line);
   border-radius: 15px;
@@ -5032,9 +5033,13 @@ textarea {
   background: var(--line);
 }
 
-.risk-metric-grid-summary,
-.risk-metric-grid-featured {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+.risk-metric-grid > .risk-metric-card {
+  flex: 1 1 190px;
+}
+
+.risk-metric-grid-summary > .risk-metric-card,
+.risk-metric-grid-featured > .risk-metric-card {
+  flex-basis: calc((100% - 2px) / 3);
 }
 
 .risk-metric-card {
@@ -5061,44 +5066,74 @@ textarea {
   letter-spacing: 0.015em;
 }
 
-.risk-metric-help {
-  position: relative;
-  flex: 0 0 auto;
-}
-
-.risk-metric-help summary {
+.risk-metric-info {
   display: grid;
-  width: 18px;
-  height: 18px;
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  padding: 0;
   place-items: center;
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-strong);
   border-radius: 50%;
   color: var(--muted);
+  background: transparent;
   cursor: help;
+  font: inherit;
   font-size: 0.68rem;
   font-weight: 800;
-  list-style: none;
+  line-height: 1;
 }
 
-.risk-metric-help summary::-webkit-details-marker { display: none; }
-.risk-metric-help summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.risk-metric-info:hover,
+.risk-metric-info[aria-expanded="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
 
-.risk-metric-help p {
-  position: absolute;
-  z-index: 8;
-  right: 0;
-  bottom: calc(100% + 8px);
-  width: min(250px, 70vw);
-  margin: 0;
-  padding: 10px 11px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
+.risk-metric-info:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Fixed and in a portal: the grid above clips its content, so a popover inside it was cut off. */
+.risk-metric-popover {
+  position: fixed;
+  z-index: 90;
+  display: grid;
+  gap: 4px;
+  padding: 11px 13px;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
   color: var(--text);
-  background: var(--surface);
-  box-shadow: 0 12px 28px rgba(20, 35, 48, 0.16);
-  font-size: 0.72rem;
+  background: var(--surface-strong);
+  box-shadow: 0 14px 34px rgba(20, 35, 48, 0.2);
+}
+
+.risk-metric-popover strong {
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.risk-metric-popover p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.76rem;
   font-weight: 600;
-  line-height: 1.45;
+  line-height: 1.5;
+}
+
+@media (pointer: coarse) {
+  .risk-metric-info {
+    position: relative;
+  }
+
+  /* About 44 px to hit with a thumb, without growing the visible button. */
+  .risk-metric-info::after {
+    position: absolute;
+    inset: -12px;
+    content: "";
+  }
 }
 
 .risk-metric-card > strong {
@@ -5258,10 +5293,10 @@ textarea {
 .risk-monthly-matrix .tone-neutral { color: var(--muted); }
 
 @media (max-width: 1024px) {
-  .risk-metric-grid,
-  .risk-metric-grid-summary,
-  .risk-metric-grid-featured {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .risk-metric-grid > .risk-metric-card,
+  .risk-metric-grid-summary > .risk-metric-card,
+  .risk-metric-grid-featured > .risk-metric-card {
+    flex-basis: calc((100% - 1px) / 2);
   }
 }
 
@@ -5285,10 +5320,10 @@ textarea {
     grid-template-columns: 1fr;
   }
 
-  .risk-metric-grid,
-  .risk-metric-grid-summary,
-  .risk-metric-grid-featured {
-    grid-template-columns: 1fr;
+  .risk-metric-grid > .risk-metric-card,
+  .risk-metric-grid-summary > .risk-metric-card,
+  .risk-metric-grid-featured > .risk-metric-card {
+    flex-basis: 100%;
   }
 
   .performance-heading-actions,
@@ -5310,10 +5345,6 @@ textarea {
   .risk-section-heading > span,
   .risk-section-heading > span a {
     text-align: left;
-  }
-
-  .risk-metric-grid {
-    grid-template-columns: 1fr;
   }
 
   .risk-metric-card,
@@ -10674,7 +10705,8 @@ textarea {
 .portfolio-scope-overview-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
 .portfolio-scope-overview-head > div { min-width: 0; }
 .portfolio-scope-overview-head > span { flex: 0 0 auto; border: 1px solid var(--line); border-radius: 999px; padding: 6px 10px; color: var(--muted); background: var(--surface-soft); font-size: .7rem; font-weight: 750; }
-.portfolio-scope-overview-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+/* As many columns as there are cards (3 or 4), so there is never an empty cell. */
+.portfolio-scope-overview-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
 .portfolio-scope-overview-metrics > article { display: grid; min-width: 0; align-content: start; gap: 8px; border: 1px solid var(--line); border-radius: 14px; padding: 15px 16px; background: var(--surface-soft); }
 .portfolio-scope-overview-metrics > article > span { display: block; color: var(--muted); font-size: .72rem; font-weight: 700; line-height: 1.35; }
 .portfolio-scope-overview-metrics > article > strong { display: block; min-width: 0; font-size: clamp(1.05rem, 2vw, 1.35rem); font-variant-numeric: tabular-nums; font-weight: 800; letter-spacing: -.035em; line-height: 1.2; overflow-wrap: anywhere; }
@@ -10699,7 +10731,7 @@ textarea {
 @media (max-width: 640px) {
   .portfolio-scope-overview-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
   .portfolio-scope-overview-metrics > article { gap: 7px; padding: 13px 12px; }
-  .portfolio-scope-overview-metrics > article:last-child { grid-column: 1 / -1; }
+  .portfolio-scope-overview-metrics > article:last-child:nth-child(odd) { grid-column: 1 / -1; }
   .portfolio-scope-breakdown > button { grid-template-columns: minmax(0, 1fr) minmax(70px, .65fr) 14px; gap: 8px; padding-inline: 6px; }
   .workspace-aggregate-dividend-list > li { align-items: flex-start; gap: 8px; }
   .workspace-aggregate-dividend-list > li > span:last-child { max-width: 46%; }

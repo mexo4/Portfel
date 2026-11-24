@@ -155,14 +155,24 @@ export function WorkspaceWatchlistPage() { return <WatchlistWorkspace />; }
 export function WorkspaceEventsPage() { const workspace = usePortfolioWorkspace(); return <div className="workspace-page"><GpwEventsWorkspace portfolioId={workspace.portfolioScope.mode === "CUSTOM" ? "custom" : workspace.isAllRealPortfoliosSelected ? "all" : workspace.activePortfolioId} portfolioIds={workspace.portfolioScope.mode === "CUSTOM" ? workspace.selectedPortfolioIds : undefined} /></div>; }
 export function WorkspaceGeneralMeetingsPage() { const workspace = usePortfolioWorkspace(); return <div className="workspace-page"><CorporateEventsPanel portfolioId={workspace.portfolioScope.mode === "CUSTOM" ? "custom" : workspace.isAllRealPortfoliosSelected ? "all" : workspace.activePortfolioId} portfolioIds={workspace.portfolioScope.mode === "CUSTOM" ? workspace.selectedPortfolioIds : undefined} variant="general-meetings" /></div>; }
 export function WorkspaceSettingsPage() { return <div className="workspace-page workspace-settings-page">{usePortfolioWorkspace().settingsWorkspace}</div>; }
+const getPositionsLabel = (count: number) =>
+  count === 1 ? "pozycja" : count % 10 >= 2 && count % 10 <= 4 && (count % 100 < 10 || count % 100 >= 20) ? "pozycje" : "pozycji";
+
 function SelectedPortfolioOverview() {
   const workspace = usePortfolioWorkspace();
   const totalValuePln = workspace.selectedPortfolioSummaries.reduce((sum, item) => sum + item.summary.totalValuePln, 0);
+  const marketValuePln = workspace.selectedPortfolioSummaries.reduce((sum, item) => sum + item.summary.marketValuePln, 0);
+  const cashValuePln = workspace.selectedPortfolioSummaries.reduce((sum, item) => sum + item.summary.cashValuePln, 0);
+  const positionsCount = workspace.selectedPortfolioSummaries.reduce((sum, item) => sum + item.summary.positionsCount, 0);
+  const formatInPresentationCurrency = (valuePln: number) =>
+    formatCurrency(convertFromPln(valuePln, workspace.presentationCurrency, workspace.fxRates), workspace.presentationCurrency);
   return <section className="panel portfolio-scope-overview">
     <div className="portfolio-scope-overview-head"><div><p className="eyebrow">Analizowany zakres</p><h2 className="section-title">{workspace.portfolioScopeLabel}</h2><p className="section-copy">Wirtualny widok tylko do odczytu; rzeczywiste rachunki i ich transakcje pozostają rozdzielone.</p></div><span>{workspace.selectedPortfolios.length} {workspace.selectedPortfolios.length === 1 ? "portfel" : "portfeli"}</span></div>
     <div className="workspace-performance-metric-grid portfolio-scope-overview-metrics mt-5">
       <article><span>Łączna wartość</span><strong>{formatCurrency(workspace.summaryTotalValue, workspace.activeBaseCurrency)}</strong></article>
       <article><span>Zysk / strata</span><strong className={workspace.summaryCombinedProfitLoss >= 0 ? "tone-positive" : "tone-negative"}>{formatCurrency(workspace.summaryCombinedProfitLoss, workspace.activeBaseCurrency)}</strong></article>
+      {positionsCount > 0 ? <article><span>Wartość pozycji · {positionsCount} {getPositionsLabel(positionsCount)}</span><strong>{formatInPresentationCurrency(marketValuePln)}</strong></article> : null}
+      {Math.abs(cashValuePln) >= 0.005 ? <article><span>Gotówka</span><strong className={cashValuePln < 0 ? "tone-negative" : undefined}>{formatInPresentationCurrency(cashValuePln)}</strong></article> : null}
     </div>
     {workspace.selectedPortfolioSummaries.length ? <div className="portfolio-scope-breakdown mt-5" aria-label="Wartość według portfela">{workspace.selectedPortfolioSummaries.map(({ portfolio, summary }) => {
       const share = totalValuePln > 0 ? Math.max(0, Math.min(100, summary.totalValuePln / totalValuePln * 100)) : 0;

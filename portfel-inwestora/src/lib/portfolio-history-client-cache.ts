@@ -13,7 +13,9 @@ export type PortfolioHistoryRequestDescriptor = {
 // Same window as the server's stored copy: a reload inside it needs no API call.
 const HISTORY_REQUEST_CACHE_TTL_MS = PORTFOLIO_HISTORY_RESPONSE_TTL_MS;
 const HISTORY_REQUEST_CACHE_MAX_ENTRIES = 8;
-const SESSION_CACHE_STORAGE_KEY = "mexo.portfolio-history.v1";
+// v2: histories saved by v1 had wrong net invested / P&L / returns for broker imports (see
+// HISTORY_ENGINE_VERSION in the history route), so they must not be shown from this tab's copy.
+const SESSION_CACHE_STORAGE_KEY = "mexo.portfolio-history.v2";
 const SESSION_CACHE_MAX_CHARS = 1_500_000;
 const historyProgressByKey = new Map<string, PortfolioHistoryProgress>();
 const historyProgressListeners = new Map<

@@ -52,11 +52,21 @@ const buildHistoryOnce = (
 type HistoryCacheStatus = "hit" | "stored" | "miss" | "shared";
 
 /**
+ * Part of every cache key, in memory and in the database. Raise it whenever the
+ * history calculation changes what it returns for the same input, so a result
+ * computed by the old code is never served from either copy.
+ *
+ * 2: purchases imported from a broker without a lotId are no longer counted as
+ *    new capital (net invested, P/L and the flow-neutral returns were wrong).
+ */
+const HISTORY_ENGINE_VERSION = "2";
+
+/**
  * `key` identifies a calculation in memory; `storeKey` is the same identity
  * without the user, because the stored copy has its own user column.
  */
 const historyBuildKeys = (userId: string, revision: number, input: unknown) => {
-  const storeKey = `${revision}:${createHash("sha256").update(JSON.stringify(input)).digest("hex")}`;
+  const storeKey = `${HISTORY_ENGINE_VERSION}:${revision}:${createHash("sha256").update(JSON.stringify(input)).digest("hex")}`;
   return { key: `${userId}:${storeKey}`, storeKey };
 };
 

@@ -220,7 +220,7 @@ test("the session record keeps a hash of the request, not the request, so a big 
 
   await cache.getOrLoad(bigKey, async () => ({ points: [1] }));
 
-  const record = JSON.parse(storage.getItem("mexo.portfolio-history.v1"));
+  const record = JSON.parse(storage.getItem("mexo.portfolio-history.v2"));
 
   // The whole key alone was 1.4 MB, over the 1.5 MB limit once the response was added.
   assert.equal("key" in record, false);
@@ -238,7 +238,7 @@ test("the session record keeps a hash of the request, not the request, so a big 
 test("a record in the older format, which carried the whole key, is dropped and rebuilt", async () => {
   const storage = createSessionStorage();
   storage.setItem(
-    "mexo.portfolio-history.v1",
+    "mexo.portfolio-history.v2",
     JSON.stringify({ key: "same-request", expiresAt: Date.now() + 60_000, response: { points: ["stale format"] } })
   );
   let loads = 0;

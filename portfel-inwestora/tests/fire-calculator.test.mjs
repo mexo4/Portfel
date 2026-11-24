@@ -64,6 +64,26 @@ test("negative real return does not loop and reports an unreachable target", () 
   assert.ok(result.projection.every((point) => Number.isFinite(point.value) && point.value >= 0));
 });
 
+test("zero monthly expenses are held at the 1 PLN minimum, and the form says so", async () => {
+  const result = calculateFire({
+    age: 30,
+    portfolio: 100_000,
+    monthlyExpenses: 0,
+    monthlyContribution: 0,
+    annualReturnPercent: 7,
+    inflationPercent: 2.5,
+    safeWithdrawalRatePercent: 4,
+    useRealValues: true,
+  });
+  const calculator = await readFile(new URL("../src/app/narzedzia/kalkulator-fire/FireCalculator.tsx", import.meta.url), "utf8");
+
+  // 1 PLN a month at a 4% rate is a 300 PLN target: finite and non-NaN, but not
+  // a meaningful answer, so the expenses field warns instead of presenting it as one.
+  assert.equal(result.target, 300);
+  assert.equal(result.isAlreadyFire, true);
+  assert.match(calculator, /Wpisz wydatki większe od zera/);
+});
+
 test("public page exposes the FIRE route, FAQ and related tool links", async () => {
   const page = await readFile(new URL("../src/app/narzedzia/kalkulator-fire/page.tsx", import.meta.url), "utf8");
   const calculator = await readFile(new URL("../src/app/narzedzia/kalkulator-fire/FireCalculator.tsx", import.meta.url), "utf8");

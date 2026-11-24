@@ -151,7 +151,7 @@ export default function FireCalculator() {
 
         <div className={styles.fieldsGrid}>
           <MoneyInput id="fire-portfolio" label="Aktualny portfel" value={inputs.portfolio} onChange={(value) => update("portfolio", value)} hint="Wartość kapitału, który już pracuje." />
-          <MoneyInput id="fire-expenses" label="Miesięczne wydatki" value={inputs.monthlyExpenses} onChange={(value) => update("monthlyExpenses", value)} hint="Kwota potrzebna do wygodnego życia." />
+          <MoneyInput id="fire-expenses" label="Miesięczne wydatki" value={inputs.monthlyExpenses} onChange={(value) => update("monthlyExpenses", value)} hint={inputs.monthlyExpenses >= 1 ? "Kwota potrzebna do wygodnego życia." : "Wpisz wydatki większe od zera. Przy 0 zł liczymy cel dla 1 zł miesięcznie, więc wynik nie ma sensu."} />
           <MoneyInput id="fire-contribution" label="Miesięczne inwestowanie" value={inputs.monthlyContribution} onChange={(value) => update("monthlyContribution", value)} hint="Regularna wpłata do portfela." />
           <label className={styles.field} htmlFor="fire-age">
             <span className={styles.fieldLabel}>Wiek teraz</span>

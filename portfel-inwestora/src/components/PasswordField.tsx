@@ -42,8 +42,8 @@ export default function PasswordField({
           className="password-toggle"
           disabled={disabled}
           onClick={() => setIsVisible((current) => !current)}
-          aria-label={isVisible ? "Ukryj haslo" : "Pokaz haslo"}
-          title={isVisible ? "Ukryj haslo" : "Pokaz haslo"}
+          aria-label={isVisible ? "Ukryj hasło" : "Pokaż hasło"}
+          title={isVisible ? "Ukryj hasło" : "Pokaż hasło"}
         >
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z" />

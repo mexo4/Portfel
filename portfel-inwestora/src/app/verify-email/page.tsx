@@ -14,17 +14,17 @@ export default async function VerifyEmailPage({
   const token = params.token ?? "";
 
   let title = "Email zweryfikowany";
-  let copy = "Adres email zostal potwierdzony. Mozesz wrocic do aplikacji i korzystac z konta.";
+  let copy = "Adres email został potwierdzony. Możesz wrócić do aplikacji i korzystać z konta.";
   let isError = false;
 
   try {
     await verifyEmailToken(token);
   } catch (error) {
-    title = "Nie udalo sie zweryfikowac emaila";
+    title = "Nie udało się zweryfikować emaila";
     copy =
       error instanceof Error
         ? error.message
-        : "Link weryfikacyjny jest niepoprawny albo juz wygasl.";
+        : "Link weryfikacyjny jest niepoprawny albo już wygasł.";
     isError = true;
   }
 
@@ -40,7 +40,7 @@ export default async function VerifyEmailPage({
 
           <p className="section-copy mt-6">
             <Link href={isError ? "/" : "/login?verified=1"} className="auth-link">
-              {isError ? "Wroc do aplikacji" : "Przejdz do logowania"}
+              {isError ? "Wróć do aplikacji" : "Przejdź do logowania"}
             </Link>
           </p>
         </section>

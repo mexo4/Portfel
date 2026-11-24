@@ -20,14 +20,14 @@ export default function PasswordResetRequestCard() {
     try {
       const response = await requestPasswordReset(email);
       setMessage(
-        "Jesli konto z tym adresem istnieje, link do ustawienia nowego hasla jest gotowy."
+        "Jeśli konto z tym adresem istnieje, link do ustawienia nowego hasła jest gotowy."
       );
       setPreviewUrl(response.previewUrl);
     } catch (submitError) {
       setError(
         submitError instanceof Error
           ? submitError.message
-          : "Nie udalo sie przygotowac resetu hasla."
+          : "Nie udało się przygotować resetu hasła."
       );
     } finally {
       setIsSubmitting(false);
@@ -38,10 +38,10 @@ export default function PasswordResetRequestCard() {
     <main className="page-shell">
       <div className="auth-shell">
         <section className="panel auth-card">
-          <p className="eyebrow">Reset hasla</p>
+          <p className="eyebrow">Reset hasła</p>
           <h1 className="auth-title">Odzyskaj dostep do konta</h1>
           <p className="section-copy">
-            Podaj email przypisany do konta. W trybie developerskim pokazemy Ci od razu
+            Podaj email przypisany do konta. W trybie developerskim pokażemy Ci od razu
             link do resetu.
           </p>
 
@@ -61,7 +61,7 @@ export default function PasswordResetRequestCard() {
               <p className="field-note">
                 Tryb developerski:{" "}
                 <a className="auth-link" href={previewUrl}>
-                  otworz formularz nowego hasla
+                  otwórz formularz nowego hasła
                 </a>
               </p>
             ) : null}
@@ -75,14 +75,14 @@ export default function PasswordResetRequestCard() {
               }}
               disabled={isSubmitting}
             >
-              {isSubmitting ? "Przygotowuje link..." : "Wyslij link resetu"}
+              {isSubmitting ? "Przygotowuję link..." : "Wyślij link resetu"}
             </button>
           </div>
 
           <p className="section-copy mt-6">
-            Pamietasz haslo?{" "}
+            Pamiętasz hasło?{" "}
             <Link href="/login" className="auth-link">
-              Wroc do logowania
+              Wróć do logowania
             </Link>
           </p>
         </section>

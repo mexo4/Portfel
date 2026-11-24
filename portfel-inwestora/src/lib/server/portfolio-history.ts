@@ -25,6 +25,7 @@ import { shouldTrustHistoricalFxRate } from "@/lib/fx-quality";
 import {
   getOperationCashDeltas,
   getPortfolioAccountArchivedDate,
+  getPortfolioInstrumentId,
 } from "@/lib/operation-engine";
 import { createHash } from "node:crypto";
 import https from "node:https";
@@ -455,6 +456,8 @@ const dedupeAndSortPricePoints = (points: PricePoint[]) => {
 };
 
 const MAX_MISSING_PRICE_SESSIONS = 2;
+/** Quantities of one purchase are compared across a lot, its sales and a broker row. */
+const LEDGER_PURCHASE_QUANTITY_TOLERANCE = 1e-6;
 
 export const hasUnreliableHistoryGap = (
   points: readonly PricePoint[],
@@ -1559,8 +1562,51 @@ export const buildBuyCashflowEvents = (
       .filter((saleId): saleId is string => typeof saleId === "string")
   );
 
+  // A purchase imported from a broker (XTB) is a cash-ledger BUY with cashImpact,
+  // but it carries no lotId: the importer links one only for the lots that are
+  // still open, so the purchases of positions that were sold later (88 of 141 on
+  // a real import) could not be recognised. Their cost was then counted as new
+  // capital at the purchase date while their sale, being mirrored, took nothing
+  // out, so "net invested" grew by the cost of every sold lot (5,493 PLN on a
+  // 7,019 PLN account), the P/L turned negative and the daily returns showed
+  // -67% and -82% on days with a purchase (TWR -97.8%, instead of +48.7%).
+  // Such a purchase is matched by instrument and day, and by the quantity that
+  // is left on that day, so that a legacy lot bought the same day is not lost.
+  const portfolioId = operations.find((operation) => operation.portfolioId)?.portfolioId;
+  const unlinkedLedgerPurchases = new Map<string, number>();
+  if (portfolioId) {
+    for (const operation of operations) {
+      if (
+        operation.operationType !== "BUY" ||
+        operation.metadata.cashImpact !== true ||
+        typeof operation.metadata.lotId === "string" ||
+        !operation.assetId ||
+        !(typeof operation.quantity === "number" && operation.quantity > 0)
+      ) {
+        continue;
+      }
+      const key = `${operation.assetId}|${toDateInputValue(operation.date, "")}`;
+      unlinkedLedgerPurchases.set(key, (unlinkedLedgerPurchases.get(key) ?? 0) + operation.quantity);
+    }
+  }
+  const takeUnlinkedLedgerPurchase = (
+    target: Parameters<typeof getPortfolioInstrumentId>[1],
+    purchaseDate: string,
+    quantity: number
+  ) => {
+    if (!portfolioId || !(quantity > 0)) return false;
+    const key = `${getPortfolioInstrumentId(portfolioId, target)}|${toDateInputValue(purchaseDate, "")}`;
+    const remaining = unlinkedLedgerPurchases.get(key);
+    if (remaining === undefined || remaining + LEDGER_PURCHASE_QUANTITY_TOLERANCE < quantity) return false;
+    unlinkedLedgerPurchases.set(key, remaining - quantity);
+    return true;
+  };
+
   for (const asset of assets) {
     if (cashImpactLotIds.has(asset.id)) {
+      continue;
+    }
+    if (takeUnlinkedLedgerPurchase(asset, asset.purchaseDate, asset.quantity)) {
       continue;
     }
     const investedPln = round(
@@ -1577,6 +1623,21 @@ export const buildBuyCashflowEvents = (
   for (const sale of sales) {
     for (const allocation of sale.allocations) {
       if (cashImpactLotIds.has(allocation.lotId)) {
+        continue;
+      }
+      if (
+        takeUnlinkedLedgerPurchase(
+          {
+            kind: allocation.kind ?? sale.kind,
+            symbol: allocation.symbol ?? sale.symbol,
+            instrumentIdentity: allocation.instrumentIdentity ?? sale.instrumentIdentity,
+            instrumentType: allocation.instrumentType ?? sale.instrumentType,
+            positionDirection: allocation.positionDirection ?? sale.positionDirection,
+          },
+          allocation.purchaseDate,
+          allocation.quantity
+        )
+      ) {
         continue;
       }
       const investedPln = round(

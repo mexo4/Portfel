@@ -144,8 +144,9 @@ test("an answer, even an empty or a refusal, is not an unreachable host", async 
   };
 
   try {
-    assert.equal(await safeFetchText(notFound.url, 1_000, onUnreachable), null);
-    assert.match(String(await safeFetchText(csv.url, 1_000, onUnreachable)), /2026-11-23,1,2,0.5,1.5/);
+    // A generous deadline: these answer at once, and a loaded machine must not turn them into timeouts.
+    assert.equal(await safeFetchText(notFound.url, 5_000, onUnreachable), null);
+    assert.match(String(await safeFetchText(csv.url, 5_000, onUnreachable)), /2026-11-23,1,2,0.5,1.5/);
     assert.equal(unreachable, 0);
   } finally {
     notFound.close();

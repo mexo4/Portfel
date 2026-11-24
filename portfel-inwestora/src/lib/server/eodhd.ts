@@ -1,5 +1,7 @@
+import { createInFlightDeduper } from "@/lib/server/in-flight";
 import { getMarketCachePayload, setMarketCachePayload } from "@/lib/server/market-cache";
 import { isProviderLimitStatus, logProviderHttpFailure } from "@/lib/server/provider-diagnostics";
+import { createTtlMemo } from "@/lib/server/ttl-memo";
 import { normalizeSymbol } from "@/lib/ticker";
 import { normalizeText, round, toCurrencyCode, uniqueBy } from "@/lib/utils";
 import type {
@@ -87,6 +89,11 @@ const EODHD_SEARCH_CACHE_TTL_MS = 5 * 60 * 1_000;
 const EODHD_EXCHANGE_CACHE_TTL_MS = 24 * 60 * 60 * 1_000;
 const EODHD_QUOTE_CACHE_TTL_MS = 30_000;
 const FX_RATE_CACHE_TTL_MS = 5 * 60 * 1_000;
+// A pair EODHD cannot price (not in the plan, no key, delisted) used to be asked again on
+// every request, which cost 600-800 ms per /api/fx call before NBP answered. A failed pair
+// is now left alone for a few minutes, and a pair that is down fails fast.
+const FX_PAIR_FAILURE_TTL_MS = 5 * 60 * 1_000;
+const FX_PAIR_TIMEOUT_MS = 4_000;
 const EODHD_ISSUER_SEARCH_CACHE_TTL_MS = 24 * 60 * 60 * 1_000;
 
 const EODHD_FALLBACK_EXCHANGES = [
@@ -946,20 +953,34 @@ const timestampToDate = (timestamp: number | undefined) => {
   return Number.isFinite(date.getTime()) ? date.toISOString().slice(0, 10) : null;
 };
 
-const fetchFxPairRate = async (pair: string): Promise<EodhdFxRate | null> => {
-  const response = await fetchJson<EodhdQuoteResponse>(
-    `${EODHD_API_ROOT}/real-time/${encodeURIComponent(pair)}?api_token=${encodeURIComponent(EODHD_API_KEY)}&fmt=json`
-  );
+const fxPairFailures = createTtlMemo<true>({ ttlMs: FX_PAIR_FAILURE_TTL_MS, maxEntries: 200 });
+const fxPairInFlight = createInFlightDeduper<EodhdFxRate | null>();
 
-  if (typeof response?.close === "number" && response.close > 0) {
-    return { rate: round(response.close, 6), asOf: timestampToDate(response.timestamp) };
-  }
+const fetchFxPairRate = (pair: string): Promise<EodhdFxRate | null> => {
+  if (!hasEodhdApiKey()) return Promise.resolve(null);
+  if (fxPairFailures.get(pair)) return Promise.resolve(null);
 
-  if (typeof response?.previousClose === "number" && response.previousClose > 0) {
-    return { rate: round(response.previousClose, 6), asOf: timestampToDate(response.timestamp) };
-  }
+  // Several currencies are resolved in parallel and share the USDPLN leg.
+  return fxPairInFlight(pair, async () => {
+    const response = await fetchJson<EodhdQuoteResponse>(
+      `${EODHD_API_ROOT}/real-time/${encodeURIComponent(pair)}?api_token=${encodeURIComponent(EODHD_API_KEY)}&fmt=json`,
+      FX_PAIR_TIMEOUT_MS
+    );
+    const asOf = timestampToDate(response?.timestamp);
 
-  return null;
+    if (typeof response?.close === "number" && response.close > 0) {
+      fxPairFailures.delete(pair);
+      return { rate: round(response.close, 6), asOf };
+    }
+
+    if (typeof response?.previousClose === "number" && response.previousClose > 0) {
+      fxPairFailures.delete(pair);
+      return { rate: round(response.previousClose, 6), asOf };
+    }
+
+    fxPairFailures.set(pair, true);
+    return null;
+  });
 };
 
 const fetchFxRateToPlnDetailed = async (code: CurrencyCode): Promise<EodhdFxRate | null> => {

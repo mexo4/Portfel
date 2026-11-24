@@ -2,7 +2,6 @@ export const PERFORMANCE_METRIC_IDS = [
   "portfolio-value",
   "total-result",
   "net-external-capital",
-  "twr",
   "xirr",
   "cagr",
   "latest-value-change",
@@ -34,7 +33,6 @@ export const PERFORMANCE_METRIC_LABELS: Record<PerformanceMetricId, string> = {
   "portfolio-value": "Aktualna wartość",
   "total-result": "Wynik łączny",
   "net-external-capital": "Kapitał zewnętrzny netto",
-  twr: "TWR",
   xirr: "XIRR",
   cagr: "CAGR",
   "latest-value-change": "Ostatnia zmiana wartości",
@@ -62,7 +60,7 @@ export const PERFORMANCE_METRIC_SECTIONS: Array<{
   title: string;
   metricIds: PerformanceMetricId[];
 }> = [
-  { title: "Podsumowanie", metricIds: ["portfolio-value", "total-result", "net-external-capital", "twr", "xirr", "cagr"] },
+  { title: "Podsumowanie", metricIds: ["portfolio-value", "total-result", "net-external-capital", "xirr", "cagr"] },
   { title: "Statystyki wyniku", metricIds: ["latest-value-change", "best-day", "best-daily-result", "worst-day", "best-month", "worst-month", "best-year", "worst-year"] },
   { title: "Ryzyko", metricIds: ["volatility", "max-drawdown", "time-under-water"] },
   { title: "Efektywność ryzyka", metricIds: ["sharpe", "sortino", "calmar"] },

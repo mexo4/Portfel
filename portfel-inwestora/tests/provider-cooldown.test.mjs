@@ -121,7 +121,9 @@ test("a host that hangs is given up on at the deadline, once, and reported as un
     // One attempt, not the same request again over a second client: that
     // retry doubled the wait (and it was the 20 s of the ~31 s on production).
     assert.ok(elapsedMs < 1_000, `gave up after ${Math.round(elapsedMs)} ms`);
-    assert.equal(hanging.requests(), 1);
+    // At most one: on a loaded machine the deadline can pass before the request
+    // even reaches the server (0), but it must never be sent a second time.
+    assert.ok(hanging.requests() <= 1, `server saw ${hanging.requests()} requests`);
   } finally {
     hanging.close();
   }
@@ -142,8 +144,9 @@ test("an answer, even an empty or a refusal, is not an unreachable host", async 
   };
 
   try {
-    assert.equal(await safeFetchText(notFound.url, 1_000, onUnreachable), null);
-    assert.match(String(await safeFetchText(csv.url, 1_000, onUnreachable)), /2026-11-23,1,2,0.5,1.5/);
+    // A generous deadline: these answer at once, and a loaded machine must not turn them into timeouts.
+    assert.equal(await safeFetchText(notFound.url, 5_000, onUnreachable), null);
+    assert.match(String(await safeFetchText(csv.url, 5_000, onUnreachable)), /2026-11-23,1,2,0.5,1.5/);
     assert.equal(unreachable, 0);
   } finally {
     notFound.close();

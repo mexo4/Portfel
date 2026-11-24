@@ -10,12 +10,22 @@ import {
   type IssuerCountryResolution,
 } from "@/lib/issuer-country";
 import { resolveEodhdCommonStockIsin } from "@/lib/server/eodhd";
+import { createTtlMemo } from "@/lib/server/ttl-memo";
 
 const GLEIF_API_URL = "https://api.gleif.org/api/v1/lei-records";
 const CONFIRMED_TTL_MS = 1000 * 60 * 60 * 24 * 180;
 const UNRESOLVED_TTL_MS = 1000 * 60 * 60 * 24 * 14;
 const inFlightByIsin = new Map<string, Promise<IssuerCountryResolution | null>>();
 const generationByIsin = new Map<string, number>();
+// Every workspace page and portfolio API enriches the whole book, and an issuer without a stored
+// country was looked up again each time: one or two reads of the shared cache per issuer, about
+// 350 ms per request for a 30-instrument portfolio. The outcome (a country or none) is reused for
+// a few minutes; the database cache underneath keeps its own, much longer, lifetimes.
+const RESOLUTION_MEMO_TTL_MS = 1000 * 60 * 5;
+const resolutionMemo = createTtlMemo<IssuerCountryResolution | null>({
+  ttlMs: RESOLUTION_MEMO_TTL_MS,
+  maxEntries: 2_000,
+});
 
 type CachedIssuerCountry =
   | {
@@ -154,13 +164,23 @@ export const resolveIssuerCountryByIsin = async (rawIsin: string) => {
   const isin = normalizeIssuerIsin(rawIsin);
   if (!isin) return null;
 
+  const memoKey = `isin:${isin}`;
+  const memoized = resolutionMemo.get(memoKey);
+  if (memoized !== undefined) return memoized;
+
   const existing = inFlightByIsin.get(isin);
   if (existing) return existing;
 
   const generation = generationByIsin.get(isin) ?? 0;
-  const pending = resolveUncached(isin, generation).finally(() => {
-    if (inFlightByIsin.get(isin) === pending) inFlightByIsin.delete(isin);
-  });
+  const pending = resolveUncached(isin, generation)
+    .then((resolution) => {
+      // An answer computed before an invalidation must not outlive it.
+      if ((generationByIsin.get(isin) ?? 0) === generation) resolutionMemo.set(memoKey, resolution);
+      return resolution;
+    })
+    .finally(() => {
+      if (inFlightByIsin.get(isin) === pending) inFlightByIsin.delete(isin);
+    });
   inFlightByIsin.set(isin, pending);
   return pending;
 };
@@ -176,8 +196,15 @@ export const resolveIssuerCountryByInstrument = async (
   const existingIsin = normalizeIssuerIsin(identity.isin);
   if (existingIsin) return resolveIssuerCountryByIsin(existingIsin);
 
+  // Legacy lots without an ISIN need an EODHD search first; that whole chain is what is memoised.
+  const memoKey = `identity:${JSON.stringify([identity.symbol, identity.providerId, identity.exchange, identity.name])}`;
+  const memoized = resolutionMemo.get(memoKey);
+  if (memoized !== undefined) return memoized;
+
   const recoveredIsin = await resolveEodhdCommonStockIsin(identity);
-  return recoveredIsin ? resolveIssuerCountryByIsin(recoveredIsin) : null;
+  const resolution = recoveredIsin ? await resolveIssuerCountryByIsin(recoveredIsin) : null;
+  resolutionMemo.set(memoKey, resolution);
+  return resolution;
 };
 
 /** Explicit invalidation hook for a future authoritative issuer-profile refresh. */
@@ -186,5 +213,7 @@ export const invalidateIssuerCountryCacheForIsin = async (rawIsin: string) => {
   if (!isin) return;
   generationByIsin.set(isin, (generationByIsin.get(isin) ?? 0) + 1);
   inFlightByIsin.delete(isin);
+  // Identity memo entries are not keyed by ISIN, so drop them all rather than risk a stale country.
+  resolutionMemo.clear();
   await deleteMarketCachePayload(cacheKeyForIsin(isin));
 };

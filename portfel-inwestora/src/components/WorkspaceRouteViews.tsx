@@ -17,11 +17,9 @@ import PortfolioPerformanceResults from "@/components/PortfolioPerformanceResult
 import PortfolioPositionCards from "@/components/PortfolioPositionCards";
 import { usePortfolioWorkspace } from "@/components/PortfolioWorkspaceContext";
 import { formatCurrency, formatDate } from "@/lib/utils";
-import { fetchPortfolioHistory } from "@/lib/api";
 import { getPortfolioDividends } from "@/lib/dividend-engine";
 import { ensurePortfolioCoreModel } from "@/lib/operation-engine";
 import { convertFromPln } from "@/lib/pricing";
-import type { PortfolioHistoryResponse } from "@/types/portfolio";
 
 const getWorkspaceHistoryScopes = (workspace: ReturnType<typeof usePortfolioWorkspace>) =>
   workspace.isAllPortfoliosSelected
@@ -159,58 +157,12 @@ export function WorkspaceGeneralMeetingsPage() { const workspace = usePortfolioW
 export function WorkspaceSettingsPage() { return <div className="workspace-page workspace-settings-page">{usePortfolioWorkspace().settingsWorkspace}</div>; }
 function SelectedPortfolioOverview() {
   const workspace = usePortfolioWorkspace();
-  const [historyState, setHistoryState] = useState<{
-    signature: string;
-    history: PortfolioHistoryResponse | null;
-    error: boolean;
-  } | null>(null);
-  const selectedKey = workspace.selectedPortfolioIds.join(",");
-  const selectedDataKey = workspace.selectedPortfolioSummaries.map(({ portfolio, summary }) =>
-    `${portfolio.id}:${portfolio.updatedAt}:${portfolio.operations?.length ?? 0}:${summary.totalValuePln}:${summary.combinedProfitLossPln}`
-  ).join("|") + `:${workspace.refreshRevision}:${workspace.presentationCurrency}`;
-
-  useEffect(() => {
-    const controller = new AbortController();
-    void fetchPortfolioHistory({
-      assets: [], sales: [], realizedAdjustments: [],
-      portfolioScopes: workspace.selectedPortfolios.map((portfolio) => ({
-        portfolioId: portfolio.id,
-        accountType: portfolio.accountType,
-        assets: portfolio.assets,
-        sales: portfolio.sales,
-        realizedAdjustments: portfolio.realizedAdjustments,
-        operations: portfolio.operations ?? [],
-        accounts: portfolio.accounts ?? [],
-      })),
-      presentationCurrency: workspace.presentationCurrency,
-      signal: controller.signal,
-    }).then((history) => {
-      if (!controller.signal.aborted) setHistoryState({ signature: selectedDataKey, history, error: false });
-    }).catch((error: unknown) => {
-      if (!controller.signal.aborted && !(error instanceof DOMException && error.name === "AbortError")) {
-        setHistoryState({ signature: selectedDataKey, history: null, error: true });
-      }
-    });
-    return () => controller.abort();
-    // Keep the read model fresh when the same selected set receives new trades or prices.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedDataKey, selectedKey, workspace.presentationCurrency]);
-
-  const historyMatchesScope = historyState?.signature === selectedDataKey;
-  const history = historyMatchesScope ? historyState?.history ?? null : null;
-  const isLoading = !historyMatchesScope;
-  const hasError = historyMatchesScope && historyState?.error === true;
-  const returnPercent = history?.presentationTwrStatus === "complete"
-    ? history.points.at(-1)?.presentationTimeWeightedReturnPercent ?? null
-    : null;
-  const twrReason = history?.presentationTwrStatusReason ?? history?.twrStatusReason;
   const totalValuePln = workspace.selectedPortfolioSummaries.reduce((sum, item) => sum + item.summary.totalValuePln, 0);
-  return <section className="panel portfolio-scope-overview" aria-busy={isLoading}>
+  return <section className="panel portfolio-scope-overview">
     <div className="portfolio-scope-overview-head"><div><p className="eyebrow">Analizowany zakres</p><h2 className="section-title">{workspace.portfolioScopeLabel}</h2><p className="section-copy">Wirtualny widok tylko do odczytu; rzeczywiste rachunki i ich transakcje pozostają rozdzielone.</p></div><span>{workspace.selectedPortfolios.length} {workspace.selectedPortfolios.length === 1 ? "portfel" : "portfeli"}</span></div>
     <div className="workspace-performance-metric-grid portfolio-scope-overview-metrics mt-5">
       <article><span>Łączna wartość</span><strong>{formatCurrency(workspace.summaryTotalValue, workspace.activeBaseCurrency)}</strong></article>
       <article><span>Zysk / strata</span><strong className={workspace.summaryCombinedProfitLoss >= 0 ? "tone-positive" : "tone-negative"}>{formatCurrency(workspace.summaryCombinedProfitLoss, workspace.activeBaseCurrency)}</strong></article>
-      <article><span>Łączna stopa zwrotu · TWR</span><strong title={twrReason ?? undefined}>{isLoading ? "Wczytywanie…" : hasError ? "Niedostępna" : returnPercent === null ? "Brak wiarygodnej historii" : `${returnPercent >= 0 ? "+" : ""}${returnPercent.toLocaleString("pl-PL", { maximumFractionDigits: 2 })}%`}</strong>{returnPercent === null && !isLoading && twrReason ? <small>{twrReason.slice(0, 220)}</small> : null}</article>
     </div>
     {workspace.selectedPortfolioSummaries.length ? <div className="portfolio-scope-breakdown mt-5" aria-label="Wartość według portfela">{workspace.selectedPortfolioSummaries.map(({ portfolio, summary }) => {
       const share = totalValuePln > 0 ? Math.max(0, Math.min(100, summary.totalValuePln / totalValuePln * 100)) : 0;

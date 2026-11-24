@@ -88,6 +88,13 @@ const EODHD_EXCHANGE_SEARCH_TIMEOUT_MS = 5_000;
 const EODHD_SEARCH_CACHE_TTL_MS = 5 * 60 * 1_000;
 const EODHD_EXCHANGE_CACHE_TTL_MS = 24 * 60 * 60 * 1_000;
 const EODHD_QUOTE_CACHE_TTL_MS = 30_000;
+// A listing EODHD has no price for (not in the plan, delisted, a wrong suffix) used to cost two
+// requests on every refresh, the real-time call and then the end-of-day one, before Yahoo
+// answered, as it did for the Warsaw listings checked in production. Such an answer is kept for a few
+// minutes. A reached limit or a network failure says nothing about the listing and is likely to
+// pass, so it is remembered only briefly, just long enough not to spend more of the quota.
+const EODHD_QUOTE_NO_DATA_TTL_MS = 5 * 60 * 1_000;
+const EODHD_QUOTE_TROUBLE_TTL_MS = 60 * 1_000;
 const FX_RATE_CACHE_TTL_MS = 5 * 60 * 1_000;
 // A pair EODHD cannot price (not in the plan, no key, delisted) used to be asked again on
 // every request, which cost 600-800 ms per /api/fx call before NBP answered. A failed pair
@@ -159,6 +166,8 @@ const DISPLAY_SUFFIX_TO_EODHD_EXCHANGES: Record<string, string[]> = {
 };
 
 const quoteCache = new Map<string, { quote: AssetQuote; expiresAt: number }>();
+const quoteNoData = createTtlMemo<true>({ ttlMs: EODHD_QUOTE_NO_DATA_TTL_MS, maxEntries: 500 });
+const quoteTrouble = createTtlMemo<true>({ ttlMs: EODHD_QUOTE_TROUBLE_TTL_MS, maxEntries: 500 });
 const fxRateCache = new Map<string, { rate: number; asOf: string | null; expiresAt: number }>();
 const issuerSearchInFlight = new Map<string, Promise<EodhdSearchItem[] | null>>();
 
@@ -816,6 +825,11 @@ export const fetchEodhdQuote = async ({
     return cachedQuote;
   }
 
+  // Asked a moment ago and got nothing: let the caller go on to its next source.
+  if (quoteNoData.get(normalizedProviderId) || quoteTrouble.get(normalizedProviderId)) {
+    return null;
+  }
+
   const { data: realtimeQuote, status: realtimeStatus } = await fetchJsonWithStatus<EodhdQuoteResponse>(
     `${EODHD_API_ROOT}/real-time/${encodeURIComponent(normalizedProviderId)}?api_token=${encodeURIComponent(EODHD_API_KEY)}&fmt=json`
   );
@@ -854,6 +868,7 @@ export const fetchEodhdQuote = async ({
   // The daily quota or the rate limit is used up: the `/eod/` call below would
   // be refused too, so skip it instead of spending another request.
   if (isProviderLimitStatus(realtimeStatus)) {
+    quoteTrouble.set(normalizedProviderId, true);
     return null;
   }
 
@@ -861,7 +876,7 @@ export const fetchEodhdQuote = async ({
   const dateFrom = new Date(Date.now() - 14 * 24 * 60 * 60 * 1_000)
     .toISOString()
     .slice(0, 10);
-  const history = await fetchJson<EodhdHistoricalItem[]>(
+  const { data: history, status: historyStatus } = await fetchJsonWithStatus<EodhdHistoricalItem[]>(
     `${EODHD_API_ROOT}/eod/${encodeURIComponent(normalizedProviderId)}?api_token=${encodeURIComponent(EODHD_API_KEY)}&fmt=json&from=${dateFrom}&to=${dateTo}`,
     20_000
   );
@@ -891,6 +906,11 @@ export const fetchEodhdQuote = async ({
   const previousClose = historyCloses.length > 1 ? historyCloses.at(-2)?.price : undefined;
 
   if (typeof historyPrice !== "number" || historyPrice <= 0) {
+    // Both calls were answered and neither carried a price: EODHD does not know this listing.
+    // Anything else (a limit, a timeout) may pass, so it is only remembered for a moment.
+    const answered =
+      realtimeStatus !== null && historyStatus !== null && !isProviderLimitStatus(historyStatus);
+    (answered ? quoteNoData : quoteTrouble).set(normalizedProviderId, true);
     return null;
   }
 

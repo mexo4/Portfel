@@ -1,0 +1,40 @@
+name: CI
+
+# Fast quality gate for every pull request, and the gate that the production
+# deploy waits for. It has no path filter on purpose: the heavier PostgreSQL and
+# GPW workflows are path-filtered and can sit idle for weeks, so on their own
+# they do not protect a change to a file outside their lists.
+on:
+  pull_request:
+    branches: [najlepsza-wersja]
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Typecheck, lint and tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Run TypeScript check
+        run: npm --workspace portfel-inwestora exec tsc -- --noEmit
+      - name: Run ESLint
+        run: npm --workspace portfel-inwestora run lint
+      - name: Run application tests
+        # The PostgreSQL integration tests skip themselves without their
+        # database URLs; privacy-data-release.yml and gpw-quality-audit.yml run
+        # them against a real database when their files change.
+        run: npm --workspace portfel-inwestora test
+        env:
+          POSTGRES_CA_CERT_BASE64: ""
+          POSTGRES_CA_CERT_PATH: ""

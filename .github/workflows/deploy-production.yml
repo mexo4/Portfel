@@ -37,8 +37,21 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # A merge into the production branch is a deploy, so the change must pass the
+  # same typecheck, lint and tests as a pull request before anything reaches the
+  # host. Restoring a verified release and the read-only preflight skip it: a
+  # rollback must never wait for, or be blocked by, a test run.
+  verify:
+    name: Verify before deploy
+    if: ${{ !inputs.restore_release && !inputs.preflight_only }}
+    uses: ./.github/workflows/ci.yml
+
   deploy:
     name: Deploy to Oracle
+    needs: verify
+    # `verify` is skipped for restore and preflight runs; a failed or cancelled
+    # verification still blocks the deploy.
+    if: ${{ !cancelled() && (needs.verify.result == 'success' || needs.verify.result == 'skipped') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 35
 

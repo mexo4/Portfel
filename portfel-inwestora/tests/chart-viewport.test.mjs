@@ -100,42 +100,48 @@ test("uses the selected range as the initial viewport while preserving earlier h
   );
 });
 
-test("value chart summaries follow the visible range and preserve flow-neutral TWR semantics", () => {
+test("value chart summaries follow the visible range and report the capital rate of that window", () => {
   const summary = getPortfolioValueRangeSummary([
     {
       date: "2026-01-01",
       portfolioValuePln: 1_000,
       netInvestedPln: 900,
       profitLossPln: 50,
-      timeWeightedReturnPercent: 5,
     },
     {
       date: "2026-02-01",
       portfolioValuePln: 1_200,
       netInvestedPln: 1_000,
       profitLossPln: 100,
-      timeWeightedReturnPercent: 10,
     },
   ]);
 
+  // The window result (100 - 50) over the net invested capital at its end (1,000).
   assert.deepEqual(summary, {
     valueChangePln: 200,
     investmentResultPln: 50,
-    timeWeightedReturnPercent: 4.76,
+    capitalReturnPercent: 5,
     netInvestedChangePln: 100,
   });
+  assert.equal(
+    getPortfolioValueRangeSummary([
+      { date: "2026-01-01", portfolioValuePln: 100, netInvestedPln: 0, profitLossPln: 0 },
+      { date: "2026-02-01", portfolioValuePln: 120, netInvestedPln: 0, profitLossPln: 20 },
+    ])?.capitalReturnPercent,
+    null,
+    "no capital rate without positive net invested capital",
+  );
   assert.deepEqual(getPortfolioValueRangeSummary([
     {
       date: "2026-02-01",
       portfolioValuePln: 1_200,
       netInvestedPln: 1_000,
       profitLossPln: 100,
-      timeWeightedReturnPercent: 10,
     },
   ]), {
     valueChangePln: null,
     investmentResultPln: null,
-    timeWeightedReturnPercent: null,
+    capitalReturnPercent: null,
     netInvestedChangePln: null,
   });
 });

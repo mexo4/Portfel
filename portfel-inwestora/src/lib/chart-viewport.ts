@@ -1,3 +1,4 @@
+import { calculatePeriodCapitalReturnPercent } from "@/lib/portfolio-performance";
 import { round } from "@/lib/utils";
 
 export type ChartRangePreset =
@@ -27,13 +28,13 @@ export type PortfolioValueChartPoint = {
   portfolioValuePln: number;
   netInvestedPln: number;
   profitLossPln: number;
-  timeWeightedReturnPercent: number | null;
 };
 
 export type PortfolioValueRangeSummary = {
   valueChangePln: number | null;
   investmentResultPln: number | null;
-  timeWeightedReturnPercent: number | null;
+  /** Result of the window divided by the net invested capital at its end. */
+  capitalReturnPercent: number | null;
   netInvestedChangePln: number | null;
 };
 
@@ -48,25 +49,19 @@ export const getPortfolioValueRangeSummary = (
     return {
       valueChangePln: null,
       investmentResultPln: null,
-      timeWeightedReturnPercent: null,
+      capitalReturnPercent: null,
       netInvestedChangePln: null,
     };
   }
 
-  const startFactor = first.timeWeightedReturnPercent === null
-    ? null
-    : 1 + first.timeWeightedReturnPercent / 100;
-  const endFactor = last.timeWeightedReturnPercent === null
-    ? null
-    : 1 + last.timeWeightedReturnPercent / 100;
-
   return {
     valueChangePln: round(last.portfolioValuePln - first.portfolioValuePln),
     investmentResultPln: round(last.profitLossPln - first.profitLossPln),
-    timeWeightedReturnPercent:
-      startFactor !== null && endFactor !== null && startFactor > 0 && endFactor >= 0
-        ? round(((endFactor / startFactor) - 1) * 100, 2)
-        : null,
+    capitalReturnPercent: calculatePeriodCapitalReturnPercent(
+      first.profitLossPln,
+      last.profitLossPln,
+      last.netInvestedPln,
+    ),
     netInvestedChangePln: round(last.netInvestedPln - first.netInvestedPln),
   };
 };

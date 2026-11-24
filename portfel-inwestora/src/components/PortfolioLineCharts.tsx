@@ -2385,7 +2385,6 @@ export default function PortfolioLineCharts({
         portfolioValuePln,
         netInvestedPln,
         profitLossPln,
-        timeWeightedReturnPercent: getFiniteNumber(point.timeWeightedReturnPercent),
       }];
     }),
     [renderedChartData]
@@ -2411,11 +2410,11 @@ export default function PortfolioLineCharts({
           tone: getToneClass(rangeSummary.investmentResultPln ?? 0),
         },
         {
-          label: "Zwrot w zakresie · TWR",
-          value: rangeSummary.timeWeightedReturnPercent === null
+          label: "Stopa kapitałowa w zakresie",
+          value: rangeSummary.capitalReturnPercent === null
             ? "—"
-            : formatSignedPercent(rangeSummary.timeWeightedReturnPercent),
-          tone: getToneClass(rangeSummary.timeWeightedReturnPercent ?? 0),
+            : formatSignedPercent(rangeSummary.capitalReturnPercent),
+          tone: getToneClass(rangeSummary.capitalReturnPercent ?? 0),
         },
         {
           label: "Zmiana kapitału netto",

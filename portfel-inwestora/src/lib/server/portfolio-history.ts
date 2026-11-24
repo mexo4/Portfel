@@ -1263,7 +1263,7 @@ const buildFxSeries = async (
             ? [`Brakuje historycznego kursu FX ${code} dla zakresu ${firstUnavailableDate}–${lastUnavailableDate}; części historii nie można wiarygodnie przeliczyć.`]
             : usedFallback || points.length === 0
               ? [
-                  `Brak wcześniejszej historii FX ${code} przed ${firstUnavailableDate}; wstępna wycena PLN użyła kursu bieżącego, dlatego TWR w tym okresie jest niepełny.`,
+                  `Brak wcześniejszej historii FX ${code} przed ${firstUnavailableDate}; wstępna wycena PLN użyła kursu bieżącego, dlatego zwrot w tym okresie jest niepełny.`,
                 ]
               : [],
       };
@@ -1931,10 +1931,10 @@ export const buildPortfolioHistory = async ({
       points: [],
       warnings: [],
       twrStatus: "unavailable",
-      twrStatusReason: "Brak danych historycznych do wyliczenia TWR.",
+      twrStatusReason: "Brak danych historycznych do wyliczenia zwrotu.",
       presentationCurrency: normalizedPresentationCurrency,
       presentationTwrStatus: "unavailable",
-      presentationTwrStatusReason: "Brak danych historycznych do wyliczenia TWR.",
+      presentationTwrStatusReason: "Brak danych historycznych do wyliczenia zwrotu.",
       assetSeries: [],
       benchmarkSeries: [],
     };
@@ -2403,14 +2403,14 @@ export const buildPortfolioHistory = async ({
     ...(twrStatus === "incomplete"
       ? { twrStatusReason: Array.from(twrIssues).slice(0, 5).join(" ") }
       : twrStatus === "unavailable"
-        ? { twrStatusReason: "Brak wystarczających danych historycznych do wyliczenia TWR." }
+        ? { twrStatusReason: "Brak wystarczających danych historycznych do wyliczenia zwrotu." }
         : {}),
     ...(presentationTwrStatus === "incomplete"
       ? { presentationTwrStatusReason: hasMissingPresentationFx
-          ? `Brakuje historycznego kursu ${normalizedPresentationCurrency} w części zakresu; TWR w tej walucie nie jest dostępny. ${Array.from(twrIssues).slice(0, 5).join(" ")}`
+          ? `Brakuje historycznego kursu ${normalizedPresentationCurrency} w części zakresu; zwrot w tej walucie nie jest dostępny. ${Array.from(twrIssues).slice(0, 5).join(" ")}`
           : Array.from(twrIssues).slice(0, 5).join(" ") }
       : presentationTwrStatus === "unavailable"
-        ? { presentationTwrStatusReason: "Brak wystarczających danych historycznych do wyliczenia TWR." }
+        ? { presentationTwrStatusReason: "Brak wystarczających danych historycznych do wyliczenia zwrotu." }
         : {}),
     externalCashFlows,
   };
@@ -2588,10 +2588,10 @@ export const buildAggregatePortfolioHistory = async ({
       points: [],
       warnings: [],
       twrStatus: "unavailable",
-      twrStatusReason: "Brak danych historycznych do wyliczenia TWR.",
+      twrStatusReason: "Brak danych historycznych do wyliczenia zwrotu.",
       presentationCurrency: normalizedPresentationCurrency,
       presentationTwrStatus: "unavailable",
-      presentationTwrStatusReason: "Brak danych historycznych do wyliczenia TWR.",
+      presentationTwrStatusReason: "Brak danych historycznych do wyliczenia zwrotu.",
       externalCashFlows: [],
       assetSeries: [],
       benchmarkSeries: [],

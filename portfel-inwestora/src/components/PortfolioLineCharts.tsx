@@ -1295,7 +1295,7 @@ export default function PortfolioLineCharts({
           signature: historyRequestSignature,
           message: fetchError instanceof Error
             ? fetchError.message
-            : "Nie udalo sie pobrac historii portfela.",
+            : "Nie udało się pobrać historii portfela.",
         });
         setServerHistory(EMPTY_HISTORY);
         setServerHistorySignature(historyRequestSignature);
@@ -1467,7 +1467,7 @@ export default function PortfolioLineCharts({
             ? null
             : searchError instanceof Error
               ? searchError.message
-              : "Nie udalo sie pobrac benchmarkow.",
+              : "Nie udało się pobrać benchmarków.",
           loading: false,
         });
       }
@@ -1676,8 +1676,8 @@ export default function PortfolioLineCharts({
 
       if (!firstPoint || !lastPoint) {
         return {
-          title: "Wartosc portfela",
-          copy: `Glowny widok portfela w ${baseCurrency} z kapitalem netto jako linia odniesienia.`,
+          title: "Wartość portfela",
+          copy: `Główny widok portfela w ${baseCurrency} z kapitałem netto jako linia odniesienia.`,
           data: [],
           lines: [],
           summaryLabel: "Brak danych",
@@ -1687,7 +1687,7 @@ export default function PortfolioLineCharts({
           deltaTone: "tone-neutral",
           stats: [],
           yAxisTickFormatter: (value) => formatCompactCurrency(value, baseCurrency),
-          emptyTitle: "Brakuje historii do wykresu wartosci",
+          emptyTitle: "Brakuje historii do wykresu wartości",
           emptyCopy: "Dodaj aktywa albo poczekaj, az pojawi sie seria dziennych punktow.",
         };
       }
@@ -1702,8 +1702,8 @@ export default function PortfolioLineCharts({
       );
 
       return {
-        title: "Wartosc portfela",
-        copy: "Najczystszy widok fintech: dominujaca krzywa portfela z kapitalem netto jako cicha linia odniesienia.",
+        title: "Wartość portfela",
+        copy: "Najczystszy widok fintech: dominująca krzywa portfela z kapitałem netto jako cicha linia odniesienia.",
         data: visiblePoints,
         lines: [
           {
@@ -1716,36 +1716,36 @@ export default function PortfolioLineCharts({
           },
           {
             dataKey: "netInvestedPln",
-            label: "Kapital netto",
+            label: "Kapitał netto",
             color: SERIES_COLORS[1],
             strokeWidth: 2.2,
             valueFormatter: (value) => formatCurrency(value, baseCurrency),
           },
         ],
-        summaryLabel: "Wartosc teraz",
+        summaryLabel: "Wartość teraz",
         summaryValue: formatCurrency(lastPoint.portfolioValuePln, baseCurrency),
         deltaLabel: "Zmiana w zakresie",
         deltaValue: formatSignedCurrency(rangeChangePln, baseCurrency),
         deltaTone: getToneClass(rangeChangePln),
         stats: [
           {
-            label: "Wynik od poczatku",
+            label: "Wynik od początku",
             value: formatSignedCurrency(lastPoint.profitLossPln, baseCurrency),
             tone: getToneClass(lastPoint.profitLossPln),
           },
           {
-            label: "Zwrot od poczatku",
+            label: "Zwrot od początku",
             value: formatSignedPercent(totalReturnPercent),
             tone: getToneClass(totalReturnPercent),
           },
           {
-            label: "Kapital netto",
+            label: "Kapitał netto",
             value: formatCurrency(lastPoint.netInvestedPln, baseCurrency),
           },
         ],
         yAxisDomain,
         yAxisTickFormatter: (value) => formatCompactCurrency(value, baseCurrency),
-        emptyTitle: "Brakuje historii do wykresu wartosci",
+        emptyTitle: "Brakuje historii do wykresu wartości",
         emptyCopy: "Dodaj aktywa albo poczekaj, az pojawi sie seria dziennych punktow.",
       };
     }
@@ -1772,7 +1772,7 @@ export default function PortfolioLineCharts({
           referenceValue: 0,
           yAxisTickFormatter: formatAxisPercent,
           emptyTitle: "Brakuje danych do liczenia zwrotu",
-          emptyCopy: "Zwrot pojawi sie, gdy portfel bedzie mial dodatni kapital netto.",
+          emptyCopy: "Zwrot pojawi się, gdy portfel będzie miał dodatni kapitał netto.",
         };
       }
 
@@ -1788,7 +1788,7 @@ export default function PortfolioLineCharts({
         lines: [
           {
             dataKey: "returnPercent",
-            label: "Zwrot od poczatku",
+            label: "Zwrot od początku",
             color: SERIES_COLORS[1],
             strokeWidth: 2.8,
             valueFormatter: (value) => formatSignedPercent(value),
@@ -1810,11 +1810,11 @@ export default function PortfolioLineCharts({
             tone: getToneClass(lastPoint.profitLossPln),
           },
           {
-            label: "Kapital netto",
+            label: "Kapitał netto",
             value: formatCurrency(lastPoint.netInvestedPln, baseCurrency),
           },
           {
-            label: "Najwyzej w zakresie",
+            label: "Najwyżej w zakresie",
             value: formatSignedPercent(maxReturnPercent),
             tone: getToneClass(maxReturnPercent),
           },
@@ -1822,7 +1822,7 @@ export default function PortfolioLineCharts({
         referenceValue: 0,
         yAxisTickFormatter: formatAxisPercent,
         emptyTitle: "Brakuje danych do liczenia zwrotu",
-        emptyCopy: "Zwrot pojawi sie, gdy portfel bedzie mial dodatni kapital netto.",
+        emptyCopy: "Zwrot pojawi się, gdy portfel będzie miał dodatni kapitał netto.",
       };
     }
 
@@ -1878,7 +1878,7 @@ export default function PortfolioLineCharts({
         deltaTone: getToneClass(worstDrawdown),
         stats: [
           {
-            label: "Biezaca wartosc",
+            label: "Bieżąca wartość",
             value: formatCurrency(lastPoint.portfolioValuePln, baseCurrency),
           },
           {
@@ -1959,7 +1959,7 @@ export default function PortfolioLineCharts({
           const profitLossPln = getFiniteNumber(row.portfolioProfitLossPln);
 
           return [
-            valuePln === null ? null : `wartosc ${formatCurrency(valuePln, baseCurrency)}`,
+            valuePln === null ? null : `wartość ${formatCurrency(valuePln, baseCurrency)}`,
             profitLossPln === null ? null : `wynik ${formatSignedCurrency(profitLossPln, baseCurrency)}`,
           ]
             .filter(Boolean)
@@ -2102,7 +2102,7 @@ export default function PortfolioLineCharts({
               tone: getToneClass(portfolioPercent),
             },
             {
-              label: "Wynik laczny",
+              label: "Wynik łączny",
               value: formatSignedCurrency(combinedProfitLoss, baseCurrency),
               tone: getToneClass(combinedProfitLoss),
             },
@@ -2140,7 +2140,7 @@ export default function PortfolioLineCharts({
               value: String(missingBenchmarkCount),
             },
             {
-              label: "Wynik laczny",
+              label: "Wynik łączny",
               value: formatSignedCurrency(combinedProfitLoss, baseCurrency),
               tone: getToneClass(combinedProfitLoss),
             },
@@ -2195,7 +2195,7 @@ export default function PortfolioLineCharts({
             }
           : null,
         {
-          label: "Wynik laczny",
+          label: "Wynik łączny",
           value: formatSignedCurrency(combinedProfitLoss, baseCurrency),
           tone: getToneClass(combinedProfitLoss),
         },
@@ -2639,9 +2639,9 @@ export default function PortfolioLineCharts({
     return (
       <section className="panel chart-card chart-card-wide">
         <p className="eyebrow">Wykresy liniowe</p>
-        <h2 className="section-title">Najpierw dodaj historie portfela</h2>
+        <h2 className="section-title">Najpierw dodaj historię portfela</h2>
         <p className="section-copy">
-          Tutaj pojawi sie jeden nowoczesny wykres z wieloma trybami: wartosc,
+          Tutaj pojawi się jeden nowoczesny wykres z wieloma trybami: wartość,
           zwrot, drawdown, benchmarki i zmiana dzienna.
         </p>
       </section>
@@ -2808,7 +2808,7 @@ export default function PortfolioLineCharts({
             title={
               isVisible
                 ? `Ukryj serie ${line.label}`
-                : `Pokaz serie ${line.label}`
+                : `Pokaż serie ${line.label}`
             }
           >
             <span
@@ -3324,7 +3324,7 @@ export default function PortfolioLineCharts({
                         checked={isVisible}
                         onChange={() => handleToggleBenchmarkVisibility(benchmark.id)}
                       />
-                      <span>Pokaz</span>
+                      <span>Pokaż</span>
                     </label>
                     <button
                       type="button"

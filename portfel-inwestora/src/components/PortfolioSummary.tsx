@@ -117,7 +117,7 @@ export default function PortfolioSummary({
 
       <div className="metric-grid mt-6">
         <article className="metric-card">
-          <span>Wartosc portfela{summary.unpricedPositionsCount > 0 ? " · czesciowa" : ""}</span>
+          <span>Wartość portfela{summary.unpricedPositionsCount > 0 ? " · częściowa" : ""}</span>
           <strong>{formatCurrency(summary.totalValue, summary.currency)}</strong>
         </article>
         <article className="metric-card">
@@ -125,7 +125,7 @@ export default function PortfolioSummary({
           <strong>{formatCurrency(summary.totalInvested, summary.currency)}</strong>
         </article>
         <article className="metric-card">
-          <span>Wynik otwarty{summary.unpricedPositionsCount > 0 ? " · czesciowy" : ""}</span>
+          <span>Wynik otwarty{summary.unpricedPositionsCount > 0 ? " · częściowy" : ""}</span>
           <strong
             className={
               summary.openProfitLoss >= 0 ? "tone-positive" : "tone-negative"
@@ -153,7 +153,7 @@ export default function PortfolioSummary({
           </article>
         ))}
         <article className="metric-card">
-          <span>Wynik laczny{summary.unpricedPositionsCount > 0 ? " · czesciowy" : ""}</span>
+          <span>Wynik łączny{summary.unpricedPositionsCount > 0 ? " · częściowy" : ""}</span>
           <strong
             className={
               summary.combinedProfitLoss >= 0 ? "tone-positive" : "tone-negative"
@@ -171,7 +171,7 @@ export default function PortfolioSummary({
 
       {summary.unpricedPositionsCount > 0 ? (
         <p className="field-note mt-4" role="status">
-          Wycena portfela jest czesciowa: {summary.unpricedPositionsCount} pozycji nie ma
+          Wycena portfela jest częściowa: {summary.unpricedPositionsCount} pozycji nie ma
           aktualnego kursu lub wymaganego kursu FX. Ich koszt i historia pozostaja zachowane;
           nie pokazujemy dla nich fikcyjnej straty.
         </p>

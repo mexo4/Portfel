@@ -1,20 +1,20 @@
 import { NextResponse } from "next/server";
 import {
   changeCurrentUserPassword,
-  getCurrentAccountData,
+  getCurrentAuthenticatedUser,
 } from "@/lib/server/auth";
 import { applyAuthRateLimit } from "@/lib/server/auth-rate-limit-response";
 
 export const runtime = "nodejs";
 
 export async function POST(request: Request) {
-  const accountData = await getCurrentAccountData();
+  const user = await getCurrentAuthenticatedUser();
 
-  if (!accountData) {
+  if (!user) {
     return NextResponse.json({ error: "Brak autoryzacji." }, { status: 401 });
   }
 
-  const limited = await applyAuthRateLimit(request, "login", accountData.user.id);
+  const limited = await applyAuthRateLimit(request, "login", user.id);
   if (limited) return limited;
 
   try {
@@ -24,7 +24,7 @@ export async function POST(request: Request) {
     };
 
     await changeCurrentUserPassword({
-      userId: accountData.user.id,
+      userId: user.id,
       currentPassword: payload.currentPassword ?? "",
       newPassword: payload.newPassword ?? "",
     });

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import {
-  getCurrentAccountData,
+  getCurrentAuthenticatedUser,
   updateCurrentUserSubscription,
 } from "@/lib/server/auth";
 import type { SubscriptionPlan } from "@/types/portfolio";
@@ -9,24 +9,24 @@ import { isSubscriptionPlan } from "@/lib/entitlements";
 export const runtime = "nodejs";
 
 export async function GET() {
-  const accountData = await getCurrentAccountData();
+  const user = await getCurrentAuthenticatedUser();
 
-  if (!accountData) {
+  if (!user) {
     return NextResponse.json({ error: "Brak autoryzacji." }, { status: 401 });
   }
 
   return NextResponse.json({
-    plan: accountData.user.subscriptionPlan,
-    status: accountData.user.subscriptionStatus,
-    activatedAt: accountData.user.subscriptionActivatedAt,
-    expiresAt: accountData.user.subscriptionExpiresAt,
+    plan: user.subscriptionPlan,
+    status: user.subscriptionStatus,
+    activatedAt: user.subscriptionActivatedAt,
+    expiresAt: user.subscriptionExpiresAt,
   });
 }
 
 export async function PUT(request: Request) {
-  const accountData = await getCurrentAccountData();
+  const currentUser = await getCurrentAuthenticatedUser();
 
-  if (!accountData) {
+  if (!currentUser) {
     return NextResponse.json({ error: "Brak autoryzacji." }, { status: 401 });
   }
 
@@ -40,7 +40,7 @@ export async function PUT(request: Request) {
     if (payload.plan !== "free") {
       return NextResponse.json({ error: "Samodzielny zakup planów płatnych nie jest jeszcze dostępny." }, { status: 409 });
     }
-    const user = await updateCurrentUserSubscription(accountData.user.id, payload.plan as SubscriptionPlan);
+    const user = await updateCurrentUserSubscription(currentUser.id, payload.plan as SubscriptionPlan);
 
     return NextResponse.json({
       user,

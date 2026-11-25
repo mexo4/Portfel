@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import AssetTable from "@/components/AssetTable";
+import ClosedInvestmentsWorkspace from "@/components/ClosedInvestmentsWorkspace";
 import ConfigurableDashboard from "@/components/ConfigurableDashboard";
 import CorporateEventsPanel from "@/components/CorporateEventsPanel";
 import DividendIncomeDashboard from "@/components/DividendIncomeDashboard";
@@ -15,6 +16,7 @@ import PortfolioCharts from "@/components/PortfolioCharts";
 import PortfolioLineCharts from "@/components/PortfolioLineCharts";
 import PortfolioPerformanceResults from "@/components/PortfolioPerformanceResults";
 import PortfolioPositionCards from "@/components/PortfolioPositionCards";
+import TaxReportWorkspace from "@/components/TaxReportWorkspace";
 import { usePortfolioWorkspace } from "@/components/PortfolioWorkspaceContext";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { getPortfolioDividends } from "@/lib/dividend-engine";
@@ -140,6 +142,16 @@ export function WorkspaceImportPage() { const workspace = usePortfolioWorkspace(
 
 export function WorkspacePerformancePage() { const workspace = usePortfolioWorkspace(); return <PortfolioPerformanceResults {...workspaceHistoryProps(workspace)} isAggregate={workspace.isAllPortfoliosSelected} />; }
 export function WorkspaceChartsPage() { const workspace = usePortfolioWorkspace(); return <div className="workspace-page workspace-analysis-page"><PortfolioLineCharts initialMode="value" historyUserId={workspace.account.id} {...workspaceHistoryProps(workspace)} onBenchmarksChange={workspace.isAllPortfoliosSelected ? undefined : workspace.onBenchmarksChange} /></div>; }
+export function WorkspaceClosedInvestmentsPage() {
+  const workspace = usePortfolioWorkspace();
+  return <div className="workspace-page"><ClosedInvestmentsWorkspace portfolios={workspace.selectedPortfolios} /></div>;
+}
+
+export function WorkspaceTaxesPage() {
+  const workspace = usePortfolioWorkspace();
+  return <div className="workspace-page"><TaxReportWorkspace portfolios={workspace.selectedPortfolios} scopeLabel={workspace.portfolioScopeLabel} /></div>;
+}
+
 export function WorkspaceStructurePage() { const workspace = usePortfolioWorkspace(); return <div className="workspace-page workspace-analysis-page"><PortfolioCharts view="structure" {...workspaceChartProps(workspace)} /></div>; }
 export function WorkspaceInstrumentsPage() {
   const workspace = usePortfolioWorkspace();

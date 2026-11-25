@@ -14,6 +14,8 @@ test("maps every public workspace URL to one independently mountable view", () =
     ["/analytics/charts", "charts"],
     ["/analytics/structure", "structure"],
     ["/analytics/benchmarks", "charts"],
+    ["/analytics/closed", "closed"],
+    ["/tools/taxes", "taxes"],
     ["/market/instruments", "instruments"],
     ["/market/watchlist", "watchlist"],
     ["/market/events", "events"],
@@ -35,6 +37,8 @@ test("each workspace URL has a route-owned view rather than a null page placehol
     ["src/app/(workspace)/analytics/performance/page.tsx", "WorkspacePerformancePage"],
     ["src/app/(workspace)/analytics/charts/page.tsx", "WorkspaceChartsPage"],
     ["src/app/(workspace)/analytics/structure/page.tsx", "WorkspaceStructurePage"],
+    ["src/app/(workspace)/analytics/closed/page.tsx", "WorkspaceClosedInvestmentsPage"],
+    ["src/app/(workspace)/tools/taxes/page.tsx", "WorkspaceTaxesPage"],
     ["src/app/(workspace)/market/instruments/page.tsx", "WorkspaceInstrumentsPage"],
     ["src/app/(workspace)/market/watchlist/page.tsx", "WorkspaceWatchlistPage"],
     ["src/app/(workspace)/market/events/page.tsx", "WorkspaceEventsPage"],
@@ -73,4 +77,16 @@ test("dashboard route delegates aggregate data views to the configurable dashboa
   assert.match(dashboard, /watchlist: workspace\.watchlistItems/);
   assert.doesNotMatch(dashboard, /fetchWatchlist\(/);
   assert.doesNotMatch(source, /Historia łączna wymaga osobnego modelu/);
+});
+
+test("closed investments and taxes are in the navigation, and the tax report reads data on the server", async () => {
+  const shell = await readFile(new URL("../src/components/AppWorkspaceShell.tsx", import.meta.url), "utf8");
+  const route = await readFile(new URL("../src/app/api/tax/pit38/route.ts", import.meta.url), "utf8");
+
+  assert.match(shell, /\{ key: "closed", href: "\/analytics\/closed", label: "Zamknięte"/);
+  assert.match(shell, /\{ key: "taxes", href: "\/tools\/taxes", label: "Podatki"/);
+  // The portfolios come from the signed-in account, never from the request body.
+  assert.match(route, /const accountData = await getCurrentAccountData\(\);/);
+  assert.match(route, /export async function GET\(/);
+  assert.doesNotMatch(route, /export async function POST\(/);
 });

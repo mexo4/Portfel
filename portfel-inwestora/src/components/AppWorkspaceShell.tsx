@@ -39,6 +39,8 @@ type WorkspaceIconName =
   | "performance"
   | "charts"
   | "structure"
+  | "closed"
+  | "taxes"
   | "instruments"
   | "watchlist"
   | "espi"
@@ -61,6 +63,8 @@ const WORKSPACE_ICON_DRAWINGS: Record<WorkspaceIconName, ReactNode> = {
   performance: <><path d="M4 18V9M10 18V5M16 18v-7M22 18V3" /></>,
   charts: <><path d="M3 18l5-6 4 3 7-9" /><path d="M16 6h3v3" /></>,
   structure: <><circle cx="12" cy="12" r="3" /><path d="M12 3v6M12 15v6M3 12h6M15 12h6" /></>,
+  closed: <><rect x="4" y="4" width="16" height="16" rx="2" /><path d="m8 12 3 3 5-6" /></>,
+  taxes: <><path d="M6 3h12v18l-3-2-3 2-3-2-3 2z" /><path d="M9 8h6M9 12h6M9 16h3" /></>,
   instruments: <><circle cx="10.5" cy="10.5" r="6.5" /><path d="m15.5 15.5 5 5" /></>,
   watchlist: <path d="m12 3 2.7 5.5 6.1.9-4.4 4.3 1 6.1-5.4-2.9-5.4 2.9 1-6.1-4.4-4.3 6.1-.9L12 3Z" />,
   espi: <><path d="M6 3h9l4 4v14H6z" /><path d="M15 3v5h4M9 12h6M9 16h6" /></>,
@@ -121,6 +125,7 @@ const navigationGroups: NavigationGroup[] = [
     { key: "performance", href: "/analytics/performance", label: "Wyniki", icon: "performance", keywords: "wynik ryzyko stopa zwrotu" },
     { key: "charts", href: "/analytics/charts", label: "Wykresy", icon: "charts", keywords: "historia benchmark" },
     { key: "structure", href: "/analytics/structure", label: "Struktura", icon: "structure", keywords: "alokacja klasy aktywów" },
+    { key: "closed", href: "/analytics/closed", label: "Zamknięte", icon: "closed", keywords: "zamknięte inwestycje sprzedaże fifo wynik zrealizowany" },
   ] },
   { id: "market", label: "Rynek", items: [
     { key: "watchlist", href: "/market/watchlist", label: "Obserwowane", icon: "watchlist", keywords: "watchlista spółki" },
@@ -131,6 +136,7 @@ const navigationGroups: NavigationGroup[] = [
   ] },
   { id: "tools", label: "Narzędzia", items: [
     { key: "import", href: "/portfolio/import", label: "Import", icon: "import", keywords: "broker plik historia" },
+    { key: "taxes", href: "/tools/taxes", label: "Podatki", icon: "taxes", keywords: "pit-38 pit podatek belka dywidendy zagraniczne" },
   ] },
 ];
 
@@ -143,6 +149,8 @@ const routeMeta: Record<WorkspaceRouteKey, { eyebrow: string; title: string; bre
   performance: { eyebrow: "Analiza", title: "Wyniki portfela", breadcrumb: "Analiza / Wyniki", description: "Wynik, ryzyko i jakość zwrotu w wybranym okresie." },
   charts: { eyebrow: "Analiza", title: "Wykresy", breadcrumb: "Analiza / Wykresy", description: "Historia wartości, wyniku i porównanie z benchmarkiem." },
   structure: { eyebrow: "Analiza", title: "Struktura portfela", breadcrumb: "Analiza / Struktura", description: "Rozkład aktywów, rynków i koncentracji portfela." },
+  closed: { eyebrow: "Analiza", title: "Zamknięte inwestycje", breadcrumb: "Analiza / Zamknięte", description: "Sprzedaże z zamkniętymi zakupami (FIFO), wynik i skuteczność." },
+  taxes: { eyebrow: "Narzędzia", title: "Podatki", breadcrumb: "Narzędzia / Podatki", description: "Zestawienie do PIT-38: sprzedaże i dywidendy zagraniczne po kursach NBP." },
   instruments: { eyebrow: "Rynek", title: "Znajdź instrument", breadcrumb: "Rynek / Instrumenty", description: "Wyszukaj instrument i przejdź do istniejącego procesu dodawania." },
   watchlist: { eyebrow: "Rynek", title: "Obserwowane", breadcrumb: "Rynek / Obserwowane", description: "Spółki śledzone niezależnie od aktualnych pozycji." },
   espi: { eyebrow: "Rynek", title: "Raporty ESPI", breadcrumb: "Rynek / Raporty ESPI", description: "Oficjalne komunikaty emitentów GPW." },

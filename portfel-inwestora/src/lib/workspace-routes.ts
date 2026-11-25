@@ -7,6 +7,8 @@ export type WorkspaceRouteKey =
   | "performance"
   | "charts"
   | "structure"
+  | "closed"
+  | "taxes"
   | "instruments"
   | "watchlist"
   | "espi"
@@ -26,6 +28,8 @@ export const getWorkspaceRoute = (pathname: string | null): WorkspaceRouteKey =>
   if (pathname.startsWith("/analytics/performance")) return "performance";
   if (pathname.startsWith("/analytics/charts")) return "charts";
   if (pathname.startsWith("/analytics/structure")) return "structure";
+  if (pathname.startsWith("/analytics/closed")) return "closed";
+  if (pathname.startsWith("/tools/taxes")) return "taxes";
   if (pathname.startsWith("/analytics/benchmarks")) return "charts";
   if (pathname.startsWith("/market/instruments")) return "instruments";
   if (pathname.startsWith("/market/watchlist")) return "watchlist";

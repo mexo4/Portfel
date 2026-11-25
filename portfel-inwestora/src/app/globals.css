@@ -11102,3 +11102,41 @@ textarea {
 .portfolio-backup-restore.is-disabled { opacity: .55; cursor: not-allowed; }
 .portfolio-backup-restore:focus-within { outline: 2px solid var(--accent, #0f766e); outline-offset: 2px; }
 @media (max-width: 640px) { .portfolio-backup-actions > * { flex: 1 1 100%; } }
+
+/* Deposits and loans on the wealth page. */
+.wealth-checkbox { display: flex; align-items: center; gap: 8px; min-height: 44px; font-weight: 600; font-size: .86rem; }
+.wealth-checkbox input { width: 18px; height: 18px; }
+.wealth-terms { margin: 8px 0 0; color: var(--muted); font-size: .8rem; line-height: 1.45; }
+
+/* Wealth report: totals, a proportion bar and two lists. */
+.wealth-report-panel { display: grid; gap: 4px; }
+.wealth-report-totals { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; }
+.wealth-report-totals > div { display: grid; gap: 4px; border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; background: var(--surface); }
+.wealth-report-totals span { color: var(--muted); font-size: .74rem; font-weight: 700; }
+.wealth-report-totals strong { font-size: 1.2rem; font-variant-numeric: tabular-nums; }
+.wealth-report-bar { display: flex; height: 12px; overflow: hidden; border-radius: 999px; background: var(--surface-soft); }
+.wealth-report-bar-part { display: block; min-width: 3px; height: 100%; }
+.wealth-report-columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 18px; }
+.wealth-report-list { display: grid; margin: 8px 0 0; padding: 0; list-style: none; }
+.wealth-report-list li { display: flex; justify-content: space-between; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--line); font-size: .84rem; }
+.wealth-report-list li > span:first-child { display: grid; gap: 2px; min-width: 0; }
+.wealth-report-list li > span:last-child { display: grid; justify-items: end; gap: 2px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.wealth-report-list small { color: var(--muted); font-size: .72rem; }
+.wealth-report-list li.is-liability strong { color: var(--negative, #b4413a); }
+.wealth-report-dot { display: inline-block; width: 9px; height: 9px; margin-right: 7px; border-radius: 50%; }
+.wealth-report-list li > span:first-child:has(.wealth-report-dot) { display: block; }
+.tone-0 { background: #0f766e; } .tone-1 { background: #2c5d8f; } .tone-2 { background: #b7791f; }
+.tone-3 { background: #7c4dab; } .tone-4 { background: #c05661; } .tone-5 { background: #6b8f3a; }
+
+/* Recurring cash operations. */
+.recurring-panel { display: grid; gap: 4px; }
+.recurring-due { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; border: 1px solid var(--line); border-left: 4px solid var(--accent, #0f766e); border-radius: 12px; padding: 12px 14px; background: var(--surface-soft); }
+.recurring-due > div { display: grid; gap: 3px; min-width: 0; }
+.recurring-due small { color: var(--muted); font-size: .76rem; }
+.recurring-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px 12px; align-items: end; }
+.recurring-form .primary-button { justify-self: start; }
+.recurring-list { display: grid; margin: 0; padding: 0; list-style: none; }
+.recurring-list li { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.recurring-list li > span { display: grid; gap: 3px; min-width: 0; }
+.recurring-list small { color: var(--muted); font-size: .76rem; }
+@media (max-width: 640px) { .recurring-form .primary-button, .recurring-due .primary-button { justify-self: stretch; width: 100%; } }

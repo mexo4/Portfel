@@ -961,6 +961,7 @@ export type WealthAssetCategory =
   | "gold"
   | "art"
   | "collection"
+  | "deposit"
   | "other";
 
 export type WealthLiabilityCategory =
@@ -981,8 +982,30 @@ export type WealthItem = {
   addedAt: string;
   description: string;
   annualChangePercent: number;
+  /** A bank deposit: its value is the principal plus the interest accrued so far. */
+  deposit?: WealthDeposit;
+  /** A loan with a repayment schedule: its value is the balance left after the installments due so far. */
+  loan?: WealthLoan;
   createdAt: string;
   updatedAt: string;
+};
+
+export type WealthDeposit = {
+  principal: number;
+  startDate: string;
+  termMonths: number;
+  annualRatePercent: number;
+  capitalization: "maturity" | "monthly" | "quarterly";
+  /** Whether the 19% capital gains tax is withheld from the interest. */
+  taxed: boolean;
+};
+
+export type WealthLoan = {
+  principal: number;
+  startDate: string;
+  termMonths: number;
+  annualRatePercent: number;
+  installment: "equal" | "decreasing";
 };
 
 export type UserProfile = {

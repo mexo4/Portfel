@@ -11,9 +11,13 @@ import {
   toCurrencyCode,
   toDateInputValue,
 } from "@/lib/utils";
+import { addMonths, getDepositState, getLoanState, getWealthItemValue } from "@/lib/wealth-instruments";
+import WealthReportPanel from "@/components/WealthReportPanel";
 import type {
   CurrencyCode,
   FxRates,
+  InvestmentPortfolio,
+  PortfolioSummary,
   UserProfile,
   WealthCategory,
   WealthItem,
@@ -24,6 +28,8 @@ type WealthWorkspaceProps = {
   profile: UserProfile;
   fxRates: FxRates;
   onChange: (profile: UserProfile) => void;
+  /** Every real portfolio with its summary, for the wealth report. */
+  portfolioSummaries?: Array<{ portfolio: InvestmentPortfolio; summary: PortfolioSummary }>;
 };
 
 type WealthDraft = {
@@ -36,7 +42,19 @@ type WealthDraft = {
   addedAt: string;
   description: string;
   annualChangePercent: number;
+  /** Deposit and loan terms (used for the "Lokata" category and for loans with a schedule). */
+  termMonths: number;
+  ratePercent: number;
+  capitalization: "maturity" | "monthly" | "quarterly";
+  taxed: boolean;
+  useSchedule: boolean;
+  installment: "equal" | "decreasing";
 };
+
+const LOAN_CATEGORIES = new Set<WealthCategory>(["mortgage", "car-loan", "loan"]);
+const isDepositDraft = (draft: Pick<WealthDraft, "kind" | "category">) => draft.kind === "asset" && draft.category === "deposit";
+const isScheduledLoanDraft = (draft: Pick<WealthDraft, "kind" | "category" | "useSchedule">) => draft.kind === "liability" && LOAN_CATEGORIES.has(draft.category) && draft.useSchedule;
+const addOneYear = (date: string) => addMonths(date, 12);
 
 const ASSET_CATEGORIES: Array<{ value: WealthCategory; label: string }> = [
   { value: "house", label: "Dom" },
@@ -47,6 +65,7 @@ const ASSET_CATEGORIES: Array<{ value: WealthCategory; label: string }> = [
   { value: "gold", label: "Złoto" },
   { value: "art", label: "Dzieła sztuki" },
   { value: "collection", label: "Kolekcje" },
+  { value: "deposit", label: "Lokata" },
   { value: "other", label: "Inne" },
 ];
 
@@ -69,6 +88,12 @@ const createEmptyWealthDraft = (): WealthDraft => ({
   addedAt: getTodayDateInputValue(),
   description: "",
   annualChangePercent: 0,
+  termMonths: 12,
+  ratePercent: 0,
+  capitalization: "maturity",
+  taxed: true,
+  useSchedule: false,
+  installment: "equal",
 });
 
 const createWealthItemId = () => {
@@ -95,6 +120,23 @@ const getCurrencyRate = (currency: CurrencyCode, fxRates: FxRates) => {
   return typeof rate === "number" && Number.isFinite(rate) && rate > 0 ? rate : 1;
 };
 
+/** One line about a deposit's or a loan's terms and where they stand today. */
+const describeWealthTerms = (item: WealthItem, today: string) => {
+  if (item.kind === "asset" && item.deposit) {
+    const state = getDepositState(item.deposit, today);
+    return state.isMatured
+      ? `Lokata zakończona ${formatDate(state.maturityDate)} · odsetki netto ${formatCurrency(state.interestAtMaturityNet, item.currency)}`
+      : `${formatNumber(item.deposit.annualRatePercent, 2)}% do ${formatDate(state.maturityDate)} · narosło ${formatCurrency(state.interestNet, item.currency)} · na koniec ${formatCurrency(state.interestAtMaturityNet, item.currency)}${item.deposit.taxed ? " netto" : ""}`;
+  }
+  if (item.kind === "liability" && item.loan) {
+    const state = getLoanState(item.loan, today);
+    return state.remainingInstallments === 0
+      ? `Kredyt spłacony ${formatDate(state.endDate)}`
+      : `Rata ${formatCurrency(state.nextInstallment?.payment ?? 0, item.currency)} (${formatDate(state.nextInstallment?.date)}) · zostało ${state.remainingInstallments} rat · odsetki zapłacone ${formatCurrency(state.paidInterest, item.currency)}, do zapłaty ${formatCurrency(state.remainingInterest, item.currency)}`;
+  }
+  return null;
+};
+
 const getProjectedValue = (value: number, annualChangePercent: number, years = 1) =>
   round(value * (1 + annualChangePercent / 100) ** years, 2);
 
@@ -102,6 +144,7 @@ export default function WealthWorkspace({
   profile,
   fxRates,
   onChange,
+  portfolioSummaries = [],
 }: WealthWorkspaceProps) {
   const nameRef = useRef<HTMLInputElement | null>(null);
   const valueRef = useRef<HTMLInputElement | null>(null);
@@ -113,15 +156,22 @@ export default function WealthWorkspace({
     () =>
       profile.wealthItems.map((item) => {
         const rate = getCurrencyRate(item.currency, fxRates);
-        const valuePln = round(item.value * rate, 2);
-        const projectedValue = getProjectedValue(item.value, item.annualChangePercent);
+        const today = getTodayDateInputValue();
+        const value = getWealthItemValue(item, today);
+        const valuePln = round(value * rate, 2);
+        // A deposit and a scheduled loan follow their terms over the next year, not a growth rate.
+        const projectedValue = item.deposit || item.loan
+          ? getWealthItemValue(item, addOneYear(today))
+          : getProjectedValue(item.value, item.annualChangePercent);
         const projectedValuePln = round(projectedValue * rate, 2);
 
         return {
           item,
+          value,
           valuePln,
           projectedValue,
           projectedValuePln,
+          detail: describeWealthTerms(item, today),
         };
       }),
     [fxRates, profile.wealthItems]
@@ -216,6 +266,18 @@ export default function WealthWorkspace({
       return;
     }
 
+    const termMonths = Math.round(draft.termMonths);
+    const hasTerms = isDepositDraft(draft) || isScheduledLoanDraft(draft);
+    if (hasTerms && (!Number.isFinite(termMonths) || termMonths < 1 || termMonths > 600)) {
+      setError("Podaj okres od 1 do 600 miesięcy.");
+      return;
+    }
+    if (hasTerms && (!Number.isFinite(draft.ratePercent) || draft.ratePercent < 0 || draft.ratePercent > 100)) {
+      setError("Podaj oprocentowanie od 0 do 100%.");
+      return;
+    }
+    const terms = { principal: value, startDate: addedAt, termMonths, annualRatePercent: round(draft.ratePercent, 4) };
+
     const nextItem: WealthItem = {
       id: draft.editingId ?? createWealthItemId(),
       kind: draft.kind,
@@ -229,6 +291,8 @@ export default function WealthWorkspace({
         Math.max(-100, Math.min(1000, draft.annualChangePercent)),
         2
       ),
+      ...(isDepositDraft(draft) ? { deposit: { ...terms, capitalization: draft.capitalization, taxed: draft.taxed } } : {}),
+      ...(isScheduledLoanDraft(draft) ? { loan: { ...terms, installment: draft.installment } } : {}),
       createdAt:
         profile.wealthItems.find((item) => item.id === draft.editingId)?.createdAt ?? now,
       updatedAt: now,
@@ -250,11 +314,18 @@ export default function WealthWorkspace({
       kind: item.kind,
       name: item.name,
       category: item.category,
-      value: item.value,
+      // The principal is what the terms start from; the computed value is shown on the list.
+      value: item.deposit?.principal ?? item.loan?.principal ?? item.value,
       currency: item.currency,
       addedAt: item.addedAt,
       description: item.description,
       annualChangePercent: item.annualChangePercent,
+      termMonths: item.deposit?.termMonths ?? item.loan?.termMonths ?? 12,
+      ratePercent: item.deposit?.annualRatePercent ?? item.loan?.annualRatePercent ?? 0,
+      capitalization: item.deposit?.capitalization ?? "maturity",
+      taxed: item.deposit?.taxed ?? true,
+      useSchedule: Boolean(item.loan),
+      installment: item.loan?.installment ?? "equal",
     });
     setError(null);
     nameRef.current?.focus();
@@ -270,6 +341,7 @@ export default function WealthWorkspace({
 
   return (
     <section className="wealth-workspace">
+      <WealthReportPanel portfolioSummaries={portfolioSummaries} wealthItems={profile.wealthItems} fxRates={fxRates} />
       <section className="panel wealth-summary-panel">
         <div className="sprint-panel-head">
           <div>
@@ -368,7 +440,7 @@ export default function WealthWorkspace({
           </label>
 
           <FormattedNumberInput
-            label="Aktualna wartość"
+            label={isDepositDraft(draft) ? "Kwota lokaty" : isScheduledLoanDraft(draft) ? "Kwota kredytu" : "Aktualna wartość"}
             value={draft.value}
             min={0}
             precision={2}
@@ -401,7 +473,7 @@ export default function WealthWorkspace({
           </label>
 
           <label className="field">
-            <span>Data dodania</span>
+            <span>{isDepositDraft(draft) ? "Data założenia" : isScheduledLoanDraft(draft) ? "Data uruchomienia" : "Data dodania"}</span>
             <input
               ref={dateRef}
               type="date"
@@ -415,17 +487,64 @@ export default function WealthWorkspace({
             />
           </label>
 
-          <FormattedNumberInput
-            label="Zmiana roczna (%)"
-            value={draft.annualChangePercent}
-            precision={2}
-            onChange={(value) =>
-              setDraft((currentDraft) => ({
-                ...currentDraft,
-                annualChangePercent: value,
-              }))
-            }
-          />
+          {draft.kind === "liability" && LOAN_CATEGORIES.has(draft.category) ? (
+            <label className="field">
+              <span>Saldo kredytu</span>
+              <span className="wealth-checkbox">
+                <input type="checkbox" checked={draft.useSchedule} onChange={(event) => setDraft((currentDraft) => ({ ...currentDraft, useSchedule: event.target.checked }))} />
+                Licz z harmonogramu spłat
+              </span>
+            </label>
+          ) : null}
+
+          {isDepositDraft(draft) || isScheduledLoanDraft(draft) ? (
+            <>
+              <FormattedNumberInput label="Okres (miesiące)" value={draft.termMonths} min={1} precision={0} onChange={(value) => setDraft((currentDraft) => ({ ...currentDraft, termMonths: value }))} />
+              <FormattedNumberInput label="Oprocentowanie roczne (%)" value={draft.ratePercent} min={0} precision={2} onChange={(value) => setDraft((currentDraft) => ({ ...currentDraft, ratePercent: value }))} />
+            </>
+          ) : (
+            <FormattedNumberInput
+              label="Zmiana roczna (%)"
+              value={draft.annualChangePercent}
+              precision={2}
+              onChange={(value) =>
+                setDraft((currentDraft) => ({
+                  ...currentDraft,
+                  annualChangePercent: value,
+                }))
+              }
+            />
+          )}
+
+          {isDepositDraft(draft) ? (
+            <>
+              <label className="field">
+                <span>Kapitalizacja odsetek</span>
+                <select value={draft.capitalization} onChange={(event) => setDraft((currentDraft) => ({ ...currentDraft, capitalization: event.target.value as WealthDraft["capitalization"] }))}>
+                  <option value="maturity">Na koniec okresu</option>
+                  <option value="monthly">Co miesiąc</option>
+                  <option value="quarterly">Co kwartał</option>
+                </select>
+              </label>
+              <label className="field">
+                <span>Podatek od odsetek</span>
+                <span className="wealth-checkbox">
+                  <input type="checkbox" checked={draft.taxed} onChange={(event) => setDraft((currentDraft) => ({ ...currentDraft, taxed: event.target.checked }))} />
+                  Pobierany podatek 19%
+                </span>
+              </label>
+            </>
+          ) : null}
+
+          {isScheduledLoanDraft(draft) ? (
+            <label className="field">
+              <span>Raty</span>
+              <select value={draft.installment} onChange={(event) => setDraft((currentDraft) => ({ ...currentDraft, installment: event.target.value as WealthDraft["installment"] }))}>
+                <option value="equal">Równe</option>
+                <option value="decreasing">Malejące</option>
+              </select>
+            </label>
+          ) : null}
 
           <label className="field field-full">
             <span>Opis</span>
@@ -465,7 +584,7 @@ export default function WealthWorkspace({
         </div>
 
         <div className="wealth-list mt-6">
-          {rows.map(({ item, projectedValue, projectedValuePln, valuePln }) => (
+          {rows.map(({ item, value, projectedValue, projectedValuePln, valuePln, detail }) => (
             <article key={item.id} className="wealth-item-card">
               <div>
                 <span className="tag">{item.kind === "asset" ? "aktywo" : "pasywo"}</span>
@@ -478,7 +597,7 @@ export default function WealthWorkspace({
 
               <div className="wealth-item-values">
                 <span>
-                  teraz <strong>{formatCurrency(item.value, item.currency)}</strong>
+                  teraz <strong>{formatCurrency(value, item.currency)}</strong>
                 </span>
                 <span>
                   PLN <strong>{formatCurrency(valuePln)}</strong>
@@ -490,10 +609,14 @@ export default function WealthWorkspace({
                 <span>
                   prognoza PLN <strong>{formatCurrency(projectedValuePln)}</strong>
                 </span>
-                <span>
-                  zmiana <strong>{formatNumber(item.annualChangePercent, 2)}%</strong>
-                </span>
+                {item.deposit || item.loan ? null : (
+                  <span>
+                    zmiana <strong>{formatNumber(item.annualChangePercent, 2)}%</strong>
+                  </span>
+                )}
               </div>
+
+              {detail ? <p className="wealth-terms">{detail}</p> : null}
 
               {item.description ? (
                 <p className="wealth-description">{item.description}</p>

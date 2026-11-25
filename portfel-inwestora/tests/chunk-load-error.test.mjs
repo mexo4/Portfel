@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import vm from "node:vm";
 
-const { CHUNK_RELOAD_GUARD_MS, CHUNK_RELOAD_KEY, isChunkLoadError, reloadOnceForChunkError } = await import(
+const { CHUNK_RELOAD_GUARD_MS, CHUNK_RELOAD_KEY, CHUNK_RETRY_INLINE_SCRIPT, isChunkLoadError, reloadOnceForChunkError } = await import(
   "../src/lib/chunk-load-error.ts"
 );
 
@@ -61,4 +62,41 @@ test("the root error screen uses the helper and speaks Polish", () => {
   assert.match(source, /reloadOnceForChunkError\(error, \{/);
   assert.match(source, /<html lang="pl">/);
   assert.match(source, /Nie udało się wczytać strony/);
+});
+
+// Checked in a local production build: when the page's own script tag gets a 525, Next.js throws
+// nothing and the page stays visible but never hydrates, so the root error screen never shows.
+test("the head script reloads once for a failed Next.js script or stylesheet, never for others", () => {
+  let listener = null;
+  let reloads = 0;
+  const storage = memoryStorage();
+  const window = {
+    sessionStorage: storage,
+    location: { reload: () => (reloads += 1) },
+    addEventListener: (type, handler, capture) => {
+      assert.equal(type, "error");
+      assert.equal(capture, true, "resource errors only reach a capturing listener");
+      listener = handler;
+    },
+  };
+  vm.runInNewContext(CHUNK_RETRY_INLINE_SCRIPT, { window, Date, Number, String });
+  assert.equal(typeof listener, "function");
+
+  listener({ target: { tagName: "IMG", src: "https://mexo.com.pl/_next/static/media/a.png" } });
+  listener({ target: { tagName: "SCRIPT", src: "https://www.googletagmanager.com/gtag.js" } });
+  listener({ target: window });
+  assert.equal(reloads, 0);
+
+  listener({ target: { tagName: "SCRIPT", src: "https://mexo.com.pl/_next/static/chunks/app/pricing/page-1.js" } });
+  assert.equal(reloads, 1);
+  assert.ok(storage.getItem(CHUNK_RELOAD_KEY));
+
+  listener({ target: { tagName: "LINK", href: "https://mexo.com.pl/_next/static/css/app.css" } });
+  assert.equal(reloads, 1, "the guard stops a second reload");
+});
+
+test("the root layout puts the script in the head", () => {
+  const layout = readFileSync(new URL("../src/app/layout.tsx", import.meta.url), "utf8");
+
+  assert.match(layout, /<head>[\s\S]*<script dangerouslySetInnerHTML=\{\{ __html: CHUNK_RETRY_INLINE_SCRIPT \}\} \/>[\s\S]*<\/head>/);
 });

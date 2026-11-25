@@ -39,3 +39,11 @@ export const reloadOnceForChunkError = (error: unknown, environment: ReloadEnvir
   environment.reload();
   return true;
 };
+
+/**
+ * Inline script for the document head. When the page's own `<script>` tag gets an error status
+ * (the 525 above), Next.js throws nothing: the page stays visible but never hydrates, so buttons
+ * and forms do nothing and the root error screen never shows. A capturing listener sees the
+ * failed `/_next/static/` script or stylesheet and reloads once, under the same guard.
+ */
+export const CHUNK_RETRY_INLINE_SCRIPT = `(function(){var K=${JSON.stringify(CHUNK_RELOAD_KEY)},G=${CHUNK_RELOAD_GUARD_MS};function r(){try{var l=Number(window.sessionStorage.getItem(K)||0);if(Date.now()-l<G)return;window.sessionStorage.setItem(K,String(Date.now()))}catch(e){return}window.location.reload()}window.addEventListener("error",function(e){var t=e&&e.target;if(!t||t===window||!t.tagName)return;var s=t.tagName==="SCRIPT"?t.src:t.tagName==="LINK"?t.href:"";if(s&&s.indexOf("/_next/static/")!==-1)r()},true)})();`;

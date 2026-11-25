@@ -15,6 +15,7 @@ import {
   normalizePortfolioAccountType,
 } from "@/lib/portfolio-account-rules";
 import { formatCurrency } from "@/lib/utils";
+import { buildPortfolioBackup, getExportFileDate, toSafeFileName } from "@/lib/portfolio-export";
 import { acquireBodyScrollLock } from "@/lib/client/body-scroll-lock";
 import type {
   IkzeLimitVariant,
@@ -53,7 +54,78 @@ type Props = {
     accountType: PortfolioAccountType;
     accountConfiguration: PortfolioAccountConfiguration;
   }) => void;
+  /** Restores a portfolio from a backup file's text; rejects with a message the user can read. */
+  onRestore?: (backupText: string) => Promise<void>;
 };
+
+/** Starts a download of text made in the browser (no request leaves the page). */
+const downloadText = (text: string, fileName: string, type: string) => {
+  const url = URL.createObjectURL(new Blob([text], { type }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
+};
+
+function PortfolioBackupPanel({ portfolio, canRestore, isPending, onRestore }: { portfolio: InvestmentPortfolio | null; canRestore: boolean; isPending: boolean; onRestore?: (text: string) => Promise<void> }) {
+  const [message, setMessage] = useState<{ text: string; isError: boolean } | null>(null);
+  const [isRestoring, setIsRestoring] = useState(false);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  const handleDownload = () => {
+    if (!portfolio) return;
+    downloadText(buildPortfolioBackup(portfolio), `mexo-portfel-${toSafeFileName(portfolio.name)}-${getExportFileDate()}.json`, "application/json");
+    setMessage({ text: `Pobrano kopię portfela „${portfolio.name}”.`, isError: false });
+  };
+
+  const handleFile = async (file: File | undefined) => {
+    if (!file || !onRestore) return;
+    setIsRestoring(true);
+    setMessage(null);
+    try {
+      await onRestore(await file.text());
+      setMessage({ text: "Portfel został przywrócony jako nowy portfel.", isError: false });
+    } catch (error) {
+      setMessage({ text: error instanceof Error ? error.message : "Nie udało się przywrócić portfela.", isError: true });
+    } finally {
+      setIsRestoring(false);
+      if (inputRef.current) inputRef.current.value = "";
+    }
+  };
+
+  return (
+    <section className="panel portfolio-backup-panel" aria-labelledby="portfolio-backup-title">
+      <div>
+        <p className="eyebrow">Kopia zapasowa</p>
+        <h2 id="portfolio-backup-title" className="section-title">Kopia portfela w pliku</h2>
+        <p className="section-copy">Plik zawiera cały portfel: pozycje, sprzedaże z zamkniętymi zakupami, konta, operacje i dywidendy. Przywrócenie dodaje go jako nowy portfel i nie zmienia istniejących.</p>
+      </div>
+      <div className="portfolio-backup-actions">
+        <button type="button" className="ghost-button" onClick={handleDownload} disabled={!portfolio || isPending}>
+          {portfolio ? `Pobierz kopię „${portfolio.name}”` : "Wybierz portfel, aby pobrać kopię"}
+        </button>
+        {onRestore ? (
+          <label className={`ghost-button portfolio-backup-restore${!canRestore || isPending || isRestoring ? " is-disabled" : ""}`}>
+            <input
+              ref={inputRef}
+              type="file"
+              accept="application/json,.json"
+              className="sr-only"
+              disabled={!canRestore || isPending || isRestoring}
+              onChange={(event) => void handleFile(event.target.files?.[0])}
+            />
+            {isRestoring ? "Przywracam…" : "Przywróć portfel z pliku"}
+          </label>
+        ) : null}
+      </div>
+      {!canRestore ? <p className="field-note">Obecny plan nie pozwala dodać kolejnego portfela, więc przywracanie jest niedostępne.</p> : null}
+      {message ? <p className={message.isError ? "field-note field-note-error" : "field-note"} role={message.isError ? "alert" : "status"}>{message.text}</p> : null}
+    </section>
+  );
+}
 
 const AVAILABLE_YEARS = [2024, 2025, 2026] as const;
 const CURRENT_RULE_YEAR = 2026;
@@ -296,6 +368,7 @@ export default function PortfolioAccountManagement({
   onDelete,
   onCreate,
   onUpdateAccount,
+  onRestore,
 }: Props) {
   const [isCreating, setIsCreating] = useState(false);
   const [isSubmittingCreate, setIsSubmittingCreate] = useState(false);
@@ -544,6 +617,8 @@ export default function PortfolioAccountManagement({
       </section>
 
       {!isAllPortfoliosSelected && activePortfolio ? <PortfolioAccountSettings key={`${activePortfolio.id}:${activePortfolio.accountType}:${JSON.stringify(activePortfolio.accountConfiguration ?? {})}`} portfolio={activePortfolio} isPending={isPending} onUpdate={onUpdateAccount} /> : null}
+
+      <PortfolioBackupPanel portfolio={!isAllPortfoliosSelected && activePortfolio ? activePortfolio : null} canRestore={canCreateAnotherPortfolio} isPending={isPending} onRestore={onRestore} />
 
       {!isAllPortfoliosSelected && activePortfolio && ["IKE", "IKZE"].includes(normalizePortfolioAccountType(activePortfolio.accountType)) ? <ContributionCard portfolio={activePortfolio} /> : null}
       {!isAllPortfoliosSelected && activePortfolio && normalizePortfolioAccountType(activePortfolio.accountType) === "OKI" ? <OkiCard portfolio={activePortfolio} currentValuePln={summaryByPortfolioId.get(activePortfolio.id)?.totalValuePln} /> : null}

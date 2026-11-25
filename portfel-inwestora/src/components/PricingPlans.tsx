@@ -25,12 +25,13 @@ const getConfirmedFeatures = (planId: SubscriptionPlan, freeLimit: number) => {
     `${FREE_PLAN_PORTFOLIO_LIMIT} portfel`,
     "Zapisywanie wycen i historii transakcji",
   ];
-  if (planId === "pro") return [
-    "Dotychczasowe konto Pro zachowuje zapisane dane",
-    "Brak limitu pozycji znanego z dawnej obsługi Pro",
-    "Zakres funkcji nowego planu wymaga decyzji produktowej",
-  ];
-  return ["Szczegółowy zakres funkcji i limity oczekują na zatwierdzenie produktu"];
+  const plan = PLAN_DEFINITIONS[planId];
+  const portfolios = plan.limits.portfolios.status === "confirmed" ? plan.limits.portfolios.value : null;
+  const portfolioLine = portfolios === null ? null : `Do ${portfolios} ${portfolios === 1 ? "portfela" : "portfeli"}`;
+  const positionsLine = plan.limits.assetsPerPortfolio.status === "confirmed"
+    ? plan.limits.assetsPerPortfolio.value === null ? "Bez limitu pozycji w portfelu" : `Do ${plan.limits.assetsPerPortfolio.value} pozycji na portfel`
+    : "Limit pozycji: decyzja produktowa w toku";
+  return [portfolioLine, positionsLine, "Zakres funkcji: decyzja produktowa w toku"].filter((line): line is string => Boolean(line));
 };
 
 export default function PricingPlans({ account, freeLimit }: PricingPlansProps) {
@@ -70,7 +71,6 @@ export default function PricingPlans({ account, freeLimit }: PricingPlansProps) 
             </div>
             <ul className="pricing-feature-list">
               {getConfirmedFeatures(plan.id, freeLimit).map((feature) => <li key={feature}>{feature}</li>)}
-              {paid ? <li>Funkcje i limity: decyzja produktowa w toku</li> : null}
             </ul>
             {paid ? (
               <button className="ghost-button" type="button" disabled aria-disabled="true">

@@ -17,6 +17,7 @@ import {
 import { convertFromPln, getRealizedProfitLossPercent } from "@/lib/pricing";
 import { buildAutomaticBondCouponAdjustments } from "@/lib/portfolio-state";
 import { formatCurrency, formatDate, formatNumber } from "@/lib/utils";
+import { buildOperationsCsv, getExportFileDate, toSafeFileName } from "@/lib/portfolio-export";
 import type { CurrencyCode, FxRates, PortfolioSale } from "@/types/portfolio";
 
 const PAGE_SIZE = 30;
@@ -113,6 +114,17 @@ export default function OperationsHistory({
   const shownRows = paginateAggregateOperationRows(sortedRows, visibleCount);
 
   const resetPage = () => setVisibleCount(PAGE_SIZE);
+  // Exports what the filters and the sort show, not only the first page.
+  const exportCsv = () => {
+    const url = URL.createObjectURL(new Blob([buildOperationsCsv(sortedRows)], { type: "text/csv;charset=utf-8" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `mexo-operacje-${toSafeFileName(isAggregate ? "wszystkie-portfele" : scopeLabel)}-${getExportFileDate()}.csv`;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
+  };
   const resetFilters = () => {
     setQuery("");
     setPortfolioId("all");
@@ -140,6 +152,11 @@ export default function OperationsHistory({
         </div>
         <div className="aggregate-operations-header-actions">
           {headerAction}
+          {rows.length > 0 ? (
+            <button type="button" className="ghost-button" onClick={exportCsv} disabled={sortedRows.length === 0} title="Plik CSV dla Excela (średniki, przecinki dziesiętne)">
+              Eksportuj CSV
+            </button>
+          ) : null}
           <span className="aggregate-operations-count" aria-live="polite">
             {filteredRows.length.toLocaleString("pl-PL")} {getPolishOperationCountLabel(filteredRows.length)}
           </span>

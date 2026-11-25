@@ -16,6 +16,7 @@ import {
   SEARCH_DEBOUNCE_MS,
 } from "@/lib/constants";
 import { canAddAsset, canCreatePortfolio, resolveEffectiveEntitlements } from "@/lib/entitlements";
+import { parsePortfolioBackup } from "@/lib/portfolio-export";
 import {
   ApiError,
   addWatchlistItem,
@@ -5559,6 +5560,43 @@ export default function PortfolioApp({
     }
   };
 
+  /** Adds a portfolio from a backup file, with the same checks and save queue as a new portfolio. */
+  const handleRestorePortfolio = async (backupText: string) => {
+    if (isPortfolioMutationPending) throw new Error("Poczekaj na zakończenie bieżącego zapisu portfela.");
+
+    const currentPortfolios = commitActivePortfolioSnapshot(portfoliosRef.current);
+    if (!canCreatePortfolio(account, currentPortfolios.length)) {
+      throw new Error("Obecny plan nie pozwala utworzyć kolejnego portfela. Istniejące dane pozostają dostępne.");
+    }
+    const backup = parsePortfolioBackup(backupText, {
+      existingIds: currentPortfolios.map((portfolio) => portfolio.id),
+      existingNames: currentPortfolios.map((portfolio) => portfolio.name),
+      createId: () => `portfolio-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    });
+    const normalizedBook = normalizePortfolioBook({ schemaVersion: 2, portfolios: [...currentPortfolios, backup], activePortfolioId: backup.id });
+    const restored = normalizedBook.portfolios.find((portfolio) => portfolio.id === backup.id);
+    if (!restored) throw new Error("Kopia portfela jest uszkodzona i nie da się jej wczytać.");
+    const restoredGroups = new Set(restored.assets.map(getPortfolioAssetGroupKey)).size;
+    if (restoredGroups > 0 && !canAddAsset(account, restoredGroups - 1)) {
+      throw new Error(`Portfel z kopii ma ${restoredGroups} pozycji, a obecny plan pozwala na ${FREE_PLAN_ASSET_LIMIT} w jednym portfelu.`);
+    }
+    const nextPortfolios = [...currentPortfolios, restored];
+
+    setIsPortfolioMutationPending(true);
+    applyPortfolioBook(nextPortfolios, restored.id);
+    loadPortfolioIntoWorkspace(restored);
+
+    try {
+      await queuePortfolioSave({ schemaVersion: 2, portfolios: nextPortfolios, activePortfolioId: restored.id }, true);
+      replacePortfolioContextQuery({ mode: "SINGLE", portfolioId: restored.id }, activeBaseCurrency);
+    } catch (error) {
+      restoreLastPersistedPortfolioBook();
+      throw error;
+    } finally {
+      setIsPortfolioMutationPending(false);
+    }
+  };
+
   const handleRenamePortfolio = async () => {
     if (!activePortfolio || isPortfolioMutationPending) {
       return;
@@ -5809,7 +5847,7 @@ export default function PortfolioApp({
     {entryMode === "bond" ? <TreasuryBondForm draft={bondDraft} series={bondSeries} quote={bondQuote} redemptionPreview={bondRedemptionPreview} swapPreview={bondSwapPreview} isLoadingSeries={isBondLoading} isLoadingRedemption={isBondRedemptionLoading} isLoadingSwap={isBondSwapLoading} error={bondError} redemptionError={bondRedemptionError} swapError={bondSwapError} successMessage={bondSuccess} targetPortfolios={isAllPortfoliosSelected ? selectedPortfolios : undefined} targetPortfolioId={operationTargetPortfolioId} onTargetPortfolioChange={isAllPortfoliosSelected ? handleOperationTargetChange : undefined} isTargetPortfolioPending={isPortfolioMutationPending || isBondRedemptionLoading || isBondSwapLoading} onChange={(nextDraft: TreasuryBondDraft) => { if (nextDraft.code !== bondDraft.code || nextDraft.purchaseDate !== bondDraft.purchaseDate) { setBondSeries(null); setBondQuote(null); setBondError(null); setIsBondLoading(false); } setBondDraft(nextDraft); setBondSuccess(null); resetBondInteractionState(); }} onCodeChange={(code: string) => { setBondDraft((currentDraft) => ({ ...currentDraft, code: normalizeTreasuryBondCode(code) })); setBondSeries(null); setBondQuote(null); setIsBondLoading(false); setBondError(null); setBondSuccess(null); resetBondInteractionState(); }} onBuySubmit={() => { void handleAddBondAsset(); }} onSellSubmit={() => { void handleSellBondAsset(); }} onRedeemSubmit={() => { void handleRedeemBondAsset(); }} onSwapSubmit={() => { void handleSwapBondAsset(); }} /> : <AddAssetForm showModeSelector={false} searchMode={searchMode} draft={draft} results={results} etfResultGroups={etfResultGroups} lastAddedResult={lastAddedResult} isSearching={isSearching} isQuoteLoading={isQuoteLoading} isBuyPending={isAssetAddPending} searchError={searchError} quoteError={quoteError} successMessage={assetSuccess} targetPortfolios={isAllPortfoliosSelected ? selectedPortfolios : undefined} targetPortfolioId={operationTargetPortfolioId} onTargetPortfolioChange={isAllPortfoliosSelected ? handleOperationTargetChange : undefined} isTargetPortfolioPending={isPortfolioMutationPending} watchlistKeys={watchlistKeys} isWatchlistTogglePending={isWatchlistTogglePending} watchlistError={watchlistError} onToggleWatchlist={(result: AssetSearchResult) => { void handleToggleWatchlist(result); }} onDraftChange={setDraft} onSearchModeChange={handleSearchModeChange} onQueryChange={(query: string) => { const trimmedQuery = query.trim(); const minimumSearchLength = getMinimumSearchLength(searchMode); quoteRequestSeqRef.current += 1; lastPreviewRequestKeyRef.current = ""; isManualSymbolRef.current = false; setIsSearching(trimmedQuery.length >= minimumSearchLength); setIsQuoteLoading(false); setResults([]); setEtfResultGroups([]); setSearchError(null); setAssetSuccess(null); setQuoteError(null); setWatchlistError(null); setDraft((currentDraft) => ({ ...currentDraft, query, name: query, symbol: "", providerId: undefined, priceScale: undefined, issuerCountry: undefined, instrumentIdentity: undefined, marketCurrencyConfirmed: undefined, latestPrice: undefined, latestPriceDate: undefined, previousClose: undefined })); }} onSymbolChange={(symbol: string) => { quoteRequestSeqRef.current += 1; lastPreviewRequestKeyRef.current = ""; isManualSymbolRef.current = true; setIsSearching(false); setIsQuoteLoading(false); setResults([]); setEtfResultGroups([]); setSearchError(null); setAssetSuccess(null); setQuoteError(null); setWatchlistError(null); setDraft((currentDraft) => ({ ...currentDraft, symbol: symbol.toUpperCase(), query: "", name: "", providerId: undefined, priceScale: undefined, issuerCountry: undefined, instrumentIdentity: undefined, marketCurrencyConfirmed: undefined, latestPrice: undefined, latestPriceDate: undefined, previousClose: undefined })); }} onPickResult={(result: AssetSearchResult) => { void handlePickResult(result); }} onReuseLastAddedResult={(result: AssetSearchResult) => { void handlePickResult(result); }} onBuySubmit={() => { void handleAddAsset(); }} onSellSubmit={() => { void handleSellAsset(); }} />}
   </>;
 
-  const portfolioManagement = <PortfolioAccountManagement portfolios={portfolios} activePortfolio={activePortfolio} activePortfolioId={activePortfolioId} isAllPortfoliosSelected={isAllPortfoliosSelected} canCreateAnotherPortfolio={canCreatePortfolio(account, portfolios.length)} summaries={portfolioSummaries} isPending={isSavingPortfolio || isPortfolioMutationPending} onSelect={(portfolioId: string) => { void handleSelectPortfolio(portfolioId); }} onRename={() => { void handleRenamePortfolio(); }} onDelete={() => { void handleDeletePortfolio(); }} onCreate={handleCreatePortfolio} onUpdateAccount={(input: Parameters<ComponentProps<typeof PortfolioAccountManagement>["onUpdateAccount"]>[0]) => { void handleUpdatePortfolioAccount(input); }} />;
+  const portfolioManagement = <PortfolioAccountManagement portfolios={portfolios} activePortfolio={activePortfolio} activePortfolioId={activePortfolioId} isAllPortfoliosSelected={isAllPortfoliosSelected} canCreateAnotherPortfolio={canCreatePortfolio(account, portfolios.length)} summaries={portfolioSummaries} isPending={isSavingPortfolio || isPortfolioMutationPending} onSelect={(portfolioId: string) => { void handleSelectPortfolio(portfolioId); }} onRename={() => { void handleRenamePortfolio(); }} onDelete={() => { void handleDeletePortfolio(); }} onCreate={handleCreatePortfolio} onRestore={handleRestorePortfolio} onUpdateAccount={(input: Parameters<ComponentProps<typeof PortfolioAccountManagement>["onUpdateAccount"]>[0]) => { void handleUpdatePortfolioAccount(input); }} />;
 
   const operationsWorkspace = (
     <OperationsHistory

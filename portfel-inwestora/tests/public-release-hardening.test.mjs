@@ -23,8 +23,10 @@ test("five distinct plans have configured prices and undecided product entitleme
   assert.deepEqual(Object.values(PLAN_DEFINITIONS).map((plan) => plan.pricePln), [0, 3.99, 6.99, 11.99, 14.99]);
   assert.equal(PLAN_DEFINITIONS.free.limits.portfolios.value, 1);
   assert.equal(PLAN_DEFINITIONS.free.limits.assetsPerPortfolio.value, 99);
+  // Portfolio counts decided on 2026-11-25; position caps of paid plans are still undecided.
+  assert.deepEqual(["basic", "standard", "pro", "expert"].map((id) => PLAN_DEFINITIONS[id].limits.portfolios.value), [3, 10, 30, 99]);
   for (const id of ["basic", "standard", "expert"]) {
-    assert.equal(PLAN_DEFINITIONS[id].limits.portfolios.status, "pending");
+    assert.equal(PLAN_DEFINITIONS[id].limits.assetsPerPortfolio.status, "pending");
     assert.equal(PLAN_DEFINITIONS[id].features.advancedAnalytics, "pending");
     assert.equal(PLAN_DEFINITIONS[id].selfServicePurchase, false);
   }
@@ -50,8 +52,8 @@ test("expiry falls back to Free without changing the assigned plan or deleting d
 test("legacy Pro access survives old records without activation/expiry timestamps", () => {
   const resolved = resolveEffectiveEntitlements(user({ subscriptionPlan: "pro", subscriptionStatus: "active" }));
   assert.equal(resolved.effectivePlan, "pro");
-  assert.equal(resolved.limits.portfolios, null);
-  assert.equal(resolved.limits.assetsPerPortfolio, null);
+  assert.equal(resolved.limits.portfolios, 30, "Pro gets the decided 30 portfolios");
+  assert.equal(resolved.limits.assetsPerPortfolio, null, "and keeps no position cap");
   assert.equal(canAccessFeature(user({ subscriptionPlan: "pro", subscriptionStatus: "active" }), "benchmarks"), false);
 });
 

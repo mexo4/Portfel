@@ -40,7 +40,7 @@ test("global Tester bypass is removed and access flags are per account", async (
   assert.match(shell, /canAccessFeature\(account, item\.featureGate\)/);
   assert.doesNotMatch(shell, /testerOnly/);
   assert.match(client, /canCreatePortfolio\(account, portfolios\.length\)/);
-  assert.match(server, /canAddAsset\(account, previousAssetCount\)/);
+  assert.match(server, /findPortfolioPlanLimitViolation\(lockedAccount, previousPortfolioBook, normalizedPortfolio\)/);
   assert.doesNotMatch(constants, /MEXO_TESTER_MODE/);
   assert.doesNotMatch(client, /MEXO_TESTER_MODE/);
   assert.doesNotMatch(server, /MEXO_TESTER_MODE|withForcedProSubscription|isForcedProEmail/);

@@ -31,7 +31,7 @@ export default function ResetPasswordCard({ token }: ResetPasswordCardProps) {
     }
 
     if (password !== confirmPassword) {
-      setError("Hasla musza byc identyczne.");
+      setError("Hasła muszą być identyczne.");
       confirmPasswordRef.current?.focus();
       return;
     }

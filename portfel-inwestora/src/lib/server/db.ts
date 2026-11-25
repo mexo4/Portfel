@@ -17,7 +17,7 @@ const getDatabaseUrl = () => {
   const databaseUrl = process.env.DATABASE_URL;
 
   if (!databaseUrl) {
-    throw new Error("Brakuje zmiennej srodowiskowej DATABASE_URL dla PostgreSQL.");
+    throw new Error("Brakuje zmiennej środowiskowej DATABASE_URL dla PostgreSQL.");
   }
 
   return databaseUrl;
@@ -37,7 +37,7 @@ const getSslConfiguration = () => {
     const certificate = Buffer.from(certificateBase64, "base64").toString("utf8");
 
     if (!certificate.includes("-----BEGIN CERTIFICATE-----")) {
-      throw new Error("POSTGRES_CA_CERT_BASE64 nie zawiera prawidlowego certyfikatu CA.");
+      throw new Error("POSTGRES_CA_CERT_BASE64 nie zawiera prawidłowego certyfikatu CA.");
     }
 
     return {

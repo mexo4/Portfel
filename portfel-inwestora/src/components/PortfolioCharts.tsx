@@ -150,8 +150,8 @@ export default function PortfolioCharts({
         <p className="eyebrow">Wykresy</p>
         <h2 className="section-title">Najpierw dodaj aktywa</h2>
         <p className="section-copy">
-          Gdy pojawia sie pierwsze pozycje, tutaj od razu zobaczysz strukture,
-          porownanie z benchmarkami i ranking wynikow.
+          Gdy pojawią się pierwsze pozycje, tutaj od razu zobaczysz strukturę,
+          porównanie z benchmarkami i ranking wyników.
         </p>
       </section>
     );
@@ -232,11 +232,11 @@ export default function PortfolioCharts({
   return (
     <div className="charts-grid">
       {view !== "structure" ? <section className="panel chart-card chart-card-wide">
-        <p className="eyebrow">Porownanie</p>
+        <p className="eyebrow">Porównanie</p>
         <h2 className="section-title">Portfel vs benchmarki</h2>
         <p className="section-copy">
-          Benchmarki liczymy na tych samych przeplywach gotowki co portfel, a procent
-          pokazuje wynik wzgledem kapitalu netto.
+          Benchmarki liczymy na tych samych przepływach gotówki co portfel, a procent
+          pokazuje wynik względem kapitału netto.
         </p>
 
         <div className="comparison-list mt-6">
@@ -293,7 +293,7 @@ export default function PortfolioCharts({
         </div>
 
         {isLoadingBenchmarks ? (
-          <p className="field-note mt-4">Laduje benchmarki do porownania...</p>
+          <p className="field-note mt-4">Ładuję benchmarki do porównania...</p>
         ) : null}
         {benchmarkError ? (
           <p className="field-note field-note-error mt-4">{benchmarkError}</p>
@@ -304,7 +304,7 @@ export default function PortfolioCharts({
         <p className="eyebrow">Struktura</p>
         <h2 className="section-title">Największe pozycje portfela</h2>
         <p className="section-copy">
-          Szybko widzisz, ktore aktywa dominuja w wartosci calego portfela.
+          Szybko widzisz, które aktywa dominują w wartości całego portfela.
         </p>
 
         <div className="chart-stack mt-6">
@@ -344,7 +344,7 @@ export default function PortfolioCharts({
         <p className="eyebrow">Dywersyfikacja</p>
         <h2 className="section-title">Udział klas aktywów</h2>
         <p className="section-copy">
-          Podzial portfela na aktywa inwestycyjne i gotowke.
+          Podział portfela na aktywa inwestycyjne i gotówkę.
         </p>
 
         <div className="donut-layout mt-6">
@@ -398,15 +398,15 @@ export default function PortfolioCharts({
 
       {view !== "benchmarks" ? <section className="panel chart-card chart-card-wide">
         <p className="eyebrow">Wynik</p>
-        <h2 className="section-title">Najmocniejsze i najslabsze pozycje</h2>
+        <h2 className="section-title">Najmocniejsze i najsłabsze pozycje</h2>
         <p className="section-copy">
-          Taki widok szybko pokazuje, co aktualnie ciagnie portfel w gore, a co
-          go obciaza.
+          Taki widok szybko pokazuje, co aktualnie ciągnie portfel w górę, a co
+          go obciąża.
         </p>
 
         <div className="chart-split mt-6">
           <div className="ranking-card">
-            <p className="table-title">Najwiekszy zysk</p>
+            <p className="table-title">Największy zysk</p>
             <div className="ranking-list mt-4">
               {topWinners.length > 0 ? (
                 topWinners.map((asset) => (
@@ -428,14 +428,14 @@ export default function PortfolioCharts({
                 ))
               ) : (
                 <p className="table-note">
-                  Na razie nie ma pozycji na plusie, wiec ranking jest pusty.
+                  Na razie nie ma pozycji na plusie, więc ranking jest pusty.
                 </p>
               )}
             </div>
           </div>
 
           <div className="ranking-card">
-            <p className="table-title">Najwieksza strata</p>
+            <p className="table-title">Największa strata</p>
             <div className="ranking-list mt-4">
               {topLosers.length > 0 ? (
                 topLosers.map((asset) => (
@@ -457,7 +457,7 @@ export default function PortfolioCharts({
                 ))
               ) : (
                 <p className="table-note">
-                  Na razie nie ma pozycji ze strata, wiec ranking jest pusty.
+                  Na razie nie ma pozycji ze stratą, więc ranking jest pusty.
                 </p>
               )}
             </div>

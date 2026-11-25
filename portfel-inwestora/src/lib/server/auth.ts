@@ -75,7 +75,7 @@ export class EmailVerificationRequiredError extends Error {
   userId: string;
 
   constructor(userId: string) {
-    super("Potwierdz adres email przed logowaniem.");
+    super("Potwierdź adres email przed logowaniem.");
     this.name = "EmailVerificationRequiredError";
     this.userId = userId;
   }
@@ -85,7 +85,7 @@ export class PortfolioRevisionConflictError extends Error {
   readonly currentRevision: number;
 
   constructor(currentRevision: number) {
-    super("Dane portfela zostaly zmienione w innej sesji. Odswiezono aktualny stan.");
+    super("Dane portfela zostały zmienione w innej sesji. Odświeżono aktualny stan.");
     this.name = "PortfolioRevisionConflictError";
     this.currentRevision = currentRevision;
   }
@@ -529,18 +529,18 @@ export const registerAccount = async ({
 
   if (existingUser) {
     if (existingUser.email_verified_at) {
-      throw new Error("Konto z tym adresem email juz istnieje.");
+      throw new Error("Konto z tym adresem email już istnieje.");
     }
 
     return toAuthenticatedUser(existingUser);
   }
 
   if (!normalizedName || normalizedName.length < 2) {
-    throw new Error("Podaj nazwe uzytkownika zlozona z co najmniej 2 znakow.");
+    throw new Error("Podaj nazwę użytkownika złożoną z co najmniej 2 znaków.");
   }
 
   if (password.length < 8) {
-    throw new Error("Haslo musi miec co najmniej 8 znakow.");
+    throw new Error("Hasło musi mieć co najmniej 8 znaków.");
   }
 
   const now = new Date().toISOString();
@@ -635,10 +635,10 @@ export const resolveGoogleOAuthAccount = async ({
 }) => {
   const provider = "google";
   const normalizedEmail = normalizeEmail(email);
-  const normalizedName = displayName?.trim() || normalizedEmail.split("@")[0] || "Uzytkownik";
+  const normalizedName = displayName?.trim() || normalizedEmail.split("@")[0] || "Użytkownik";
 
   if (!providerAccountId || !normalizedEmail || !isEmailValid(normalizedEmail)) {
-    throw new Error("Dostawca logowania nie zwrocil poprawnej tozsamosci.");
+    throw new Error("Dostawca logowania nie zwrócił poprawnej tożsamości.");
   }
 
   if (!emailVerified) {
@@ -776,7 +776,7 @@ export const resolveGoogleOAuthAccount = async ({
     (await getUserById(resolvedUserId));
 
   if (!user) {
-    throw new Error("Nie udalo sie polaczyc konta Google z kontem Mexo.");
+    throw new Error("Nie udało się połączyć konta Google z kontem Mexo.");
   }
 
   return toAuthenticatedUser(user);
@@ -798,14 +798,14 @@ export const loginAccount = async ({
 
   if (!user.password_hash) {
     throw new Error(
-      "To konto nie ma ustawionego hasla. Kontynuuj z Google albo ustaw haslo przez reset."
+      "To konto nie ma ustawionego hasła. Kontynuuj z Google albo ustaw hasło przez reset."
     );
   }
 
   const passwordMatches = await bcrypt.compare(password, user.password_hash);
 
   if (!passwordMatches) {
-    throw new Error("Niepoprawny email lub haslo.");
+    throw new Error("Niepoprawny email lub hasło.");
   }
 
   if (!user.email_verified_at) {
@@ -889,7 +889,7 @@ export const updateCurrentUserProfile = async (
   const existingUser = await getUserById(userId);
 
   if (!existingUser) {
-    throw new Error("Nie znaleziono uzytkownika.");
+    throw new Error("Nie znaleziono użytkownika.");
   }
 
   const normalizedProfile = normalizeUserProfile(nextProfile, {
@@ -900,7 +900,7 @@ export const updateCurrentUserProfile = async (
   });
 
   if (!normalizedProfile.displayName || normalizedProfile.displayName.length < 2) {
-    throw new Error("Nazwa uzytkownika musi miec co najmniej 2 znaki.");
+    throw new Error("Nazwa użytkownika musi mieć co najmniej 2 znaki.");
   }
 
   const normalizedEmail = normalizeEmail(normalizedProfile.email);
@@ -911,7 +911,7 @@ export const updateCurrentUserProfile = async (
 
   const sameEmailUser = await getUserByEmail(normalizedEmail);
   if (sameEmailUser && sameEmailUser.id !== userId) {
-    throw new Error("Ten adres email jest juz zajety.");
+    throw new Error("Ten adres email jest już zajęty.");
   }
 
   const now = new Date().toISOString();
@@ -945,7 +945,7 @@ export const updateCurrentUserProfile = async (
   const updatedUser = await getUserById(userId);
 
   if (!updatedUser) {
-    throw new Error("Nie udalo sie zapisac profilu.");
+    throw new Error("Nie udało się zapisać profilu.");
   }
 
   return {
@@ -963,7 +963,7 @@ export const updateCurrentUserPortfolio = async (
   const existingUser = await getUserById(userId);
 
   if (!existingUser) {
-    throw new Error("Nie znaleziono uzytkownika.");
+    throw new Error("Nie znaleziono użytkownika.");
   }
 
   const account = toAuthenticatedUser(existingUser);
@@ -1021,7 +1021,7 @@ export const updateCurrentUserPortfolio = async (
     const currentUser = currentRows[0];
 
     if (!currentUser) {
-      throw new Error("Nie znaleziono uzytkownika.");
+      throw new Error("Nie znaleziono użytkownika.");
     }
 
     if (currentUser.portfolio_revision !== requestedRevision) {
@@ -1066,7 +1066,7 @@ export const updateCurrentUserPortfolio = async (
     const updatedUser = updatedRows[0];
 
     if (!updatedUser) {
-      throw new Error("Nie udalo sie zapisac portfela.");
+      throw new Error("Nie udało się zapisać portfela.");
     }
 
     await syncPortfolioCoreTablesInTransaction(transaction, userId, normalizedPortfolio);
@@ -1118,7 +1118,7 @@ export const updateCurrentUserSubscription = async (
   const updatedUser = await getUserById(userId);
 
   if (!updatedUser) {
-    throw new Error("Nie udalo sie zapisac planu.");
+    throw new Error("Nie udało się zapisać planu.");
   }
 
   return toAuthenticatedUser(updatedUser);
@@ -1220,7 +1220,7 @@ export const updateUserAccessByAdmin = async (
 };
 
 export const deleteUserByAdmin = async (adminUserId: string, targetUserId: string) => {
-  if (adminUserId === targetUserId) throw new Error("Nie mozesz usunac wlasnego konta admina.");
+  if (adminUserId === targetUserId) throw new Error("Nie możesz usunąć własnego konta admina.");
   await withTransaction(async (transaction) => {
     await transaction.query("SELECT pg_advisory_xact_lock($1::bigint)", ["734219806541"]);
     const adminRows = await transaction.query<{ user_role: string }>(
@@ -1232,7 +1232,7 @@ export const deleteUserByAdmin = async (adminUserId: string, targetUserId: strin
       "SELECT id FROM users WHERE id = $1 FOR UPDATE",
       [targetUserId]
     );
-    if (!targetRows[0]) throw new Error("Nie znaleziono uzytkownika.");
+    if (!targetRows[0]) throw new Error("Nie znaleziono użytkownika.");
     await transaction.execute(
       `DELETE FROM portfolio_engine_cache WHERE portfolio_id IN
        (SELECT id FROM core_portfolios WHERE user_id = $1)`, [targetUserId]
@@ -1245,7 +1245,7 @@ export const requestEmailVerificationForUser = async (userId: string, baseUrl: s
   const user = await getUserById(userId);
 
   if (!user) {
-    throw new Error("Nie znaleziono uzytkownika.");
+    throw new Error("Nie znaleziono użytkownika.");
   }
 
   if (user.email_verified_at) {
@@ -1298,12 +1298,12 @@ export const verifyEmailToken = async (token: string) => {
   const tokenRow = await getTokenRow("email_verification_tokens", normalizedToken);
 
   if (!tokenRow) {
-    throw new Error("Link weryfikacyjny jest niepoprawny albo juz wygasl.");
+    throw new Error("Link weryfikacyjny jest niepoprawny albo już wygasł.");
   }
 
   if (new Date(tokenRow.expires_at).getTime() <= Date.now()) {
     await purgeTokensForUser("email_verification_tokens", tokenRow.user_id);
-    throw new Error("Link weryfikacyjny wygasl. Wyslij nowy z panelu konta.");
+    throw new Error("Link weryfikacyjny wygasł. Wyślij nowy z panelu konta.");
   }
 
   const user = await getUserById(tokenRow.user_id);
@@ -1325,7 +1325,7 @@ export const verifyEmailToken = async (token: string) => {
   const updatedUser = await getUserById(user.id);
 
   if (!updatedUser) {
-    throw new Error("Nie udalo sie potwierdzic adresu email.");
+    throw new Error("Nie udało się potwierdzić adresu email.");
   }
 
   return toAuthenticatedUser(updatedUser);
@@ -1368,11 +1368,11 @@ export const resetPasswordWithToken = async (token: string, password: string) =>
   const normalizedToken = token.trim();
 
   if (!normalizedToken) {
-    throw new Error("Brakuje tokenu resetu hasla.");
+    throw new Error("Brakuje tokenu resetu hasła.");
   }
 
   if (password.length < 8) {
-    throw new Error("Nowe haslo musi miec co najmniej 8 znakow.");
+    throw new Error("Nowe hasło musi mieć co najmniej 8 znaków.");
   }
 
   const passwordHash = await bcrypt.hash(password, 12);
@@ -1391,11 +1391,11 @@ export const resetPasswordWithToken = async (token: string, password: string) =>
     const tokenRow = tokenRows[0];
 
     if (!tokenRow) {
-      throw new Error("Link do resetu hasla jest niepoprawny albo juz wygasl.");
+      throw new Error("Link do resetu hasła jest niepoprawny albo już wygasł.");
     }
 
     if (new Date(tokenRow.expires_at).getTime() <= Date.now()) {
-      throw new Error("Link do resetu hasla wygasl. Popros o nowy.");
+      throw new Error("Link do resetu hasła wygasł. Poproś o nowy.");
     }
 
     const userRows = await transaction.query<{ id: string }>(
@@ -1434,23 +1434,23 @@ export const changeCurrentUserPassword = async ({
   }
 
   if (!user.password_hash) {
-    throw new Error("To konto nie ma jeszcze hasla. Ustaw je przez link resetu hasla.");
+    throw new Error("To konto nie ma jeszcze hasła. Ustaw je przez link resetu hasła.");
   }
 
   if (newPassword.length < 8) {
-    throw new Error("Nowe haslo musi miec co najmniej 8 znakow.");
+    throw new Error("Nowe hasło musi mieć co najmniej 8 znaków.");
   }
 
   const passwordMatches = await bcrypt.compare(currentPassword, user.password_hash);
 
   if (!passwordMatches) {
-    throw new Error("Aktualne haslo jest niepoprawne.");
+    throw new Error("Aktualne hasło jest niepoprawne.");
   }
 
   const passwordIsUnchanged = await bcrypt.compare(newPassword, user.password_hash);
 
   if (passwordIsUnchanged) {
-    throw new Error("Nowe haslo musi roznic sie od aktualnego.");
+    throw new Error("Nowe hasło musi różnić się od aktualnego.");
   }
 
   const passwordHash = await bcrypt.hash(newPassword, 12);

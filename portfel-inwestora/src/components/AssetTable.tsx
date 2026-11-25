@@ -84,14 +84,14 @@ const SORT_OPTIONS: Array<{
   value: AssetTableSortMode;
   label: string;
 }> = [
-  { value: "manual", label: "Wlasne ustawienie" },
-  { value: "value-desc", label: "Najwieksza wartosc" },
-  { value: "value-asc", label: "Najmniejsza wartosc" },
-  { value: "profit-desc", label: "Najwiekszy zysk" },
-  { value: "loss-asc", label: "Najwieksza strata" },
-  { value: "profit-percent-desc", label: "Najwiekszy zysk %" },
+  { value: "manual", label: "Własne ustawienie" },
+  { value: "value-desc", label: "Największa wartość" },
+  { value: "value-asc", label: "Najmniejsza wartość" },
+  { value: "profit-desc", label: "Największy zysk" },
+  { value: "loss-asc", label: "Największa strata" },
+  { value: "profit-percent-desc", label: "Największy zysk %" },
   { value: "profit-percent-asc", label: "Najmniejszy zysk %" },
-  { value: "daily-gain-desc", label: "Najwiekszy wynik dzienny" },
+  { value: "daily-gain-desc", label: "Największy wynik dzienny" },
   { value: "daily-loss-asc", label: "Najmniejszy wynik dzienny" },
 ];
 
@@ -221,7 +221,7 @@ const SortableGroupSection = ({
               <button
                 type="button"
                 className="drag-handle"
-                aria-label={`Przeciagnij ${group.name}`}
+                aria-label={`Przeciągnij ${group.name}`}
                 disabled={!canDrag}
                 onClick={(event) => {
                   event.stopPropagation();
@@ -351,7 +351,7 @@ const SortableGroupSection = ({
                   onToggleGroup(group.key);
                 }}
               >
-                {isExpanded ? "Zwin" : "Rozwin"}
+                {isExpanded ? "Zwiń" : "Rozwiń"}
               </button>
             </div>
           )}
@@ -400,13 +400,13 @@ const SortableGroupSection = ({
                         className="ghost-button"
                         onClick={() => onRemove(lot.id)}
                       >
-                        Usun zakup
+                        Usuń zakup
                       </button>
                     </div>
 
                     <div className="lot-grid">
                       <div>
-                        <p className="table-note">Ilosc</p>
+                        <p className="table-note">Ilość</p>
                         <strong>{formatNumber(lot.quantity)}</strong>
                       </div>
                       <div>
@@ -552,7 +552,7 @@ export default function AssetTable({
       <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
         <div>
           <p className="eyebrow">Portfel</p>
-          <h2 className="section-title">Biezace pozycje</h2>
+          <h2 className="section-title">Bieżące pozycje</h2>
         </div>
 
         <div className="flex flex-col gap-4 md:flex-row md:items-end">
@@ -585,7 +585,7 @@ export default function AssetTable({
 
       {isManualReorderLocked ? (
         <p className="field-note mt-4">
-          Wyczysc filtr, aby zmieniac reczna kolejnosc pozycji.
+          Wyczyść filtr, aby zmieniać ręczną kolejność pozycji.
         </p>
       ) : null}
 
@@ -616,8 +616,8 @@ export default function AssetTable({
               <tr>
                 <th className="portfolio-cell-asset">Aktywo</th>
                 <th className="portfolio-cell-kind">Typ</th>
-                <th className="portfolio-cell-quantity">Ilosc</th>
-                <th className="portfolio-cell-average-price">Sredni zakup</th>
+                <th className="portfolio-cell-quantity">Ilość</th>
+                <th className="portfolio-cell-average-price">Średni zakup</th>
                 <th className="portfolio-cell-unit-price">Kurs jednostkowy</th>
                 <th className="portfolio-cell-profit-loss">P/L {baseCurrency}</th>
                 <th className="portfolio-cell-profit-percent">Zysk %</th>
@@ -631,7 +631,7 @@ export default function AssetTable({
               <tbody>
                 <tr>
                   <td className="empty-row" colSpan={10}>
-                    Brak pozycji. Dodaj pierwsze aktywo formularzem powyzej.
+                    Brak pozycji. Dodaj pierwsze aktywo formularzem powyżej.
                   </td>
                 </tr>
               </tbody>

@@ -230,7 +230,7 @@ test("XTB comment fill rejects impossible executed volume instead of accepting a
     row("impossible-fill", "Stock purchase", "OPEN BUY DNP.PL 2/1 @ 10.00", "", -20, "01.09.2026 10:00:00", "Dino Polska"),
   ]);
   assert.equal(result.operations.length, 0);
-  assert.deepEqual(result.skippedRows.map(({ reason }) => reason), ["Nie udalo sie odczytac symbolu, ilosci albo ceny z transakcji XTB."]);
+  assert.deepEqual(result.skippedRows.map(({ reason }) => reason), ["Nie udało się odczytać symbolu, ilości albo ceny z transakcji XTB."]);
 });
 
 test("XTB XLSX decimal and thousands separators do not turn unit price into thousands or truncate it", async () => {

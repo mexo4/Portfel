@@ -22,7 +22,7 @@ export async function POST(request: Request) {
     const message =
       error instanceof Error
         ? error.message
-        : "Nie udalo sie policzyc porownania z benchmarkami.";
+        : "Nie udało się policzyć porównania z benchmarkami.";
 
     return NextResponse.json({ error: message }, { status: 400 });
   }

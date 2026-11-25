@@ -71,7 +71,7 @@ export class GoogleOAuthConfigurationError extends Error {
 
 export class GoogleOAuthError extends Error {
   constructor() {
-    super("Nie udalo sie zalogowac przez Google. Sprobuj ponownie.");
+    super("Nie udało się zalogować przez Google. Spróbuj ponownie.");
     this.name = "GoogleOAuthError";
   }
 }

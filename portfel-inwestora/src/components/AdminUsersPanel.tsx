@@ -18,7 +18,7 @@ type AdminUsersPanelProps = {
 type AdminTransaction = {
   id: string;
   date: string;
-  type: "Zakup" | "Sprzedaz" | "Korekta";
+  type: "Zakup" | "Sprzedaż" | "Korekta";
   title: string;
   details: string;
   value: string;
@@ -70,7 +70,7 @@ const buildTransactions = (user: AdminUserOverview) => {
   const sales: AdminTransaction[] = user.portfolio.sales.map((sale) => ({
     id: `sale-${sale.id}`,
     date: sale.saleDate,
-    type: "Sprzedaz",
+    type: "Sprzedaż",
     title: `${sale.symbol} - ${sale.name}`,
     details: `${formatNumber(sale.quantity)} szt. po ${formatNumber(sale.salePrice, 4)} ${sale.marketCurrency}`,
     value: `Wynik: ${formatNumber(sale.realizedProfitLossPln, 2)} PLN`,
@@ -81,7 +81,7 @@ const buildTransactions = (user: AdminUserOverview) => {
     date: adjustment.date,
     type: "Korekta",
     title: adjustment.note?.trim() || adjustment.bondCode || adjustment.source,
-    details: adjustment.source === "bond-coupon" ? "Kupon obligacji" : "Korekta reczna",
+    details: adjustment.source === "bond-coupon" ? "Kupon obligacji" : "Korekta ręczna",
     value: `${formatNumber(adjustment.amount, 2)} ${adjustment.currency}`,
   }));
 
@@ -105,7 +105,7 @@ export default function AdminUsersPanel({ users, currentUserId }: AdminUsersPane
 
   const handleDeleteUser = async (user: AdminUserOverview) => {
     const confirmed = window.confirm(
-      `Usunac profil ${user.displayName} (${user.email})? Tej operacji nie da sie cofnac.`
+      `Usunąć profil ${user.displayName} (${user.email})? Tej operacji nie da się cofnąć.`
     );
 
     if (!confirmed) return;
@@ -117,7 +117,7 @@ export default function AdminUsersPanel({ users, currentUserId }: AdminUsersPane
       await deleteAdminUser(user.id);
       router.refresh();
     } catch (error) {
-      setDeleteError(error instanceof Error ? error.message : "Nie udalo sie usunac profilu.");
+      setDeleteError(error instanceof Error ? error.message : "Nie udało się usunąć profilu.");
     } finally {
       setPendingDeleteUserId(null);
     }
@@ -147,10 +147,10 @@ export default function AdminUsersPanel({ users, currentUserId }: AdminUsersPane
       <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
         <div>
           <p className="eyebrow">Konta</p>
-          <h2 className="section-title">Uzytkownicy i transakcje</h2>
+          <h2 className="section-title">Użytkownicy i transakcje</h2>
         </div>
         <p className="section-copy">
-          Profile sa kompaktowe. Rozwin konto, aby zobaczyc wszystkie transakcje.
+          Profile są kompaktowe. Rozwiń konto, aby zobaczyć wszystkie transakcje.
         </p>
       </div>
 
@@ -186,10 +186,10 @@ export default function AdminUsersPanel({ users, currentUserId }: AdminUsersPane
                   <span className="tag">Email: {user.emailVerifiedAt ? "OK" : "Nie"}</span>
                   <span className="tag">Sesje: {user.activeSessions}</span>
                   <span className="tag">
-                    {user.assetsCount} lotow / {user.salesCount} sprzedazy
+                    {user.assetsCount} lotów / {user.salesCount} sprzedaży
                   </span>
                 </div>
-                <span className="admin-expand-indicator">{isExpanded ? "Zwin" : "Rozwin"}</span>
+                <span className="admin-expand-indicator">{isExpanded ? "Zwiń" : "Rozwiń"}</span>
               </button>
 
               {isExpanded ? (
@@ -227,7 +227,7 @@ export default function AdminUsersPanel({ users, currentUserId }: AdminUsersPane
                       onClick={() => void handleDeleteUser(user)}
                       disabled={pendingDeleteUserId === user.id || user.id === currentUserId}
                     >
-                      {pendingDeleteUserId === user.id ? "Usuwam..." : "Usun profil"}
+                      {pendingDeleteUserId === user.id ? "Usuwam..." : "Usuń profil"}
                     </button>
                   </div>
                   {pendingAccessUserId === user.id ? <p className="field-note">Zapisuję zmianę dostępu…</p> : null}

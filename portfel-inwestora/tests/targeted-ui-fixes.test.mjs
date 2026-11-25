@@ -161,7 +161,7 @@ test("a verified ETF can continue with its historical transaction price after qu
 
   assert.match(
     source,
-    /if \(draft\.kind === "etf"\) \{[\s\S]*?Mozesz dodac ETF z cena transakcji\.[\s\S]*?return null;/
+    /if \(draft\.kind === "etf"\) \{[\s\S]*?Możesz dodać ETF z ceną transakcji\.[\s\S]*?return null;/
   );
 });
 

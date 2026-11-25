@@ -41,11 +41,11 @@ type WealthDraft = {
 const ASSET_CATEGORIES: Array<{ value: WealthCategory; label: string }> = [
   { value: "house", label: "Dom" },
   { value: "apartment", label: "Mieszkanie" },
-  { value: "land", label: "Dzialka" },
-  { value: "car", label: "Samochod" },
+  { value: "land", label: "Działka" },
+  { value: "car", label: "Samochód" },
   { value: "motorcycle", label: "Motocykl" },
-  { value: "gold", label: "Zloto" },
-  { value: "art", label: "Dziela sztuki" },
+  { value: "gold", label: "Złoto" },
+  { value: "art", label: "Dzieła sztuki" },
   { value: "collection", label: "Kolekcje" },
   { value: "other", label: "Inne" },
 ];
@@ -53,8 +53,8 @@ const ASSET_CATEGORIES: Array<{ value: WealthCategory; label: string }> = [
 const LIABILITY_CATEGORIES: Array<{ value: WealthCategory; label: string }> = [
   { value: "mortgage", label: "Kredyt hipoteczny" },
   { value: "car-loan", label: "Kredyt samochodowy" },
-  { value: "loan", label: "Pozyczka" },
-  { value: "other-liability", label: "Inne zobowiazanie" },
+  { value: "loan", label: "Pożyczka" },
+  { value: "other-liability", label: "Inne zobowiązanie" },
 ];
 
 const CURRENCY_OPTIONS = ["PLN", "USD", "EUR", "GBP", "CHF", "CZK"];
@@ -84,7 +84,7 @@ const getCategoriesForKind = (kind: WealthItemKind) =>
 
 const getCategoryLabel = (category: WealthCategory, kind: WealthItemKind) =>
   getCategoriesForKind(kind).find((option) => option.value === category)?.label ??
-  (kind === "asset" ? "Inne" : "Inne zobowiazanie");
+  (kind === "asset" ? "Inne" : "Inne zobowiązanie");
 
 const getCurrencyRate = (currency: CurrencyCode, fxRates: FxRates) => {
   if (currency === "PLN") {
@@ -199,19 +199,19 @@ export default function WealthWorkspace({
       : categories[0].value;
 
     if (!name) {
-      setError("Podaj nazwe pozycji majatku.");
+      setError("Podaj nazwę pozycji majątku.");
       nameRef.current?.focus();
       return;
     }
 
     if (!Number.isFinite(value) || value <= 0) {
-      setError("Podaj dodatnia wartosc pozycji.");
+      setError("Podaj dodatnią wartość pozycji.");
       valueRef.current?.focus();
       return;
     }
 
     if (!addedAt) {
-      setError("Podaj poprawna date dodania.");
+      setError("Podaj poprawną datę dodania.");
       dateRef.current?.focus();
       return;
     }
@@ -273,23 +273,23 @@ export default function WealthWorkspace({
       <section className="panel wealth-summary-panel">
         <div className="sprint-panel-head">
           <div>
-            <p className="eyebrow">Majatek</p>
-            <h2 className="section-title">Dashboard majatku</h2>
+            <p className="eyebrow">Majątek</p>
+            <h2 className="section-title">Pulpit majątku</h2>
           </div>
           <span className="tag">{profile.wealthItems.length} pozycji</span>
         </div>
 
         <div className="wealth-summary-grid mt-6">
           <article className="metric-card">
-            <span>Wartosc aktywow</span>
+            <span>Wartość aktywów</span>
             <strong>{formatCurrency(summary.assetsValuePln)}</strong>
           </article>
           <article className="metric-card">
-            <span>Wartosc pasywow</span>
+            <span>Wartość pasywów</span>
             <strong>{formatCurrency(summary.liabilitiesValuePln)}</strong>
           </article>
           <article className="metric-card">
-            <span>Majatek netto</span>
+            <span>Majątek netto</span>
             <strong
               className={summary.netWorthPln >= 0 ? "tone-positive" : "tone-negative"}
             >
@@ -305,7 +305,7 @@ export default function WealthWorkspace({
         {missingFxCurrencies.length > 0 ? (
           <p className="field-note mt-4">
             Brak kursu FX dla {missingFxCurrencies.join(", ")}. Do czasu
-            odswiezenia kursow przeliczenie uzywa 1:1.
+            odświeżenia kursów przeliczenie używa 1:1.
           </p>
         ) : null}
       </section>
@@ -363,12 +363,12 @@ export default function WealthWorkspace({
                   name: event.target.value,
                 }))
               }
-              placeholder="np. mieszkanie, samochod, kredyt"
+              placeholder="np. mieszkanie, samochód, kredyt"
             />
           </label>
 
           <FormattedNumberInput
-            label="Aktualna wartosc"
+            label="Aktualna wartość"
             value={draft.value}
             min={0}
             precision={2}
@@ -446,7 +446,7 @@ export default function WealthWorkspace({
 
         <div className="sprint-action-row mt-5">
           <button className="primary-button" type="button" onClick={handleSave}>
-            {draft.editingId ? "Zapisz pozycje" : "Dodaj pozycje"}
+            {draft.editingId ? "Zapisz pozycję" : "Dodaj pozycję"}
           </button>
           {draft.editingId ? (
             <button className="ghost-button" type="button" onClick={resetDraft}>
@@ -459,7 +459,7 @@ export default function WealthWorkspace({
       <section className="panel wealth-list-panel">
         <div className="sprint-panel-head">
           <div>
-            <p className="eyebrow">Lista majatku</p>
+            <p className="eyebrow">Lista majątku</p>
             <h2 className="section-title">Aktywa i pasywa</h2>
           </div>
         </div>
@@ -508,7 +508,7 @@ export default function WealthWorkspace({
                   type="button"
                   onClick={() => handleDelete(item.id)}
                 >
-                  Usun
+                  Usuń
                 </button>
               </div>
             </article>
@@ -516,7 +516,7 @@ export default function WealthWorkspace({
 
           {rows.length === 0 ? (
             <p className="field-note">
-              Nie dodano jeszcze pozycji majatku poza inwestycjami.
+              Nie dodano jeszcze pozycji majątku poza inwestycjami.
             </p>
           ) : null}
         </div>

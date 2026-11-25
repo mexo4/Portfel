@@ -1018,7 +1018,7 @@ const fetchInstrumentHistory = async ({
 
       return {
         points: [],
-        warning: `Nie udalo sie pobrac pelnej historii cen dla ${symbol}; uzyto fallbacku z danych zakupu.`,
+        warning: `Nie udało się pobrać pełnej historii cen dla ${symbol}; użyto fallbacku z danych zakupu.`,
       };
     }
 
@@ -1045,7 +1045,7 @@ const fetchInstrumentHistory = async ({
 
       return {
         points: [],
-        warning: `Nie udalo sie pobrac pelnej historii cen dla ETF ${symbol}; uzyto fallbacku z danych zakupu.`,
+        warning: `Nie udało się pobrać pełnej historii cen dla ETF ${symbol}; użyto fallbacku z danych zakupu.`,
       };
     }
 
@@ -1093,19 +1093,19 @@ const fetchInstrumentHistory = async ({
       return {
         points: [],
         warning: coinGeckoProviderId
-          ? `Nie udalo sie pobrac pelnej historii cen dla krypto ${symbol}; uzyto fallbacku z danych zakupu.`
-          : `Krypto ${symbol} nie ma providerId CoinGecko; uzyto fallbacku z danych zakupu.`,
+          ? `Nie udało się pobrać pełnej historii cen dla krypto ${symbol}; użyto fallbacku z danych zakupu.`
+          : `Krypto ${symbol} nie ma providerId CoinGecko; użyto fallbacku z danych zakupu.`,
       };
     }
 
     return {
       points: [],
-      warning: `Brakuje historii cen dla ${symbol} (${resolvedMarketCurrency}); uzyto fallbacku z danych zakupu.`,
+      warning: `Brakuje historii cen dla ${symbol} (${resolvedMarketCurrency}); użyto fallbacku z danych zakupu.`,
     };
   } catch {
     return {
       points: [],
-      warning: `Nie udalo sie zbudowac historii dla ${symbol}; uzyto fallbacku z danych zakupu.`,
+      warning: `Nie udało się zbudować historii dla ${symbol}; użyto fallbacku z danych zakupu.`,
     };
   }
 };
@@ -1852,7 +1852,7 @@ const buildBenchmarkReturnSeries = ({
         // that one ("uzyto fallbacku z danych zakupu") is about holdings, the UI
         // hides it, and a benchmark with no series then vanished without a word.
         warnings.add(
-          `Nie udalo sie pobrac historii dla benchmarku ${benchmark.name}; pominieto go na wykresie.`
+          `Nie udało się pobrać historii dla benchmarku ${benchmark.name}; pominięto go na wykresie.`
         );
         return null;
       }
@@ -1897,7 +1897,7 @@ const buildBenchmarkReturnSeries = ({
 
       if (points.length === 0) {
         warnings.add(
-          `Nie udalo sie dopasowac historii kursu dla benchmarku ${benchmark.name}; pominieto go na wykresie.`
+          `Nie udało się dopasować historii kursu dla benchmarku ${benchmark.name}; pominięto go na wykresie.`
         );
         return null;
       }
@@ -2215,7 +2215,7 @@ export const buildPortfolioHistory = async ({
 
     if (usedFallback && historyPoints.length > 0 && initialGapDays > 5) {
       warnings.add(
-        `Historia ${segment.symbol} ma braki na poczatku zakresu; brakujace dni wyceniono po cenie zakupu.`
+        `Historia ${segment.symbol} ma braki na początku zakresu; brakujące dni wyceniono po cenie zakupu.`
       );
     }
   }

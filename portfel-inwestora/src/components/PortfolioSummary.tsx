@@ -70,7 +70,7 @@ export default function PortfolioSummary({
       <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
         <div>
           <p className="eyebrow">Portfel inwestycyjny</p>
-          <h2 className="section-title">Szybki podglad portfela</h2>
+          <h2 className="section-title">Szybki podgląd portfela</h2>
           <p className="section-copy">
             Glowny wynik liczony jest w {summary.currency}, a zysk zrealizowany pokazujemy
             dodatkowo w walutach transakcji.
@@ -172,7 +172,7 @@ export default function PortfolioSummary({
       {summary.unpricedPositionsCount > 0 ? (
         <p className="field-note mt-4" role="status">
           Wycena portfela jest częściowa: {summary.unpricedPositionsCount} pozycji nie ma
-          aktualnego kursu lub wymaganego kursu FX. Ich koszt i historia pozostaja zachowane;
+          aktualnego kursu lub wymaganego kursu FX. Ich koszt i historia pozostają zachowane;
           nie pokazujemy dla nich fikcyjnej straty.
         </p>
       ) : null}
@@ -180,7 +180,7 @@ export default function PortfolioSummary({
       <div className="hero-meta mt-5">
         <span className="tag">pozycje: {summary.positionsCount}</span>
         <span className="tag">unikalne aktywa: {summary.assetsCount}</span>
-        <span className="tag">sprzedaze: {summary.salesCount}</span>
+        <span className="tag">sprzedaże: {summary.salesCount}</span>
         <span className="tag">
           plan: {testerAccess
             ? "Tester: dostęp przypisany do konta"
@@ -201,7 +201,7 @@ export default function PortfolioSummary({
         <p className="field-note">
           Tryb developerski:{" "}
           <a className="auth-link" href={verificationPreviewUrl}>
-            otworz link weryfikacyjny
+            otwórz link weryfikacyjny
           </a>
         </p>
       ) : null}

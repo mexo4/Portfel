@@ -33,7 +33,7 @@ export async function GET(request: Request) {
     });
   } catch (error) {
     const message =
-      error instanceof Error ? error.message : "Nie udalo sie pobrac danych obligacji.";
+      error instanceof Error ? error.message : "Nie udało się pobrać danych obligacji.";
 
     return NextResponse.json({ error: message }, { status: 400 });
   }

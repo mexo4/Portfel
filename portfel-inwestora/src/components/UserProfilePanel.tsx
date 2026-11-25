@@ -29,7 +29,7 @@ export default function UserProfilePanel({
   onLogout,
 }: UserProfilePanelProps) {
   const initials = getUserInitials(profile);
-  const title = profile.displayName.trim() || "Twoj profil inwestora";
+  const title = profile.displayName.trim() || "Twój profil inwestora";
   const [verificationMessage, setVerificationMessage] = useState<string | null>(null);
   const [verificationError, setVerificationError] = useState<string | null>(null);
   const [verificationPreviewUrl, setVerificationPreviewUrl] = useState<string | null>(null);
@@ -45,7 +45,7 @@ export default function UserProfilePanel({
       const response = await requestEmailVerification();
 
       if (response.alreadyVerified) {
-        setVerificationMessage("Ten adres email jest juz zweryfikowany.");
+        setVerificationMessage("Ten adres email jest już zweryfikowany.");
         return;
       }
 
@@ -53,7 +53,7 @@ export default function UserProfilePanel({
       setVerificationPreviewUrl(response.previewUrl);
     } catch (error) {
       setVerificationError(
-        error instanceof Error ? error.message : "Nie udalo sie przygotowac linku."
+        error instanceof Error ? error.message : "Nie udało się przygotować linku."
       );
     } finally {
       setIsSendingVerification(false);
@@ -73,7 +73,7 @@ export default function UserProfilePanel({
             <div className="hero-meta mt-3">
               <span className="tag">{account.email}</span>
               <span className="tag">
-                {account.emailVerifiedAt ? "email zweryfikowany" : "email czeka na weryfikacje"}
+                {account.emailVerifiedAt ? "email zweryfikowany" : "email czeka na weryfikację"}
               </span>
             </div>
           </div>
@@ -81,7 +81,7 @@ export default function UserProfilePanel({
 
         <div className="profile-grid">
           <label className="field">
-            <span>Imie i nazwisko</span>
+            <span>Imię i nazwisko</span>
             <input
               value={profile.displayName}
               onChange={(event) => onChange({ displayName: event.target.value })}
@@ -95,7 +95,7 @@ export default function UserProfilePanel({
               type="email"
               value={profile.email}
               onChange={(event) => onChange({ email: event.target.value })}
-              placeholder="twoj@email.com"
+              placeholder="twój@email.com"
             />
           </label>
 
@@ -136,7 +136,7 @@ export default function UserProfilePanel({
           </label>
 
           <label className="field">
-            <span>Miesieczna wplata PLN</span>
+            <span>Miesięczna wpłata PLN</span>
             <input
               type="number"
               min="0"
@@ -155,7 +155,7 @@ export default function UserProfilePanel({
             <input
               value={profile.investmentGoal}
               onChange={(event) => onChange({ investmentGoal: event.target.value })}
-              placeholder="Np. niezaleznosc finansowa, emerytura, portfel dywidendowy"
+              placeholder="Np. niezależność finansowa, emerytura, portfel dywidendowy"
             />
           </label>
         </div>
@@ -167,7 +167,7 @@ export default function UserProfilePanel({
             <span className="tag">broker: {profile.preferredBroker.trim() || "brak"}</span>
             <span className="tag">kraj: {profile.country.trim() || "brak"}</span>
             <span className="tag">
-              miesiecznie:{" "}
+              miesięcznie:{" "}
               {profile.monthlyContributionPln > 0
                 ? formatCurrency(profile.monthlyContributionPln)
                 : "nie ustawiono"}
@@ -194,10 +194,10 @@ export default function UserProfilePanel({
               </button>
             ) : null}
             <button className="ghost-button" type="button" onClick={onReset}>
-              Wyczysc profil
+              Wyczyść profil
             </button>
             <button className="ghost-button" type="button" onClick={onLogout} disabled={isLoggingOut}>
-              {isLoggingOut ? "Wylogowuje..." : "Wyloguj sie"}
+              {isLoggingOut ? "Wylogowuję..." : "Wyloguj się"}
             </button>
           </div>
         </div>
@@ -207,7 +207,7 @@ export default function UserProfilePanel({
           <p className="field-note">
             Tryb developerski:{" "}
             <a className="auth-link" href={verificationPreviewUrl}>
-              otworz link weryfikacyjny
+              otwórz link weryfikacyjny
             </a>
           </p>
         ) : null}

@@ -20,7 +20,7 @@ export async function POST(request: Request) {
     );
     return NextResponse.json({ saved: result.saved });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Nie udalo sie zapisac aktualnych kursow.";
+    const message = error instanceof Error ? error.message : "Nie udało się zapisać aktualnych kursów.";
     return NextResponse.json({ error: message }, { status: 400 });
   }
 }

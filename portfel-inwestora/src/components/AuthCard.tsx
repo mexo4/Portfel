@@ -225,7 +225,7 @@ export default function AuthCard({
                 disabled={!isHydrated || isSubmitting}
                 autoComplete="email"
                 onChange={(event) => setEmail(event.target.value)}
-                placeholder="twoj@email.com"
+                placeholder="twój@email.com"
               />
             </label>
 

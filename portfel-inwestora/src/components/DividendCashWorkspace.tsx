@@ -92,12 +92,12 @@ const CASH_OPERATION_OPTIONS: Array<{
   value: CashOperationKind;
   label: string;
 }> = [
-  { value: "DEPOSIT", label: "Wplata" },
-  { value: "WITHDRAW", label: "Wyplata" },
+  { value: "DEPOSIT", label: "Wpłata" },
+  { value: "WITHDRAW", label: "Wypłata" },
   { value: "TRANSFER", label: "Przelew" },
   { value: "INTEREST", label: "Odsetki" },
-  { value: "FEE", label: "Prowizja / oplata" },
-  { value: "CUSTOM", label: "Korekta gotowki" },
+  { value: "FEE", label: "Prowizja / opłata" },
+  { value: "CUSTOM", label: "Korekta gotówki" },
 ];
 
 const createClientOperationId = (prefix: string) =>
@@ -581,8 +581,8 @@ export default function DividendCashWorkspace({
     if (!instrument) {
       setDividendError(
         dividendDraft.useCustomInstrument
-          ? "Podaj nazwe i ticker spolki dla dywidendy."
-          : "Wybierz instrument albo dodaj wlasna nazwe."
+          ? "Podaj nazwę i ticker spółki dla dywidendy."
+          : "Wybierz instrument albo dodaj własną nazwę."
       );
       (dividendDraft.useCustomInstrument
         ? dividendCustomNameRef.current
@@ -592,7 +592,7 @@ export default function DividendCashWorkspace({
     }
 
     if (!account) {
-      setDividendError("Wybierz konto wplywu albo utworz nowe konto walutowe.");
+      setDividendError("Wybierz konto wpływu albo utwórz nowe konto walutowe.");
       dividendAccountRef.current?.focus();
       return;
     }
@@ -604,32 +604,32 @@ export default function DividendCashWorkspace({
 
     if (account.currency !== selectedDividendCurrency) {
       setDividendError(
-        `Konto wplywu musi byc w walucie ${selectedDividendCurrency}. Wybierz zgodne konto albo utworz nowe.`
+        `Konto wpływu musi być w walucie ${selectedDividendCurrency}. Wybierz zgodne konto albo utwórz nowe.`
       );
       dividendAccountRef.current?.focus();
       return;
     }
 
     if (dividendDraft.quantity <= 0) {
-      setDividendError("Ilosc akcji musi byc wieksza od zera.");
+      setDividendError("Ilość akcji musi być większa od zera.");
       dividendQuantityRef.current?.focus();
       return;
     }
 
     if (dividendDraft.dividendPerShare <= 0) {
-      setDividendError("Dywidenda na akcje musi byc wieksza od zera.");
+      setDividendError("Dywidenda na akcję musi być większa od zera.");
       dividendPerShareRef.current?.focus();
       return;
     }
 
     if (!dividendDraft.paymentDate) {
-      setDividendError("Podaj date wyplaty dywidendy.");
+      setDividendError("Podaj datę wypłaty dywidendy.");
       dividendPaymentDateRef.current?.focus();
       return;
     }
 
     if (dividendNet < 0) {
-      setDividendError("Podatki nie moga byc wyzsze niz dywidenda brutto.");
+      setDividendError("Podatki nie mogą być wyższe niż dywidenda brutto.");
       dividendPerShareRef.current?.focus();
       return;
     }
@@ -698,7 +698,7 @@ export default function DividendCashWorkspace({
     );
 
     if (!account) {
-      setCashError("Wybierz konto gotowkowe lub inwestycyjne.");
+      setCashError("Wybierz konto gotówkowe lub inwestycyjne.");
       cashAccountRef.current?.focus();
       return;
     }
@@ -720,13 +720,13 @@ export default function DividendCashWorkspace({
     }
 
     if (cashDraft.amount <= 0) {
-      setCashError("Kwota operacji gotowkowej musi byc wieksza od zera.");
+      setCashError("Kwota operacji gotówkowej musi być większa od zera.");
       cashAmountRef.current?.focus();
       return;
     }
 
     if (!cashDraft.date) {
-      setCashError("Podaj date operacji gotowkowej.");
+      setCashError("Podaj datę operacji gotówkowej.");
       cashDateRef.current?.focus();
       return;
     }
@@ -775,10 +775,10 @@ export default function DividendCashWorkspace({
               <div>
                 <p className="eyebrow">Dywidendy</p>
                 <h2 className="section-title">
-                  {dividendDraft.editingId ? "Edytuj dywidende" : "Dodaj dywidende"}
+                  {dividendDraft.editingId ? "Edytuj dywidendę" : "Dodaj dywidendę"}
                 </h2>
               </div>
-              <span className="tag">{dividends.length} wyplat</span>
+              <span className="tag">{dividends.length} wypłat</span>
             </div>
 
             <div className="sprint-form-grid dividend-form-grid mt-6">
@@ -814,7 +814,7 @@ export default function DividendCashWorkspace({
               </label>
 
               <label className="field">
-                <span>Konto wplywu</span>
+                <span>Konto wpływu</span>
                 <select
                   ref={dividendAccountRef}
                   value={dividendDraft.accountId}
@@ -832,13 +832,13 @@ export default function DividendCashWorkspace({
                     </option>
                   ))}
                   <option value={CREATE_DIVIDEND_ACCOUNT_VALUE}>
-                    Utworz konto {selectedDividendCurrency}
+                    Utwórz konto {selectedDividendCurrency}
                   </option>
                 </select>
               </label>
 
               <div className="field">
-                <span>Wlasna spolka</span>
+                <span>Własna spółka</span>
                 <button
                   className="ghost-button dividend-inline-button"
                   type="button"
@@ -846,14 +846,14 @@ export default function DividendCashWorkspace({
                 >
                   {dividendDraft.useCustomInstrument
                     ? "Wybierz z listy"
-                    : "Nie ma na liscie? Dodaj wlasna nazwe."}
+                    : "Nie ma na liście? Dodaj własną nazwę."}
                 </button>
               </div>
 
               {dividendDraft.useCustomInstrument ? (
                 <>
                   <label className="field">
-                    <span>Nazwa spolki</span>
+                    <span>Nazwa spółki</span>
                     <input
                       ref={dividendCustomNameRef}
                       value={dividendDraft.customInstrumentName}
@@ -915,7 +915,7 @@ export default function DividendCashWorkspace({
               ) : null}
 
               <FormattedNumberInput
-                label="Ilosc akcji"
+                label="Ilość akcji"
                 value={dividendDraft.quantity}
                 min={0}
                 inputRef={dividendQuantityRef}
@@ -928,7 +928,7 @@ export default function DividendCashWorkspace({
               />
 
               <FormattedNumberInput
-                label={`Dywidenda na akcje (${selectedDividendCurrency})`}
+                label={`Dywidenda na akcję (${selectedDividendCurrency})`}
                 value={dividendDraft.dividendPerShare}
                 min={0}
                 inputRef={dividendPerShareRef}
@@ -941,7 +941,7 @@ export default function DividendCashWorkspace({
               />
 
               <FormattedNumberInput
-                label={`Podatek u zrodla (${selectedDividendCurrency})`}
+                label={`Podatek u źródła (${selectedDividendCurrency})`}
                 value={dividendDraft.withholdingTax}
                 min={0}
                 onChange={(value) =>
@@ -986,7 +986,7 @@ export default function DividendCashWorkspace({
               />
 
               <label className="field">
-                <span>Ex-dividend date</span>
+                <span>Dzień odcięcia (ex-date)</span>
                 <input
                   type="date"
                   value={dividendDraft.exDividendDate}
@@ -1000,7 +1000,7 @@ export default function DividendCashWorkspace({
               </label>
 
               <label className="field">
-                <span>Record date</span>
+                <span>Dzień ustalenia prawa</span>
                 <input
                   type="date"
                   value={dividendDraft.recordDate}
@@ -1014,7 +1014,7 @@ export default function DividendCashWorkspace({
               </label>
 
               <label className="field">
-                <span>Payment date</span>
+                <span>Dzień wypłaty</span>
                 <input
                   ref={dividendPaymentDateRef}
                   type="date"
@@ -1052,7 +1052,7 @@ export default function DividendCashWorkspace({
                       notes: event.target.value,
                     }))
                   }
-                  placeholder="np. kwartalna wyplata"
+                  placeholder="np. kwartalna wypłata"
                 />
               </label>
               {isAggregateMode && onTargetPortfolioChange ? (
@@ -1112,7 +1112,7 @@ export default function DividendCashWorkspace({
 
             <div className="sprint-action-row mt-5">
               <button className="primary-button" type="button" onClick={() => void saveDividend()} disabled={isSavingDividend || isPortfolioMutationPending || (isAggregateMode && !selectedTargetPortfolio)}>
-                {isSavingDividend ? "Zapisywanie…" : isPortfolioMutationPending ? "Zmiana portfela…" : dividendDraft.editingId ? "Zapisz dywidende" : "Dodaj dywidende"}
+                {isSavingDividend ? "Zapisywanie…" : isPortfolioMutationPending ? "Zmiana portfela…" : dividendDraft.editingId ? "Zapisz dywidendę" : "Dodaj dywidendę"}
               </button>
               {dividendDraft.editingId ? (
                 <button className="ghost-button" type="button" onClick={resetDividendDraft}>
@@ -1127,7 +1127,7 @@ export default function DividendCashWorkspace({
             <div className="sprint-panel-head">
               <div>
                 <p className="eyebrow">Historia dywidend</p>
-                <h2 className="section-title">Wszystkie wyplaty</h2>
+                <h2 className="section-title">Wszystkie wypłaty</h2>
               </div>
               <span className="tag">{filteredDividendHistory.length} wyników</span>
             </div>
@@ -1230,7 +1230,7 @@ export default function DividendCashWorkspace({
                                 type="button"
                                 onClick={() => deleteDividend(dividend)}
                               >
-                                Usun
+                                Usuń
                               </button>
                             </>
                           ) : null}
@@ -1287,8 +1287,8 @@ export default function DividendCashWorkspace({
           <article className="panel">
             <div className="sprint-panel-head">
               <div>
-                <p className="eyebrow">Gotowka</p>
-                <h2 className="section-title">Dodaj operacje gotowkowa</h2>
+                <p className="eyebrow">Gotówka</p>
+                <h2 className="section-title">Dodaj operację gotówkową</h2>
               </div>
               <span className="tag">{cashBalances.length} sald</span>
             </div>
@@ -1424,7 +1424,7 @@ export default function DividendCashWorkspace({
 
             <div className="sprint-action-row mt-5">
               <button className="primary-button" type="button" onClick={() => void saveCashOperation()} disabled={isSavingCash || isPortfolioMutationPending}>
-                {isSavingCash ? "Zapisywanie…" : isPortfolioMutationPending ? "Zmiana portfela…" : "Dodaj operacje gotowkowa"}
+                {isSavingCash ? "Zapisywanie…" : isPortfolioMutationPending ? "Zmiana portfela…" : "Dodaj operację gotówkową"}
               </button>
             </div>
           </article>
@@ -1433,7 +1433,7 @@ export default function DividendCashWorkspace({
             <div className="sprint-panel-head">
               <div>
                 <p className="eyebrow">Salda</p>
-                <h2 className="section-title">Gotowka wg kont i walut</h2>
+                <h2 className="section-title">Gotówka wg kont i walut</h2>
               </div>
             </div>
 
@@ -1455,7 +1455,7 @@ export default function DividendCashWorkspace({
                 );
               })}
               {cashBalances.length === 0 ? (
-                <p className="field-note">Brak operacji gotowkowych.</p>
+                <p className="field-note">Brak operacji gotówkowych.</p>
               ) : null}
             </div>
           </article>
@@ -1463,7 +1463,7 @@ export default function DividendCashWorkspace({
           <article className="panel sprint-wide-panel">
             <div className="sprint-panel-head">
               <div>
-                <p className="eyebrow">Historia gotowki</p>
+                <p className="eyebrow">Historia gotówki</p>
                 <h2 className="section-title">Saldo po operacji</h2>
               </div>
               <span className="tag">{cashHistory.length} wpisow</span>
@@ -1501,7 +1501,7 @@ export default function DividendCashWorkspace({
                   {cashHistory.length === 0 ? (
                     <tr>
                       <td colSpan={7}>
-                        <p className="empty-row">Brak historii gotowki.</p>
+                        <p className="empty-row">Brak historii gotówki.</p>
                       </td>
                     </tr>
                   ) : null}

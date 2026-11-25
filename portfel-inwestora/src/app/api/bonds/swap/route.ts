@@ -23,7 +23,7 @@ export async function POST(request: Request) {
 
   if (!sourceRedemption) {
     return NextResponse.json(
-      { error: "Brak podgladu wykupu dla zrodlowej serii." },
+      { error: "Brak podglądu wykupu dla źródłowej serii." },
       { status: 400 }
     );
   }
@@ -34,7 +34,7 @@ export async function POST(request: Request) {
 
   if (!Number.isFinite(targetQuantity) || targetQuantity <= 0) {
     return NextResponse.json(
-      { error: "Podaj poprawna ilosc obligacji po zamianie." },
+      { error: "Podaj poprawną ilość obligacji po zamianie." },
       { status: 400 }
     );
   }
@@ -49,7 +49,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ swap });
   } catch (error) {
     const message =
-      error instanceof Error ? error.message : "Nie udalo sie pobrac podgladu zamiany.";
+      error instanceof Error ? error.message : "Nie udało się pobrać podglądu zamiany.";
 
     return NextResponse.json({ error: message }, { status: 400 });
   }

@@ -51,7 +51,7 @@ export default function RealizedAdjustmentsPanel({
         </div>
 
         <p className="section-copy">
-          Tutaj dopisujesz historyczny zysk albo strate z transakcji, ktorych nie bylo
+          Tutaj dopisujesz historyczny zysk albo stratę z transakcji, których nie było
           jeszcze w aplikacji.
         </p>
       </div>
@@ -117,7 +117,7 @@ export default function RealizedAdjustmentsPanel({
                 note: event.target.value,
               })
             }
-            placeholder="Np. sprzedaz sprzed zalozenia konta"
+            placeholder="Np. sprzedaż sprzed założenia konta"
           />
         </label>
 
@@ -162,7 +162,7 @@ export default function RealizedAdjustmentsPanel({
                 {adjustment.source === "manual" ? (
                   <>
                     <span className="table-note">
-                      Usuniecie cofnie ten historyczny wynik z podsumowan i porownania z benchmarkami.
+                      Usunięcie cofnie ten historyczny wynik z podsumowań i porównania z benchmarkami.
                     </span>
 
                     <button
@@ -170,12 +170,12 @@ export default function RealizedAdjustmentsPanel({
                       type="button"
                       onClick={() => onRemove(adjustment.id)}
                     >
-                      Usun
+                      Usuń
                     </button>
                   </>
                 ) : (
                   <span className="table-note">
-                    Automatyczny wpis kuponowy z obligacji jest liczony systemowo i nie mozna go usunac recznie.
+                    Automatyczny wpis kuponowy z obligacji jest liczony systemowo i nie można go usunąć ręcznie.
                   </span>
                 )}
               </div>

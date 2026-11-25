@@ -65,7 +65,7 @@ export async function PUT(request: Request) {
     });
   } catch (error) {
     const message =
-      error instanceof Error ? error.message : "Nie udalo sie zapisac portfela V2.";
+      error instanceof Error ? error.message : "Nie udało się zapisać portfela V2.";
 
     return NextResponse.json({ error: message }, { status: 400 });
   }

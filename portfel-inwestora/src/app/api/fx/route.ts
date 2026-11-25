@@ -20,14 +20,14 @@ export async function GET(request: Request) {
     if (historicalOnly && (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date) ||
       !Number.isFinite(Date.parse(`${date}T00:00:00Z`)) ||
       new Date(`${date}T00:00:00Z`).toISOString().slice(0, 10) !== date)) {
-      return NextResponse.json({ error: "Historyczny kurs FX wymaga prawidlowej daty." }, { status: 400 });
+      return NextResponse.json({ error: "Historyczny kurs FX wymaga prawidłowej daty." }, { status: 400 });
     }
     return NextResponse.json(await fetchFxRatesServerDetailed(codes, date, { historicalOnly }));
   } catch (error) {
     console.error("GET /api/fx failed", error);
     return NextResponse.json(
       {
-        error: "Nie udalo sie pobrac kursow walut.",
+        error: "Nie udało się pobrać kursów walut.",
       },
       { status: 502 }
     );

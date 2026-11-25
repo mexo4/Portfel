@@ -31,7 +31,7 @@ export default function SellAssetPanel({
     <section className="panel">
       <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
         <div>
-          <p className="eyebrow">Sprzedaz aktywa</p>
+          <p className="eyebrow">Sprzedaż aktywa</p>
           <TruncatedText
             as="div"
             className="section-title"
@@ -40,13 +40,13 @@ export default function SellAssetPanel({
         </div>
 
         <p className="section-copy">
-          Dostepna ilosc: {draft.maxQuantity} {draft.maxQuantity === 1 ? "sztuka" : "szt."}
+          Dostępna ilość: {draft.maxQuantity} {draft.maxQuantity === 1 ? "sztuka" : "szt."}
         </p>
       </div>
 
       <div className="mt-6 grid gap-4 xl:grid-cols-4">
         <label className="field">
-          <span>Ilosc do sprzedazy</span>
+          <span>Ilość do sprzedaży</span>
           <input
             type="number"
             min="0"
@@ -63,7 +63,7 @@ export default function SellAssetPanel({
         </label>
 
         <label className="field">
-          <span>Cena sprzedazy (1 szt)</span>
+          <span>Cena sprzedaży (1 szt)</span>
           <input
             type="number"
             min="0"
@@ -80,7 +80,7 @@ export default function SellAssetPanel({
         </label>
 
         <label className="field">
-          <span>Data sprzedazy</span>
+          <span>Data sprzedaży</span>
           <input
             type="date"
             value={draft.saleDate}
@@ -114,7 +114,7 @@ export default function SellAssetPanel({
 
       <div className="mt-5 flex flex-wrap gap-3">
         <button type="button" className="primary-button" onClick={onSubmit}>
-          Zapisz sprzedaz
+          Zapisz sprzedaż
         </button>
         <button type="button" className="ghost-button" onClick={onCancel}>
           Anuluj

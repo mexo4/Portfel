@@ -375,7 +375,7 @@ export async function POST(request: Request) {
     const message =
       error instanceof Error
         ? error.message
-        : "Nie udalo sie zbudowac historii portfela.";
+        : "Nie udało się zbudować historii portfela.";
 
     return respondWithTiming({ error: message }, 400, requestStartedAt, authMs, 0, 0);
   }

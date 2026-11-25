@@ -85,21 +85,21 @@ export const parseTreasuryBondCode = (value: string): ParsedTreasuryBondCode => 
   const code = normalizeTreasuryBondCode(value);
 
   if (!/^[A-Z]{3}\d{4}$/.test(code)) {
-    throw new Error("Kod obligacji powinien miec format np. EDO0125.");
+    throw new Error("Kod obligacji powinien mieć format np. EDO0125.");
   }
 
   const type = code.slice(0, 3) as TreasuryBondType;
   const config = TREASURY_BOND_TYPE_CONFIG[type];
 
   if (!config) {
-    throw new Error("Obslugujemy tylko polskie obligacje EDO, COI i ROS.");
+    throw new Error("Obsługujemy tylko polskie obligacje EDO, COI i ROS.");
   }
 
   const redemptionMonth = Number(code.slice(3, 5));
   const redemptionYearSuffix = Number(code.slice(5, 7));
 
   if (!Number.isInteger(redemptionMonth) || redemptionMonth < 1 || redemptionMonth > 12) {
-    throw new Error("Kod obligacji ma niepoprawny miesiac wykupu.");
+    throw new Error("Kod obligacji ma niepoprawny miesiąc wykupu.");
   }
 
   const currentCentury = Math.floor(new Date().getUTCFullYear() / 100) * 100;
@@ -151,8 +151,8 @@ export const createFallbackTreasuryBondSeries = (code: string): TreasuryBondSeri
     couponMode: config.couponMode,
     interestPaymentDescription:
       config.couponMode === "capitalized"
-        ? "Odsetki sa kapitalizowane i wyplacane przy wykupie."
-        : "Odsetki sa wyplacane co roku.",
+        ? "Odsetki są kapitalizowane i wypłacane przy wykupie."
+        : "Odsetki są wypłacane co roku.",
     isFamilyOnly: config.isFamilyOnly,
     sourceLinks: {
       offerPageUrl: getTreasuryBondOfferUrl(code),

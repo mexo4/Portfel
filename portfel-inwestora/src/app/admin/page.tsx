@@ -26,13 +26,13 @@ export default async function AdminPage() {
               <p className="eyebrow">Admin</p>
               <h1 className="section-title">Panel administracyjny</h1>
               <p className="section-copy">
-                Prywatny widok kont, planow, sesji i danych portfeli zapisanych w aplikacji.
+                Prywatny widok kont, planów, sesji i danych portfeli zapisanych w aplikacji.
               </p>
             </div>
 
             <div className="summary-actions">
               <Link className="ghost-button" href="/app">
-                Wroc do aplikacji
+                Wróć do aplikacji
               </Link>
             </div>
           </div>
@@ -40,7 +40,7 @@ export default async function AdminPage() {
 
         <section className="metric-grid">
           <article className="metric-card">
-            <span>Uzytkownicy</span>
+            <span>Użytkownicy</span>
             <strong>{dashboard.totals.users}</strong>
           </article>
           <article className="metric-card">
@@ -66,7 +66,7 @@ export default async function AdminPage() {
             <strong>{dashboard.totals.openPositions}</strong>
           </article>
           <article className="metric-card">
-            <span>Sprzedaze</span>
+            <span>Sprzedaże</span>
             <strong>{dashboard.totals.sales}</strong>
           </article>
         </section>

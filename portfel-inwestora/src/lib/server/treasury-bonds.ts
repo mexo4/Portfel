@@ -634,18 +634,18 @@ export const fetchTreasuryBondRedemptionQuoteServer = async ({
   const normalizedQuantity = round(quantity, 6);
 
   if (normalizedQuantity <= 0) {
-    throw new Error("Podaj ilosc obligacji do wykupu.");
+    throw new Error("Podaj ilość obligacji do wykupu.");
   }
 
   const normalizedPurchaseDate = toDateInputValue(purchaseDate);
   const normalizedRequestDate = toDateInputValue(requestDate);
 
   if (normalizedRequestDate < normalizedPurchaseDate) {
-    throw new Error("Data dyspozycji wykupu nie moze byc wczesniejsza niz data zakupu.");
+    throw new Error("Data dyspozycji wykupu nie może być wcześniejsza niż data zakupu.");
   }
 
   if (getDaysBetweenDates(normalizedPurchaseDate, normalizedRequestDate) < 7) {
-    throw new Error("Dyspozycje wykupu mozna zlozyc najwczesniej po 7 dniach od zakupu.");
+    throw new Error("Dyspozycję wykupu można złożyć najwcześniej po 7 dniach od zakupu.");
   }
 
   const settlementDate = addBusinessDays(normalizedRequestDate, 5);
@@ -715,7 +715,7 @@ export const fetchTreasuryBondSwapQuoteServer = async ({
   const normalizedTargetQuantity = round(targetQuantity, 6);
 
   if (normalizedTargetQuantity <= 0) {
-    throw new Error("Podaj ilosc obligacji po zamianie.");
+    throw new Error("Podaj ilość obligacji po zamianie.");
   }
   const settlementDate = sourceRedemption.settlementDate;
   const resolvedTargetCode = normalizeSymbol(targetCode);
@@ -726,7 +726,7 @@ export const fetchTreasuryBondSwapQuoteServer = async ({
 
   if (!isTreasuryBondPurchaseDateInIssueWindow(resolvedTargetCode, settlementDate)) {
     throw new Error(
-      "Docelowa seria musi byc dostepna w miesiacu rozliczenia zamiany."
+      "Docelowa seria musi być dostępna w miesiącu rozliczenia zamiany."
     );
   }
 
@@ -743,7 +743,7 @@ export const fetchTreasuryBondSwapQuoteServer = async ({
   const residualCashPln = round(sourceRedemption.netValueTotal - swapPurchaseTotal, 2);
 
   if (residualCashPln < 0) {
-    throw new Error("Srodki z wykupu nie wystarczaja na wskazana ilosc obligacji po zamianie.");
+    throw new Error("Środki z wykupu nie wystarczają na wskazaną ilość obligacji po zamianie.");
   }
 
   return {

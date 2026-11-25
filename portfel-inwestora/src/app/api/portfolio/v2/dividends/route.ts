@@ -121,7 +121,7 @@ export async function POST(request: Request) {
     });
 
     if (!operation.quantity || operation.quantity <= 0 || !operation.price || operation.price <= 0) {
-      throw new Error("Podaj poprawna ilosc akcji i dywidende na akcje.");
+      throw new Error("Podaj poprawną ilość akcji i dywidendę na akcję.");
     }
 
     const nextBook = {
@@ -159,7 +159,7 @@ export async function POST(request: Request) {
     });
   } catch (error) {
     const message =
-      error instanceof Error ? error.message : "Nie udalo sie zapisac dywidendy.";
+      error instanceof Error ? error.message : "Nie udało się zapisać dywidendy.";
 
     return NextResponse.json({ error: message }, { status: 400 });
   }

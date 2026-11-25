@@ -48,7 +48,7 @@ export async function PUT(request: Request) {
       status: user.subscriptionStatus,
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Nie udalo sie zapisac planu.";
+    const message = error instanceof Error ? error.message : "Nie udało się zapisać planu.";
     return NextResponse.json({ error: message }, { status: 400 });
   }
 }

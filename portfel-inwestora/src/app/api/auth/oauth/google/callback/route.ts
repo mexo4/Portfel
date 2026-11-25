@@ -58,8 +58,8 @@ export async function GET(request: Request) {
     return redirectToLogin(
       providerError === "access_denied" ? "oauthNotice" : "oauthError",
       providerError === "access_denied"
-        ? "Logowanie przez Google zostalo anulowane."
-        : "Nie udalo sie zalogowac przez Google. Sprobuj ponownie."
+        ? "Logowanie przez Google zostało anulowane."
+        : "Nie udało się zalogować przez Google. Spróbuj ponownie."
     );
   }
 
@@ -96,6 +96,6 @@ export async function GET(request: Request) {
     return response;
   } catch {
     if (pending.purpose === "account-deletion") return redirectToDeletionSettings(false);
-    return redirectToLogin("oauthError", "Nie udalo sie zalogowac przez Google. Sprobuj ponownie.");
+    return redirectToLogin("oauthError", "Nie udało się zalogować przez Google. Spróbuj ponownie.");
   }
 }

@@ -285,7 +285,7 @@ export const savePortfolioQuoteSnapshots = async (
   );
 
   if (ownedRows.length !== portfolioIds.length) {
-    throw new Error("Nieprawidlowy portfel dla zapisu kursow.");
+    throw new Error("Nieprawidłowy portfel dla zapisu kursów.");
   }
 
   const now = new Date().toISOString();
@@ -345,7 +345,7 @@ export const saveManualPortfolioQuoteSnapshots = async (
     [userId, portfolioIds]
   );
   if (ownedRows.length !== portfolioIds.length) {
-    throw new Error("Nieprawidlowy portfel dla recznej ceny.");
+    throw new Error("Nieprawidłowy portfel dla ręcznej ceny.");
   }
 
   const now = new Date().toISOString();
@@ -390,7 +390,7 @@ export const clearManualPortfolioQuoteSnapshots = async (
       "SELECT id FROM core_portfolios WHERE id = $1 AND user_id = $2 FOR UPDATE",
       [portfolioId, userId]
     );
-    if (!owned.length) throw new Error("Nieprawidlowy portfel dla recznej ceny.");
+    if (!owned.length) throw new Error("Nieprawidłowy portfel dla ręcznej ceny.");
 
     const rows = await transaction.query<PortfolioQuoteSnapshotRow>(
       `SELECT portfolio_id, asset_id, payload_json, quote_timestamp, updated_at

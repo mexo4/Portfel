@@ -11061,3 +11061,26 @@ textarea {
   .tax-table .closed-detail-row,
   .tax-table .closed-detail-row > td { display: block; width: 100%; padding: 0 8px 8px; }
 }
+
+/* "Skąd wynik": result split by source on the results page. */
+.profit-breakdown { display: grid; gap: 14px; border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; background: var(--surface); }
+.profit-group { display: grid; gap: 6px; }
+.profit-group-head { display: flex; justify-content: space-between; gap: 12px; padding-bottom: 6px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: .74rem; font-weight: 700; }
+.profit-group-head strong { font-variant-numeric: tabular-nums; font-size: .86rem; }
+.profit-group ul { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.profit-source { display: grid; grid-template-columns: minmax(0, 1fr) minmax(150px, 34%); align-items: center; gap: 14px; padding: 7px 0; }
+.profit-source-text { display: grid; gap: 2px; min-width: 0; }
+.profit-source-text strong { font-size: .84rem; }
+.profit-source-text small { color: var(--muted); font-size: .72rem; line-height: 1.35; }
+.profit-source-value { display: grid; gap: 4px; justify-items: end; }
+.profit-source-value > span:first-child { font-variant-numeric: tabular-nums; font-weight: 750; font-size: .88rem; white-space: nowrap; }
+.profit-source-bar { display: block; width: 100%; height: 5px; overflow: hidden; border-radius: 999px; background: var(--surface-soft); }
+.profit-source-bar i { display: block; height: 100%; margin-left: auto; border-radius: inherit; background: var(--positive, #1f7a52); }
+.profit-source-bar i.is-negative { background: var(--negative, #b4413a); }
+.profit-total { display: flex; justify-content: space-between; gap: 12px; padding-top: 10px; border-top: 2px solid var(--line); font-weight: 750; }
+.profit-total strong { font-variant-numeric: tabular-nums; font-size: 1.02rem; }
+@media (max-width: 640px) {
+  .profit-source { grid-template-columns: 1fr; gap: 6px; }
+  .profit-source-value { justify-items: start; }
+  .profit-source-bar i { margin-left: 0; }
+}

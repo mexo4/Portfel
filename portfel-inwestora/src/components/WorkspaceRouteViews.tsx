@@ -9,6 +9,7 @@ import ConfigurableDashboard from "@/components/ConfigurableDashboard";
 import CorporateEventsPanel from "@/components/CorporateEventsPanel";
 import DividendIncomeDashboard from "@/components/DividendIncomeDashboard";
 import GpwEventsWorkspace from "@/components/GpwEventsWorkspace";
+import InstrumentChartsWorkspace from "@/components/InstrumentChartsWorkspace";
 import IncomeCurrencyAmount from "@/components/IncomeCurrencyAmount";
 import UpcomingDividendsPanel from "@/components/UpcomingDividendsPanel";
 import WatchlistWorkspace from "@/components/WatchlistWorkspace";
@@ -16,6 +17,7 @@ import PortfolioCharts from "@/components/PortfolioCharts";
 import PortfolioLineCharts from "@/components/PortfolioLineCharts";
 import PortfolioPerformanceResults from "@/components/PortfolioPerformanceResults";
 import PortfolioPositionCards from "@/components/PortfolioPositionCards";
+import ReportsWorkspace from "@/components/ReportsWorkspace";
 import TaxReportWorkspace from "@/components/TaxReportWorkspace";
 import { usePortfolioWorkspace } from "@/components/PortfolioWorkspaceContext";
 import { formatCurrency, formatDate } from "@/lib/utils";
@@ -145,6 +147,14 @@ export function WorkspaceChartsPage() { const workspace = usePortfolioWorkspace(
 export function WorkspaceClosedInvestmentsPage() {
   const workspace = usePortfolioWorkspace();
   return <div className="workspace-page"><ClosedInvestmentsWorkspace portfolios={workspace.selectedPortfolios} /></div>;
+}
+
+export function WorkspaceReportsPage() {
+  return <div className="workspace-page workspace-analysis-page"><ReportsWorkspace /></div>;
+}
+
+export function WorkspaceAssetChartsPage() {
+  return <div className="workspace-page workspace-analysis-page"><InstrumentChartsWorkspace /></div>;
 }
 
 export function WorkspaceTaxesPage() {

@@ -40,6 +40,8 @@ type WorkspaceIconName =
   | "charts"
   | "structure"
   | "closed"
+  | "reports"
+  | "assetCharts"
   | "taxes"
   | "instruments"
   | "watchlist"
@@ -64,6 +66,8 @@ const WORKSPACE_ICON_DRAWINGS: Record<WorkspaceIconName, ReactNode> = {
   charts: <><path d="M3 18l5-6 4 3 7-9" /><path d="M16 6h3v3" /></>,
   structure: <><circle cx="12" cy="12" r="3" /><path d="M12 3v6M12 15v6M3 12h6M15 12h6" /></>,
   closed: <><rect x="4" y="4" width="16" height="16" rx="2" /><path d="m8 12 3 3 5-6" /></>,
+  reports: <><rect x="3" y="3" width="8" height="8" rx="1" /><rect x="13" y="3" width="8" height="5" rx="1" /><rect x="13" y="10" width="8" height="11" rx="1" /><rect x="3" y="13" width="8" height="8" rx="1" /></>,
+  assetCharts: <><path d="M3 20h18" /><path d="M4 16l5-6 4 4 7-9" /><circle cx="9" cy="10" r="1.6" /><circle cx="13" cy="14" r="1.6" /></>,
   taxes: <><path d="M6 3h12v18l-3-2-3 2-3-2-3 2z" /><path d="M9 8h6M9 12h6M9 16h3" /></>,
   instruments: <><circle cx="10.5" cy="10.5" r="6.5" /><path d="m15.5 15.5 5 5" /></>,
   watchlist: <path d="m12 3 2.7 5.5 6.1.9-4.4 4.3 1 6.1-5.4-2.9-5.4 2.9 1-6.1-4.4-4.3 6.1-.9L12 3Z" />,
@@ -126,6 +130,8 @@ const navigationGroups: NavigationGroup[] = [
     { key: "charts", href: "/analytics/charts", label: "Wykresy", icon: "charts", keywords: "historia benchmark" },
     { key: "structure", href: "/analytics/structure", label: "Struktura", icon: "structure", keywords: "alokacja klasy aktywów" },
     { key: "closed", href: "/analytics/closed", label: "Zamknięte", icon: "closed", keywords: "zamknięte inwestycje sprzedaże fifo wynik zrealizowany" },
+    { key: "reports", href: "/analytics/reports", label: "Raporty", icon: "reports", keywords: "zysk typ konto mapa cieplna heatmapa zmienność plusy minusy udział walorów" },
+    { key: "assetCharts", href: "/analytics/assets", label: "Walory", icon: "assetCharts", keywords: "wykres waloru kurs kupno sprzedaż średnia cena porównanie walorów" },
   ] },
   { id: "market", label: "Rynek", items: [
     { key: "watchlist", href: "/market/watchlist", label: "Obserwowane", icon: "watchlist", keywords: "watchlista spółki" },
@@ -150,6 +156,8 @@ const routeMeta: Record<WorkspaceRouteKey, { eyebrow: string; title: string; bre
   charts: { eyebrow: "Analiza", title: "Wykresy", breadcrumb: "Analiza / Wykresy", description: "Historia wartości, wyniku i porównanie z benchmarkiem." },
   structure: { eyebrow: "Analiza", title: "Struktura portfela", breadcrumb: "Analiza / Struktura", description: "Rozkład aktywów, rynków i koncentracji portfela." },
   closed: { eyebrow: "Analiza", title: "Zamknięte inwestycje", breadcrumb: "Analiza / Zamknięte", description: "Sprzedaże z zamkniętymi zakupami (FIFO), wynik i skuteczność." },
+  reports: { eyebrow: "Analiza", title: "Raporty", breadcrumb: "Analiza / Raporty", description: "Zysk według typu i konta, walory na kontach, mapa cieplna i zmienność stopy zwrotu." },
+  assetCharts: { eyebrow: "Analiza", title: "Wykresy walorów", breadcrumb: "Analiza / Walory", description: "Kurs waloru z Twoimi zakupami i sprzedażami oraz porównanie walorów." },
   taxes: { eyebrow: "Narzędzia", title: "Podatki", breadcrumb: "Narzędzia / Podatki", description: "Zestawienie do PIT-38: sprzedaże i dywidendy zagraniczne po kursach NBP." },
   instruments: { eyebrow: "Rynek", title: "Znajdź instrument", breadcrumb: "Rynek / Instrumenty", description: "Wyszukaj instrument i przejdź do istniejącego procesu dodawania." },
   watchlist: { eyebrow: "Rynek", title: "Obserwowane", breadcrumb: "Rynek / Obserwowane", description: "Spółki śledzone niezależnie od aktualnych pozycji." },

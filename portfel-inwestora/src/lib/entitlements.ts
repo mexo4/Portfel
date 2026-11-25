@@ -58,7 +58,7 @@ export const PLAN_DEFINITIONS: Record<SubscriptionPlan, PlanDefinition> = {
     pricePln: 3.99,
     periodDays: 30,
     selfServicePurchase: false,
-    limits: { portfolios: pendingLimit(), assetsPerPortfolio: pendingLimit() },
+    limits: { portfolios: confirmedLimit(3), assetsPerPortfolio: pendingLimit() },
     features: undecidedFeatures(),
   },
   standard: {
@@ -67,7 +67,7 @@ export const PLAN_DEFINITIONS: Record<SubscriptionPlan, PlanDefinition> = {
     pricePln: 6.99,
     periodDays: 30,
     selfServicePurchase: false,
-    limits: { portfolios: pendingLimit(), assetsPerPortfolio: pendingLimit() },
+    limits: { portfolios: confirmedLimit(10), assetsPerPortfolio: pendingLimit() },
     features: undecidedFeatures(),
   },
   pro: {
@@ -78,7 +78,9 @@ export const PLAN_DEFINITIONS: Record<SubscriptionPlan, PlanDefinition> = {
     selfServicePurchase: false,
     // Existing Pro accounts keep the current no-position-cap behavior. The
     // old UI promised more portfolios, and the server did not enforce a cap.
-    limits: { portfolios: confirmedLimit(null), assetsPerPortfolio: confirmedLimit(null) },
+    // Portfolio counts per plan were decided on 2026-11-25 (1 / 3 / 10 / 30 / 99). Pro keeps no
+    // position cap; an account above 30 portfolios keeps them and only cannot add more.
+    limits: { portfolios: confirmedLimit(30), assetsPerPortfolio: confirmedLimit(null) },
     // There is no operator-approved plan matrix yet. Existing Pro accounts
     // keep their historical resource-limit behavior, but features stay pending
     // until product explicitly assigns them to a tier.
@@ -90,7 +92,7 @@ export const PLAN_DEFINITIONS: Record<SubscriptionPlan, PlanDefinition> = {
     pricePln: 14.99,
     periodDays: 30,
     selfServicePurchase: false,
-    limits: { portfolios: pendingLimit(), assetsPerPortfolio: pendingLimit() },
+    limits: { portfolios: confirmedLimit(99), assetsPerPortfolio: pendingLimit() },
     features: undecidedFeatures(),
   },
 };

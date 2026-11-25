@@ -11094,3 +11094,11 @@ textarea {
 .line-visual-mix-rows { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px 12px; }
 .line-visual-mix-builder .primary-button { justify-self: start; }
 @media (max-width: 640px) { .line-visual-mix-builder .primary-button { justify-self: stretch; } }
+
+/* Portfolio backup and restore. */
+.portfolio-backup-panel { display: grid; gap: 14px; }
+.portfolio-backup-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.portfolio-backup-restore { position: relative; cursor: pointer; }
+.portfolio-backup-restore.is-disabled { opacity: .55; cursor: not-allowed; }
+.portfolio-backup-restore:focus-within { outline: 2px solid var(--accent, #0f766e); outline-offset: 2px; }
+@media (max-width: 640px) { .portfolio-backup-actions > * { flex: 1 1 100%; } }

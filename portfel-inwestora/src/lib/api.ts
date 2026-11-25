@@ -26,6 +26,7 @@ import type {
   PortfolioHistoryScope,
   PortfolioRealizedAdjustment,
   PortfolioSale,
+  QuoteProvider,
   SubscriptionPlan,
   TreasuryBondQuote,
   TreasuryBondSeries,
@@ -1114,6 +1115,38 @@ export const fetchPortfolioHistory = async ({
     body: JSON.stringify(body),
   });
 };
+
+export type InstrumentHistoryRequestItem = {
+  key: string;
+  symbol: string;
+  kind: AssetKind;
+  marketCurrency: CurrencyCode;
+  provider: QuoteProvider;
+  providerId?: string;
+  priceScale?: number;
+};
+
+export type InstrumentHistoryResponseItem = {
+  key: string;
+  points: Array<{ date: string; close: number }>;
+  warning?: string;
+};
+
+/** Daily closes of up to eight instruments since `startDate`, in each instrument's quote currency. */
+export const fetchInstrumentHistories = async ({
+  instruments,
+  startDate,
+  signal,
+}: {
+  instruments: InstrumentHistoryRequestItem[];
+  startDate: string;
+  signal?: AbortSignal;
+}) =>
+  requestJson<{ series: InstrumentHistoryResponseItem[] }>("/api/instrument-history", {
+    method: "POST",
+    signal,
+    body: JSON.stringify({ instruments, startDate }),
+  });
 
 export const fetchPoloniaRates = async (signal?: AbortSignal) =>
   requestJson<{

@@ -1121,6 +1121,16 @@ const fetchInstrumentHistory = async ({
   }
 };
 
+/**
+ * Daily closes of one instrument in its quote currency, from the same cached providers as the
+ * portfolio history (used by the instrument chart and the comparison of holdings).
+ */
+export const fetchInstrumentPriceHistory = (
+  definition: Omit<InstrumentHistoryDefinition, "historyKey">,
+  startDate: string,
+  endDate: string
+) => fetchInstrumentHistory({ historyKey: "instrument-chart", ...definition }, startDate, endDate);
+
 const chunkDateRange = (startDate: string, endDate: string) => {
   const chunks: Array<{ startDate: string; endDate: string }> = [];
   let cursor = startDate;

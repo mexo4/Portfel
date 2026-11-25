@@ -2,11 +2,10 @@ import bcrypt from "bcryptjs";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import { FREE_PLAN_ASSET_LIMIT } from "@/lib/constants";
-import { canAddAsset, canCreatePortfolio, isSubscriptionPlan } from "@/lib/entitlements";
+import { isSubscriptionPlan } from "@/lib/entitlements";
+import { findPortfolioPlanLimitViolation } from "@/lib/portfolio-plan-limits";
 import { assertUniquePortfolioNames, normalizePortfolioBook, normalizePortfolioState } from "@/lib/portfolio-state";
 import { getPortfolioInstrumentId, repairMisclassifiedXtbListingCurrencies } from "@/lib/operation-engine";
-import { getPortfolioAssetGroupKey } from "@/lib/ticker";
 import type { NextResponse } from "next/server";
 import { createFreshUserProfile, normalizeUserProfile } from "@/lib/profile";
 import { execute, queryOne, withTransaction } from "@/lib/server/db";
@@ -972,35 +971,11 @@ export const updateCurrentUserPortfolio = async (
   // every portfolio-book write, including concurrent tabs and API callers.
   assertUniquePortfolioNames(normalizedPortfolio.portfolios);
 
-  const previousPortfolioBook = parsePortfolioBook(existingUser.portfolio_json).portfolioBook;
-  if (options.enforcePlanLimit !== false) {
-    const portfolioLimitExceeded = normalizedPortfolio.portfolios.length > previousPortfolioBook.portfolios.length &&
-      !canCreatePortfolio(account, previousPortfolioBook.portfolios.length);
-    if (portfolioLimitExceeded) {
-      throw new Error("Plan nie pozwala utworzyć kolejnego portfela. Istniejące dane pozostają dostępne.");
-    }
-
-    for (const nextPortfolio of normalizedPortfolio.portfolios) {
-      const previousPortfolio = previousPortfolioBook.portfolios.find((item) => item.id === nextPortfolio.id);
-      const previousAssetCount = new Set(previousPortfolio?.assets.map(getPortfolioAssetGroupKey) ?? []).size;
-      const nextAssetCount = new Set(nextPortfolio.assets.map(getPortfolioAssetGroupKey)).size;
-      if (nextAssetCount > previousAssetCount && !canAddAsset(account, previousAssetCount)) {
-        throw new Error(
-          `Plan Free pozwala zapisać do ${FREE_PLAN_ASSET_LIMIT} pozycji w portfelu. Istniejące dane nie zostały zmienione.`
-        );
-      }
-    }
-  }
-
   const updatedAt = new Date().toISOString();
   const requestedRevision = Number.isInteger(expectedPortfolioRevision)
     ? expectedPortfolioRevision
     : existingUser.portfolio_revision;
-  const previousIssuerMetadata = getConfirmedIssuerMetadataByIsin(previousPortfolioBook);
   const nextIssuerMetadata = getConfirmedIssuerMetadataByIsin(normalizedPortfolio);
-  const issuerIsinsToInvalidate = Array.from(
-    new Set([...previousIssuerMetadata.keys(), ...nextIssuerMetadata.keys()])
-  ).filter((isin) => previousIssuerMetadata.get(isin) !== nextIssuerMetadata.get(isin));
 
   const result = await withTransaction(async (transaction) => {
     const currentRows = await transaction.query<{
@@ -1012,9 +987,12 @@ export const updateCurrentUserPortfolio = async (
       user_role: string;
       tester_access: boolean;
       espi_access: boolean;
+      portfolio_json: string;
     }>(
+      // getUserById leaves portfolio_json out (light account reads), so the stored book is read
+      // here, on the locked row: the plan limits and the issuer cache compare against it.
       `SELECT portfolio_revision, portfolio_core_revision, subscription_plan, subscription_status,
-        subscription_expires_at, user_role, tester_access, espi_access
+        subscription_expires_at, user_role, tester_access, espi_access, portfolio_json
        FROM users WHERE id = $1 FOR UPDATE`,
       [userId]
     );
@@ -1028,6 +1006,8 @@ export const updateCurrentUserPortfolio = async (
       throw new PortfolioRevisionConflictError(currentUser.portfolio_revision);
     }
 
+    const previousPortfolioBook = parsePortfolioBook(currentUser.portfolio_json ?? "").portfolioBook;
+
     if (options.enforcePlanLimit !== false) {
       const lockedAccount = {
         ...account,
@@ -1038,19 +1018,16 @@ export const updateCurrentUserPortfolio = async (
         testerAccess: currentUser.tester_access === true,
         espiAccess: currentUser.espi_access === true,
       };
-      if (normalizedPortfolio.portfolios.length > previousPortfolioBook.portfolios.length &&
-        !canCreatePortfolio(lockedAccount, previousPortfolioBook.portfolios.length)) {
-        throw new Error("Plan nie pozwala utworzyć kolejnego portfela. Istniejące dane pozostają dostępne.");
-      }
-      for (const nextPortfolio of normalizedPortfolio.portfolios) {
-        const previousPortfolio = previousPortfolioBook.portfolios.find((item) => item.id === nextPortfolio.id);
-        const previousAssetCount = new Set(previousPortfolio?.assets.map(getPortfolioAssetGroupKey) ?? []).size;
-        const nextAssetCount = new Set(nextPortfolio.assets.map(getPortfolioAssetGroupKey)).size;
-        if (nextAssetCount > previousAssetCount && !canAddAsset(lockedAccount, previousAssetCount)) {
-          throw new Error(`Plan Free pozwala zapisać do ${FREE_PLAN_ASSET_LIMIT} pozycji w portfelu. Istniejące dane nie zostały zmienione.`);
-        }
+      const violation = findPortfolioPlanLimitViolation(lockedAccount, previousPortfolioBook, normalizedPortfolio);
+      if (violation) {
+        throw new Error(violation);
       }
     }
+
+    const previousIssuerMetadata = getConfirmedIssuerMetadataByIsin(previousPortfolioBook);
+    const issuerIsinsToInvalidate = Array.from(
+      new Set([...previousIssuerMetadata.keys(), ...nextIssuerMetadata.keys()])
+    ).filter((isin) => previousIssuerMetadata.get(isin) !== nextIssuerMetadata.get(isin));
 
     const updatedRows = await transaction.query<{ portfolio_revision: number }>(
       `
@@ -1078,10 +1055,11 @@ export const updateCurrentUserPortfolio = async (
     return {
       portfolioBook: normalizedPortfolio,
       portfolioRevision: updatedUser.portfolio_revision,
+      issuerIsinsToInvalidate,
     };
   });
 
-  await Promise.all(issuerIsinsToInvalidate.map(async (isin) => {
+  await Promise.all(result.issuerIsinsToInvalidate.map(async (isin) => {
     try {
       await invalidateIssuerCountryCacheForIsin(isin);
     } catch {
@@ -1089,7 +1067,7 @@ export const updateCurrentUserPortfolio = async (
     }
   }));
 
-  return result;
+  return { portfolioBook: result.portfolioBook, portfolioRevision: result.portfolioRevision };
 };
 
 export const updateCurrentUserSubscription = async (

@@ -42,7 +42,7 @@ const createUnsupportedParser = (
   source,
   format,
   parse: () => {
-    throw new Error("Parser dla tego zrodla importu zostanie dodany w kolejnym etapie.");
+    throw new Error("Parser dla tego źródła importu zostanie dodany w kolejnym etapie.");
   },
 });
 
@@ -84,7 +84,7 @@ export const operationImportValidator: ImportValidator = {
       )
       .map((operation) => ({
         rowNumber: operation.rowNumber,
-        reason: "Operacja nie przeszla walidacji importu.",
+        reason: "Operacja nie przeszła walidacji importu.",
       })),
   }),
 };
@@ -153,7 +153,7 @@ export const importOperations = (payload: ImportPayload) => {
   const importer = operationImporters[payload.source];
 
   if (!importer) {
-    throw new Error("Nieznane zrodlo importu.");
+    throw new Error("Nieznane źródło importu.");
   }
 
   return importer.import(payload);

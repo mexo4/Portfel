@@ -39,7 +39,7 @@ export async function PUT(request: Request) {
 
     return NextResponse.json(updated);
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Nie udalo sie zapisac profilu.";
+    const message = error instanceof Error ? error.message : "Nie udało się zapisać profilu.";
     return NextResponse.json({ error: message }, { status: 400 });
   }
 }

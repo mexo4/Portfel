@@ -68,7 +68,7 @@ const IMPORT_PLATFORMS: ImportPlatformDefinition[] = [
     formats: ["CSV"],
     status: "partial",
     logoText: "T212",
-    description: "Import przez istniejacy mapper CSV.",
+    description: "Import przez istniejący mapper CSV.",
     searchTerms: ["trading212", "t212"],
   }),
   platform({
@@ -78,7 +78,7 @@ const IMPORT_PLATFORMS: ImportPlatformDefinition[] = [
     formats: ["CSV"],
     status: "partial",
     logoText: "IBKR",
-    description: "Import przez istniejacy mapper CSV.",
+    description: "Import przez istniejący mapper CSV.",
     searchTerms: ["ibkr"],
   }),
   platform({
@@ -88,7 +88,7 @@ const IMPORT_PLATFORMS: ImportPlatformDefinition[] = [
     formats: ["CSV"],
     status: "partial",
     logoText: "DEG",
-    description: "Import przez istniejacy mapper CSV.",
+    description: "Import przez istniejący mapper CSV.",
   }),
   platform({
     id: "mbank",
@@ -97,7 +97,7 @@ const IMPORT_PLATFORMS: ImportPlatformDefinition[] = [
     formats: ["CSV"],
     status: "partial",
     logoText: "mB",
-    description: "Import przez istniejacy mapper CSV.",
+    description: "Import przez istniejący mapper CSV.",
     searchTerms: ["mbank", "m bank"],
   }),
   platform({
@@ -107,7 +107,7 @@ const IMPORT_PLATFORMS: ImportPlatformDefinition[] = [
     formats: ["CSV"],
     status: "partial",
     logoText: "eT",
-    description: "Import przez istniejacy mapper CSV.",
+    description: "Import przez istniejący mapper CSV.",
   }),
   platform({
     id: "binance",
@@ -134,7 +134,7 @@ const IMPORT_PLATFORMS: ImportPlatformDefinition[] = [
     formats: ["CSV"],
     status: "planned",
     logoText: "TR",
-    description: "Dedykowany mapper zostanie dopiety pozniej.",
+    description: "Dedykowany mapper zostanie dodany później.",
   }),
   platform({
     id: "bm-bos",
@@ -143,7 +143,7 @@ const IMPORT_PLATFORMS: ImportPlatformDefinition[] = [
     formats: ["CSV"],
     status: "partial",
     logoText: "BOS",
-    description: "Rozliczenia kupna i sprzedazy z eksportu CSV.",
+    description: "Rozliczenia kupna i sprzedaży z eksportu CSV.",
     searchTerms: ["bos", "bossa"],
   }),
   platform({
@@ -153,7 +153,7 @@ const IMPORT_PLATFORMS: ImportPlatformDefinition[] = [
     formats: ["CSV"],
     status: "planned",
     logoText: "PKO",
-    description: "Dedykowany mapper zostanie dopiety pozniej.",
+    description: "Dedykowany mapper zostanie dodany później.",
   }),
   platform({
     id: "bm-pekao",
@@ -162,7 +162,7 @@ const IMPORT_PLATFORMS: ImportPlatformDefinition[] = [
     formats: ["CSV"],
     status: "planned",
     logoText: "PEO",
-    description: "Dedykowany mapper zostanie dopiety pozniej.",
+    description: "Dedykowany mapper zostanie dodany później.",
   }),
   platform({
     id: "bm-santander",
@@ -171,7 +171,7 @@ const IMPORT_PLATFORMS: ImportPlatformDefinition[] = [
     formats: ["CSV"],
     status: "planned",
     logoText: "SAN",
-    description: "Dedykowany mapper zostanie dopiety pozniej.",
+    description: "Dedykowany mapper zostanie dodany później.",
   }),
   platform({
     id: "bm-ing",
@@ -180,7 +180,7 @@ const IMPORT_PLATFORMS: ImportPlatformDefinition[] = [
     formats: ["CSV"],
     status: "planned",
     logoText: "ING",
-    description: "Dedykowany mapper zostanie dopiety pozniej.",
+    description: "Dedykowany mapper zostanie dodany później.",
   }),
   platform({
     id: "bm-alior",
@@ -189,7 +189,7 @@ const IMPORT_PLATFORMS: ImportPlatformDefinition[] = [
     formats: ["CSV"],
     status: "planned",
     logoText: "ALR",
-    description: "Dedykowany mapper zostanie dopiety pozniej.",
+    description: "Dedykowany mapper zostanie dodany później.",
   }),
   platform({
     id: "bm-bnp",
@@ -198,7 +198,7 @@ const IMPORT_PLATFORMS: ImportPlatformDefinition[] = [
     formats: ["CSV"],
     status: "planned",
     logoText: "BNP",
-    description: "Dedykowany mapper zostanie dopiety pozniej.",
+    description: "Dedykowany mapper zostanie dodany później.",
   }),
   platform({
     id: "bm-millennium",
@@ -207,7 +207,7 @@ const IMPORT_PLATFORMS: ImportPlatformDefinition[] = [
     formats: ["CSV"],
     status: "planned",
     logoText: "MIL",
-    description: "Dedykowany mapper zostanie dopiety pozniej.",
+    description: "Dedykowany mapper zostanie dodany później.",
   }),
   platform({
     id: "noble-securities",
@@ -216,7 +216,7 @@ const IMPORT_PLATFORMS: ImportPlatformDefinition[] = [
     formats: ["CSV"],
     status: "planned",
     logoText: "NS",
-    description: "Dedykowany mapper zostanie dopiety pozniej.",
+    description: "Dedykowany mapper zostanie dodany później.",
   }),
   platform({
     id: "oanda-tms",
@@ -225,7 +225,7 @@ const IMPORT_PLATFORMS: ImportPlatformDefinition[] = [
     formats: ["CSV"],
     status: "planned",
     logoText: "TMS",
-    description: "Dedykowany mapper zostanie dopiety pozniej.",
+    description: "Dedykowany mapper zostanie dodany później.",
     searchTerms: ["tms"],
   }),
   platform({
@@ -235,7 +235,7 @@ const IMPORT_PLATFORMS: ImportPlatformDefinition[] = [
     formats: ["CSV"],
     status: "planned",
     logoText: "FX",
-    description: "Dedykowany mapper zostanie dopiety pozniej.",
+    description: "Dedykowany mapper zostanie dodany później.",
   }),
   platform({
     id: "saxo",
@@ -244,7 +244,7 @@ const IMPORT_PLATFORMS: ImportPlatformDefinition[] = [
     formats: ["CSV"],
     status: "planned",
     logoText: "SAX",
-    description: "Dedykowany mapper zostanie dopiety pozniej.",
+    description: "Dedykowany mapper zostanie dodany później.",
   }),
   platform({
     id: "freedom24",
@@ -253,7 +253,7 @@ const IMPORT_PLATFORMS: ImportPlatformDefinition[] = [
     formats: ["CSV"],
     status: "planned",
     logoText: "F24",
-    description: "Dedykowany mapper zostanie dopiety pozniej.",
+    description: "Dedykowany mapper zostanie dodany później.",
   }),
   platform({
     id: "robinhood",
@@ -262,7 +262,7 @@ const IMPORT_PLATFORMS: ImportPlatformDefinition[] = [
     formats: ["CSV"],
     status: "planned",
     logoText: "RH",
-    description: "Dedykowany mapper zostanie dopiety pozniej.",
+    description: "Dedykowany mapper zostanie dodany później.",
   }),
   platform({
     id: "charles-schwab",
@@ -271,7 +271,7 @@ const IMPORT_PLATFORMS: ImportPlatformDefinition[] = [
     formats: ["CSV"],
     status: "planned",
     logoText: "CS",
-    description: "Dedykowany mapper zostanie dopiety pozniej.",
+    description: "Dedykowany mapper zostanie dodany później.",
   }),
   platform({
     id: "fidelity",
@@ -280,7 +280,7 @@ const IMPORT_PLATFORMS: ImportPlatformDefinition[] = [
     formats: ["CSV"],
     status: "planned",
     logoText: "FID",
-    description: "Dedykowany mapper zostanie dopiety pozniej.",
+    description: "Dedykowany mapper zostanie dodany później.",
   }),
   platform({
     id: "vanguard",
@@ -289,7 +289,7 @@ const IMPORT_PLATFORMS: ImportPlatformDefinition[] = [
     formats: ["CSV"],
     status: "planned",
     logoText: "VG",
-    description: "Dedykowany mapper zostanie dopiety pozniej.",
+    description: "Dedykowany mapper zostanie dodany później.",
   }),
   platform({
     id: "webull",
@@ -298,7 +298,7 @@ const IMPORT_PLATFORMS: ImportPlatformDefinition[] = [
     formats: ["CSV"],
     status: "planned",
     logoText: "WB",
-    description: "Dedykowany mapper zostanie dopiety pozniej.",
+    description: "Dedykowany mapper zostanie dodany później.",
   }),
   platform({
     id: "moomoo",
@@ -307,7 +307,7 @@ const IMPORT_PLATFORMS: ImportPlatformDefinition[] = [
     formats: ["CSV"],
     status: "planned",
     logoText: "MM",
-    description: "Dedykowany mapper zostanie dopiety pozniej.",
+    description: "Dedykowany mapper zostanie dodany później.",
   }),
   platform({
     id: "firstrade",
@@ -316,7 +316,7 @@ const IMPORT_PLATFORMS: ImportPlatformDefinition[] = [
     formats: ["CSV"],
     status: "planned",
     logoText: "FT",
-    description: "Dedykowany mapper zostanie dopiety pozniej.",
+    description: "Dedykowany mapper zostanie dodany później.",
   }),
   platform({
     id: "lightyear",
@@ -325,7 +325,7 @@ const IMPORT_PLATFORMS: ImportPlatformDefinition[] = [
     formats: ["CSV"],
     status: "planned",
     logoText: "LY",
-    description: "Dedykowany mapper zostanie dopiety pozniej.",
+    description: "Dedykowany mapper zostanie dodany później.",
   }),
   platform({
     id: "coinbase",
@@ -334,7 +334,7 @@ const IMPORT_PLATFORMS: ImportPlatformDefinition[] = [
     formats: ["CSV"],
     status: "planned",
     logoText: "CB",
-    description: "Dedykowany mapper zostanie dopiety pozniej.",
+    description: "Dedykowany mapper zostanie dodany później.",
   }),
   platform({
     id: "kraken",
@@ -343,7 +343,7 @@ const IMPORT_PLATFORMS: ImportPlatformDefinition[] = [
     formats: ["CSV"],
     status: "planned",
     logoText: "KR",
-    description: "Dedykowany mapper zostanie dopiety pozniej.",
+    description: "Dedykowany mapper zostanie dodany później.",
   }),
   platform({
     id: "bybit",
@@ -352,7 +352,7 @@ const IMPORT_PLATFORMS: ImportPlatformDefinition[] = [
     formats: ["CSV"],
     status: "planned",
     logoText: "BB",
-    description: "Dedykowany mapper zostanie dopiety pozniej.",
+    description: "Dedykowany mapper zostanie dodany później.",
   }),
   platform({
     id: "okx",
@@ -361,7 +361,7 @@ const IMPORT_PLATFORMS: ImportPlatformDefinition[] = [
     formats: ["CSV"],
     status: "planned",
     logoText: "OKX",
-    description: "Dedykowany mapper zostanie dopiety pozniej.",
+    description: "Dedykowany mapper zostanie dodany później.",
   }),
   platform({
     id: "bitget",
@@ -370,7 +370,7 @@ const IMPORT_PLATFORMS: ImportPlatformDefinition[] = [
     formats: ["CSV"],
     status: "planned",
     logoText: "BG",
-    description: "Dedykowany mapper zostanie dopiety pozniej.",
+    description: "Dedykowany mapper zostanie dodany później.",
   }),
   platform({
     id: "kucoin",
@@ -379,7 +379,7 @@ const IMPORT_PLATFORMS: ImportPlatformDefinition[] = [
     formats: ["CSV"],
     status: "planned",
     logoText: "KC",
-    description: "Dedykowany mapper zostanie dopiety pozniej.",
+    description: "Dedykowany mapper zostanie dodany później.",
   }),
   platform({
     id: "crypto-com",
@@ -388,7 +388,7 @@ const IMPORT_PLATFORMS: ImportPlatformDefinition[] = [
     formats: ["CSV"],
     status: "planned",
     logoText: "CDC",
-    description: "Dedykowany mapper zostanie dopiety pozniej.",
+    description: "Dedykowany mapper zostanie dodany później.",
     searchTerms: ["crypto com"],
   }),
   platform({
@@ -398,7 +398,7 @@ const IMPORT_PLATFORMS: ImportPlatformDefinition[] = [
     formats: ["CSV"],
     status: "planned",
     logoText: "GM",
-    description: "Dedykowany mapper zostanie dopiety pozniej.",
+    description: "Dedykowany mapper zostanie dodany później.",
   }),
   platform({
     id: "bitstamp",
@@ -407,7 +407,7 @@ const IMPORT_PLATFORMS: ImportPlatformDefinition[] = [
     formats: ["CSV"],
     status: "planned",
     logoText: "BS",
-    description: "Dedykowany mapper zostanie dopiety pozniej.",
+    description: "Dedykowany mapper zostanie dodany później.",
   }),
   platform({
     id: "htx",
@@ -416,7 +416,7 @@ const IMPORT_PLATFORMS: ImportPlatformDefinition[] = [
     formats: ["CSV"],
     status: "planned",
     logoText: "HTX",
-    description: "Dedykowany mapper zostanie dopiety pozniej.",
+    description: "Dedykowany mapper zostanie dodany później.",
   }),
   platform({
     id: "gate-io",
@@ -425,7 +425,7 @@ const IMPORT_PLATFORMS: ImportPlatformDefinition[] = [
     formats: ["CSV"],
     status: "planned",
     logoText: "GIO",
-    description: "Dedykowany mapper zostanie dopiety pozniej.",
+    description: "Dedykowany mapper zostanie dodany później.",
     searchTerms: ["gateio"],
   }),
   platform({
@@ -435,7 +435,7 @@ const IMPORT_PLATFORMS: ImportPlatformDefinition[] = [
     formats: ["CSV"],
     status: "planned",
     logoText: "MX",
-    description: "Dedykowany mapper zostanie dopiety pozniej.",
+    description: "Dedykowany mapper zostanie dodany później.",
   }),
   platform({
     id: "oanda",
@@ -444,7 +444,7 @@ const IMPORT_PLATFORMS: ImportPlatformDefinition[] = [
     formats: ["CSV"],
     status: "planned",
     logoText: "OA",
-    description: "Dedykowany mapper zostanie dopiety pozniej.",
+    description: "Dedykowany mapper zostanie dodany później.",
   }),
   platform({
     id: "ic-markets",
@@ -453,7 +453,7 @@ const IMPORT_PLATFORMS: ImportPlatformDefinition[] = [
     formats: ["CSV"],
     status: "planned",
     logoText: "IC",
-    description: "Dedykowany mapper zostanie dopiety pozniej.",
+    description: "Dedykowany mapper zostanie dodany później.",
   }),
   platform({
     id: "pepperstone",
@@ -462,7 +462,7 @@ const IMPORT_PLATFORMS: ImportPlatformDefinition[] = [
     formats: ["CSV"],
     status: "planned",
     logoText: "PP",
-    description: "Dedykowany mapper zostanie dopiety pozniej.",
+    description: "Dedykowany mapper zostanie dodany później.",
   }),
   platform({
     id: "eightcap",
@@ -471,7 +471,7 @@ const IMPORT_PLATFORMS: ImportPlatformDefinition[] = [
     formats: ["CSV"],
     status: "planned",
     logoText: "E8",
-    description: "Dedykowany mapper zostanie dopiety pozniej.",
+    description: "Dedykowany mapper zostanie dodany później.",
   }),
   platform({
     id: "admirals",
@@ -480,7 +480,7 @@ const IMPORT_PLATFORMS: ImportPlatformDefinition[] = [
     formats: ["CSV"],
     status: "planned",
     logoText: "ADM",
-    description: "Dedykowany mapper zostanie dopiety pozniej.",
+    description: "Dedykowany mapper zostanie dodany później.",
   }),
   platform({
     id: "fxcm",
@@ -489,7 +489,7 @@ const IMPORT_PLATFORMS: ImportPlatformDefinition[] = [
     formats: ["CSV"],
     status: "planned",
     logoText: "FX",
-    description: "Dedykowany mapper zostanie dopiety pozniej.",
+    description: "Dedykowany mapper zostanie dodany później.",
   }),
   platform({
     id: "avatrade",
@@ -498,7 +498,7 @@ const IMPORT_PLATFORMS: ImportPlatformDefinition[] = [
     formats: ["CSV"],
     status: "planned",
     logoText: "AVA",
-    description: "Dedykowany mapper zostanie dopiety pozniej.",
+    description: "Dedykowany mapper zostanie dodany później.",
   }),
   platform({
     id: "cmc-markets",
@@ -507,7 +507,7 @@ const IMPORT_PLATFORMS: ImportPlatformDefinition[] = [
     formats: ["CSV"],
     status: "planned",
     logoText: "CMC",
-    description: "Dedykowany mapper zostanie dopiety pozniej.",
+    description: "Dedykowany mapper zostanie dodany później.",
   }),
   platform({
     id: "custom-csv",
@@ -516,7 +516,7 @@ const IMPORT_PLATFORMS: ImportPlatformDefinition[] = [
     formats: ["CSV"],
     status: "full",
     logoText: "CSV",
-    description: "Uniwersalny import CSV dla innych brokerow.",
+    description: "Uniwersalny import CSV dla innych brokerów.",
     searchTerms: ["plik csv", "wlasny plik"],
   }),
   ...["OFX", "QIF", "MT940", "XML", "JSON"].map((format) =>
@@ -654,7 +654,7 @@ const IMPORT_PLATFORM_SECTIONS: ImportPlatformSection[] = [
   },
   {
     id: "custom",
-    label: "Import wlasnego pliku",
+    label: "Import własnego pliku",
     marker: "FILE",
     platformIds: [
       "custom-csv",
@@ -668,8 +668,8 @@ const IMPORT_PLATFORM_SECTIONS: ImportPlatformSection[] = [
 ];
 
 const STATUS_LABELS: Record<ImportPlatformStatus, string> = {
-  full: "Pelna obsluga",
-  partial: "Czesciowa obsluga",
+  full: "Pełna obsługa",
+  partial: "Częściowa obsługa",
   planned: "W przygotowaniu",
 };
 
@@ -853,11 +853,11 @@ export default function ImportPlatformPicker({
           {selectedPlatform.logoText}
         </span>
         <span className="import-platform-trigger-copy">
-          <span>Wczytaj historie z platformy inwestycyjnej</span>
+          <span>Wczytaj historię z platformy inwestycyjnej</span>
           <strong>{selectedPlatform.name}</strong>
           <small>{selectedPlatform.formats.join(" / ")}</small>
         </span>
-        <span className="import-platform-trigger-action">Zmien</span>
+        <span className="import-platform-trigger-action">Zmień</span>
       </button>
 
       {isOpen ? createPortal(
@@ -867,7 +867,7 @@ export default function ImportPlatformPicker({
           onClick={() => setIsOpen(false)}
         >
           <section
-            aria-label="Wybierz platforme importu"
+            aria-label="Wybierz platformę importu"
             aria-modal="true"
             className="import-platform-modal"
             role="dialog"
@@ -876,7 +876,7 @@ export default function ImportPlatformPicker({
             <div className="import-platform-modal-head">
               <div>
                 <p className="eyebrow">Import</p>
-                <h3 className="section-title">Wybierz platforme</h3>
+                <h3 className="section-title">Wybierz platformę</h3>
               </div>
               <button
                 type="button"
@@ -894,7 +894,7 @@ export default function ImportPlatformPicker({
                 ref={searchInputRef}
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                placeholder="Wyszukaj platforme..."
+                placeholder="Wyszukaj platformę..."
               />
             </label>
 
@@ -903,7 +903,7 @@ export default function ImportPlatformPicker({
                 <div className="import-platform-section">
                   <div className="import-platform-section-head">
                     <span>REC</span>
-                    <strong>Ostatnio uzywane</strong>
+                    <strong>Ostatnio używane</strong>
                   </div>
                   <div className="import-platform-card-grid">
                     {recentPlatforms.map((item) => (
@@ -941,7 +941,7 @@ export default function ImportPlatformPicker({
                 <div className="line-chart-empty">
                   <p className="table-title">Brak platform</p>
                   <p className="table-note mt-2">
-                    Sprobuj wpisac nazwe brokera, gieldy albo format pliku.
+                    Spróbuj wpisać nazwę brokera, giełdy albo format pliku.
                   </p>
                 </div>
               ) : null}

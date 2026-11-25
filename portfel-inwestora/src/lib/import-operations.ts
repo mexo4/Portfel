@@ -527,7 +527,7 @@ const parseBrokerOperationRows = (
   if (cleanedRows.length < 2) {
     return {
       operations: [],
-      skippedRows: [{ rowNumber: 1, reason: "Plik nie ma naglowka i wierszy transakcji." }],
+      skippedRows: [{ rowNumber: 1, reason: "Plik nie ma nagłówka i wierszy transakcji." }],
       warnings,
     };
   }
@@ -585,7 +585,7 @@ const parseBrokerOperationRows = (
     if (!side || !rawDate || !symbol || !quantity || quantity <= 0 || !price || price <= 0) {
       skippedRows.push({
         rowNumber,
-        reason: "Brakuje typu, daty, symbolu, ilosci albo ceny.",
+        reason: "Brakuje typu, daty, symbolu, ilości albo ceny.",
       });
       return;
     }
@@ -645,7 +645,7 @@ const parseBrokerOperationRows = (
       isin: alias?.isin,
       warnings:
         currency !== "PLN" && fee !== 0
-          ? ["Prowizja z importu jest zapisana jako PLN. Sprawdz ja, jesli broker eksportuje prowizje w walucie rynku."]
+          ? ["Prowizja z importu jest zapisana jako PLN. Sprawdź ją, jeśli broker eksportuje prowizje w walucie rynku."]
           : [],
     });
   });
@@ -675,7 +675,7 @@ const parseBossaOperationRows = (rows: string[][]): BrokerImportParseResult => {
       skippedRows: [
         {
           rowNumber: 1,
-          reason: "Brakuje wymaganych kolumn eksportu BM BOS: data, tytul operacji, szczegoly i kwota.",
+          reason: "Brakuje wymaganych kolumn eksportu BM BOS: data, tytuł operacji, szczegóły i kwota.",
         },
       ],
     };
@@ -711,7 +711,7 @@ const parseBossaOperationRows = (rows: string[][]): BrokerImportParseResult => {
     if (!rawDate || !trade || amount === null) {
       skippedRows.push({
         rowNumber,
-        reason: "Nie udalo sie odczytac daty, instrumentu, ilosci, ceny albo kwoty z operacji BM BOS.",
+        reason: "Nie udało się odczytać daty, instrumentu, ilości, ceny albo kwoty z operacji BM BOS.",
       });
       return;
     }
@@ -724,7 +724,7 @@ const parseBossaOperationRows = (rows: string[][]): BrokerImportParseResult => {
     if (!quantity || quantity <= 0 || !price || price <= 0) {
       skippedRows.push({
         rowNumber,
-        reason: "Operacja BM BOS ma niepoprawna ilosc albo cene.",
+        reason: "Operacja BM BOS ma niepoprawną ilość albo cenę.",
       });
       return;
     }
@@ -786,7 +786,7 @@ const parseBossaOperationRows = (rows: string[][]): BrokerImportParseResult => {
   return {
     operations,
     skippedRows,
-    warnings: ["BM BOS: rozpoznano rozliczenia kupna i sprzedazy z eksportu CSV."],
+    warnings: ["BM BOS: rozpoznano rozliczenia kupna i sprzedaży z eksportu CSV."],
   };
 };
 
@@ -1166,7 +1166,7 @@ const extractTextFromPdfJs = async (
       return {
         text: "",
         warnings: [
-          "PDF jest zabezpieczony haslem. Import Daily Statement XTB wymaga pliku bez hasla albo dodania hasla do importu.",
+          "PDF jest zabezpieczony hasłem. Import Daily Statement XTB wymaga pliku bez hasła albo dodania hasła do importu.",
         ],
         passwordProtected: true,
       };
@@ -1175,8 +1175,8 @@ const extractTextFromPdfJs = async (
     return {
       text: "",
       warnings: [
-        `PDF.js nie odczytal tekstu z dokumentu: ${
-          error instanceof Error ? error.message : "nieznany blad"
+        `PDF.js nie odczytał tekstu z dokumentu: ${
+          error instanceof Error ? error.message : "nieznany błąd"
         }.`,
       ],
     };
@@ -1217,7 +1217,7 @@ const extractOcrTextFromPdfBytes = async (bytes: Uint8Array): Promise<PdfTextExt
   if (typeof document === "undefined") {
     return {
       text: "",
-      warnings: ["OCR PDF wymaga srodowiska przegladarki z obsluga canvas."],
+      warnings: ["OCR PDF wymaga środowiska przeglądarki z obsługą canvas."],
     };
   }
 
@@ -1232,7 +1232,7 @@ const extractOcrTextFromPdfBytes = async (bytes: Uint8Array): Promise<PdfTextExt
     if (!recognize) {
       return {
         text: "",
-        warnings: ["OCR PDF nie jest dostepny: brak funkcji recognize w tesseract.js."],
+        warnings: ["OCR PDF nie jest dostępny: brak funkcji recognize w tesseract.js."],
       };
     }
 
@@ -1273,7 +1273,7 @@ const extractOcrTextFromPdfBytes = async (bytes: Uint8Array): Promise<PdfTextExt
       return {
         text: "",
         warnings: [
-          "PDF jest zabezpieczony haslem. OCR nie moze odczytac zaszyfrowanego dokumentu bez hasla.",
+          "PDF jest zabezpieczony hasłem. OCR nie może odczytać zaszyfrowanego dokumentu bez hasła.",
         ],
         passwordProtected: true,
       };
@@ -1282,7 +1282,7 @@ const extractOcrTextFromPdfBytes = async (bytes: Uint8Array): Promise<PdfTextExt
     return {
       text: "",
       warnings: [
-        `OCR PDF nie powiodl sie: ${error instanceof Error ? error.message : "nieznany blad"}.`,
+        `OCR PDF nie powiódł się: ${error instanceof Error ? error.message : "nieznany błąd"}.`,
       ],
     };
   }
@@ -1528,7 +1528,7 @@ const parseXtbPdfChunk = (
     priceScale: alias?.priceScale,
     isin: alias?.isin,
     warnings: [
-      "PDF XTB zostal odczytany heurystycznie. Sprawdz ilosc, cene, prowizje i walute przed importem.",
+      "PDF XTB został odczytany heurystycznie. Sprawdź ilość, cenę, prowizje i walutę przed importem.",
     ],
   };
 };
@@ -1639,7 +1639,7 @@ const inflateRawBytes = async (bytes: Uint8Array) => {
   }
 
   if (typeof DecompressionStream === "undefined") {
-    throw new Error("Ta przegladarka nie wspiera rozpakowywania XLSX.");
+    throw new Error("Ta przeglądarka nie wspiera rozpakowywania XLSX.");
   }
 
   const stream = new Blob([toArrayBuffer(bytes)])
@@ -1685,7 +1685,7 @@ const readZipEntryBytes = async (
   const localHeaderOffset = entry.localHeaderOffset;
 
   if (view.getUint32(localHeaderOffset, true) !== ZIP_LOCAL_FILE_SIGNATURE) {
-    throw new Error(`Nieprawidlowy naglowek XLSX dla ${entry.name}.`);
+    throw new Error(`Nieprawidłowy nagłówek XLSX dla ${entry.name}.`);
   }
 
   const fileNameLength = view.getUint16(localHeaderOffset + 26, true);
@@ -1701,7 +1701,7 @@ const readZipEntryBytes = async (
     return inflateRawBytes(compressedBytes);
   }
 
-  throw new Error(`Nieobslugiwany sposob kompresji XLSX: ${entry.compressionMethod}.`);
+  throw new Error(`Nieobsługiwany sposób kompresji XLSX: ${entry.compressionMethod}.`);
 };
 
 const readZipTextEntry = async (
@@ -3014,7 +3014,7 @@ export const parseXtbCashOperationRows = (
       operations: [],
       skippedRows: [{
         rowNumber: header.rowIndex + 1,
-        reason: "Brak jednoznacznej waluty rachunku XTB. Dodaj naglowek Currency (PLN/USD/EUR/GBP itd.) lub ponownie wyeksportuj raport; nie zastosowano domyslnego PLN ani FX 1:1.",
+        reason: "Brak jednoznacznej waluty rachunku XTB. Dodaj nagłówek Currency (PLN/USD/EUR/GBP itd.) lub ponownie wyeksportuj raport; nie zastosowano domyślnego PLN ani FX 1:1.",
       }],
     };
   }
@@ -3069,7 +3069,7 @@ export const parseXtbCashOperationRows = (
     if (!row.date) {
       skippedRows.push({
         rowNumber: row.rowNumber,
-        reason: "Nie udalo sie odczytac daty z wiersza XTB.",
+        reason: "Nie udało się odczytać daty z wiersza XTB.",
       });
       return;
     }
@@ -3077,7 +3077,7 @@ export const parseXtbCashOperationRows = (
     if (row.amount === null) {
       skippedRows.push({
         rowNumber: row.rowNumber,
-        reason: "Brak lub nieprawidlowa kwota operacji XTB. Sprawdz pole Amount; nie zastosowano kwoty 0.",
+        reason: "Brak lub nieprawidłowa kwota operacji XTB. Sprawdź pole Amount; nie zastosowano kwoty 0.",
       });
       return;
     }
@@ -3092,7 +3092,7 @@ export const parseXtbCashOperationRows = (
       if (!tradeSymbol || !trade) {
         skippedRows.push({
           rowNumber: row.rowNumber,
-          reason: "Nie udalo sie odczytac symbolu, ilosci albo ceny z transakcji XTB.",
+          reason: "Nie udało się odczytać symbolu, ilości albo ceny z transakcji XTB.",
         });
         return;
       }
@@ -3104,7 +3104,7 @@ export const parseXtbCashOperationRows = (
       if ((side === "buy" && signedAmount > 0) || (side === "sell" && signedAmount < 0)) {
         skippedRows.push({
           rowNumber: row.rowNumber,
-          reason: "Znak kwoty Amount jest sprzeczny z kupnem/sprzedaza XTB. Sprawdz wiersz przed importem.",
+          reason: "Znak kwoty Amount jest sprzeczny z kupnem/sprzedażą XTB. Sprawdź wiersz przed importem.",
         });
         return;
       }
@@ -3122,7 +3122,7 @@ export const parseXtbCashOperationRows = (
       if (!marketCurrency) {
         skippedRows.push({
           rowNumber: row.rowNumber,
-          reason: `Nie mozna wiarygodnie ustalic waluty notowania ${tradeRow.rawSymbol}. Dodaj kolumne Price Currency / Quote Currency; waluta rachunku ani gielda nie okreslaja waluty tej linii.`,
+          reason: `Nie można wiarygodnie ustalić waluty notowania ${tradeRow.rawSymbol}. Dodaj kolumnę Price Currency / Quote Currency; waluta rachunku ani giełda nie określają waluty tej linii.`,
         });
         return;
       }
@@ -3140,7 +3140,7 @@ export const parseXtbCashOperationRows = (
       if (settlementCashAmount < 0) {
         skippedRows.push({
           rowNumber: row.rowNumber,
-          reason: "Suma Stock sell i close trade jest ujemna; nie mozna bezpiecznie ustalic przychodu ze sprzedazy.",
+          reason: "Suma Stock sell i close trade jest ujemna; nie można bezpiecznie ustalić przychodu ze sprzedaży.",
         });
         return;
       }
@@ -3410,7 +3410,7 @@ export const parseXtbCashOperationRows = (
           accountCurrency,
           operationType: "CUSTOM",
           symbol: row.rawSymbol,
-          name: row.instrumentName || row.rawSymbol || "Wynik zamkniecia pozycji",
+          name: row.instrumentName || row.rawSymbol || "Wynik zamknięcia pozycji",
           kind: inferKind(row.rawType, row.rawSymbol, row.instrumentName || row.rawSymbol),
           currency: accountCurrency,
           amount: absoluteAmount,
@@ -3428,7 +3428,7 @@ export const parseXtbCashOperationRows = (
 
     skippedRows.push({
       rowNumber: row.rowNumber,
-      reason: `Nieobslugiwany typ operacji XTB: ${row.rawType}.`,
+      reason: `Nieobsługiwany typ operacji XTB: ${row.rawType}.`,
     });
   });
 
@@ -3459,9 +3459,9 @@ export const parseXtbCashOperationRows = (
     }),
     skippedRows,
     warnings: [
-      `${sourceKind}: odczytano "${sheetName}" jako historie operacji gotowkowych.`,
+      `${sourceKind}: odczytano "${sheetName}" jako historię operacji gotówkowych.`,
       accountNumber ? `${sourceKind}: rachunek ${accountNumber}, waluta ${accountCurrency}.` : "",
-      `${sourceKind}: rozpoznano ${tradeRows} transakcji, ${dividendRows} dywidend oraz ${cashRows} operacji gotowkowych/podatkowych.`,
+      `${sourceKind}: rozpoznano ${tradeRows} transakcji, ${dividendRows} dywidend oraz ${cashRows} operacji gotówkowych/podatkowych.`,
     ].filter(Boolean),
   };
 };
@@ -3871,7 +3871,7 @@ export const parseBrokerOperationsXlsx = async (
     .filter((entry) => /^xl\/worksheets\/sheet\d+\.xml$/i.test(entry.name))
     .sort((left, right) => left.name.localeCompare(right.name));
   const warnings = [
-    "XLSX zostal odczytany z arkuszy Excela i zmapowany tym samym silnikiem co CSV.",
+    "XLSX został odczytany z arkuszy Excela i zmapowany tym samym silnikiem co CSV.",
   ];
 
   if (worksheetEntries.length === 0) {
@@ -3935,7 +3935,7 @@ export const parseBrokerOperationsXlsx = async (
       warnings: [
         ...(xtbResult.warnings ?? []),
         additionalXtbCashSheets > 0
-          ? "Plik zawiera kilka arkuszy historii gotowkowej. Zaimportowano pierwszy rachunek; pozostale rachunki wyeksportuj i zaimportuj osobno do wybranego portfela."
+          ? "Plik zawiera kilka arkuszy historii gotówkowej. Zaimportowano pierwszy rachunek; pozostałe rachunki wyeksportuj i zaimportuj osobno do wybranego portfela."
           : "",
         closedPositions.length > 0
           ? `XTB XLSX: odczytano ${closedPositions.length} zamknietych pozycji do weryfikacji wyniku zrealizowanego.`
@@ -3961,7 +3961,7 @@ export const parseBrokerOperationsXlsx = async (
   if (!worksheetText) {
     return {
       operations: [],
-      skippedRows: [{ rowNumber: 1, reason: "Nie udalo sie odczytac pierwszego arkusza XLSX." }],
+      skippedRows: [{ rowNumber: 1, reason: "Nie udało się odczytać pierwszego arkusza XLSX." }],
       warnings,
     };
   }
@@ -3989,7 +3989,7 @@ export const parseBrokerOperationsPdf = async (
       warnings: [
         ...extraction.warnings,
         ...(xtbTableResult.warnings ?? []),
-        "XTB PDF: raport zostal odczytany z tabeli CASH OPERATION HISTORY.",
+        "XTB PDF: raport został odczytany z tabeli CASH OPERATION HISTORY.",
       ],
     };
   }
@@ -4009,7 +4009,7 @@ export const parseBrokerOperationsPdf = async (
         ...extraction.warnings,
         ...ocrExtraction.warnings,
         ...(ocrTableResult.warnings ?? []),
-        "XTB PDF: raport zostal odczytany przez OCR z obrazu/skanu.",
+        "XTB PDF: raport został odczytany przez OCR z obrazu/skanu.",
       ],
     };
   }
@@ -4022,7 +4022,7 @@ export const parseBrokerOperationsPdf = async (
     ...ocrExtraction.warnings,
     extraction.passwordProtected
       ? ""
-      : "Import PDF XTB dziala dla raportow z warstwa tekstowa oraz dla skanow obslugiwanych przez OCR. Mocno zmieniony uklad PDF moze wymagac eksportu CSV/Excel z platformy XTB.",
+      : "Import PDF XTB działa dla raportów z warstwą tekstową oraz dla skanów obsługiwanych przez OCR. Mocno zmieniony układ PDF może wymagać eksportu CSV/Excel z platformy XTB.",
   ].filter(Boolean);
 
   if (chunks.length === 0) {
@@ -4033,9 +4033,9 @@ export const parseBrokerOperationsPdf = async (
           rowNumber: 1,
           reason:
             extraction.passwordProtected
-              ? "PDF jest zabezpieczony haslem i nie mozna odczytac Daily Statement bez hasla."
+              ? "PDF jest zabezpieczony hasłem i nie można odczytać Daily Statement bez hasła."
               : extractedText.trim().length === 0
-              ? "PDF wyglada jak skan albo obraz bez warstwy tekstowej."
+              ? "PDF wygląda jak skan albo obraz bez warstwy tekstowej."
               : "Nie znaleziono dat transakcji w odczytanej warstwie tekstowej PDF.",
         },
       ],
@@ -4055,7 +4055,7 @@ export const parseBrokerOperationsPdf = async (
     if (inferSide(chunk)) {
       skippedRows.push({
         rowNumber,
-        reason: "Nie udalo sie jednoznacznie odczytac symbolu, ilosci albo ceny z PDF.",
+        reason: "Nie udało się jednoznacznie odczytać symbolu, ilości albo ceny z PDF.",
       });
     }
   });
@@ -4063,7 +4063,7 @@ export const parseBrokerOperationsPdf = async (
   if (operations.length === 0 && skippedRows.length === 0) {
     skippedRows.push({
       rowNumber: 1,
-      reason: "PDF nie zawiera rozpoznanych operacji kupna lub sprzedazy.",
+      reason: "PDF nie zawiera rozpoznanych operacji kupna lub sprzedaży.",
     });
   }
 
@@ -4089,7 +4089,7 @@ export const parseBrokerOperationsMhtml = (
       ...htmlResult,
       warnings: [
         ...(htmlResult.warnings ?? []),
-        "XTB MHTML/HTML: raport zostal odczytany z tabel HTML.",
+        "XTB MHTML/HTML: raport został odczytany z tabel HTML.",
       ],
     };
   }
@@ -4102,7 +4102,7 @@ export const parseBrokerOperationsMhtml = (
       ...xtbTableResult,
       warnings: [
         ...(xtbTableResult.warnings ?? []),
-        "XTB MHTML/HTML: raport zostal odczytany z tabeli CASH OPERATION HISTORY.",
+        "XTB MHTML/HTML: raport został odczytany z tabeli CASH OPERATION HISTORY.",
       ],
     };
   }
@@ -4116,7 +4116,7 @@ export const parseBrokerOperationsMhtml = (
       },
     ],
     warnings: [
-      "Import HTML/MHTML XTB wymaga raportu z tekstowa tabela operacji gotowkowych.",
+      "Import HTML/MHTML XTB wymaga raportu z tekstową tabelą operacji gotówkowych.",
     ],
   };
 };

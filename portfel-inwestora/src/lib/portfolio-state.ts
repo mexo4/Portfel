@@ -1298,15 +1298,15 @@ export const applySaleToPortfolio = ({
   const saleCurrency = toCurrencyCode(draft.marketCurrency, group.marketCurrency);
 
   if (saleQuantity <= 0) {
-    throw new Error("Podaj ilosc do sprzedazy.");
+    throw new Error("Podaj ilość do sprzedaży.");
   }
 
   if (saleQuantity > group.quantity) {
-    throw new Error("Nie mozna sprzedac wiecej niz posiadasz.");
+    throw new Error("Nie można sprzedać więcej niż posiadasz.");
   }
 
   if (salePrice <= 0) {
-    throw new Error("Podaj poprawna cene sprzedazy.");
+    throw new Error("Podaj poprawną cenę sprzedaży.");
   }
 
   const sortedLots = [...group.lots].sort((left, right) => {
@@ -1325,7 +1325,7 @@ export const applySaleToPortfolio = ({
     }
 
     if (saleDate < lot.purchaseDate) {
-      throw new Error("Data sprzedazy nie moze byc wczesniejsza niz data zakupu.");
+      throw new Error("Data sprzedaży nie może być wcześniejsza niż data zakupu.");
     }
 
     const availableQuantity = round(lot.quantity, 6);
@@ -1390,7 +1390,7 @@ export const applySaleToPortfolio = ({
   }
 
   if (remainingQuantity > 0) {
-    throw new Error("Brakuje wystarczajacej ilosci do sprzedazy.");
+    throw new Error("Brakuje wystarczającej ilości do sprzedaży.");
   }
 
   const realizedInvestedPln = round(
@@ -1437,7 +1437,7 @@ export const applySaleToPortfolio = ({
     group.lots[0]?.instrumentType === "CFD" || positionDirection === "SHORT";
 
   if (realizedProceedsPln < 0 && !isCashSettledPosition) {
-    throw new Error("Prowizja nie moze byc wyzsza niz wartosc sprzedazy.");
+    throw new Error("Prowizja nie może być wyższa niż wartość sprzedaży.");
   }
 
   const nativeResultCurrency = toCurrencyCode(
@@ -1610,12 +1610,12 @@ export const undoPortfolioSale = ({
   const sale = sales.find((item) => item.id === saleId);
 
   if (!sale) {
-    throw new Error("Nie znaleziono wskazanej sprzedazy.");
+    throw new Error("Nie znaleziono wskazanej sprzedaży.");
   }
 
   if (!canUndoPortfolioSale(sales, saleId)) {
     throw new Error(
-      "Nie mozna cofnac tej sprzedazy, bo nowsza sprzedaz rozliczyla juz te same zakupy."
+      "Nie można cofnąć tej sprzedaży, bo nowsza sprzedaż rozliczyła już te same zakupy."
     );
   }
 

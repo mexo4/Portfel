@@ -24,7 +24,7 @@ export async function GET(request: Request) {
   }
 
   if (!Number.isFinite(quantity) || quantity <= 0) {
-    return NextResponse.json({ error: "Podaj poprawna ilosc do wykupu." }, { status: 400 });
+    return NextResponse.json({ error: "Podaj poprawną ilość do wykupu." }, { status: 400 });
   }
 
   try {
@@ -39,7 +39,7 @@ export async function GET(request: Request) {
     return NextResponse.json({ redemption });
   } catch (error) {
     const message =
-      error instanceof Error ? error.message : "Nie udalo sie pobrac wyceny wykupu.";
+      error instanceof Error ? error.message : "Nie udało się pobrać wyceny wykupu.";
 
     return NextResponse.json({ error: message }, { status: 400 });
   }

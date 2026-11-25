@@ -1915,7 +1915,7 @@ export default function PortfolioLineCharts({
           yAxisTickFormatter: formatAxisPercent,
           emptyTitle: "Dodaj benchmark z wyszukiwarki",
           emptyCopy:
-            "Wyszukaj akcje, ETF albo krypto, zeby porownac stopy zwrotu w czasie.",
+            "Wyszukaj akcje, ETF albo krypto, żeby porównać stopy zwrotu w czasie.",
         };
       }
 
@@ -2212,8 +2212,8 @@ export default function PortfolioLineCharts({
           comparisons.length === 1
             ? `Przewaga vs ${focusComparison.label}`
             : focusComparison.outperformance >= 0
-              ? `Najwieksza przewaga vs ${focusComparison.label}`
-              : `Najwieksze opoznienie vs ${focusComparison.label}`,
+              ? `Największa przewaga vs ${focusComparison.label}`
+              : `Największe opóźnienie vs ${focusComparison.label}`,
         deltaValue: formatSignedPercentagePoints(focusComparison.outperformance),
         deltaTone: getToneClass(focusComparison.outperformance),
         stats,
@@ -3222,7 +3222,7 @@ export default function PortfolioLineCharts({
           <h2 className="section-title">Jeden wykres, sześć trybów analizy</h2>
           <p className="section-copy">
             Widok inspirowany TradingView i myfund: mniej szumu, szybszy odczyt,
-            te same dane w roznych perspektywach.
+            te same dane w różnych perspektywach.
           </p>
         </div>
 
@@ -3330,7 +3330,7 @@ export default function PortfolioLineCharts({
                       className="ghost-button line-visual-benchmark-remove"
                       onClick={() => handleRemoveBenchmark(benchmark.id)}
                     >
-                      Usun
+                      Usuń
                     </button>
                     {benchmarkIdsWithoutSeries.has(benchmark.id) ? (
                       <p
@@ -3357,7 +3357,7 @@ export default function PortfolioLineCharts({
               </div>
 
               {hasActiveBenchmarkQuery && isSearchingBenchmarks ? (
-                <p className="field-note">Szukam benchmarkow...</p>
+                <p className="field-note">Szukam benchmarków...</p>
               ) : null}
 
               {hasActiveBenchmarkQuery && benchmarkSearchError ? (
@@ -3366,7 +3366,7 @@ export default function PortfolioLineCharts({
 
               {!isSearchingBenchmarks && hasActiveBenchmarkQuery && !hasReachedBenchmarkMinimumLength ? (
                 <p className="field-note">
-                  Wpisz min. {benchmarkSearchMinimumLength} znaki, aby zobaczyc wyniki.
+                  Wpisz min. {benchmarkSearchMinimumLength} znaki, aby zobaczyć wyniki.
                 </p>
               ) : null}
 
@@ -3374,7 +3374,7 @@ export default function PortfolioLineCharts({
               hasReachedBenchmarkMinimumLength &&
               benchmarkResults.length === 0 &&
               !benchmarkSearchError ? (
-                <p className="field-note">Brak wynikow</p>
+                <p className="field-note">Brak wyników</p>
               ) : null}
 
               {benchmarkAddError ? (

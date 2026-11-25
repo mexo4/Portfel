@@ -304,7 +304,7 @@ export default function AddAssetForm({
         </label>
 
         <label className="field">
-          <span>Ilosc</span>
+          <span>Ilość</span>
           <input
             type="number"
             min="0"
@@ -376,12 +376,12 @@ export default function AddAssetForm({
 
             {hasActiveSearchText && isSearching ? (
               <p className="field-note">
-                {isEtfSearch ? "Wyszukuję instrumenty ETF..." : "Szukam wynikow..."}
+                {isEtfSearch ? "Wyszukuję instrumenty ETF..." : "Szukam wyników..."}
               </p>
             ) : null}
 
             {isEtfSearch && !hasActiveSearchText && !isSearching && !hasSearchResults ? (
-              <p className="field-note">Wpisz ticker, nazwe, FIGI lub ISIN, aby znalezc ETF.</p>
+              <p className="field-note">Wpisz ticker, nazwę, FIGI lub ISIN, aby znaleźć ETF.</p>
             ) : null}
 
             {hasActiveSearchText && searchError ? (
@@ -390,7 +390,7 @@ export default function AddAssetForm({
 
             {!isSearching && hasActiveSearchText && !hasReachedMinimumSearchLength ? (
               <p className="field-note">
-                Wpisz min. {minimumSearchLength} znaki, aby zobaczyc wyniki.
+                Wpisz min. {minimumSearchLength} znaki, aby zobaczyć wyniki.
               </p>
             ) : null}
 
@@ -399,7 +399,7 @@ export default function AddAssetForm({
             !hasSearchResults &&
             !searchError ? (
               <p className="field-note">
-                {isEtfSearch ? "Nie znaleziono pasujących ETF-ów." : "Brak wynikow"}
+                {isEtfSearch ? "Nie znaleziono pasujących ETF-ów." : "Brak wyników"}
               </p>
             ) : null}
 

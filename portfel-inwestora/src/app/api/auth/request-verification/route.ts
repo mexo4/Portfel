@@ -28,7 +28,7 @@ export async function POST(request: Request) {
     });
   } catch (error) {
     const message =
-      error instanceof Error ? error.message : "Nie udalo sie wyslac linku weryfikacyjnego.";
+      error instanceof Error ? error.message : "Nie udało się wysłać linku weryfikacyjnego.";
 
     return NextResponse.json({ error: message }, { status: 400 });
   }

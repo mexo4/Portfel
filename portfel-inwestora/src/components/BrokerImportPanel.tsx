@@ -35,16 +35,16 @@ type BrokerImportPanelProps = {
 
 const formatOperationType = (operation: ImportedBrokerOperation) => {
   if (operation.side === "buy") return "Kupno";
-  if (operation.side === "sell") return "Sprzedaz";
+  if (operation.side === "sell") return "Sprzedaż";
 
   const labels: Record<string, string> = {
-    DEPOSIT: "Wplata",
-    WITHDRAW: "Wyplata",
+    DEPOSIT: "Wpłata",
+    WITHDRAW: "Wypłata",
     TRANSFER: "Transfer",
     CONVERSION: "Przewalutowanie",
     DIVIDEND: "Dywidenda",
     INTEREST: "Odsetki",
-    FEE: "Oplata",
+    FEE: "Opłata",
     TAX: "Podatek",
   };
 
@@ -96,8 +96,8 @@ export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) 
     : ".csv,text/csv";
   const fileLabel = isXtbImport ? "Plik XTB (XLSX)" : "Plik CSV";
   const importDescription = isXtbImport
-    ? "Dla XTB obslugiwany jest aktualny eksport XLSX. Starsze raporty PDF, HTML i CSV nie sa juz pokazywane w wyborze XTB."
-    : "Dla pozostalych platform uzyj uniwersalnego importera CSV. Dedykowane parsery pozostaja rozdzielone modulowo.";
+    ? "Dla XTB obsługiwany jest aktualny eksport XLSX. Starsze raporty PDF, HTML i CSV nie są już pokazywane w wyborze XTB."
+    : "Dla pozostałych platform użyj uniwersalnego importera CSV. Dedykowane parsery pozostają rozdzielone modulowo.";
 
   const handlePlatformSelect = (platform: ImportPlatformDefinition) => {
     setSelectedPlatformId(platform.id);
@@ -122,8 +122,8 @@ export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) 
     if (!isAcceptedFile) {
       setError(
         isXtbImport
-          ? "Import XTB obsluguje teraz wylacznie pliki XLSX."
-          : "Ten importer obsluguje wylacznie pliki CSV."
+          ? "Import XTB obsługuje teraz wyłącznie pliki XLSX."
+          : "Ten importer obsługuje wyłącznie pliki CSV."
       );
       return;
     }
@@ -136,7 +136,7 @@ export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) 
       let result: BrokerImportParseResult;
 
       if (isXtbImport) {
-        setParseStatus("Rozpakowuje XLSX i mapuje pierwsza zakladke...");
+        setParseStatus("Rozpakowuję XLSX i mapuję pierwszą zakładkę...");
         result = await parseBrokerOperationsXlsx(
           new Uint8Array(await file.arrayBuffer()),
           preset
@@ -154,10 +154,10 @@ export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) 
       setParseStatus(null);
 
       if (result.operations.length === 0) {
-        setError("Nie znalazlem poprawnych operacji w tym pliku.");
+        setError("Nie znalazłem poprawnych operacji w tym pliku.");
       }
     } catch (parseError) {
-      console.error("[broker-import] Nie udalo sie odczytac pliku.", {
+      console.error("[broker-import] Nie udało się odczytać pliku.", {
         fileName: file.name,
         fileType: file.type,
         preset,
@@ -166,7 +166,7 @@ export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) 
       setError(
         parseError instanceof Error
           ? parseError.message
-          : "Nie udalo sie odczytac pliku importu."
+          : "Nie udało się odczytać pliku importu."
       );
       setParseStatus(null);
     } finally {
@@ -226,12 +226,12 @@ export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) 
 
       const resultDetails = [
         ...(result.warnings ?? []),
-        `Pominiete sprzedaze bez pozycji: ${result.skippedSells}.`,
-        `Nieprawidlowe rekordy: ${skippedInvalid}.`,
+        `Pominięte sprzedaże bez pozycji: ${result.skippedSells}.`,
+        `Nieprawidłowe rekordy: ${skippedInvalid}.`,
         `Duplikaty: ${skippedDuplicates}.`,
         skippedPlanLimit > 0 ? `Pozycje ponad limitem planu: ${skippedPlanLimit}.` : "",
         result.missingQuotes
-          ? `Nie udalo sie pobrac kursu dla ${result.missingQuotes} ${result.missingQuotes === 1 ? "instrumentu" : "instrumentow"}.`
+          ? `Nie udało się pobrać kursu dla ${result.missingQuotes} ${result.missingQuotes === 1 ? "instrumentu" : "instrumentów"}.`
           : "",
       ]
         .filter(Boolean)
@@ -239,10 +239,10 @@ export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) 
 
       setSuccess(
         importedTotal > 0
-          ? `Zaimportowano ${importedTotal} operacji: ${result.importedBuys} kupna, ${result.importedSells} sprzedazy, ${importedDividends} dywidend i ${importedCashOperations} operacji gotowkowych. ${resultDetails}`
+          ? `Zaimportowano ${importedTotal} operacji: ${result.importedBuys} kupna, ${result.importedSells} sprzedaży, ${importedDividends} dywidend i ${importedCashOperations} operacji gotówkowych. ${resultDetails}`
           : allRecordsAreDuplicates
-            ? `Ten raport zostal juz zaimportowany do aktywnego portfela. ${resultDetails}`
-            : `Nie dodano nowych operacji, bo wszystkie rekordy zostaly odrzucone. ${resultDetails}`
+            ? `Ten raport został już zaimportowany do aktywnego portfela. ${resultDetails}`
+            : `Nie dodano nowych operacji, bo wszystkie rekordy zostały odrzucone. ${resultDetails}`
       );
       setParseResult(null);
       setFileName("");
@@ -255,7 +255,7 @@ export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) 
       setError(
         importError instanceof Error
           ? importError.message
-          : "Nie udalo sie zaimportowac operacji."
+          : "Nie udało się zaimportować operacji."
       );
     } finally {
       isImportingRef.current = false;
@@ -266,7 +266,7 @@ export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) 
 
   const importButtonLabel =
     isImporting && quoteProgress && quoteProgress.total > 0
-      ? `Pobieranie kursow ${quoteProgress.completed}/${quoteProgress.total}...`
+      ? `Pobieranie kursów ${quoteProgress.completed}/${quoteProgress.total}...`
       : isImporting
         ? "Importowanie..."
         : isParsing
@@ -278,7 +278,7 @@ export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) 
       <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
         <div>
           <p className="eyebrow">Import operacji</p>
-          <h2 className="section-title">Wczytaj historie z platformy inwestycyjnej</h2>
+          <h2 className="section-title">Wczytaj historię z platformy inwestycyjnej</h2>
         </div>
 
         <p className="section-copy">
@@ -319,7 +319,7 @@ export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) 
       {isParsing && parseStatus ? <p className="field-note mt-4">{parseStatus}</p> : null}
       {isImporting && quoteProgress && quoteProgress.total > 0 ? (
         <p className="field-note mt-4" aria-live="polite">
-          Pobieranie kursow {quoteProgress.completed}/{quoteProgress.total}...
+          Pobieranie kursów {quoteProgress.completed}/{quoteProgress.total}...
         </p>
       ) : null}
       {error ? <p className="field-note field-note-error mt-4">{error}</p> : null}
@@ -338,7 +338,7 @@ export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) 
       {parseResult ? (
         <div className="import-summary mt-5">
           <span>Rozpoznane operacje: {importableOperations.length}</span>
-          <span>Pominiete wiersze: {parseResult.skippedRows.length}</span>
+          <span>Pominięte wiersze: {parseResult.skippedRows.length}</span>
         </div>
       ) : null}
 
@@ -350,9 +350,9 @@ export default function BrokerImportPanel({ onImport }: BrokerImportPanelProps) 
                 <th>Typ</th>
                 <th>Data</th>
                 <th>Ticker</th>
-                <th>Ilosc</th>
+                <th>Ilość</th>
                 <th>Cena</th>
-                <th>Wartosc</th>
+                <th>Wartość</th>
                 <th>Waluta</th>
               </tr>
             </thead>

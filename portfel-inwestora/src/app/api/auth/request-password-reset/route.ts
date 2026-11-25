@@ -22,7 +22,7 @@ export async function POST(request: Request) {
     });
   } catch (error) {
     const message =
-      error instanceof Error ? error.message : "Nie udalo sie przygotowac resetu hasla.";
+      error instanceof Error ? error.message : "Nie udało się przygotować resetu hasła.";
 
     return NextResponse.json({ error: message }, { status: 400 });
   }

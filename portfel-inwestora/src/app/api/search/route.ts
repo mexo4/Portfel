@@ -87,7 +87,7 @@ export async function GET(request: Request) {
     console.error("GET /api/search failed", error);
     return NextResponse.json(
       {
-        error: "Nie udalo sie pobrac wynikow wyszukiwania.",
+        error: "Nie udało się pobrać wyników wyszukiwania.",
       },
       { status: 500 }
     );

@@ -68,7 +68,7 @@ export async function GET(request: Request) {
   } catch (error) {
     console.error("GET /api/quote failed", error);
     return NextResponse.json(
-      { error: "Nie udalo sie pobrac aktualnej ceny." },
+      { error: "Nie udało się pobrać aktualnej ceny." },
       { status: 500 }
     );
   }

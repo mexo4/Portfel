@@ -1644,7 +1644,7 @@ export default function PortfolioApp({
   const handlePortfolioCoreModelChange = useCallback(
     (nextPortfolio: InvestmentPortfolio) => {
       if (!portfoliosRef.current.some((portfolio) => portfolio.id === nextPortfolio.id)) {
-        setSyncError("Nie znaleziono portfela docelowego dla operacji gotowkowej.");
+        setSyncError("Nie znaleziono portfela docelowego dla operacji gotówkowej.");
         return;
       }
       const now = new Date().toISOString();
@@ -2029,7 +2029,7 @@ export default function PortfolioApp({
 
         setSyncError(null);
       } catch (error) {
-        setSyncError(toErrorMessage(error, "Nie udalo sie zapisac portfela."));
+        setSyncError(toErrorMessage(error, "Nie udało się zapisać portfela."));
         throw error;
       } finally {
         setIsSavingPortfolio(false);
@@ -2146,7 +2146,7 @@ export default function PortfolioApp({
         setPortfolios(previousPortfolios);
         const message = toErrorMessage(
           error,
-          "Nie udalo sie zapisac zmian w portfelu."
+          "Nie udało się zapisać zmian w portfelu."
         );
         setSyncError(message);
         throw error instanceof Error ? error : new Error(message);
@@ -2381,7 +2381,7 @@ export default function PortfolioApp({
 
         setBondSeries(null);
         setBondQuote(null);
-        setBondError(toErrorMessage(error, "Nie udalo sie pobrac danych obligacji."));
+        setBondError(toErrorMessage(error, "Nie udało się pobrać danych obligacji."));
       } finally {
         if (!isCancelled) {
           setIsBondLoading(false);
@@ -2519,7 +2519,7 @@ export default function PortfolioApp({
       } catch (error) {
         if (isCancelled) return;
 
-        setSearchError(toErrorMessage(error, "Nie udalo sie pobrac wynikow."));
+        setSearchError(toErrorMessage(error, "Nie udało się pobrać wyników."));
         setResults([]);
         setEtfResultGroups([]);
       } finally {
@@ -2637,7 +2637,7 @@ export default function PortfolioApp({
         });
       } catch (error) {
         if (!isCancelled) {
-          setSearchError(toErrorMessage(error, "Nie udalo sie pobrac wynikow."));
+          setSearchError(toErrorMessage(error, "Nie udało się pobrać wyników."));
           setEtfResultGroups([]);
         }
       } finally {
@@ -2712,7 +2712,7 @@ export default function PortfolioApp({
         }
       } catch (error) {
         if (!isCancelled) {
-          setSyncError(toErrorMessage(error, "Nie udalo sie zapisac profilu."));
+          setSyncError(toErrorMessage(error, "Nie udało się zapisać profilu."));
         }
       }
     }, SAVE_DEBOUNCE_MS);
@@ -2918,7 +2918,7 @@ export default function PortfolioApp({
       } catch (error) {
         if (refreshSeq === quoteRefreshSeqRef.current[scope]) {
           const missingWithoutFallback = countAssetsWithoutUsableQuote(assetsToRefresh);
-          console.warn("[quotes] Odswiezenie nie powiodlo sie; zachowano ostatnie poprawne kursy.", {
+          console.warn("[quotes] Odświeżenie nie powiodło się; zachowano ostatnie poprawne kursy.", {
             scope,
             positions: assetsToRefresh.length,
             missingWithoutFallback,
@@ -3168,11 +3168,11 @@ export default function PortfolioApp({
     }
 
     if (quantity <= 0) {
-      throw new Error("Podaj ilosc obligacji do wykupu.");
+      throw new Error("Podaj ilość obligacji do wykupu.");
     }
 
     if (quantity > targetGroup.quantity) {
-      throw new Error("Nie mozna wykupic wiecej obligacji niz posiadasz.");
+      throw new Error("Nie można wykupić więcej obligacji niż posiadasz.");
     }
 
     const sortedLots = [...targetGroup.lots].sort(
@@ -3206,7 +3206,7 @@ export default function PortfolioApp({
     }
 
     if (remainingQuantity > 0) {
-      throw new Error("Brakuje wystarczajacej ilosci do wykupu.");
+      throw new Error("Brakuje wystarczającej ilości do wykupu.");
     }
 
     const redemptions = await Promise.all(
@@ -3364,7 +3364,7 @@ export default function PortfolioApp({
         if (!quote) {
           setQuoteError(
             draftQuotePreviewRequest.kind === "etf"
-              ? "Brak aktualnego kursu dla wybranego listingu. Mozesz dodac ETF z cena transakcji."
+              ? "Brak aktualnego kursu dla wybranego listingu. Możesz dodać ETF z ceną transakcji."
               : "Brak kursu dla wybranego aktywa. Wybierz inny wynik."
           );
           return;
@@ -3399,7 +3399,7 @@ export default function PortfolioApp({
           draftQuotePreviewRequest.kind === "etf"
         ) {
           setQuoteError(
-            "Nie udalo sie pobrac aktualnego kursu. Mozesz dodac ETF z cena transakcji."
+            "Nie udało się pobrać aktualnego kursu. Możesz dodać ETF z ceną transakcji."
           );
         }
       } finally {
@@ -3480,12 +3480,12 @@ export default function PortfolioApp({
       });
       setQuoteError(
         resolvedListing.priceStatus === "unavailable"
-          ? "Brak aktualnego kursu dla wybranego listingu. Mozesz dodac ETF z cena transakcji."
+          ? "Brak aktualnego kursu dla wybranego listingu. Możesz dodać ETF z ceną transakcji."
           : null
       );
     } catch {
       setQuoteError(
-        "Nie udalo sie sprawdzic aktualnego kursu. Mozesz dodac ETF z cena transakcji."
+        "Nie udało się sprawdzić aktualnego kursu. Możesz dodać ETF z ceną transakcji."
       );
     } finally {
       setIsQuoteLoading(false);
@@ -3514,7 +3514,7 @@ export default function PortfolioApp({
 
     if (draft.kind === "etf" && !draft.providerId) {
       setQuoteError(
-        "Brak aktualnego kursu dla wybranego listingu. Mozesz dodac ETF z cena transakcji."
+        "Brak aktualnego kursu dla wybranego listingu. Możesz dodać ETF z ceną transakcji."
       );
       return null;
     }
@@ -3541,8 +3541,8 @@ export default function PortfolioApp({
         normalizedSymbol,
         quote,
         draft.kind === "etf"
-          ? "Brak aktualnego kursu dla wybranego listingu. Mozesz dodac ETF z cena transakcji."
-          : "Brak kursu dla tego tickera. Sprawdz symbol i sprobuj ponownie."
+          ? "Brak aktualnego kursu dla wybranego listingu. Możesz dodać ETF z ceną transakcji."
+          : "Brak kursu dla tego tickera. Sprawdź symbol i spróbuj ponownie."
       );
 
       return quote;
@@ -3552,7 +3552,7 @@ export default function PortfolioApp({
       // Other asset kinds retain their existing strict quote failure path.
       if (draft.kind === "etf") {
         setQuoteError(
-          "Nie udalo sie pobrac aktualnego kursu. Mozesz dodac ETF z cena transakcji."
+          "Nie udało się pobrać aktualnego kursu. Możesz dodać ETF z ceną transakcji."
         );
         return null;
       }
@@ -3612,7 +3612,7 @@ export default function PortfolioApp({
     setSyncError(null);
 
     if (!normalizedCode || bondDraft.quantity <= 0 || bondDraft.purchasePrice <= 0) {
-      setBondError("Podaj kod obligacji, ilosc, date operacji i cene zakupu.");
+      setBondError("Podaj kod obligacji, ilość, datę operacji i cenę zakupu.");
       return;
     }
 
@@ -3696,7 +3696,7 @@ export default function PortfolioApp({
       resetAssetEntryForm();
       setBondSuccess(`Obligacja została dodana do portfela „${targetPortfolio.name}”.`);
     } catch (error) {
-      setBondError(toErrorMessage(error, "Nie udalo sie dodac obligacji."));
+      setBondError(toErrorMessage(error, "Nie udało się dodać obligacji."));
     }
   };
 
@@ -3716,7 +3716,7 @@ export default function PortfolioApp({
     setSyncError(null);
 
     if (!normalizedCode || bondDraft.quantity <= 0 || bondDraft.purchasePrice <= 0) {
-      setBondError("Podaj kod obligacji, ilosc, date sprzedazy i cene sprzedazy.");
+      setBondError("Podaj kod obligacji, ilość, datę sprzedaży i cenę sprzedaży.");
       return;
     }
 
@@ -3728,7 +3728,7 @@ export default function PortfolioApp({
       const targetGroup = getBondGroup(normalizedCode, currentTarget);
 
       if (!targetGroup) {
-        throw new Error("Nie znaleziono pozycji do sprzedazy.");
+        throw new Error("Nie znaleziono pozycji do sprzedaży.");
       }
 
       const representativeLot = targetGroup.lots[0];
@@ -3772,7 +3772,7 @@ export default function PortfolioApp({
       setBondSuccess(`Sprzedaż obligacji została zapisana w portfelu „${targetPortfolio.name}”.`);
       setBondError(null);
     } catch (error) {
-      setBondError(toErrorMessage(error, "Nie udalo sie zapisac sprzedazy obligacji."));
+      setBondError(toErrorMessage(error, "Nie udało się zapisać sprzedaży obligacji."));
     }
   };
 
@@ -3792,7 +3792,7 @@ export default function PortfolioApp({
     setSyncError(null);
 
     if (!normalizedCode || bondDraft.quantity <= 0) {
-      setBondRedemptionError("Podaj kod obligacji, ilosc i date dyspozycji wykupu.");
+      setBondRedemptionError("Podaj kod obligacji, ilość i datę dyspozycji wykupu.");
       return;
     }
 
@@ -3866,7 +3866,7 @@ export default function PortfolioApp({
       clearBondDraftSelection();
       setBondSuccess(`Wykup zapisano w portfelu „${targetPortfolio.name}”.`);
     } catch (error) {
-      setBondRedemptionError(toErrorMessage(error, "Nie udalo sie zapisac wykupu."));
+      setBondRedemptionError(toErrorMessage(error, "Nie udało się zapisać wykupu."));
     } finally {
       setIsBondRedemptionLoading(false);
     }
@@ -3889,12 +3889,12 @@ export default function PortfolioApp({
     setSyncError(null);
 
     if (!normalizedSourceCode || bondDraft.quantity <= 0) {
-      setBondSwapError("Podaj kod zrodlowej obligacji, ilosc i date dyspozycji zamiany.");
+      setBondSwapError("Podaj kod źródłowej obligacji, ilość i datę dyspozycji zamiany.");
       return;
     }
 
     if (!normalizedTargetCode || bondDraft.swapTargetQuantity <= 0) {
-      setBondSwapError("Podaj kod docelowej serii oraz ilosc obligacji po zamianie.");
+      setBondSwapError("Podaj kod docelowej serii oraz ilość obligacji po zamianie.");
       return;
     }
 
@@ -4011,7 +4011,7 @@ export default function PortfolioApp({
       clearBondDraftSelection();
       setBondSuccess(`Zamianę zapisano w portfelu „${targetPortfolio.name}”.`);
     } catch (error) {
-      setBondSwapError(toErrorMessage(error, "Nie udalo sie zapisac zamiany."));
+      setBondSwapError(toErrorMessage(error, "Nie udało się zapisać zamiany."));
     } finally {
       setIsBondSwapLoading(false);
     }
@@ -4036,7 +4036,7 @@ export default function PortfolioApp({
     setQuoteError(null);
 
     if (!CRYPTO_UI_ENABLED && draft.kind === "crypto") {
-      setSearchError("Dodawanie kryptowalut jest tymczasowo niedostepne.");
+      setSearchError("Dodawanie kryptowalut jest tymczasowo niedostępne.");
       return;
     }
 
@@ -4058,7 +4058,7 @@ export default function PortfolioApp({
       !hasStableEtfListingIdentity(draft.instrumentIdentity, draft.marketCurrencyConfirmed)
     ) {
       setSearchError(
-        "Wybierz konkretny, zweryfikowany listing ETF z wynikow wyszukiwania."
+        "Wybierz konkretny, zweryfikowany listing ETF z wyników wyszukiwania."
       );
       return;
     }
@@ -4150,7 +4150,7 @@ export default function PortfolioApp({
 
       if (!purchaseFxRateToPln || !purchaseSettlementFxRateToPln) {
         setSearchError(
-          "Brakuje kursu FX z dnia transakcji. Nie zapisano pozycji z niepewna wycena."
+          "Brakuje kursu FX z dnia transakcji. Nie zapisano pozycji z niepewną wyceną."
         );
         return;
       }
@@ -4520,7 +4520,7 @@ export default function PortfolioApp({
       setAssetSuccess(`Sprzedaż została zapisana w portfelu „${targetPortfolio.name}”.`);
       setSyncError(null);
     } catch (error) {
-      setSearchError(toErrorMessage(error, "Nie udalo sie zapisac sprzedazy."));
+      setSearchError(toErrorMessage(error, "Nie udało się zapisać sprzedaży."));
     }
   };
 
@@ -4871,7 +4871,7 @@ export default function PortfolioApp({
         if (operation.broker?.toUpperCase() === "XTB") {
           throw new Error(`Wiersz ${operation.rowNumber}: nieprawidłowy symbol, ilość lub cena transakcji XTB. Import nie został zapisany.`);
         }
-        console.warn("[broker-import] Pomieto nieprawidlowa transakcje.", {
+        console.warn("[broker-import] Pominięto nieprawidłową transakcję.", {
           rowNumber: operation.rowNumber,
           importKey: operation.importKey,
           operationType,
@@ -4933,7 +4933,7 @@ export default function PortfolioApp({
       );
 
       if (!importedPurchaseFxRateToPln || !importedSettlementFxRateToPln) {
-        console.warn("[broker-import] Pomieto transakcje bez kursu FX.", {
+        console.warn("[broker-import] Pominięto transakcje bez kursu FX.", {
           rowNumber: operation.rowNumber,
           importKey: operation.importKey,
           symbol: operation.symbol,
@@ -5022,7 +5022,7 @@ export default function PortfolioApp({
           appendImportedRealizedAdjustment(
             operation,
             operation.realizedProfitLoss!,
-            `Zamknieta pozycja bez danych otwarcia: ${operation.name || operation.symbol}`
+            `Zamknięta pozycja bez danych otwarcia: ${operation.name || operation.symbol}`
           );
           importedSells += 1;
           continue;
@@ -5035,7 +5035,7 @@ export default function PortfolioApp({
           );
         }
 
-        console.warn("[broker-import] Pomieto sprzedaz bez pasujacej otwartej pozycji.", {
+        console.warn("[broker-import] Pominięto sprzedaż bez pasującej otwartej pozycji.", {
           rowNumber: operation.rowNumber,
           importKey: operation.importKey,
           symbol: operation.symbol,
@@ -5060,7 +5060,7 @@ export default function PortfolioApp({
               : getFxRateToPlnSnapshot(importedSaleCurrency, importFxRates));
 
         if (!importedSaleFxRateToPln) {
-          console.warn("[broker-import] Pomieto sprzedaz bez kursu FX.", {
+          console.warn("[broker-import] Pominięto sprzedaż bez kursu FX.", {
             rowNumber: operation.rowNumber,
             importKey: operation.importKey,
             symbol: operation.symbol,
@@ -5117,7 +5117,7 @@ export default function PortfolioApp({
             `${error instanceof Error ? error.message : "niezgodna historia sprzedaży"}. Import nie został zapisany.`
           );
         }
-        console.warn("[broker-import] Pomieto sprzedaz z powodu niezgodnej historii.", {
+        console.warn("[broker-import] Pominięto sprzedaż z powodu niezgodnej historii.", {
           importKey: operation.importKey,
           symbol: operation.symbol,
           error,
@@ -5244,7 +5244,7 @@ export default function PortfolioApp({
     setSyncError(null);
 
     if (!date || amount === 0) {
-      setRealizedAdjustmentError("Podaj kwote rozna od zera oraz date.");
+      setRealizedAdjustmentError("Podaj kwotę różną od zera oraz datę.");
       return;
     }
 
@@ -5345,7 +5345,7 @@ export default function PortfolioApp({
       }
       setSyncError(null);
     } catch (error) {
-      setSyncError(toErrorMessage(error, "Nie udalo sie cofnac sprzedazy."));
+      setSyncError(toErrorMessage(error, "Nie udało się cofnąć sprzedaży."));
     }
   };
 
@@ -5607,7 +5607,7 @@ export default function PortfolioApp({
 
   const handleDeletePortfolio = async () => {
     if (!activePortfolio || portfolios.length <= 1) {
-      setSyncError("Nie mozna usunac ostatniego portfela.");
+      setSyncError("Nie można usunąć ostatniego portfela.");
       return;
     }
 
@@ -5616,7 +5616,7 @@ export default function PortfolioApp({
     }
 
     const confirmed = window.confirm(
-      `Usunac portfel "${activePortfolio.name}" razem z jego transakcjami? Tej operacji nie da sie cofnac.`
+      `Usunąć portfel "${activePortfolio.name}" razem z jego transakcjami? Tej operacji nie da się cofnąć.`
     );
 
     if (!confirmed) {
@@ -5658,7 +5658,7 @@ export default function PortfolioApp({
       clearPortfolioHistoryRequestCache();
       router.replace("/login");
     } catch (error) {
-      setSyncError(toErrorMessage(error, "Nie udalo sie wylogowac."));
+      setSyncError(toErrorMessage(error, "Nie udało się wylogować."));
       setIsLoggingOut(false);
     }
   };
@@ -5673,7 +5673,7 @@ export default function PortfolioApp({
       const response = await requestEmailVerification();
 
       if (response.alreadyVerified) {
-        setVerificationMessage("Ten adres email jest juz zweryfikowany.");
+        setVerificationMessage("Ten adres email jest już zweryfikowany.");
         return;
       }
 
@@ -5681,7 +5681,7 @@ export default function PortfolioApp({
       setVerificationPreviewUrl(response.previewUrl);
     } catch (error) {
       setVerificationError(
-        toErrorMessage(error, "Nie udalo sie przygotowac linku weryfikacyjnego.")
+        toErrorMessage(error, "Nie udało się przygotować linku weryfikacyjnego.")
       );
     } finally {
       setIsSendingVerification(false);

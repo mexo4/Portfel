@@ -17,7 +17,7 @@ export async function POST(request: Request) {
     const listing = sanitiseEtfListing(body.listing);
 
     if (!listing) {
-      return NextResponse.json({ error: "Nieprawidlowy listing ETF." }, { status: 400 });
+      return NextResponse.json({ error: "Nieprawidłowy listing ETF." }, { status: 400 });
     }
 
     const resolved = await resolveEtfListingPriceSource(listing);
@@ -26,7 +26,7 @@ export async function POST(request: Request) {
     return NextResponse.json(
       {
         error:
-          "Nie udalo sie sprawdzic dostepnosci aktualnego kursu. ETF nadal mozna dodac z cena transakcji.",
+          "Nie udało się sprawdzić dostępności aktualnego kursu. ETF nadal można dodać z ceną transakcji.",
       },
       { status: 502 }
     );

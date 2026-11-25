@@ -39,7 +39,7 @@ export default function PasswordResetRequestCard() {
       <div className="auth-shell">
         <section className="panel auth-card">
           <p className="eyebrow">Reset hasła</p>
-          <h1 className="auth-title">Odzyskaj dostep do konta</h1>
+          <h1 className="auth-title">Odzyskaj dostęp do konta</h1>
           <p className="section-copy">
             Podaj email przypisany do konta. W trybie developerskim pokażemy Ci od razu
             link do resetu.
@@ -52,7 +52,7 @@ export default function PasswordResetRequestCard() {
                 type="email"
                 value={email}
                 onChange={(event) => setEmail(event.target.value)}
-                placeholder="twoj@email.com"
+                placeholder="twój@email.com"
               />
             </label>
 

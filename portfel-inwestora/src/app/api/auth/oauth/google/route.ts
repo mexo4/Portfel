@@ -36,6 +36,6 @@ export async function GET(request: Request) {
       return redirectToLogin(error.message);
     }
 
-    return redirectToLogin("Nie udalo sie rozpoczac logowania przez Google. Sprobuj ponownie.");
+    return redirectToLogin("Nie udało się rozpocząć logowania przez Google. Spróbuj ponownie.");
   }
 }

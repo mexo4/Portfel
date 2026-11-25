@@ -171,7 +171,7 @@ export async function PUT(request: Request, { params }: DividendRouteProps) {
     });
   } catch (error) {
     const message =
-      error instanceof Error ? error.message : "Nie udalo sie zaktualizowac dywidendy.";
+      error instanceof Error ? error.message : "Nie udało się zaktualizować dywidendy.";
 
     return NextResponse.json({ error: message }, { status: 400 });
   }
@@ -236,7 +236,7 @@ export async function DELETE(request: Request, { params }: DividendRouteProps) {
     });
   } catch (error) {
     const message =
-      error instanceof Error ? error.message : "Nie udalo sie usunac dywidendy.";
+      error instanceof Error ? error.message : "Nie udało się usunąć dywidendy.";
 
     return NextResponse.json({ error: message }, { status: 400 });
   }

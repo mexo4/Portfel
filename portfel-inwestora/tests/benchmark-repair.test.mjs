@@ -154,7 +154,7 @@ test("a benchmark with no series is said out loud, both by the server and on its
 
   // The server warns for a benchmark with no points whatever the instrument warning says.
   const branch = history.slice(history.indexOf("if (historyPoints.length === 0 || dates.length === 0) {"));
-  assert.match(branch.slice(0, 600), /warnings\.add\(\s*`Nie udalo sie pobrac historii dla benchmarku/);
+  assert.match(branch.slice(0, 600), /warnings\.add\(\s*`Nie udało się pobrać historii dla benchmarku/);
   assert.doesNotMatch(branch.slice(0, 600), /if \(!history\?\.warning\)/);
   // A benchmark that is not a holding gets no "purchase data" warning of a holding.
   assert.match(history, /history\.warning && holdingHistoryKeys\.has\(historyKey\)/);

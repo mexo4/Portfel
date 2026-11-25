@@ -122,7 +122,7 @@ export const createFreshUserProfile = (
     preferredBroker: "",
     experienceLevel: "beginner",
     monthlyContributionPln: 0,
-    investmentGoal: "Dlugoterminowe budowanie kapitalu",
+    investmentGoal: "Długoterminowe budowanie kapitału",
     wealthItems: [],
     createdAt: timestamp,
     updatedAt: timestamp,
@@ -181,7 +181,7 @@ export const normalizeUserProfile = (
     investmentGoal:
       typeof value?.investmentGoal === "string" && value.investmentGoal.trim()
         ? value.investmentGoal.trim()
-        : (fallback?.investmentGoal ?? "Dlugoterminowe budowanie kapitalu"),
+        : (fallback?.investmentGoal ?? "Długoterminowe budowanie kapitału"),
     wealthItems: normalizeWealthItems(value?.wealthItems ?? fallback?.wealthItems, freshProfile.updatedAt),
     createdAt:
       typeof value?.createdAt === "string" && value.createdAt

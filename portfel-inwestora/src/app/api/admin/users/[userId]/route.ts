@@ -14,7 +14,7 @@ export async function DELETE(_request: Request, context: AdminUserRouteContext) 
   const accountData = await getCurrentAccountData();
 
   if (!accountData || accountData.user.role !== "admin") {
-    return NextResponse.json({ error: "Brak uprawnien admina." }, { status: 403 });
+    return NextResponse.json({ error: "Brak uprawnień admina." }, { status: 403 });
   }
 
   try {
@@ -24,7 +24,7 @@ export async function DELETE(_request: Request, context: AdminUserRouteContext) 
     return NextResponse.json({ success: true });
   } catch (error) {
     const message =
-      error instanceof Error ? error.message : "Nie udalo sie usunac uzytkownika.";
+      error instanceof Error ? error.message : "Nie udało się usunąć użytkownika.";
 
     return NextResponse.json({ error: message }, { status: 400 });
   }
@@ -33,7 +33,7 @@ export async function DELETE(_request: Request, context: AdminUserRouteContext) 
 export async function PATCH(request: Request, context: AdminUserRouteContext) {
   const accountData = await getCurrentAccountData();
   if (!accountData || accountData.user.role !== "admin") {
-    return NextResponse.json({ error: "Brak uprawnien admina." }, { status: 403 });
+    return NextResponse.json({ error: "Brak uprawnień admina." }, { status: 403 });
   }
 
   try {

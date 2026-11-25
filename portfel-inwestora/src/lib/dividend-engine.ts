@@ -337,12 +337,12 @@ export const buildDividendCalendar = (
   return [
     createCalendarGroup(
       "today",
-      "Dzis",
+      "Dziś",
       dividends.filter((dividend) => dividend.paymentDate === todayDate)
     ),
     createCalendarGroup(
       "week",
-      "Ten tydzien",
+      "Ten tydzień",
       dividends.filter((dividend) => {
         const days = getDaysBetween(todayDate, dividend.paymentDate);
         return days >= 0 && days <= 7;
@@ -350,7 +350,7 @@ export const buildDividendCalendar = (
     ),
     createCalendarGroup(
       "month",
-      "Ten miesiac",
+      "Ten miesiąc",
       dividends.filter(
         (dividend) =>
           dividend.paymentDate >= todayDate &&
@@ -359,7 +359,7 @@ export const buildDividendCalendar = (
     ),
     createCalendarGroup(
       "upcoming",
-      "Przyszle wyplaty",
+      "Przyszłe wypłaty",
       dividends.filter((dividend) => dividend.paymentDate > todayDate)
     ),
     createCalendarGroup(

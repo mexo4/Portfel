@@ -30,6 +30,14 @@ import type {
   TreasuryBondSeries,
 } from "@/types/portfolio";
 
+// Accounts created before 2026-11-25 were saved with default names written without Polish
+// letters. Only those exact defaults are restored; a name the user typed is never touched.
+const restoreLegacyDefaultAccountName = (name: string) => {
+  if (name === "Domyslne konto inwestycyjne") return "Domyślne konto inwestycyjne";
+  const legacyCash = /^Gotowka ([A-Z]{3})$/.exec(name);
+  return legacyCash ? `Gotówka ${legacyCash[1]}` : name;
+};
+
 const SUPPORTED_OPERATION_TYPES = new Set<OperationType>([
   "BUY",
   "SELL",
@@ -260,7 +268,7 @@ export const createDefaultPortfolioAccounts = (
     createDefaultAccount({
       portfolioId,
       id: getDefaultInvestmentAccountId(portfolioId),
-      name: "Domyslne konto inwestycyjne",
+      name: "Domyślne konto inwestycyjne",
       kind: "investment",
       broker: "OTHER",
       currency: normalizedBaseCurrency,
@@ -269,7 +277,7 @@ export const createDefaultPortfolioAccounts = (
     createDefaultAccount({
       portfolioId,
       id: getDefaultCashAccountId(portfolioId, normalizedBaseCurrency),
-      name: `Gotowka ${normalizedBaseCurrency}`,
+      name: `Gotówka ${normalizedBaseCurrency}`,
       kind: "cash",
       broker: "CASH",
       currency: normalizedBaseCurrency,
@@ -308,7 +316,7 @@ export const ensurePortfolioCashAccount = (
     ...createDefaultAccount({
     portfolioId,
     id: accountId,
-    name: `Gotowka ${normalizedCurrency}`,
+    name: `Gotówka ${normalizedCurrency}`,
     kind: normalizedCurrency === BASE_CURRENCY ? "cash" : "currency",
     broker: normalizedCurrency === BASE_CURRENCY ? "CASH" : "CURRENCY",
     currency: normalizedCurrency,
@@ -347,7 +355,7 @@ export const normalizePortfolioAccounts = (
         id: normalizePortfolioAccountId(portfolioId, id),
         portfolioId,
         parentAccountId: getString(rawAccount.parentAccountId) || undefined,
-        name: getString(rawAccount.name, kind === "investment" ? "Konto inwestycyjne" : `Gotowka ${currency}`),
+        name: restoreLegacyDefaultAccountName(getString(rawAccount.name, kind === "investment" ? "Konto inwestycyjne" : `Gotówka ${currency}`)),
         kind,
         broker: normalizeBroker(rawAccount.broker, kind === "investment" ? "OTHER" : "CASH"),
         currency,

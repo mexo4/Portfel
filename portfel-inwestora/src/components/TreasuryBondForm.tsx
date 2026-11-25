@@ -89,7 +89,7 @@ export default function TreasuryBondForm({
         </div>
 
         <p className="section-copy">
-          EDO, COI i ROS. Kod emisji sam rozpoznaje typ, miesiac i rok wykupu.
+          EDO, COI i ROS. Kod emisji sam rozpoznaje typ, miesiąc i rok wykupu.
         </p>
       </div>
 
@@ -107,7 +107,7 @@ export default function TreasuryBondForm({
         </label>
 
         <label className="field">
-          <span>Ilosc</span>
+          <span>Ilość</span>
           <input
             type="number"
             min="0"
@@ -152,7 +152,7 @@ export default function TreasuryBondForm({
               })
             }
           />
-          <small className="field-note">Domyslnie cena emisji, mozesz wpisac wlasna.</small>
+          <small className="field-note">Domyślnie cena emisji, możesz wpisać własną.</small>
         </label>
 
         {targetPortfolios && onTargetPortfolioChange ? (
@@ -209,7 +209,7 @@ export default function TreasuryBondForm({
         </label>
 
         <label className="field">
-          <span>Ilosc po zamianie</span>
+          <span>Ilość po zamianie</span>
           <input
             type="number"
             min="0"
@@ -231,7 +231,7 @@ export default function TreasuryBondForm({
           onClick={onSwapSubmit}
           disabled={isLoadingSwap}
         >
-          {isLoadingSwap ? "Licze zamiane..." : "Zamien"}
+          {isLoadingSwap ? "Liczę zamianę..." : "Zamień"}
         </button>
       </div>
 
@@ -263,12 +263,12 @@ export default function TreasuryBondForm({
               {String(series.redemptionMonth).padStart(2, "0")}/{series.redemptionYear}
             </strong>
             <p className="table-note mt-2">
-              Odsetki: {series.couponMode === "capitalized" ? "kapitalizacja" : "wyplata co roku"}
+              Odsetki: {series.couponMode === "capitalized" ? "kapitalizacja" : "wypłata co roku"}
             </p>
           </article>
 
           <article className="lot-card">
-            <p className="table-title">Wartosc 1 szt. dzisiaj</p>
+            <p className="table-title">Wartość 1 szt. dzisiaj</p>
             <strong>
               {quote ? formatCurrency(quote.grossValue) : formatCurrency(series.salePrice)}
             </strong>
@@ -282,7 +282,7 @@ export default function TreasuryBondForm({
       {quote ? (
         <div className="mt-3 grid gap-3 xl:grid-cols-3">
           <article className="lot-card">
-            <p className="table-title">Biezace oprocentowanie</p>
+            <p className="table-title">Bieżące oprocentowanie</p>
             <p className="table-note mt-2">{quote.annualRate.toFixed(2)}% rocznie</p>
           </article>
           <article className="lot-card">
@@ -298,39 +298,39 @@ export default function TreasuryBondForm({
 
       {series?.isFamilyOnly ? (
         <p className="field-note mt-4">
-          ROS to rodzinne obligacje skarbowe. Formularz pozwala je sledzic w portfelu,
-          ale sam produkt jest przeznaczony dla beneficjentow programu 800+.
+          ROS to rodzinne obligacje skarbowe. Formularz pozwala je śledzić w portfelu,
+          ale sam produkt jest przeznaczony dla beneficjentów programu 800+.
         </p>
       ) : null}
 
       {redemptionPreview ? (
         <div className="mt-5">
-          <p className="eyebrow">Podglad wykupu</p>
+          <p className="eyebrow">Podgląd wykupu</p>
           <div className="grid gap-3 xl:grid-cols-5">
             <article className="lot-card">
               <p className="table-title">Rozliczenie</p>
               <p className="table-note mt-2">{formatDate(redemptionPreview.settlementDate)}</p>
             </article>
             <article className="lot-card">
-              <p className="table-title">Wartosc wykupu / 1 szt.</p>
+              <p className="table-title">Wartość wykupu / 1 szt.</p>
               <p className="table-note mt-2">
                 {formatCurrency(redemptionPreview.grossValuePerUnit)}
               </p>
             </article>
             <article className="lot-card">
-              <p className="table-title">Wartosc wykupu brutto</p>
+              <p className="table-title">Wartość wykupu brutto</p>
               <p className="table-note mt-2">
                 {formatCurrency(redemptionPreview.grossValueTotal)}
               </p>
             </article>
             <article className="lot-card">
-              <p className="table-title">Wartosc wykupu netto</p>
+              <p className="table-title">Wartość wykupu netto</p>
               <p className="table-note mt-2">
                 {formatCurrency(redemptionPreview.netValueTotal)}
               </p>
             </article>
             <article className="lot-card">
-              <p className="table-title">Podatek + oplata</p>
+              <p className="table-title">Podatek + opłata</p>
               <p className="table-note mt-2">
                 {formatCurrency(redemptionPreview.taxTotal + redemptionPreview.feeTotal)}
               </p>
@@ -344,20 +344,20 @@ export default function TreasuryBondForm({
 
       {swapPreview ? (
         <div className="mt-5">
-          <p className="eyebrow">Podglad zamiany</p>
+          <p className="eyebrow">Podgląd zamiany</p>
           <div className="grid gap-3 xl:grid-cols-6">
             <article className="lot-card">
               <p className="table-title">Rozliczenie</p>
               <p className="table-note mt-2">{formatDate(swapPreview.settlementDate)}</p>
             </article>
             <article className="lot-card">
-              <p className="table-title">Wplyw brutto</p>
+              <p className="table-title">Wpływ brutto</p>
               <p className="table-note mt-2">
                 {formatCurrency(swapPreview.sourceRedemption.grossValueTotal)}
               </p>
             </article>
             <article className="lot-card">
-              <p className="table-title">Wplyw netto</p>
+              <p className="table-title">Wpływ netto</p>
               <p className="table-note mt-2">
                 {formatCurrency(swapPreview.sourceRedemption.netValueTotal)}
               </p>
@@ -375,15 +375,15 @@ export default function TreasuryBondForm({
               </p>
             </article>
             <article className="lot-card">
-              <p className="table-title">Pozostaje do wyplaty</p>
+              <p className="table-title">Pozostaje do wypłaty</p>
               <p className="table-note mt-2">
                 {formatCurrency(swapPreview.residualCashPln)}
               </p>
             </article>
           </div>
           <p className="field-note mt-3">
-            Cena zamiany dotyczy tylko nowej serii. Zwykly wykup rozlicza sie wedlug
-            wartosci obligacji i naleznych odsetek.
+            Cena zamiany dotyczy tylko nowej serii. Zwykły wykup rozlicza się według
+            wartości obligacji i należnych odsetek.
           </p>
         </div>
       ) : null}

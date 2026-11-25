@@ -32,7 +32,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ success: true });
   } catch (error) {
     const message =
-      error instanceof Error ? error.message : "Nie udalo sie zmienic hasla.";
+      error instanceof Error ? error.message : "Nie udało się zmienić hasła.";
 
     return NextResponse.json({ error: message }, { status: 400 });
   }

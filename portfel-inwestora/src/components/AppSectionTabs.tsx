@@ -18,7 +18,7 @@ const SECTION_OPTIONS: Array<{
 }> = [
   { value: "portfolio", label: "Portfel" },
   { value: "dividends", label: "Dywidendy" },
-  { value: "wealth", label: "Majatek" },
+  { value: "wealth", label: "Majątek" },
   { value: "charts", label: "Wykresy" },
   { value: "line-charts", label: "Wykresy liniowe" },
 ];

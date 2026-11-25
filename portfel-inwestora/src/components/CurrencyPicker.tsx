@@ -84,7 +84,7 @@ export default function CurrencyPicker({
           <span>Waluta</span>
           <strong>{normalizedValue}</strong>
         </span>
-        <span className="import-platform-trigger-action">Zmien</span>
+        <span className="import-platform-trigger-action">Zmień</span>
       </button>
 
       {isOpen ? createPortal(
@@ -121,7 +121,7 @@ export default function CurrencyPicker({
                 ref={searchInputRef}
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                placeholder="Wyszukaj walute..."
+                placeholder="Wyszukaj walutę..."
               />
             </label>
 
@@ -150,7 +150,7 @@ export default function CurrencyPicker({
               {filteredOptions.length === 0 ? (
                 <div className="line-chart-empty">
                   <p className="table-title">Brak waluty</p>
-                  <p className="table-note mt-2">Sprobuj wpisac kod ISO, np. USD.</p>
+                  <p className="table-note mt-2">Spróbuj wpisać kod ISO, np. USD.</p>
                 </div>
               ) : null}
             </div>

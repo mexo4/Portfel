@@ -125,7 +125,7 @@ export async function POST(request: Request) {
     });
   } catch (error) {
     const message =
-      error instanceof Error ? error.message : "Nie udalo sie zapisac operacji.";
+      error instanceof Error ? error.message : "Nie udało się zapisać operacji.";
 
     return NextResponse.json({ error: message }, { status: 400 });
   }

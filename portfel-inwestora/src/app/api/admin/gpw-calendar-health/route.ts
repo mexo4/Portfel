@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
 export async function GET() {
   const accountData = await getCurrentAccountData();
   if (!accountData || accountData.user.role !== "admin") {
-    return NextResponse.json({ error: "Brak uprawnien admina." }, { status: 403, headers: { "Cache-Control": "private, no-store, max-age=0" } });
+    return NextResponse.json({ error: "Brak uprawnień admina." }, { status: 403, headers: { "Cache-Control": "private, no-store, max-age=0" } });
   }
   try {
     const health = await getGpwCalendarHealth();
@@ -18,7 +18,7 @@ export async function GET() {
       headers: { "Cache-Control": "private, no-store, max-age=0" },
     });
   } catch {
-    return NextResponse.json({ error: "Nie udalo sie odczytac stanu kalendarza GPW." }, {
+    return NextResponse.json({ error: "Nie udało się odczytać stanu kalendarza GPW." }, {
       status: 500, headers: { "Cache-Control": "private, no-store, max-age=0" },
     });
   }

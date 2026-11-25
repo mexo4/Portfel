@@ -19,6 +19,7 @@ import {
 } from "@/lib/portfolio-account-rules";
 import { formatCurrency, formatDate, getTodayDateInputValue, toCurrencyCode } from "@/lib/utils";
 import type { AccountFlowKind, CurrencyCode, FxRates, InvestmentPortfolio, PortfolioAccount, PortfolioOperation, PortfolioAccountType } from "@/types/portfolio";
+import RecurringOperationsPanel from "@/components/RecurringOperationsPanel";
 
 type Props = {
   portfolio?: InvestmentPortfolio | null;
@@ -584,6 +585,10 @@ export default function CashWorkspace({
         {message ? <p className={`field-note mt-4 ${message.type === "error" ? "field-note-error" : "tone-positive"}`} role={message.type === "error" ? "alert" : "status"}>{message.text}</p> : null}
         <div className="sprint-action-row mt-5"><button type="button" className="primary-button" onClick={submit} disabled={pending || isPortfolioMutationPending || !selectedPortfolio || (aggregate && !targetPortfolioId)}>{pending ? "Zapisywanie…" : isPortfolioMutationPending ? "Zmiana portfela…" : editingId ? "Zapisz zmiany" : "Dodaj operację"}</button></div>
       </article>
+
+      {!aggregate && selectedPortfolio ? (
+        <div className="mt-6"><RecurringOperationsPanel portfolio={selectedPortfolio} isPending={Boolean(isPortfolioMutationPending) || pending} onPortfolioChange={onPortfolioChange} /></div>
+      ) : null}
 
       <article className="panel sprint-wide-panel mt-6">
         <div className="sprint-panel-head">

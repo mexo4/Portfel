@@ -17,6 +17,7 @@ const WEALTH_ASSET_CATEGORIES = new Set<WealthAssetCategory>([
   "gold",
   "art",
   "collection",
+  "deposit",
   "other",
 ]);
 
@@ -58,6 +59,42 @@ const normalizeWealthCategory = (
   return kind === "asset" ? "other" : "other-liability";
 };
 
+const normalizeDate = (value: unknown) => (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : null);
+const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
+
+/** Deposit terms, or undefined when anything essential is missing. */
+const normalizeWealthDeposit = (value: unknown): WealthItem["deposit"] => {
+  const raw = toRecord(value);
+  const principal = toFiniteNumber(raw.principal, 0);
+  const startDate = normalizeDate(raw.startDate);
+  const termMonths = Math.round(toFiniteNumber(raw.termMonths, 0));
+  if (!value || principal <= 0 || !startDate || termMonths < 1) return undefined;
+  return {
+    principal: round(principal, 2),
+    startDate,
+    termMonths: clamp(termMonths, 1, 600),
+    annualRatePercent: round(clamp(toFiniteNumber(raw.annualRatePercent, 0), 0, 100), 4),
+    capitalization: raw.capitalization === "monthly" || raw.capitalization === "quarterly" ? raw.capitalization : "maturity",
+    taxed: raw.taxed !== false,
+  };
+};
+
+/** Loan terms, or undefined when anything essential is missing. */
+const normalizeWealthLoan = (value: unknown): WealthItem["loan"] => {
+  const raw = toRecord(value);
+  const principal = toFiniteNumber(raw.principal, 0);
+  const startDate = normalizeDate(raw.startDate);
+  const termMonths = Math.round(toFiniteNumber(raw.termMonths, 0));
+  if (!value || principal <= 0 || !startDate || termMonths < 1) return undefined;
+  return {
+    principal: round(principal, 2),
+    startDate,
+    termMonths: clamp(termMonths, 1, 600),
+    annualRatePercent: round(clamp(toFiniteNumber(raw.annualRatePercent, 0), 0, 100), 4),
+    installment: raw.installment === "decreasing" ? "decreasing" : "equal",
+  };
+};
+
 const normalizeWealthItems = (value: unknown, now: string): WealthItem[] => {
   if (!Array.isArray(value)) {
     return [];
@@ -97,6 +134,8 @@ const normalizeWealthItems = (value: unknown, now: string): WealthItem[] => {
             ? rawItem.description.trim().slice(0, 360)
             : "",
         annualChangePercent: round(Math.max(-100, Math.min(1000, rawAnnualChange)), 2),
+        ...(kind === "asset" && normalizeWealthDeposit(rawItem.deposit) ? { deposit: normalizeWealthDeposit(rawItem.deposit) } : {}),
+        ...(kind === "liability" && normalizeWealthLoan(rawItem.loan) ? { loan: normalizeWealthLoan(rawItem.loan) } : {}),
         createdAt:
           typeof rawItem.createdAt === "string" && rawItem.createdAt
             ? rawItem.createdAt

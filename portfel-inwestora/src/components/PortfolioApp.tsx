@@ -2124,6 +2124,7 @@ export default function PortfolioApp({
               instruments: nextPortfolio.instruments,
               operations: nextPortfolio.operations,
               benchmarks: nextPortfolio.benchmarks,
+              metadata: nextPortfolio.metadata ?? portfolio.metadata,
               updatedAt: now,
             }
           : portfolio
@@ -2195,6 +2196,8 @@ export default function PortfolioApp({
         instruments: nextPortfolio.instruments,
         operations: nextPortfolio.operations,
         benchmarks: nextPortfolio.benchmarks,
+        // Recurring operation definitions and other per-portfolio settings live here.
+        metadata: nextPortfolio.metadata ?? currentTarget.metadata,
       }, { includePortfolioSnapshots: true });
     },
     [persistPortfolioCoreModelChange]
@@ -2222,6 +2225,8 @@ export default function PortfolioApp({
         instruments: nextPortfolio.instruments,
         operations: nextPortfolio.operations,
         benchmarks: nextPortfolio.benchmarks,
+        // Recurring operation definitions and other per-portfolio settings live here.
+        metadata: nextPortfolio.metadata ?? currentTarget.metadata,
       }, { includePortfolioSnapshots: true });
     },
     [persistPortfolioCoreModelChange]
@@ -5914,7 +5919,7 @@ export default function PortfolioApp({
     />
   ) : null;
   const importWorkspace = <BrokerImportPanel onImport={handleImportBrokerOperations} />;
-  const wealthWorkspace = <WealthWorkspace profile={profile} fxRates={fxRates} onChange={setProfile} />;
+  const wealthWorkspace = <WealthWorkspace profile={profile} fxRates={fxRates} onChange={setProfile} portfolioSummaries={portfolioSummaries} />;
   const effectivePlan = resolveEffectiveEntitlements(account);
   const settingsWorkspace = <><UserProfilePanel account={account} profile={profile} positionsCount={groupedAssets.length} assetsCount={displayedAssets.length} isLoggingOut={isLoggingOut} onChange={(patch: Partial<UserProfile>) => setProfile((current) => ({ ...current, ...patch, updatedAt: new Date().toISOString() }))} onReset={() => setProfile((current) => ({ ...current, displayName: "", country: "", preferredBroker: "", investmentGoal: "", monthlyContributionPln: 0, updatedAt: new Date().toISOString() }))} onLogout={() => { void handleLogout(); }} /><ChangePasswordPanel hasPassword={account.hasPassword} /><PrivacyDataPanel account={account} positionsCount={groupedAssets.length} assetsCount={displayedAssets.length} /><section className="panel panel-compact workspace-plan-placeholder"><p className="eyebrow">Plan</p><h2 className="section-title">{account.testerAccess ? "Tester · " : ""}Mexo {effectivePlan.effectivePlan[0]?.toUpperCase()}{effectivePlan.effectivePlan.slice(1)}</h2><p className="section-copy">{effectivePlan.isExpired ? "Płatny okres wygasł. Twoje dane pozostają zapisane; obowiązują limity Free." : account.testerAccess ? "Dostęp testowy przypisany do tego konta. Rola administratora i plan abonamentowy są niezależnymi ustawieniami." : "Plan i rola konta są rozdzielone. Zakup płatnych planów będzie dostępny po uruchomieniu płatności."}</p>{account.subscriptionExpiresAt ? <p className="field-note">Dostęp do planu do: {new Date(account.subscriptionExpiresAt).toLocaleDateString("pl-PL")}</p> : null}</section></>;
 

@@ -1412,7 +1412,23 @@ export const normalizePortfolioTagAssignments = (
     .filter((assignment): assignment is PortfolioTagAssignment => Boolean(assignment));
 };
 
-export const normalizePortfolioBenchmarks = (benchmarks: unknown) =>
+const MAX_BENCHMARK_MIX_COMPONENTS = 5;
+
+/** Parts of a saved weighted mix; anything malformed (a nested mix, weights not adding up to 100) drops the mix. */
+const normalizeBenchmarkComponents = (value: unknown): PortfolioBenchmarkDefinition["components"] | null => {
+  if (!Array.isArray(value)) return null;
+  const parts = value.map((item) => {
+    const record = asRecord(item);
+    const [benchmark] = normalizePortfolioBenchmarks([record.benchmark], false);
+    const weight = hasFiniteNumber(record.weight) ? record.weight : NaN;
+    return benchmark && weight > 0 ? { benchmark, weight } : null;
+  });
+  if (parts.length < 2 || parts.length > MAX_BENCHMARK_MIX_COMPONENTS || parts.some((part) => !part)) return null;
+  const total = parts.reduce((sum, part) => sum + (part?.weight ?? 0), 0);
+  return Math.abs(total - 100) <= 0.01 ? (parts as NonNullable<PortfolioBenchmarkDefinition["components"]>) : null;
+};
+
+export const normalizePortfolioBenchmarks = (benchmarks: unknown, allowMix = true): PortfolioBenchmarkDefinition[] =>
   (Array.isArray(benchmarks) ? benchmarks : [])
     .map((benchmark): PortfolioBenchmarkDefinition | null => {
       const rawBenchmark = asRecord(benchmark);
@@ -1431,11 +1447,15 @@ export const normalizePortfolioBenchmarks = (benchmarks: unknown) =>
           ? rawBenchmark.kind
           : "etf";
 
+      const components = rawBenchmark.components === undefined ? undefined : allowMix ? normalizeBenchmarkComponents(rawBenchmark.components) : null;
+      if (components === null) return null;
+
       return {
         id,
         name: getString(rawBenchmark.name, symbol),
         symbol,
         kind,
+        ...(components ? { components } : {}),
         marketCurrency: normalizeCurrency(rawBenchmark.marketCurrency),
         provider:
           typeof rawBenchmark.provider === "string"

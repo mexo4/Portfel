@@ -68,7 +68,7 @@ export const SEARCH_MODE_OPTIONS: Array<{
 }> = [
   {
     value: "stock-global",
-    label: "Akcje amerykanskie",
+    label: "Akcje amerykańskie",
     kind: "stock",
     provider: "finnhub",
     purchaseCurrency: "USD",
@@ -84,7 +84,7 @@ export const SEARCH_MODE_OPTIONS: Array<{
   },
   {
     value: "stock-international",
-    label: "Akcje miedzynarodowe",
+    label: "Akcje międzynarodowe",
     kind: "stock",
     provider: "yahoo",
     purchaseCurrency: "USD",

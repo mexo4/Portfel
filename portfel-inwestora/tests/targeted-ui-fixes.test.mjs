@@ -110,7 +110,7 @@ test("aggregate overview metrics use scoped stacked label and value styling", as
   ]);
 
   assert.match(view, /workspace-performance-metric-grid portfolio-scope-overview-metrics mt-5/);
-  assert.match(styles, /\.portfolio-scope-overview-metrics\s*\{[^}]*display:\s*grid/);
+  assert.match(styles, /\.portfolio-scope-overview-metrics\s*\{[^}]*display:\s*flex/);
   assert.match(styles, /\.portfolio-scope-overview-metrics > article > span\s*\{[^}]*display:\s*block/);
   assert.match(styles, /\.portfolio-scope-overview-metrics > article > strong\s*\{[^}]*display:\s*block/);
   assert.match(styles, /\.portfolio-scope-overview-metrics > article > strong\s*\{[^}]*font-variant-numeric:\s*tabular-nums/);

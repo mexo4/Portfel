@@ -10705,8 +10705,13 @@ textarea {
 .portfolio-scope-overview-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
 .portfolio-scope-overview-head > div { min-width: 0; }
 .portfolio-scope-overview-head > span { flex: 0 0 auto; border: 1px solid var(--line); border-radius: 999px; padding: 6px 10px; color: var(--muted); background: var(--surface-soft); font-size: .7rem; font-weight: 750; }
-/* As many columns as there are cards (3 or 4), so there is never an empty cell. */
-.portfolio-scope-overview-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
+/* The overview shows two to four cards. A grid with auto-fit columns left empty cells (four cards
+   in three columns on a narrow desktop, three cards in two), so the cards wrap and every row,
+   including a shorter last one, stretches. Four cards go four in a row or two by two, never 3 + 1. */
+.portfolio-scope-overview-metrics { display: flex; flex-wrap: wrap; gap: 12px; }
+.portfolio-scope-overview-metrics > article { flex: 1 1 190px; }
+.portfolio-scope-overview-metrics > article:first-child:nth-last-child(4),
+.portfolio-scope-overview-metrics > article:first-child:nth-last-child(4) ~ article { flex-basis: clamp(calc(25% - 9px), calc((800px - 100%) * 999), calc(50% - 6px)); }
 .portfolio-scope-overview-metrics > article { display: grid; min-width: 0; align-content: start; gap: 8px; border: 1px solid var(--line); border-radius: 14px; padding: 15px 16px; background: var(--surface-soft); }
 .portfolio-scope-overview-metrics > article > span { display: block; color: var(--muted); font-size: .72rem; font-weight: 700; line-height: 1.35; }
 .portfolio-scope-overview-metrics > article > strong { display: block; min-width: 0; font-size: clamp(1.05rem, 2vw, 1.35rem); font-variant-numeric: tabular-nums; font-weight: 800; letter-spacing: -.035em; line-height: 1.2; overflow-wrap: anywhere; }
@@ -10729,9 +10734,10 @@ textarea {
 .workspace-aggregate-dividend-list small { color: var(--muted); font-size: .7rem; }
 
 @media (max-width: 640px) {
-  .portfolio-scope-overview-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
-  .portfolio-scope-overview-metrics > article { gap: 7px; padding: 13px 12px; }
-  .portfolio-scope-overview-metrics > article:last-child:nth-child(odd) { grid-column: 1 / -1; }
+  .portfolio-scope-overview-metrics { gap: 9px; }
+  .portfolio-scope-overview-metrics > article,
+  .portfolio-scope-overview-metrics > article:first-child:nth-last-child(4),
+  .portfolio-scope-overview-metrics > article:first-child:nth-last-child(4) ~ article { flex-basis: calc(50% - 4.5px); gap: 7px; padding: 13px 12px; }
   .portfolio-scope-breakdown > button { grid-template-columns: minmax(0, 1fr) minmax(70px, .65fr) 14px; gap: 8px; padding-inline: 6px; }
   .workspace-aggregate-dividend-list > li { align-items: flex-start; gap: 8px; }
   .workspace-aggregate-dividend-list > li > span:last-child { max-width: 46%; }

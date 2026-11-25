@@ -70,6 +70,15 @@ test("the overview of several portfolios shows value, result, positions and cash
   assert.match(body, /<span>Gotówka<\/span>/);
   assert.match(body, /Math\.abs\(cashValuePln\) >= 0\.005/);
   assert.doesNotMatch(body, /fetchPortfolioHistory/);
-  assert.match(css, /\.portfolio-scope-overview-metrics \{ display: grid; grid-template-columns: repeat\(auto-fit, minmax\(190px, 1fr\)\);/);
-  assert.match(css, /\.portfolio-scope-overview-metrics > article:last-child:nth-child\(odd\) \{ grid-column: 1 \/ -1; \}/);
+});
+
+// Seen on production after the first fix: on a narrow desktop window four cards went into three
+// auto-fit columns, which left two empty cells next to the last card. Checked in the browser at
+// 340-900 px with two, three and four cards; these pin the rules.
+test("the overview cards wrap and stretch, and four cards never go three plus one", () => {
+  assert.match(css, /\.portfolio-scope-overview-metrics \{ display: flex; flex-wrap: wrap; gap: 12px; \}/);
+  assert.match(css, /\.portfolio-scope-overview-metrics > article \{ flex: 1 1 190px; \}/);
+  assert.match(css, /article:first-child:nth-last-child\(4\) ~ article \{ flex-basis: clamp\(calc\(25% - 9px\), calc\(\(800px - 100%\) \* 999\), calc\(50% - 6px\)\); \}/);
+  assert.doesNotMatch(css, /\.portfolio-scope-overview-metrics \{[^}]*grid-template-columns/);
+  assert.doesNotMatch(css, /\.portfolio-scope-overview-metrics > article:last-child:nth-child\(odd\)/);
 });

@@ -70,6 +70,7 @@ import {
   getAssetPurchaseValuePln,
 } from "@/lib/pricing";
 import { getMinimumSearchLength, getSearchPlaceholder } from "@/lib/search";
+import { DEPOSIT_BENCHMARK, INFLATION_BENCHMARK, MAX_MIX_COMPONENTS, createMixBenchmark, isMixBenchmark, isSyntheticBenchmark } from "@/lib/synthetic-benchmarks";
 import { getPortfolioAssetGroupKey } from "@/lib/ticker";
 import {
   formatCurrency,
@@ -1020,6 +1021,9 @@ export default function PortfolioLineCharts({
   // takes a moment and can fail; the picker shows both states.
   const [pendingBenchmarkResultKey, setPendingBenchmarkResultKey] = useState<string | null>(null);
   const [benchmarkAddError, setBenchmarkAddError] = useState<string | null>(null);
+  const [isMixBuilderOpen, setIsMixBuilderOpen] = useState(false);
+  const [mixWeights, setMixWeights] = useState<Record<string, string>>({});
+  const [mixError, setMixError] = useState<string | null>(null);
   const [serverHistory, setServerHistory] = useState<PortfolioHistoryResponse>(EMPTY_HISTORY);
   const [serverHistorySignature, setServerHistorySignature] = useState("");
   const [historyWarningsState, setHistoryWarningsState] = useState<{ signature: string; values: string[] }>({ signature: "", values: [] });
@@ -1631,7 +1635,11 @@ export default function PortfolioLineCharts({
       }
     }
 
-    const benchmark = createPortfolioBenchmarkDefinition(result, benchmarkSearchMode);
+    addBenchmarkDefinition(createPortfolioBenchmarkDefinition(result, benchmarkSearchMode));
+  };
+
+  /** Adds a benchmark (from search, a preset or the mix builder), shows it and opens the comparison. */
+  const addBenchmarkDefinition = (benchmark: PortfolioBenchmarkDefinition) => {
     const nextBenchmarks = selectedBenchmarks.some((item) => item.id === benchmark.id)
       ? selectedBenchmarks
       : [...selectedBenchmarks, benchmark];
@@ -1646,6 +1654,23 @@ export default function PortfolioLineCharts({
     setVisibleBenchmarkOverride({ selectionSignature: nextSelectionSignature, ids: visible });
     setBenchmarkQuery("");
     setMode("portfolio-vs-benchmark");
+  };
+
+  const mixCandidates = selectedBenchmarks.filter((benchmark) => !isMixBenchmark(benchmark)).slice(0, MAX_MIX_COMPONENTS * 2);
+  const mixWeightTotal = mixCandidates.reduce((total, benchmark) => total + (Number(String(mixWeights[benchmark.id] ?? "").replace(",", ".")) || 0), 0);
+
+  const handleCreateMixBenchmark = () => {
+    setMixError(null);
+    try {
+      const parts = mixCandidates
+        .map((benchmark) => ({ benchmark, weight: Number(String(mixWeights[benchmark.id] ?? "").replace(",", ".")) || 0 }))
+        .filter((part) => part.weight > 0);
+      addBenchmarkDefinition(createMixBenchmark(parts));
+      setMixWeights({});
+      setIsMixBuilderOpen(false);
+    } catch (error) {
+      setMixError(error instanceof Error ? error.message : "Nie udało się utworzyć benchmarku złożonego.");
+    }
   };
 
   const handleRemoveBenchmark = (benchmarkId: string) => {
@@ -1972,6 +1997,8 @@ export default function PortfolioLineCharts({
           currentPercent: number;
           currentPrice: number;
           dataKey: string;
+          /** Inflation, the deposit and mixes are indices, not prices in a currency. */
+          isIndex: boolean;
           label: string;
           marketCurrency: string;
           percentByDate: Map<string, number | null>;
@@ -2016,6 +2043,7 @@ export default function PortfolioLineCharts({
           currentPercent: lastBenchmarkPoint.percent!,
           currentPrice: lastBenchmarkPoint.point.price,
           dataKey: `benchmark${index}`,
+          isIndex: isSyntheticBenchmark(benchmark),
           label: series.label,
           marketCurrency: benchmark.marketCurrency,
           percentByDate,
@@ -2065,8 +2093,8 @@ export default function PortfolioLineCharts({
 
             return [
               returnPercent === null ? null : `stopa ${formatSignedPercent(returnPercent)}`,
-              price === null ? null : `kurs ${formatNumber(price, 2)}`,
-              pricePln === null ? null : `kurs ${baseCurrency} ${formatCurrency(pricePln, baseCurrency)}`,
+              price === null || benchmarkModel.isIndex ? null : `kurs ${formatNumber(price, 2)}`,
+              pricePln === null || benchmarkModel.isIndex ? null : `kurs ${baseCurrency} ${formatCurrency(pricePln, baseCurrency)}`,
             ]
               .filter(Boolean)
               .join(" | ");
@@ -2185,7 +2213,9 @@ export default function PortfolioLineCharts({
         },
         ...visibleBenchmarkModels.map((benchmarkModel) => ({
           label: benchmarkModel.label,
-          value: `${formatNumber(benchmarkModel.currentPrice, 2)} ${benchmarkModel.marketCurrency} | ${formatSignedPercent(benchmarkModel.currentPercent)}`,
+          value: benchmarkModel.isIndex
+            ? formatSignedPercent(benchmarkModel.currentPercent)
+            : `${formatNumber(benchmarkModel.currentPrice, 2)} ${benchmarkModel.marketCurrency} | ${formatSignedPercent(benchmarkModel.currentPercent)}`,
           tone: getToneClass(benchmarkModel.currentPercent),
         })),
         missingBenchmarkCount > 0
@@ -3297,6 +3327,48 @@ export default function PortfolioLineCharts({
             />
           </label>
 
+          <div className="line-visual-benchmark-presets mt-4" aria-label="Gotowe punkty odniesienia">
+            <p className="table-note">Gotowe punkty odniesienia:</p>
+            {[INFLATION_BENCHMARK, DEPOSIT_BENCHMARK].map((preset) => {
+              const isAdded = selectedBenchmarks.some((benchmark) => benchmark.id === preset.id);
+              return (
+                <button key={preset.id} type="button" className="ghost-button" disabled={isAdded} onClick={() => addBenchmarkDefinition(preset)}>
+                  {isAdded ? `${preset.name} · dodano` : `+ ${preset.name}`}
+                </button>
+              );
+            })}
+            {mixCandidates.length >= 2 ? (
+              <button type="button" className="ghost-button" aria-expanded={isMixBuilderOpen} onClick={() => { setIsMixBuilderOpen((open) => !open); setMixError(null); }}>
+                {isMixBuilderOpen ? "Zamknij kreator" : "+ Benchmark złożony"}
+              </button>
+            ) : null}
+          </div>
+
+          {isMixBuilderOpen && mixCandidates.length >= 2 ? (
+            <section className="line-visual-mix-builder mt-3" aria-label="Benchmark złożony">
+              <p className="table-note">
+                Podaj udział każdego składnika w procentach (razem 100%). Benchmark złożony jest codziennie przywracany do tych wag. Wybierz od 2 do {MAX_MIX_COMPONENTS} składników.
+              </p>
+              <div className="line-visual-mix-rows">
+                {mixCandidates.map((benchmark) => (
+                  <label key={benchmark.id} className="field">
+                    <span>{benchmark.name}</span>
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      placeholder="0"
+                      value={mixWeights[benchmark.id] ?? ""}
+                      onChange={(event) => { setMixError(null); setMixWeights((current) => ({ ...current, [benchmark.id]: event.target.value })); }}
+                    />
+                  </label>
+                ))}
+              </div>
+              <p className={Math.abs(mixWeightTotal - 100) <= 0.01 ? "field-note" : "field-note field-note-error"}>Suma wag: {String(Math.round(mixWeightTotal * 100) / 100).replace(".", ",")}%</p>
+              {mixError ? <p className="field-note field-note-error" role="alert">{mixError}</p> : null}
+              <button type="button" className="primary-button" onClick={handleCreateMixBenchmark}>Dodaj benchmark złożony</button>
+            </section>
+          ) : null}
+
           {selectedBenchmarks.length > 0 ? (
             <div className="line-visual-benchmark-list mt-4">
               {selectedBenchmarks.map((benchmark) => {
@@ -3337,8 +3409,9 @@ export default function PortfolioLineCharts({
                         className="field-note field-note-error line-visual-benchmark-card-note"
                         role="status"
                       >
-                        Brak notowań dla tego benchmarku, więc nie ma go na wykresie. Usuń go
-                        i dodaj ponownie, wybierając giełdę z notowaniami.
+                        {isSyntheticBenchmark(benchmark)
+                          ? "Nie udało się teraz pobrać danych dla tego punktu odniesienia (Eurostat, NBP albo notowania składnika). Spróbuj ponownie później."
+                          : "Brak notowań dla tego benchmarku, więc nie ma go na wykresie. Usuń go i dodaj ponownie, wybierając giełdę z notowaniami."}
                       </p>
                     ) : null}
                   </article>

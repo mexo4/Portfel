@@ -11084,3 +11084,13 @@ textarea {
   .profit-source-value { justify-items: start; }
   .profit-source-bar i { margin-left: 0; }
 }
+
+/* Benchmark presets (inflation, deposit) and the weighted mix builder. */
+.line-visual-benchmark-presets { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.line-visual-benchmark-presets .table-note { margin: 0; flex-basis: 100%; }
+.line-visual-benchmark-presets .ghost-button { min-height: 36px; padding: 7px 12px; font-size: .78rem; }
+.line-visual-mix-builder { display: grid; gap: 10px; border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; background: var(--surface-soft); }
+.line-visual-mix-builder .table-note { margin: 0; }
+.line-visual-mix-rows { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px 12px; }
+.line-visual-mix-builder .primary-button { justify-self: start; }
+@media (max-width: 640px) { .line-visual-mix-builder .primary-button { justify-self: stretch; } }

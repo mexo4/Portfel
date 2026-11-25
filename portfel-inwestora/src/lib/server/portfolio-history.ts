@@ -5,6 +5,17 @@ import {
 } from "@/lib/crypto-catalog";
 import { fetchBinanceDailyCloses } from "@/lib/server/binance-history";
 import { stooqCooldown } from "@/lib/server/provider-cooldown";
+import { getPolishInflationIndex } from "@/lib/server/inflation";
+import { getPoloniaRates } from "@/lib/server/polonia";
+import {
+  DEPOSIT_PROVIDER_ID,
+  INFLATION_PROVIDER_ID,
+  buildDepositIndexPoints,
+  buildInflationIndexPoints,
+  combineMixSeries,
+  isMixBenchmark,
+  isSyntheticBenchmark,
+} from "@/lib/synthetic-benchmarks";
 import {
   migrateLegacyHistoryRangeCache,
   resolveHistoryRangeCache,
@@ -1791,8 +1802,14 @@ const buildInstrumentDefinitions = (segments: PortfolioHistorySegment[]) => {
   return Array.from(definitions.values());
 };
 
+/** A mix is replaced by its parts: those are what needs quotes and exchange rates. */
+const expandBenchmarks = (benchmarks: PortfolioBenchmarkDefinition[]) =>
+  benchmarks.flatMap((benchmark) => (isMixBenchmark(benchmark) ? (benchmark.components ?? []).map((part) => part.benchmark) : [benchmark]));
+
 const getBenchmarkHistoryKey = (benchmark: PortfolioBenchmarkDefinition) =>
-  benchmark.kind === "crypto" ||
+  isSyntheticBenchmark(benchmark)
+    ? `mexo:${benchmark.id}`
+    : benchmark.kind === "crypto" ||
   benchmark.kind === "etf" ||
   (benchmark.kind === "stock" && benchmark.providerId)
     ? `${benchmark.kind}:${normalizeSymbol(benchmark.providerId ?? benchmark.symbol)}`
@@ -1807,7 +1824,8 @@ const buildBenchmarkInstrumentDefinitions = ({
 }) => {
   const definitions = new Map<string, InstrumentHistoryDefinition>();
 
-  for (const benchmark of benchmarks) {
+  // Inflation, the deposit and mixes are computed here, not fetched as quotes.
+  for (const benchmark of expandBenchmarks(benchmarks).filter((item) => !isSyntheticBenchmark(item))) {
     const historyKey = getBenchmarkHistoryKey(benchmark);
 
     if (definitions.has(historyKey)) {
@@ -1827,6 +1845,72 @@ const buildBenchmarkInstrumentDefinitions = ({
   }
 
   return Array.from(definitions.values());
+};
+
+type SyntheticBenchmarkData = {
+  inflation: Array<{ month: string; index: number }> | null;
+  deposit: Array<{ date: string; annualRate: number }> | null;
+};
+
+/** Reads only the sources the selected benchmarks need; a failed read leaves that source empty. */
+const loadSyntheticBenchmarkData = async (benchmarks: PortfolioBenchmarkDefinition[]): Promise<SyntheticBenchmarkData> => {
+  const used = new Set(expandBenchmarks(benchmarks).filter(isSyntheticBenchmark).map((benchmark) => benchmark.providerId));
+  const [inflation, deposit] = await Promise.all([
+    used.has(INFLATION_PROVIDER_ID) ? getPolishInflationIndex().catch(() => []) : Promise.resolve(null),
+    used.has(DEPOSIT_PROVIDER_ID) ? getPoloniaRates().then((response) => response.rates).catch(() => []) : Promise.resolve(null),
+  ]);
+  return { inflation, deposit };
+};
+
+/**
+ * Puts inflation and the deposit into the instrument histories as PLN price series, then each
+ * mix, built from its parts' PLN prices. `buildBenchmarkReturnSeries` then treats them like quotes.
+ */
+const addSyntheticBenchmarkHistories = ({
+  benchmarks,
+  dates,
+  fxSeriesByCode,
+  instrumentHistoryByKey,
+  warnings,
+  data,
+}: {
+  benchmarks: PortfolioBenchmarkDefinition[];
+  dates: string[];
+  fxSeriesByCode: Map<CurrencyCode, Map<string, number>>;
+  instrumentHistoryByKey: Map<string, InstrumentHistoryResult>;
+  warnings: Set<string>;
+  data: SyntheticBenchmarkData;
+}) => {
+  for (const benchmark of expandBenchmarks(benchmarks).filter(isSyntheticBenchmark)) {
+    const key = getBenchmarkHistoryKey(benchmark);
+    if (instrumentHistoryByKey.has(key)) continue;
+    if (benchmark.providerId === INFLATION_PROVIDER_ID) {
+      instrumentHistoryByKey.set(key, { points: buildInflationIndexPoints(data.inflation ?? [], dates) });
+    } else if (benchmark.providerId === DEPOSIT_PROVIDER_ID) {
+      instrumentHistoryByKey.set(key, { points: buildDepositIndexPoints(data.deposit ?? [], dates) });
+    }
+  }
+
+  for (const mix of benchmarks.filter(isMixBenchmark)) {
+    const parts = mix.components ?? [];
+    const partSeries = buildBenchmarkReturnSeries({
+      benchmarks: parts.map((part) => part.benchmark),
+      dates,
+      fxSeriesByCode,
+      instrumentHistoryByKey,
+      warnings: new Set<string>(),
+    });
+    const missing = parts.filter((part) => !partSeries.some((series) => series.id === part.benchmark.id));
+    if (missing.length > 0) {
+      warnings.add(`Benchmark złożony ${mix.name} nie ma historii składnika ${missing.map((part) => part.benchmark.name).join(", ")}; pominięto go na wykresie.`);
+      continue;
+    }
+    const points = combineMixSeries(
+      parts.map((part) => ({ weight: part.weight, points: partSeries.find((series) => series.id === part.benchmark.id)?.points ?? [] })),
+      dates
+    );
+    instrumentHistoryByKey.set(getBenchmarkHistoryKey(mix), { points });
+  }
 };
 
 const buildBenchmarkReturnSeries = ({
@@ -2039,7 +2123,8 @@ export const buildPortfolioHistory = async ({
   });
 
   const fxStartedAt = performance.now();
-  const requiredFxCodes = getNeededFxCodes(assets, sales, benchmarks, operations);
+  const requiredFxCodes = getNeededFxCodes(assets, sales, expandBenchmarks(benchmarks), operations);
+  const syntheticBenchmarkDataPromise = loadSyntheticBenchmarkData(benchmarks);
   // Historical FX and instrument quotes are independent remote reads. Start the
   // FX side before assembling quote definitions, then wait for both below.
   // This deliberately leaves the cache keys, fallbacks and post-fetch
@@ -2132,6 +2217,15 @@ export const buildPortfolioHistory = async ({
       warnings.add(history.warning);
     }
   }
+
+  addSyntheticBenchmarkHistories({
+    benchmarks,
+    dates,
+    fxSeriesByCode,
+    instrumentHistoryByKey,
+    warnings,
+    data: await syntheticBenchmarkDataPromise,
+  });
 
   const benchmarkSeries = buildBenchmarkReturnSeries({
     benchmarks,

@@ -104,7 +104,9 @@ export type QuoteProvider =
   | "eodhd"
   | "coingecko"
   | "catalog"
-  | "obligacjeskarbowe";
+  | "obligacjeskarbowe"
+  /** Benchmarks Mexo computes itself: inflation, an overnight deposit, a weighted mix. */
+  | "mexo";
 
 /** The quote can be personal to one portfolio when the instrument has no
  * trustworthy automatic market feed. This never changes a global quote. */
@@ -700,6 +702,8 @@ export type PortfolioBenchmarkDefinition = {
   provider: QuoteProvider;
   providerId?: string;
   priceScale?: number;
+  /** Parts of a weighted mix (weights in percent, adding up to 100), rebalanced daily. */
+  components?: Array<{ benchmark: PortfolioBenchmarkDefinition; weight: number }>;
 };
 
 export type PortfolioAccount = {

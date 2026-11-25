@@ -10,13 +10,16 @@ import { DEFAULT_PERFORMANCE_METRICS, PERFORMANCE_METRIC_LABELS, PERFORMANCE_MET
 import { getPerformanceMetricAvailability, isPerformanceMetricShown } from "@/lib/performance-metric-availability";
 import { calculateWindowCapitalReturnPercent } from "@/lib/portfolio-performance";
 import { formatCurrency, formatDate } from "@/lib/utils";
-import type { CurrencyCode, FxRates, PortfolioAccount, PortfolioAccountType, PortfolioAsset, PortfolioBenchmarkDefinition, PortfolioHistoryResponse, PortfolioHistoryScope, PortfolioOperation, PortfolioRealizedAdjustment, PortfolioSale } from "@/types/portfolio";
+import ProfitBreakdownPanel from "@/components/ProfitBreakdownPanel";
+import type { CurrencyCode, FxRates, InvestmentPortfolio, PortfolioAccount, PortfolioAccountType, PortfolioAsset, PortfolioBenchmarkDefinition, PortfolioHistoryResponse, PortfolioHistoryScope, PortfolioOperation, PortfolioRealizedAdjustment, PortfolioSale } from "@/types/portfolio";
 
 type Props = {
   assets: PortfolioAsset[]; sales: PortfolioSale[]; realizedAdjustments: PortfolioRealizedAdjustment[];
   fxRates: FxRates; baseCurrency: CurrencyCode; combinedProfitLoss: number; refreshRevision: number;
   operations?: PortfolioOperation[]; accounts?: PortfolioAccount[]; accountType?: PortfolioAccountType;
   benchmarks?: PortfolioBenchmarkDefinition[]; portfolioScopes?: PortfolioHistoryScope[]; isAggregate?: boolean;
+  /** Portfolios whose result is split by source in "Skąd wynik"; the section is left out without them. */
+  breakdownPortfolios?: InvestmentPortfolio[];
 };
 
 const EMPTY_HISTORY: PortfolioHistoryResponse = { points: [], warnings: [], assetSeries: [], benchmarkSeries: [] };
@@ -111,7 +114,7 @@ const getCalendarCompletenessLabel = (item: CalendarReturn | undefined) => {
 };
 const calendarCoverage = (item: CalendarReturn) => `${formatDate(item.dateFrom)} – ${formatDate(item.dateTo)}`;
 
-export default function PortfolioPerformanceResults({ assets, sales, realizedAdjustments, baseCurrency, combinedProfitLoss, refreshRevision, operations = [], accounts = [], accountType, benchmarks = [], portfolioScopes, isAggregate = false }: Props) {
+export default function PortfolioPerformanceResults({ assets, sales, realizedAdjustments, fxRates, baseCurrency, combinedProfitLoss, refreshRevision, operations = [], accounts = [], accountType, benchmarks = [], portfolioScopes, isAggregate = false, breakdownPortfolios }: Props) {
   const [historyState, setHistoryState] = useState<{ signature: string; history: PortfolioHistoryResponse; error: string | null }>({ signature: "", history: EMPTY_HISTORY, error: null });
   const [riskFreeState, setRiskFreeState] = useState<{ rates: RiskFreeRatePoint[] | null; sourceUrl: string | null; fetchedAt: string | null; stale: boolean }>({ rates: null, sourceUrl: null, fetchedAt: null, stale: false });
   const [period, setPeriod] = useState<RiskAnalyticsPeriod>("MAX");
@@ -280,6 +283,7 @@ export default function PortfolioPerformanceResults({ assets, sales, realizedAdj
         {shown("xirr") ? <MetricCard title="XIRR" value={xirr.value !== null ? formatPercent(xirr.value) : "Niedostępne"} tone={toneForValue(xirr.value)} detail={xirr.value !== null ? "Od początku · zwrot ważony datami przepływów" : !hasCashFlowLedger ? "Brak kompletnego rejestru wpłat i wypłat" : !hasReliableCashFlowCurrency ? "Brak wiarygodnego FX dla przepływów" : presentationHistoryStatus !== "complete" ? "Wymaga kompletnej historii" : XIRR_UNAVAILABLE_LABELS[xirr.unavailableCode!]} description="Money-weighted return uwzględnia rzeczywiste daty potwierdzonych wpłat i wypłat." /> : null}
         {shown("cagr") ? <MetricCard title={`CAGR · ${PERIOD_LABELS[effectivePeriod]}`} value={cagr !== null ? formatPercent(cagr) : "Niedostępne"} tone={toneForValue(cagr)} detail={cagr !== null ? "Średnie tempo roczne dla wybranego zakresu" : "Wymaga kompletnej historii co najmniej 365 dni"} description="Geometryczne średnie tempo roczne; nie jest dostępne dla historii krótszej niż rok." /> : null}
       </div></section> : null}
+      {breakdownPortfolios && breakdownPortfolios.length > 0 ? <ProfitBreakdownPanel portfolios={breakdownPortfolios} fxRates={fxRates} flowsProfitLossPln={isHistoryLoading ? null : history.points.at(-1)?.profitLossPln ?? null} /> : null}
       {hasReturnHistory && isVisible("latest-value-change", "best-day", "best-daily-result", "worst-day", "best-month", "worst-month", "best-year", "worst-year") ? <section className="risk-section" aria-labelledby="risk-result-title"><div className="risk-section-heading"><div><p className="eyebrow">Statystyki wyniku</p><h3 id="risk-result-title">Najlepsze i najsłabsze okresy</h3></div><span>{PERIOD_LABELS[effectivePeriod]} · {analytics.dailyReturns.length} obserwacji</span></div><div className="risk-metric-grid">
         {shown("latest-value-change") ? <MetricCard title="Ostatnia zmiana wartości" value={metrics.latestRaw ? formatSignedPln(metrics.latestRaw.rawValueChangePln) : "—"} tone={toneForValue(metrics.latestRaw?.rawValueChangePln)} detail={metrics.latestRaw ? `${formatDate(metrics.latestRaw.date)} · względem poprzedniej wyceny` : "Brak poprzedniej wyceny"} /> : null}
         {shown("best-day") ? <MetricCard title="Najlepszy dzień" metric={analytics.bestDay} value={analytics.bestDay.value ? formatPercent(analytics.bestDay.value.returnDecimal) : undefined} tone={toneForValue(analytics.bestDay.value?.returnDecimal)} detail={analytics.bestDay.value ? `${formatSignedPln(analytics.bestDay.value.resultPln)} · ${formatDate(analytics.bestDay.value.endDate)}` : undefined} description="Najwyższy zwrot procentowy jednego dnia po wyłączeniu przepływów kapitału." /> : null}

@@ -1157,7 +1157,8 @@ const fetchNbpFxChunk = async (
   );
 };
 
-const fetchHistoricalFxPoints = async (
+/** NBP average rates of one currency between two dates (cached; shared with the tax report). */
+export const fetchHistoricalFxPoints = async (
   code: CurrencyCode,
   startDate: string,
   endDate: string

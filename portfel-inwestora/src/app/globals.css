@@ -10989,3 +10989,75 @@ textarea {
     margin-block: -12px;
   }
 }
+
+/* Closed investments and the PIT-38 summary. */
+.closed-investments,
+.tax-report { display: grid; gap: 18px; min-width: 0; }
+.closed-year-field { min-width: 160px; }
+.closed-summary-table td,
+.tax-table td { vertical-align: top; }
+.closed-summary-table { min-width: 720px; }
+.tax-table { min-width: 680px; }
+.closed-summary-table td:not(:first-child),
+.tax-table td:not(:nth-child(2)) { white-space: nowrap; }
+.closed-summary-table tr:not(.closed-detail-row) > td:last-child,
+.tax-table tr:not(.closed-detail-row) > td:last-child { width: 1%; text-align: right; }
+.closed-detail-row > td { white-space: normal; text-align: left; }
+.closed-summary-table small.block,
+.tax-table small.block { margin-top: 2px; color: var(--muted); font-size: .72rem; font-weight: 600; }
+.closed-summary-table .ghost-button,
+.tax-table .ghost-button { white-space: nowrap; }
+.closed-detail-row > td { padding-top: 0; background: var(--surface-soft); }
+.closed-trades { display: grid; gap: 12px; padding: 12px 4px; }
+.closed-trade { display: grid; gap: 8px; border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; background: var(--surface); }
+.closed-trade header { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 14px; }
+.closed-trade header span { color: var(--muted); font-size: .8rem; }
+.closed-trade dl { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px 16px; margin: 0; }
+.closed-trade dt { color: var(--muted); font-size: .7rem; font-weight: 700; }
+.closed-trade dd { margin: 2px 0 0; font-variant-numeric: tabular-nums; font-weight: 700; }
+.closed-trade ul,
+.tax-transaction-details ul { display: grid; gap: 4px; margin: 0; padding-left: 18px; font-size: .8rem; }
+.closed-trade ul span { color: var(--muted); }
+.tax-transaction-details { display: grid; gap: 6px; padding: 12px 4px; font-size: .82rem; line-height: 1.5; }
+.tax-transaction-details p { margin: 0; }
+.tax-method-list { display: grid; gap: 8px; margin: 0; padding-left: 18px; color: var(--muted); font-size: .86rem; line-height: 1.55; }
+@media (max-width: 640px) {
+  .closed-year-field { min-width: 0; width: 100%; }
+  .closed-investments .risk-section-heading,
+  .tax-report .risk-section-heading { flex-direction: column; align-items: stretch; }
+}
+
+/* Four cards: four in a row, or two by two on narrower screens; never three plus one. */
+.risk-metric-grid-four > .risk-metric-card { flex-basis: calc((100% - 3px) / 4); }
+@media (max-width: 1180px) { .risk-metric-grid-four > .risk-metric-card { flex-basis: calc((100% - 1px) / 2); } }
+@media (max-width: 767px) { .risk-metric-grid-four > .risk-metric-card { flex-basis: 100%; } }
+
+/* On a phone the closed-investment and tax tables become one card per row, with field labels. */
+@media (max-width: 640px) {
+  .closed-summary-table,
+  .tax-table { min-width: 0; }
+  .closed-summary-table thead,
+  .tax-table thead { display: none; }
+  .closed-summary-table,
+  .closed-summary-table tbody,
+  .tax-table,
+  .tax-table tbody { display: block; width: 100%; }
+  .closed-summary-table tr:not(.closed-detail-row),
+  .tax-table tr:not(.closed-detail-row) { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 14px; padding: 14px 12px; border-bottom: 1px solid var(--line); }
+  .closed-summary-table tr:not(.closed-detail-row) > td,
+  .tax-table tr:not(.closed-detail-row) > td { display: block; padding: 0; border: 0; white-space: normal; text-align: left; width: auto; }
+  .closed-summary-table tr:not(.closed-detail-row) > td:first-child,
+  .tax-table tr:not(.closed-detail-row) > td:nth-child(2) { grid-column: 1 / -1; }
+  .closed-summary-table tr:not(.closed-detail-row) > td:last-child,
+  .tax-table tr:not(.closed-detail-row) > td:last-child:has(> .ghost-button) { grid-column: 1 / -1; }
+  .closed-summary-table td[data-label]::before,
+  .tax-table td[data-label]::before { content: attr(data-label); display: block; margin-bottom: 2px; color: var(--muted); font-size: .68rem; font-weight: 700; }
+  .closed-summary-table tr:not(.closed-detail-row) > td:last-child,
+  .tax-table tr:not(.closed-detail-row) > td:last-child { width: auto; text-align: left; }
+  .closed-summary-table .ghost-button,
+  .tax-table .ghost-button { width: 100%; }
+  .closed-summary-table .closed-detail-row,
+  .closed-summary-table .closed-detail-row > td,
+  .tax-table .closed-detail-row,
+  .tax-table .closed-detail-row > td { display: block; width: 100%; padding: 0 8px 8px; }
+}

@@ -169,6 +169,29 @@ export const getStockMarketClass = (group: PortfolioAssetGroup) => {
   return { id: "stock:foreign", label: "Akcje zagraniczne" };
 };
 
+/** The asset-class bucket of one holding (Akcje GPW, Akcje zagraniczne, ETF, Krypto, Obligacje…). */
+export const getAssetClassGroup = (group: PortfolioAssetGroup) => {
+  const instrumentClass = getPortfolioInstrumentClass(group);
+  const stockClass = instrumentClass === "stock" ? getStockMarketClass(group) : null;
+  if (stockClass) return stockClass;
+  const label = instrumentClass === "etf"
+    ? "ETF"
+    : instrumentClass === "crypto"
+      ? "Krypto"
+      : instrumentClass === "bond"
+        ? "Obligacje"
+        : instrumentClass === "cfd"
+          ? "CFD"
+          : instrumentClass === "etc"
+            ? "ETC"
+            : instrumentClass === "etn"
+              ? "ETN"
+              : instrumentClass === "fund"
+                ? "Fundusze"
+                : "Niezweryfikowany typ";
+  return { id: instrumentClass as string, label };
+};
+
 /**
  * Ordinary stocks are grouped by confirmed GPW listing vs. other listings.
  * Issuer-country metadata remains available separately through
@@ -181,26 +204,7 @@ export const getAssetClassAllocation = (groups: PortfolioAssetGroup[]) => {
   const allocation = new Map<string, AssetClassAllocationItem>();
 
   for (const group of groups) {
-    const instrumentClass = getPortfolioInstrumentClass(group);
-    const stockClass = instrumentClass === "stock" ? getStockMarketClass(group) : null;
-    const id = stockClass?.id ?? instrumentClass;
-    const label = stockClass
-      ? stockClass.label
-      : instrumentClass === "etf"
-        ? "ETF"
-        : instrumentClass === "crypto"
-          ? "Krypto"
-          : instrumentClass === "bond"
-            ? "Obligacje"
-            : instrumentClass === "cfd"
-              ? "CFD"
-              : instrumentClass === "etc"
-                ? "ETC"
-                : instrumentClass === "etn"
-                  ? "ETN"
-                  : instrumentClass === "fund"
-                    ? "Fundusze"
-                    : "Niezweryfikowany typ";
+    const { id, label } = getAssetClassGroup(group);
     const current = allocation.get(id);
 
     allocation.set(id, {

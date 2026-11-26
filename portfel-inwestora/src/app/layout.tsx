@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import { CHUNK_RETRY_INLINE_SCRIPT } from "@/lib/chunk-load-error";
 import { APP_DESCRIPTION, APP_NAME } from "@/lib/constants";
 import "./globals.css";
+// Nowy wygląd (lista z podglądem). Usunięcie tej linii przywraca poprzedni wygląd.
+import "./nowy-wyglad.css";
 
 export const metadata: Metadata = {
   title: APP_NAME,

@@ -12,7 +12,8 @@ test("workspace uses one live-route hierarchy across sidebar, tabs and command s
   ]);
 
   assert.match(shell, /id: "portfolio", label: "Portfel"/);
-  assert.match(shell, /label: "Dywidendy i gotówka"/);
+  assert.match(shell, /label: "Dywidendy"/);
+  assert.match(shell, /label: "Gotówka"/);
   assert.match(shell, /id: "analysis", label: "Analiza"/);
   assert.match(shell, /id: "market", label: "Rynek"/);
   assert.match(shell, /label: "Obserwowane"/);
@@ -34,7 +35,7 @@ test("command search and quick actions only target existing workspace flows", as
   assert.match(shell, /event\.key\.toLocaleLowerCase\(\) === "k"/);
   assert.match(shell, /role="listbox"/);
   assert.match(shell, /onQuickAdd\(\)/);
-  assert.match(shell, /getWorkspaceHref\("\/portfolio\/dividends"\)/);
+  assert.match(shell, /getWorkspaceHref\("\/portfolio\/cash"\)/);
   assert.match(shell, /getWorkspaceHref\("\/portfolio\/import"\)/);
   assert.doesNotMatch(shell, /fetch\(/);
 });

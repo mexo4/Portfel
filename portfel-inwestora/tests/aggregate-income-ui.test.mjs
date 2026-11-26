@@ -15,13 +15,11 @@ test("aggregate income view separates dividends from cash and preserves scope co
     readFile(new URL("../src/components/DividendIncomeDashboard.tsx", import.meta.url), "utf8"),
   ]);
 
-  assert.match(route, /useState<"dividends" \| "cash">\("dividends"\)/);
-  assert.match(route, /if \(!workspace\.isAllPortfoliosSelected\) return[\s\S]*?workspace\.incomeWorkspace/);
-  assert.match(route, /role="group" aria-label="Widok dywidend i gotówki"/);
-  assert.match(route, /aria-pressed=\{aggregateIncomeView === "dividends"\}/);
-  assert.match(route, /aria-pressed=\{aggregateIncomeView === "cash"\}/);
-  const dividendBranchStart = route.indexOf('aggregateIncomeView === "dividends" ? (');
-  const dividendBranchEnd = route.indexOf(") : null}", dividendBranchStart);
+  // Dywidendy and Gotówka are separate pages: one view each, no switch between them.
+  assert.match(route, /if \(!workspace\.isAllPortfoliosSelected\) return[\s\S]*?withIncomeView\(workspace\.incomeWorkspace, "dividends"\)/);
+  assert.doesNotMatch(route, /aggregateIncomeView/);
+  const dividendBranchStart = route.indexOf("export function WorkspaceDividendsPage");
+  const dividendBranchEnd = route.indexOf("export function WorkspaceImportPage", dividendBranchStart);
   assert.notEqual(dividendBranchStart, -1);
   assert.notEqual(dividendBranchEnd, -1);
   const dividendBranch = route.slice(dividendBranchStart, dividendBranchEnd);
@@ -33,13 +31,12 @@ test("aggregate income view separates dividends from cash and preserves scope co
   assert.match(dividendBranch, /mode="aggregate"/);
   assert.doesNotMatch(dividendBranch, /workspace-performance-metric-grid|Wybierz portfel do zmian/);
   assert.match(dividendBranch, /UpcomingDividendsPanel[\s\S]*?AggregateDividendHistory \/>/);
-  assert.doesNotMatch(dividendBranch, /workspace\.incomeWorkspace/);
-  const cashPanelStart = route.indexOf('<div className="workspace-aggregate-cash-view"', dividendBranchEnd);
-  const nextRoutePage = route.indexOf("export function WorkspaceImportPage", cashPanelStart);
-  const cashPanel = route.slice(cashPanelStart, nextRoutePage);
-  assert.notEqual(cashPanelStart, -1);
-  assert.match(cashPanel, /hidden=\{aggregateIncomeView !== "cash"\}[\s\S]*?\{workspace\.incomeWorkspace\}/);
-  assert.doesNotMatch(cashPanel, /UpcomingDividendsPanel|AggregateDividendHistory/);
+  assert.doesNotMatch(dividendBranch, /\{workspace\.incomeWorkspace\}/);
+  const cashPageStart = route.indexOf("export function WorkspaceCashPage");
+  const cashPage = route.slice(cashPageStart, route.indexOf("export function", cashPageStart + 10));
+  assert.notEqual(cashPageStart, -1);
+  assert.match(cashPage, /withIncomeView\(workspace\.incomeWorkspace, "cash"\)/);
+  assert.doesNotMatch(cashPage, /UpcomingDividendsPanel|AggregateDividendHistory/);
   assert.match(route, /workspace\.portfolioScopeLabel/);
 
   // Cash remains aggregate-read-only and keeps each balance/history row tied to its source portfolio.

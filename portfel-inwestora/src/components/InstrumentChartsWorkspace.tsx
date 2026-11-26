@@ -1,5 +1,6 @@
 "use client";
 
+import { useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { CartesianGrid, ComposedChart, Line, LineChart, ReferenceLine, ResponsiveContainer, Scatter, Tooltip, XAxis, YAxis, ZAxis } from "recharts";
 import { usePortfolioWorkspace } from "@/components/PortfolioWorkspaceContext";
@@ -8,6 +9,7 @@ import {
   averagePriceOn,
   buildComparisonRows,
   buildInstrumentTimeline,
+  instrumentKeyOf,
   listChartInstruments,
   priceExtremes,
   type ChartInstrument,
@@ -15,6 +17,7 @@ import {
   type PricePoint,
 } from "@/lib/instrument-chart";
 import { formatCurrency, formatDate } from "@/lib/utils";
+import type { InvestmentPortfolio } from "@/types/portfolio";
 
 const PRICE = "#13314a";
 const BUY = "#087657";
@@ -166,13 +169,9 @@ function PriceTooltip({ active, payload, currency, tradesByDate }: { active?: bo
   );
 }
 
-function InstrumentChart({ instruments }: { instruments: ChartInstrument[] }) {
-  const { selectedPortfolios } = usePortfolioWorkspace();
-  const [selectedKey, setSelectedKey] = useState<string>(instruments[0]?.key ?? "");
-  const [range, setRange] = useState<RangeKey>("ALL");
+/** Price history, trades and the average purchase price of one instrument, for the chart. */
+export function useInstrumentChartData(instrument: ChartInstrument | undefined, portfolios: InvestmentPortfolio[], range: RangeKey) {
   const [state, setState] = useState<{ key: string; result: SeriesResult | null; error: string | null } | null>(null);
-  const instrument = instruments.find((item) => item.key === selectedKey) ?? instruments[0];
-  const isNarrow = useNarrowScreen();
 
   useEffect(() => {
     if (!instrument) return;
@@ -183,7 +182,7 @@ function InstrumentChart({ instruments }: { instruments: ChartInstrument[] }) {
     return () => { cancelled = true; };
   }, [instrument]);
 
-  const timeline = useMemo(() => (instrument ? buildInstrumentTimeline(selectedPortfolios, instrument) : null), [instrument, selectedPortfolios]);
+  const timeline = useMemo(() => (instrument ? buildInstrumentTimeline(portfolios, instrument) : null), [instrument, portfolios]);
   const current = state && instrument && state.key === instrument.key ? state : null;
   const start = instrument ? rangeStart(range, instrument.firstTradeDate) : "";
   const points = useMemo(() => (current?.result?.points ?? []).filter((point) => point.date >= start), [current, start]);
@@ -196,6 +195,70 @@ function InstrumentChart({ instruments }: { instruments: ChartInstrument[] }) {
     for (const trade of timeline?.trades ?? []) map.set(trade.date, [...(map.get(trade.date) ?? []), trade]);
     return map;
   }, [timeline]);
+
+  return { current, timeline, points, rows, extremes, lastDate, markers, tradesByDate };
+}
+
+type ChartData = ReturnType<typeof useInstrumentChartData>;
+
+/** The price line with purchases (+), sales (−), the average purchase price and max/min. */
+export function InstrumentPriceChartBody({ instrument, data, height }: { instrument: ChartInstrument; data: ChartData; height?: number }) {
+  const isNarrow = useNarrowScreen();
+  const { current, points, rows, extremes, lastDate, markers, tradesByDate, timeline } = data;
+  const currency = instrument.marketCurrency;
+  const lastPrice = extremes?.last.close ?? null;
+  const buys = timeline?.trades.filter((trade) => trade.side === "buy").length ?? 0;
+  const sells = (timeline?.trades.length ?? 0) - buys;
+  if (!current) return <p className="empty-row mt-4">Wczytywanie notowań…</p>;
+  if (current.error || points.length === 0) return <p className="empty-row mt-4">{current.error ?? "Brak notowań tego waloru w wybranym zakresie."}</p>;
+  return (
+    <div className="instrument-chart mt-3" style={height ? { height } : undefined} role="img" aria-label={`Kurs ${instrument.name} od ${formatDate(points[0]!.date)} do ${formatDate(lastDate)}: ${buys} zakupów i ${sells} sprzedaży zaznaczonych na wykresie.`}>
+      <ResponsiveContainer width="100%" height="100%">
+        <ComposedChart margin={{ top: 16, right: 8, bottom: 0, left: 4 }}>
+          <CartesianGrid stroke="rgba(20, 35, 48, 0.08)" strokeDasharray="3 10" vertical={false} />
+          <XAxis dataKey="t" type="number" scale="time" domain={[toTime(points[0]!.date), toTime(lastDate)]} ticks={monthTicks(toTime(points[0]!.date), toTime(lastDate), isNarrow ? 4 : 7)} axisLine={false} tickLine={false} tick={AXIS} tickFormatter={monthTick} allowDuplicatedCategory={false} />
+          <YAxis type="number" domain={["auto", "auto"]} axisLine={false} tickLine={false} tick={AXIS} orientation="right" width={64} tickFormatter={(value: number) => percentFormatter.format(value)} />
+          <ZAxis dataKey="amount" type="number" range={[60, 520]} />
+          <Tooltip content={<PriceTooltip currency={currency} tradesByDate={tradesByDate} />} cursor={{ stroke: "rgba(20, 35, 48, 0.16)", strokeDasharray: "6 8" }} wrapperStyle={{ outline: "none", zIndex: 20 }} />
+          {extremes ? (
+            <>
+              <ReferenceLine y={extremes.max.close} stroke={MAX} strokeWidth={1.5} label={{ value: `max ${percentFormatter.format(extremes.max.close)}`, position: "insideTopLeft", fill: MAX, fontSize: 11, fontWeight: 700 }} />
+              <ReferenceLine y={extremes.min.close} stroke={MIN} strokeWidth={1.5} label={{ value: `min ${percentFormatter.format(extremes.min.close)}`, position: "insideBottomLeft", fill: MIN, fontSize: 11, fontWeight: 700 }} />
+            </>
+          ) : null}
+          <Line data={rows} dataKey="close" type="linear" stroke={PRICE} strokeWidth={2} dot={false} isAnimationActive={false} name="Kurs" />
+          <Line data={rows} dataKey="average" type="stepAfter" stroke={BUY} strokeWidth={2} strokeDasharray="6 4" dot={false} connectNulls={false} isAnimationActive={false} name="Średnia cena kupna" />
+          <Scatter data={markers} dataKey="price" shape={<TradeShape />} isAnimationActive={false} name="Transakcje" />
+          {lastPrice !== null ? <ReferenceLine y={lastPrice} stroke="transparent" label={{ value: `ostatni ${percentFormatter.format(lastPrice)}`, position: "insideBottomRight", fill: PRICE, fontSize: 11, fontWeight: 800 }} /> : null}
+        </ComposedChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+export function InstrumentChartLegend() {
+  return (
+    <ul className="instrument-legend" aria-label="Legenda">
+      <li><i className="is-line" style={{ background: PRICE }} />Kurs</li>
+      <li><i className="is-dot" style={{ background: BUY }}>+</i>Kupno</li>
+      <li><i className="is-dot" style={{ background: SELL }}>−</i>Sprzedaż</li>
+      <li><i className="is-dash" style={{ borderColor: BUY }} />Średnia cena kupna</li>
+      <li><i className="is-line" style={{ background: MAX }} />Maksimum</li>
+      <li><i className="is-line" style={{ background: MIN }} />Minimum</li>
+    </ul>
+  );
+}
+
+export { RangePicker };
+export type { RangeKey };
+
+function InstrumentChart({ instruments, initialKey }: { instruments: ChartInstrument[]; initialKey?: string }) {
+  const { selectedPortfolios } = usePortfolioWorkspace();
+  const [selectedKey, setSelectedKey] = useState<string>(initialKey && instruments.some((item) => item.key === initialKey) ? initialKey : instruments[0]?.key ?? "");
+  const [range, setRange] = useState<RangeKey>("ALL");
+  const instrument = instruments.find((item) => item.key === selectedKey) ?? instruments[0];
+  const data = useInstrumentChartData(instrument, selectedPortfolios, range);
+  const { current, extremes, timeline } = data;
 
   if (!instrument || !timeline) return null;
   const currency = instrument.marketCurrency;
@@ -225,43 +288,10 @@ function InstrumentChart({ instruments }: { instruments: ChartInstrument[] }) {
 
       <div className="instrument-chart-toolbar mt-4">
         <RangePicker value={range} onChange={setRange} label="Zakres wykresu waloru" />
-        <ul className="instrument-legend" aria-label="Legenda">
-          <li><i className="is-line" style={{ background: PRICE }} />Kurs</li>
-          <li><i className="is-dot" style={{ background: BUY }}>+</i>Kupno</li>
-          <li><i className="is-dot" style={{ background: SELL }}>−</i>Sprzedaż</li>
-          <li><i className="is-dash" style={{ borderColor: BUY }} />Średnia cena kupna</li>
-          <li><i className="is-line" style={{ background: MAX }} />Maksimum</li>
-          <li><i className="is-line" style={{ background: MIN }} />Minimum</li>
-        </ul>
+        <InstrumentChartLegend />
       </div>
 
-      {!current ? (
-        <p className="empty-row mt-4">Wczytywanie notowań…</p>
-      ) : current.error || points.length === 0 ? (
-        <p className="empty-row mt-4">{current.error ?? "Brak notowań tego waloru w wybranym zakresie."}</p>
-      ) : (
-        <div className="instrument-chart mt-3" role="img" aria-label={`Kurs ${instrument.name} od ${formatDate(points[0]!.date)} do ${formatDate(lastDate)}: ${buys} zakupów i ${sells} sprzedaży zaznaczonych na wykresie.`}>
-          <ResponsiveContainer width="100%" height="100%">
-            <ComposedChart margin={{ top: 16, right: 8, bottom: 0, left: 4 }}>
-              <CartesianGrid stroke="rgba(20, 35, 48, 0.08)" strokeDasharray="3 10" vertical={false} />
-              <XAxis dataKey="t" type="number" scale="time" domain={[toTime(points[0]!.date), toTime(lastDate)]} ticks={monthTicks(toTime(points[0]!.date), toTime(lastDate), isNarrow ? 4 : 7)} axisLine={false} tickLine={false} tick={AXIS} tickFormatter={monthTick} allowDuplicatedCategory={false} />
-              <YAxis type="number" domain={["auto", "auto"]} axisLine={false} tickLine={false} tick={AXIS} orientation="right" width={64} tickFormatter={(value: number) => percentFormatter.format(value)} />
-              <ZAxis dataKey="amount" type="number" range={[60, 520]} />
-              <Tooltip content={<PriceTooltip currency={currency} tradesByDate={tradesByDate} />} cursor={{ stroke: "rgba(20, 35, 48, 0.16)", strokeDasharray: "6 8" }} wrapperStyle={{ outline: "none", zIndex: 20 }} />
-              {extremes ? (
-                <>
-                  <ReferenceLine y={extremes.max.close} stroke={MAX} strokeWidth={1.5} label={{ value: `max ${percentFormatter.format(extremes.max.close)}`, position: "insideTopLeft", fill: MAX, fontSize: 11, fontWeight: 700 }} />
-                  <ReferenceLine y={extremes.min.close} stroke={MIN} strokeWidth={1.5} label={{ value: `min ${percentFormatter.format(extremes.min.close)}`, position: "insideBottomLeft", fill: MIN, fontSize: 11, fontWeight: 700 }} />
-                </>
-              ) : null}
-              <Line data={rows} dataKey="close" type="linear" stroke={PRICE} strokeWidth={2} dot={false} isAnimationActive={false} name="Kurs" />
-              <Line data={rows} dataKey="average" type="stepAfter" stroke={BUY} strokeWidth={2} strokeDasharray="6 4" dot={false} connectNulls={false} isAnimationActive={false} name="Średnia cena kupna" />
-              <Scatter data={markers} dataKey="price" shape={<TradeShape />} isAnimationActive={false} name="Transakcje" />
-              {lastPrice !== null ? <ReferenceLine y={lastPrice} stroke="transparent" label={{ value: `ostatni ${percentFormatter.format(lastPrice)}`, position: "insideBottomRight", fill: PRICE, fontSize: 11, fontWeight: 800 }} /> : null}
-            </ComposedChart>
-          </ResponsiveContainer>
-        </div>
-      )}
+      <InstrumentPriceChartBody instrument={instrument} data={data} />
 
       <div className="risk-metric-grid risk-metric-grid-summary mt-4">
         <article className="risk-metric-card"><div className="risk-metric-label"><span>Ostatni kurs</span></div><strong>{lastPrice === null ? "—" : formatCurrency(lastPrice, currency)}</strong><small>{extremes ? formatDate(extremes.last.date) : "brak notowań"}</small></article>
@@ -319,7 +349,7 @@ function InstrumentComparison({ instruments }: { instruments: ChartInstrument[] 
   const { groupedAssets } = usePortfolioWorkspace();
   const defaultKeys = useMemo(() => {
     const byValue = new Map<string, number>();
-    for (const group of groupedAssets) byValue.set(group.key, (byValue.get(group.key) ?? 0) + group.totalValuePln);
+    for (const group of groupedAssets) byValue.set(instrumentKeyOf(group), (byValue.get(instrumentKeyOf(group)) ?? 0) + group.totalValuePln);
     return instruments.filter((item) => item.isOpen).sort((left, right) => (byValue.get(right.key) ?? 0) - (byValue.get(left.key) ?? 0)).slice(0, 4).map((item) => item.key);
   }, [groupedAssets, instruments]);
   const [chosen, setChosen] = useState<string[] | null>(null);
@@ -413,6 +443,7 @@ function InstrumentComparison({ instruments }: { instruments: ChartInstrument[] 
 export default function InstrumentChartsWorkspace() {
   const { selectedPortfolios } = usePortfolioWorkspace();
   const instruments = useMemo(() => listChartInstruments(selectedPortfolios), [selectedPortfolios]);
+  const initialKey = useSearchParams().get("instrument") ?? undefined;
 
   if (instruments.length === 0) {
     return <section className="panel"><p className="empty-row">Dodaj akcje, ETF lub kryptowaluty, aby zobaczyć ich wykresy. Obligacje skarbowe nie mają notowań rynkowych.</p></section>;
@@ -420,7 +451,7 @@ export default function InstrumentChartsWorkspace() {
 
   return (
     <div className="reports-workspace">
-      <InstrumentChart instruments={instruments} />
+      <InstrumentChart key={initialKey ?? "first"} instruments={instruments} initialKey={initialKey} />
       <InstrumentComparison instruments={instruments} />
     </div>
   );

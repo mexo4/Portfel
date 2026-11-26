@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { cloneElement, isValidElement, useEffect, useMemo, useState, type ReactNode } from "react";
 import AssetTable from "@/components/AssetTable";
 import ClosedInvestmentsWorkspace from "@/components/ClosedInvestmentsWorkspace";
 import ConfigurableDashboard from "@/components/ConfigurableDashboard";
@@ -17,6 +17,7 @@ import PortfolioCharts from "@/components/PortfolioCharts";
 import PortfolioLineCharts from "@/components/PortfolioLineCharts";
 import PortfolioPerformanceResults from "@/components/PortfolioPerformanceResults";
 import PortfolioPositionCards from "@/components/PortfolioPositionCards";
+import PositionsWorkspace from "@/components/PositionsWorkspace";
 import ReportsWorkspace from "@/components/ReportsWorkspace";
 import TaxReportWorkspace from "@/components/TaxReportWorkspace";
 import { usePortfolioWorkspace } from "@/components/PortfolioWorkspaceContext";
@@ -77,7 +78,21 @@ export function WorkspacePositionsPage() {
     if (isAddAssetOpen) resetAssetEntryForm();
     return () => { if (isAddAssetOpen) resetAssetEntryForm(); };
   }, [isAddAssetOpen, resetAssetEntryForm]);
-  return <div className="workspace-page"><section className="workspace-page-actions"><p>{workspace.isAllPortfoliosSelected ? "Dodaj operację do jednego portfela z aktualnego zakresu. Pozycje i loty pozostają rozdzielone między portfelami." : isAddAssetOpen ? "Formularz operacji jest otwarty." : "Zarządzaj pozycjami i przeglądaj ich bieżącą wycenę."}</p><Link href={workspace.getReadHref(isAddAssetOpen ? "/portfolio/positions" : "/portfolio/positions?add=asset")} className="primary-button">{isAddAssetOpen ? "Zamknij formularz" : "Dodaj transakcję"}</Link></section>{workspace.displayedSyncError ? <p className="field-note field-note-error">{workspace.displayedSyncError}</p> : null}{isAddAssetOpen ? workspace.assetEntryWorkspace : null}<div className="workspace-desktop-only"><AssetTable assets={workspace.assets} groups={workspace.groupedAssets} fxRates={workspace.fxRates} baseCurrency={workspace.activeBaseCurrency} filter={workspace.filter} sortMode={workspace.assetSortMode} isRefreshing={workspace.isRefreshing} isReadOnly={workspace.isAllPortfoliosSelected} isManualPricePending={workspace.isManualPricePending} manualPriceError={workspace.manualPriceError} onUpdateManualPrice={workspace.onUpdateManualPrice} onClearManualPrice={workspace.onClearManualPrice} onFilterChange={workspace.onFilterChange} onSortModeChange={workspace.onSortModeChange} onReorderGroups={workspace.onReorderGroups} onRemove={workspace.onRemoveAsset} /></div><div className="workspace-mobile-only"><PortfolioPositionCards assets={workspace.assets} groups={workspace.groupedAssets} fxRates={workspace.fxRates} baseCurrency={workspace.activeBaseCurrency} filter={workspace.filter} sortMode={workspace.assetSortMode} isRefreshing={workspace.isRefreshing} isManualPricePending={workspace.isManualPricePending} manualPriceError={workspace.manualPriceError} onUpdateManualPrice={workspace.onUpdateManualPrice} onClearManualPrice={workspace.onClearManualPrice} onSortModeChange={workspace.onSortModeChange} onRemove={workspace.onRemoveAsset} /></div></div>;
+  const [view, setView] = useState<"list" | "table">(() => {
+    try { return typeof window !== "undefined" && window.localStorage.getItem("mexo.positions.view") === "table" ? "table" : "list"; } catch { return "list"; }
+  });
+  const changeView = (next: "list" | "table") => { setView(next); try { window.localStorage.setItem("mexo.positions.view", next); } catch { /* the choice is a convenience */ } };
+  const toolbar = <><div className="view-switch" role="group" aria-label="Widok pozycji"><button type="button" aria-pressed={view === "list"} onClick={() => changeView("list")}>Lista z podglądem</button><button type="button" aria-pressed={view === "table"} onClick={() => changeView("table")}>Tabela</button></div><Link href={workspace.getReadHref(isAddAssetOpen ? "/portfolio/positions" : "/portfolio/positions?add=asset")} className="primary-button">{isAddAssetOpen ? "Zamknij formularz" : "Dodaj transakcję"}</Link></>;
+  return <div className="workspace-page">{view === "table" || isAddAssetOpen ? <section className="workspace-page-actions positions-toolbar">{toolbar}</section> : null}{workspace.displayedSyncError ? <p className="field-note field-note-error">{workspace.displayedSyncError}</p> : null}{isAddAssetOpen ? workspace.assetEntryWorkspace : null}{view === "list" ? <PositionsWorkspace toolbar={isAddAssetOpen ? undefined : toolbar} /> : <><div className="workspace-desktop-only"><AssetTable assets={workspace.assets} groups={workspace.groupedAssets} fxRates={workspace.fxRates} baseCurrency={workspace.activeBaseCurrency} filter={workspace.filter} sortMode={workspace.assetSortMode} isRefreshing={workspace.isRefreshing} isReadOnly={workspace.isAllPortfoliosSelected} isManualPricePending={workspace.isManualPricePending} manualPriceError={workspace.manualPriceError} onUpdateManualPrice={workspace.onUpdateManualPrice} onClearManualPrice={workspace.onClearManualPrice} onFilterChange={workspace.onFilterChange} onSortModeChange={workspace.onSortModeChange} onReorderGroups={workspace.onReorderGroups} onRemove={workspace.onRemoveAsset} /></div><div className="workspace-mobile-only"><PortfolioPositionCards assets={workspace.assets} groups={workspace.groupedAssets} fxRates={workspace.fxRates} baseCurrency={workspace.activeBaseCurrency} filter={workspace.filter} sortMode={workspace.assetSortMode} isRefreshing={workspace.isRefreshing} isManualPricePending={workspace.isManualPricePending} manualPriceError={workspace.manualPriceError} onUpdateManualPrice={workspace.onUpdateManualPrice} onClearManualPrice={workspace.onClearManualPrice} onSortModeChange={workspace.onSortModeChange} onRemove={workspace.onRemoveAsset} /></div></>}</div>;
+}
+
+/** The income workspace shows one view per page: Dywidendy and Gotówka are separate pages. */
+const withIncomeView = (element: ReactNode, view: "dividends" | "cash") =>
+  isValidElement<{ view?: "dividends" | "cash" }>(element) ? cloneElement(element, { view }) : element;
+
+export function WorkspaceCashPage() {
+  const workspace = usePortfolioWorkspace();
+  return <div className="workspace-page">{withIncomeView(workspace.incomeWorkspace, "cash")}</div>;
 }
 
 export function WorkspaceOperationsPage() {
@@ -87,14 +102,13 @@ export function WorkspaceOperationsPage() {
 
 export function WorkspaceDividendsPage() {
   const workspace = usePortfolioWorkspace();
-  const [aggregateIncomeView, setAggregateIncomeView] = useState<"dividends" | "cash">("dividends");
   const aggregateDividends = useMemo(() => workspace.selectedPortfolios.flatMap((portfolio) =>
     getPortfolioDividends(ensurePortfolioCoreModel(portfolio), workspace.fxRates)
   ), [workspace.fxRates, workspace.selectedPortfolios]);
   const eventScopeProps = workspace.portfolioScope.mode === "CUSTOM"
     ? { portfolioId: "custom", portfolioIds: workspace.selectedPortfolioIds }
     : { portfolioId: workspace.isAllRealPortfoliosSelected ? "all" : workspace.activePortfolioId, portfolioIds: undefined };
-  if (!workspace.isAllPortfoliosSelected) return <div className="workspace-page">{workspace.incomeWorkspace}</div>;
+  if (!workspace.isAllPortfoliosSelected) return <div className="workspace-page">{withIncomeView(workspace.incomeWorkspace, "dividends")}</div>;
   return (
     <div className="workspace-page workspace-aggregate-income-page">
       <section className="workspace-page-actions workspace-aggregate-income-controls">
@@ -103,22 +117,8 @@ export function WorkspaceDividendsPage() {
           <p className="section-copy">{workspace.portfolioScopeLabel} · {workspace.selectedPortfolios.length} {workspace.selectedPortfolios.length === 1 ? "portfel" : "portfeli"} · widok łączny, bez mieszania rachunków źródłowych</p>
         </div>
         <span className="income-currency-tag">Waluta prezentacji <strong>{workspace.presentationCurrency}</strong></span>
-        <div className="workspace-subnav workspace-aggregate-income-tabs" role="group" aria-label="Widok dywidend i gotówki">
-          <button
-            type="button"
-            className={aggregateIncomeView === "dividends" ? "is-active" : ""}
-            aria-pressed={aggregateIncomeView === "dividends"}
-            onClick={() => setAggregateIncomeView("dividends")}
-          >Dywidendy</button>
-          <button
-            type="button"
-            className={aggregateIncomeView === "cash" ? "is-active" : ""}
-            aria-pressed={aggregateIncomeView === "cash"}
-            onClick={() => setAggregateIncomeView("cash")}
-          >Gotówka</button>
-        </div>
       </section>
-      {aggregateIncomeView === "dividends" ? (
+      {(
         <>
           <DividendIncomeDashboard
             dividends={aggregateDividends}
@@ -132,10 +132,7 @@ export function WorkspaceDividendsPage() {
           <UpcomingDividendsPanel key={`${workspace.portfolioScopeLabel}:${workspace.selectedPortfolioIds.join(",")}`} {...eventScopeProps} presentationCurrency={workspace.presentationCurrency} fxRates={workspace.fxRates} verifiedFxCurrencies={workspace.verifiedFxCurrencies} />
           <AggregateDividendHistory />
         </>
-      ) : null}
-      <div className="workspace-aggregate-cash-view" hidden={aggregateIncomeView !== "cash"}>
-        {workspace.incomeWorkspace}
-      </div>
+      )}
     </div>
   );
 }

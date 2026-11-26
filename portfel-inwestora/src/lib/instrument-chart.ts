@@ -50,6 +50,13 @@ export type InstrumentTimeline = {
   averagePriceSteps: AveragePriceStep[];
 };
 
+/**
+ * The instrument key of a holding group. In the all-portfolios view a group key is
+ * `portfolioId:groupKey`, so the same instrument in two portfolios has two group keys.
+ */
+export const instrumentKeyOf = (group: { key: string; portfolioId?: string }) =>
+  group.portfolioId && group.key.startsWith(`${group.portfolioId}:`) ? group.key.slice(group.portfolioId.length + 1) : group.key;
+
 const saleKey = (sale: PortfolioSale) => sale.assetKey || getPortfolioAssetGroupKey(sale);
 
 /** Holdings that have a market price (bonds have none), open ones first, then by name. */

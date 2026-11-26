@@ -349,7 +349,7 @@ export default function AppWorkspaceShell({ account, portfolios, selectedPortfol
           <header className="workspace-page-header"><div><span className="workspace-breadcrumb">{meta.breadcrumb}</span><h1>{meta.title} <span className="workspace-page-help" title={meta.description} aria-label={`O stronie: ${meta.description}`} role="img">?</span></h1><p>{meta.description}</p></div></header>
           {showSectionTabs ? <nav className="workspace-section-tabs" aria-label={`Sekcja ${currentNavigationGroup.label}`}>{currentNavigationGroup.items.map((item) => <Link key={item.key} href={getWorkspaceHref(item.href)} prefetch={false} className={route === item.key ? "is-active" : undefined} aria-current={route === item.key ? "page" : undefined}>{item.label}</Link>)}</nav> : null}
         </div>
-        {doubleCounted ? <div className="workspace-warning"><p role="alert">Widok łączny liczy te same operacje brokera dwa razy ({doubleCounted.count}) w portfelach {doubleCounted.portfolioNames.map((name) => `„${name}”`).join(" i ")}, więc zysk i wartość są zawyżone. Usuń jeden z tych portfeli albo oglądaj je osobno.</p><Link href={getWorkspaceHref("/portfolios")} prefetch={false}>Przejdź do portfeli</Link></div> : null}
+        {doubleCounted ? <div className="workspace-warning"><p role="alert">W portfelach {doubleCounted.portfolioNames.map((name) => `„${name}”`).join(" i ")} są te same operacje brokera (liczba: {doubleCounted.count}). Widok łączny liczy je dwa razy, więc zysk i wartość są zawyżone. Usuń jeden z tych portfeli albo oglądaj je osobno.</p><Link href={getWorkspaceHref("/portfolios")} prefetch={false}>Przejdź do portfeli</Link></div> : null}
         {children}
       </main>
     </div>

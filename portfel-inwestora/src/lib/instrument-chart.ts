@@ -219,6 +219,65 @@ export const averagePriceOn = (steps: AveragePriceStep[], date: string) => {
 
 export type PricePoint = { date: string; close: number };
 
+/** One session as the exchange printed it: not adjusted for dividends, so trades sit on it. */
+export type Candle = { date: string; open: number; high: number; low: number; close: number };
+
+export type CandleInterval = "D" | "W" | "M";
+
+/** A drawn candle: one session, or a week or month of sessions joined into one. */
+export type CandleBar = Candle & {
+  /** First and last session inside the bar. */
+  from: string;
+  to: string;
+};
+
+/** The shortest interval that still leaves candles wide enough to tell apart. */
+export const pickCandleInterval = (sessions: number, maxBars: number): CandleInterval =>
+  sessions <= maxBars ? "D" : sessions / 5 <= maxBars ? "W" : "M";
+
+/** The Monday of a date's week, or its month. */
+const bucketOf = (date: string, interval: CandleInterval) => {
+  if (interval === "D") return date;
+  if (interval === "M") return date.slice(0, 7);
+  const value = new Date(`${date}T00:00:00.000Z`);
+  value.setUTCDate(value.getUTCDate() - ((value.getUTCDay() + 6) % 7));
+  return value.toISOString().slice(0, 10);
+};
+
+/** Opens with the first session, closes with the last, keeps the highest and lowest price. */
+export const aggregateCandles = (candles: Candle[], interval: CandleInterval): CandleBar[] => {
+  const bars: CandleBar[] = [];
+  let bucket = "";
+  for (const candle of candles) {
+    const next = bucketOf(candle.date, interval);
+    const current = bars.at(-1);
+    if (current && next === bucket) {
+      current.high = Math.max(current.high, candle.high);
+      current.low = Math.min(current.low, candle.low);
+      current.close = candle.close;
+      current.date = candle.date;
+      current.to = candle.date;
+    } else {
+      bucket = next;
+      bars.push({ ...candle, from: candle.date, to: candle.date });
+    }
+  }
+  return bars;
+};
+
+/**
+ * The bar a trade belongs to: the last one that starts on or before the trade's day, so a trade
+ * booked on a day without a session joins the session before it. `null` before the first bar.
+ */
+export const findCandleBar = (bars: CandleBar[], date: string) => {
+  let found: CandleBar | null = null;
+  for (const bar of bars) {
+    if (bar.from > date) break;
+    found = bar;
+  }
+  return found;
+};
+
 /** Highest and lowest close in a range, with their dates. */
 export const priceExtremes = (points: PricePoint[]) => {
   if (points.length === 0) return null;

@@ -2,6 +2,7 @@ import { inferCurrencyFromSymbol, normalizeSymbol } from "@/lib/ticker";
 import { normalizeProviderInstrumentType } from "@/lib/instrument-classification";
 import { logProviderHttpFailure } from "@/lib/server/provider-diagnostics";
 import { normalizeText, round, toCurrencyCode, uniqueBy } from "@/lib/utils";
+import type { Candle } from "@/lib/instrument-chart";
 import type { AssetQuote, AssetSearchResult, CurrencyCode } from "@/types/portfolio";
 
 type YahooSearchResponse = {
@@ -36,6 +37,9 @@ type YahooChartResponse = {
       timestamp?: number[];
       indicators?: {
         quote?: Array<{
+          open?: Array<number | null>;
+          high?: Array<number | null>;
+          low?: Array<number | null>;
           close?: Array<number | null>;
         }>;
         adjclose?: Array<{
@@ -670,6 +674,8 @@ export const searchYahooEtfs = async (query: string): Promise<YahooEtfSearchItem
 
 export type YahooDailyHistory = {
   points: Array<{ date: string; close: number }>;
+  /** The same days with open, high and low, in Yahoo's own money unit. */
+  candles?: Candle[];
   currency?: string;
   instrumentType?: string;
   /** Yahoo's own name for the symbol, e.g. "Chainlink USD". */
@@ -711,27 +717,36 @@ export const fetchYahooDailyHistory = async ({
   }
 
   const timestamps = result.timestamp ?? [];
-  const closes = result.indicators?.quote?.[0]?.close ?? [];
+  const quote = result.indicators?.quote?.[0];
+  const closes = quote?.close ?? [];
   const closeByDate = new Map<string, number>();
+  const candleByDate = new Map<string, Candle>();
+  const positive = (value: number | null | undefined) =>
+    typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
 
   timestamps.forEach((timestamp, index) => {
-    const close = closes[index];
+    const close = positive(closes[index]);
 
-    if (
-      typeof timestamp === "number" &&
-      Number.isFinite(timestamp) &&
-      typeof close === "number" &&
-      Number.isFinite(close) &&
-      close > 0
-    ) {
-      closeByDate.set(new Date(timestamp * 1_000).toISOString().slice(0, 10), close);
+    if (typeof timestamp === "number" && Number.isFinite(timestamp) && close !== null) {
+      const date = new Date(timestamp * 1_000).toISOString().slice(0, 10);
+      closeByDate.set(date, close);
+      // A session without an open, high or low is drawn flat at its close.
+      const open = positive(quote?.open?.[index]) ?? close;
+      candleByDate.set(date, {
+        date,
+        open,
+        high: Math.max(positive(quote?.high?.[index]) ?? close, open, close),
+        low: Math.min(positive(quote?.low?.[index]) ?? close, open, close),
+        close,
+      });
     }
   });
 
+  const byDate = (left: { date: string }, right: { date: string }) => left.date.localeCompare(right.date);
+
   return {
-    points: Array.from(closeByDate, ([date, close]) => ({ date, close })).sort(
-      (left, right) => left.date.localeCompare(right.date)
-    ),
+    points: Array.from(closeByDate, ([date, close]) => ({ date, close })).sort(byDate),
+    candles: Array.from(candleByDate.values()).sort(byDate),
     currency: result.meta?.currency,
     instrumentType: result.meta?.instrumentType,
     name: result.meta?.longName?.trim() || result.meta?.shortName?.trim() || undefined,

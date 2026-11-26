@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Fragment, useEffect, useMemo, useState, type MouseEvent, type ReactNode } from "react";
-import { InstrumentChartLegend, InstrumentPriceChartBody, RangePicker, useInstrumentChartData, type RangeKey } from "@/components/InstrumentChartsWorkspace";
+import { ChartStyleSwitch, InstrumentChartLegend, InstrumentPriceChartBody, RangePicker, useInstrumentChartData, type RangeKey } from "@/components/InstrumentChartsWorkspace";
 import { usePortfolioWorkspace } from "@/components/PortfolioWorkspaceContext";
 import { getAssetEntryHref, getDividendEntryHref, getLatestLot, type AssetEntrySide } from "@/lib/asset-entry-prefill";
 import { getAssetClassGroup } from "@/lib/geographic-allocation";
@@ -78,7 +78,7 @@ function RowActions({ group, showPortfolio, hasAnalysis }: { group: PortfolioAss
   return (
     <span className="positions-row-icons" onClick={(event) => event.stopPropagation()}>
       {actions.map((action) => (
-        <Link key={action.key} href={action.href} prefetch={false} title={action.label} aria-label={`${action.label}: ${group.name}`} onClick={(event: MouseEvent) => applyToOpenForm(action, event)}><Icon name={action.key} /></Link>
+        <Link key={action.key} href={action.href} prefetch={false} className={`action-${action.key}`} title={action.label} aria-label={`${action.label}: ${group.name}`} onClick={(event: MouseEvent) => applyToOpenForm(action, event)}><Icon name={action.key} /></Link>
       ))}
     </span>
   );
@@ -124,7 +124,7 @@ function Preview({ group, showPortfolio }: { group: PortfolioAssetGroup; showPor
         </div>
         <div className="positions-actions">
           {actions.map((action) => (
-            <Link key={action.key} href={action.href} prefetch={false} className={action.key === "buy" ? "primary-button" : "ghost-button"} onClick={(event: MouseEvent) => applyToOpenForm(action, event)}><Icon name={action.key} />{action.shortLabel}</Link>
+            <Link key={action.key} href={action.href} prefetch={false} className={`ghost-button action-${action.key}`} onClick={(event: MouseEvent) => applyToOpenForm(action, event)}><Icon name={action.key} />{action.shortLabel}</Link>
           ))}
         </div>
       </div>
@@ -144,9 +144,12 @@ function Preview({ group, showPortfolio }: { group: PortfolioAssetGroup; showPor
         <section className="positions-card">
           <div className="positions-card-bar">
             <h3>Kurs i Twoje transakcje</h3>
-            <RangePicker value={range} onChange={setRange} label="Zakres wykresu" />
+            <div className="positions-chart-switches">
+              <ChartStyleSwitch />
+              <RangePicker value={range} onChange={setRange} label="Zakres wykresu" />
+            </div>
           </div>
-          <InstrumentChartLegend />
+          <InstrumentChartLegend hasCandles={data.candles.length > 1} />
           <InstrumentPriceChartBody instrument={instrument} data={data} height={300} />
         </section>
       ) : group.kind === "bond" ? (

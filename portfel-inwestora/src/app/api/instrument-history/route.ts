@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentAuthenticatedUser } from "@/lib/server/auth";
+import { fetchInstrumentCandles } from "@/lib/server/instrument-candles";
 import { fetchInstrumentPriceHistory } from "@/lib/server/portfolio-history";
 import { toCurrencyCode } from "@/lib/utils";
 import type { AssetKind, QuoteProvider } from "@/types/portfolio";
@@ -11,6 +12,11 @@ const MAX_INSTRUMENTS = 8;
 const PRICE_KINDS = new Set<AssetKind>(["stock", "etf", "crypto"]);
 const PROVIDERS = new Set<QuoteProvider>(["binance", "finnhub", "stooq", "yahoo", "eodhd", "coingecko", "catalog"]);
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
+/** A series starting this much later than another still counts as reaching as far back. */
+const COVERAGE_TOLERANCE_DAYS = 30;
+
+const shiftDays = (date: string, days: number) =>
+  new Date(Date.parse(`${date}T00:00:00.000Z`) + days * 86_400_000).toISOString().slice(0, 10);
 
 type RequestItem = {
   key?: unknown;
@@ -69,12 +75,25 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Każdy walor musi mieć klucz, symbol i typ: akcja, ETF lub kryptowaluta." }, { status: 400, headers: NO_STORE });
   }
 
+  const inRange = (point: { date: string; close: number }) =>
+    point.date >= startDate && point.date <= today && Number.isFinite(point.close) && point.close > 0;
+
   const series = await Promise.all(
     instruments.map(async ({ key, ...definition }) => {
+      const candles = (await fetchInstrumentCandles(definition, startDate, today)).filter(inRange);
+      // Candles that start about when asked need no second source.
+      if (candles.length > 1 && candles[0]!.date <= shiftDays(startDate, COVERAGE_TOLERANCE_DAYS)) {
+        return { key, points: candles.map(({ date, close }) => ({ date, close })), candles };
+      }
       const result = await fetchInstrumentPriceHistory({ ...definition, purchaseDate: startDate }, startDate, today);
+      const points = result.points.filter(inRange);
+      // A shorter Yahoo series is still used when no other source reaches further back.
+      if (candles.length > 1 && (points.length === 0 || candles[0]!.date <= shiftDays(points[0]!.date, COVERAGE_TOLERANCE_DAYS))) {
+        return { key, points: candles.map(({ date, close }) => ({ date, close })), candles };
+      }
       return {
         key,
-        points: result.points.filter((point) => point.date >= startDate && point.date <= today && Number.isFinite(point.close) && point.close > 0),
+        points,
         ...(result.warning ? { warning: "Nie udało się pobrać historii notowań tego waloru." } : {}),
       };
     })

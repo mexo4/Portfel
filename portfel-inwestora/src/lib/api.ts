@@ -1129,6 +1129,8 @@ export type InstrumentHistoryRequestItem = {
 export type InstrumentHistoryResponseItem = {
   key: string;
   points: Array<{ date: string; close: number }>;
+  /** Present when Yahoo has the instrument's sessions; the points are then their closes. */
+  candles?: Array<{ date: string; open: number; high: number; low: number; close: number }>;
   warning?: string;
 };
 

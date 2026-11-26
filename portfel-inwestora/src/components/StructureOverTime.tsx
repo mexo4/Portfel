@@ -111,7 +111,7 @@ export default function StructureOverTime() {
                 <XAxis dataKey="date" ticks={ticks} interval={0} axisLine={false} tickLine={false} tick={AXIS} tickFormatter={(date: string) => monthTick(toTime(date))} />
                 <YAxis orientation="right" width={56} axisLine={false} tickLine={false} tick={AXIS} domain={unit === "share" ? [0, 100] : [0, "auto"]} allowDataOverflow={unit === "share"} tickFormatter={(value: number) => (unit === "share" ? `${Math.round(value)}%` : compact.format(value))} />
                 <Tooltip content={<StructureTooltip series={series} currency={currency} />} cursor={{ stroke: "#16202a", strokeOpacity: 0.35 }} wrapperStyle={{ outline: "none", zIndex: 20 }} />
-                {series.map((item) => <Area key={item.id} type="linear" dataKey={item.id} name={item.label} stackId="structure" stroke="#ffffff" strokeWidth={1} fill={item.color} fillOpacity={1} isAnimationActive={false} />)}
+                {series.map((item) => <Area key={item.id} type="linear" dataKey={item.id} name={item.label} stackId="structure" stroke="#ffffff" strokeWidth={1.5} fill={item.color} fillOpacity={0.85} isAnimationActive={false} />)}
               </AreaChart>
             </ResponsiveContainer>
           </div>

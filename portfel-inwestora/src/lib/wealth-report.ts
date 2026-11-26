@@ -22,7 +22,7 @@ export type WealthReport = {
   places: WealthReportPlace[];
 };
 
-const CATEGORY_LABELS: Record<WealthReportCategoryKey, string> = {
+export const WEALTH_CATEGORY_LABELS: Record<WealthReportCategoryKey, string> = {
   investments: "Inwestycje na rachunkach",
   "broker-cash": "Gotówka na rachunkach inwestycyjnych",
   deposits: "Lokaty",
@@ -44,6 +44,10 @@ const ITEM_CATEGORY: Partial<Record<WealthCategory, WealthReportCategoryKey>> = 
   art: "valuables",
   collection: "valuables",
 };
+
+/** The report group of one item of the wealth page. */
+export const getWealthReportCategory = (item: Pick<WealthItem, "kind" | "category">): WealthReportCategoryKey =>
+  item.kind === "liability" ? "liabilities" : ITEM_CATEGORY[item.category] ?? "other";
 
 const ACCOUNT_TYPE_LABELS: Record<string, string> = { IKE: "IKE", IKZE: "IKZE", OKI: "OKI" };
 
@@ -87,9 +91,9 @@ export const buildWealthReport = ({
 
   for (const item of wealthItems) {
     const valuePln = round(getWealthItemValue(item, today) * rateToPln(item.currency, fxRates), 2);
-    const key: WealthReportCategoryKey = item.kind === "liability" ? "liabilities" : ITEM_CATEGORY[item.category] ?? "other";
+    const key = getWealthReportCategory(item);
     sums[key] += valuePln;
-    places.push({ id: `wealth:${item.id}`, name: item.name, detail: CATEGORY_LABELS[key] + (item.currency !== "PLN" ? ` · ${item.currency}` : ""), valuePln, isLiability: item.kind === "liability" });
+    places.push({ id: `wealth:${item.id}`, name: item.name, detail: WEALTH_CATEGORY_LABELS[key] + (item.currency !== "PLN" ? ` · ${item.currency}` : ""), valuePln, isLiability: item.kind === "liability" });
   }
 
   const assetsPln = round((Object.keys(sums) as WealthReportCategoryKey[]).filter((key) => key !== "liabilities").reduce((total, key) => total + sums[key], 0), 2);
@@ -98,7 +102,7 @@ export const buildWealthReport = ({
     .filter((key) => Math.abs(sums[key]) >= 0.005)
     .map((key) => ({
       key,
-      label: CATEGORY_LABELS[key],
+      label: WEALTH_CATEGORY_LABELS[key],
       valuePln: round(sums[key], 2),
       // Assets as a share of all assets; liabilities as a share of assets too (how much is owed against them).
       sharePercent: assetsPln > 0 ? round((sums[key] / assetsPln) * 100, 1) : 0,

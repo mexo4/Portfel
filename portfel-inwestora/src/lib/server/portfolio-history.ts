@@ -385,7 +385,7 @@ const getDaysBetween = (startDate: string, endDate: string) => {
   return Math.max(0, Math.floor((end - start) / 86_400_000));
 };
 
-const getCachedOrFetchHistoryRange = async <TPoint extends { date: string }>(
+export const getCachedOrFetchHistoryRange = async <TPoint extends { date: string }>(
   key: string,
   startDate: string,
   endDate: string,
@@ -578,7 +578,7 @@ type YahooChartResponse = {
   };
 };
 
-const toYahooStockSymbol = (symbol: string) => {
+export const toYahooStockSymbol = (symbol: string) => {
   const normalizedSymbol = normalizeSymbol(symbol);
 
   if (isGpwSymbol(normalizedSymbol)) {
@@ -947,6 +947,55 @@ const getGpwScopedHistorySymbols = (symbols: string[], fallbackSymbol: string) =
     )
   );
 
+/** Which symbols and providers stand for a saved holding when its price history is asked for. */
+export const resolveHistoryDefinition = ({
+  kind,
+  symbol,
+  marketCurrency,
+  provider,
+  providerId,
+  priceScale,
+}: Pick<InstrumentHistoryDefinition, "kind" | "symbol" | "marketCurrency" | "provider" | "providerId" | "priceScale">) => {
+  const normalizedSymbol = normalizeSymbol(symbol);
+  const identity = resolveTickerIdentity({
+    symbol: normalizedSymbol,
+    kind,
+    marketCurrency,
+  });
+  const alias = identity.alias ?? resolveTickerAlias(normalizedSymbol, kind);
+  const resolvedKind = identity.kind ?? alias?.kind ?? kind;
+  const resolvedSymbol = normalizeSymbol(identity.symbol);
+  const resolvedMarketCurrency = toCurrencyCode(
+    identity.marketCurrency ?? alias?.marketCurrency ?? marketCurrency,
+    marketCurrency
+  );
+  const resolvedProvider = alias?.provider ?? provider;
+  const resolvedProviderId = identity.providerId ?? alias?.providerId ?? providerId;
+  const resolvedPriceScale = identity.priceScale ?? alias?.priceScale ?? priceScale;
+  const lookupSymbols = getHistoryLookupSymbols({
+    symbol: resolvedSymbol,
+    kind: resolvedKind,
+    marketCurrency: resolvedMarketCurrency,
+    providerId: resolvedProviderId,
+  });
+  const isGpwStockRequest =
+    resolvedKind === "stock" &&
+    (isGpwSymbol(resolvedSymbol) || resolvedMarketCurrency === "PLN");
+
+  return {
+    kind: resolvedKind,
+    symbol: resolvedSymbol,
+    marketCurrency: resolvedMarketCurrency,
+    provider: resolvedProvider,
+    providerId: resolvedProviderId,
+    priceScale: resolvedPriceScale,
+    lookupSymbols,
+    historyLookupSymbols: isGpwStockRequest
+      ? getGpwScopedHistorySymbols(lookupSymbols, resolvedSymbol)
+      : lookupSymbols,
+  };
+};
+
 const fetchInstrumentHistory = async ({
   kind,
   symbol,
@@ -960,34 +1009,16 @@ const fetchInstrumentHistory = async ({
   endDate: string
 ): Promise<InstrumentHistoryResult> => {
   try {
-    const normalizedSymbol = normalizeSymbol(symbol);
-    const identity = resolveTickerIdentity({
-      symbol: normalizedSymbol,
-      kind,
-      marketCurrency,
-    });
-    const alias = identity.alias ?? resolveTickerAlias(normalizedSymbol, kind);
-    const resolvedKind = identity.kind ?? alias?.kind ?? kind;
-    const resolvedSymbol = normalizeSymbol(identity.symbol);
-    const resolvedMarketCurrency = toCurrencyCode(
-      identity.marketCurrency ?? alias?.marketCurrency ?? marketCurrency,
-      marketCurrency
-    );
-    const resolvedProvider = alias?.provider ?? provider;
-    const resolvedProviderId = identity.providerId ?? alias?.providerId ?? providerId;
-    const resolvedPriceScale = identity.priceScale ?? alias?.priceScale ?? priceScale;
-    const lookupSymbols = getHistoryLookupSymbols({
-      symbol: resolvedSymbol,
+    const {
       kind: resolvedKind,
+      symbol: resolvedSymbol,
       marketCurrency: resolvedMarketCurrency,
+      provider: resolvedProvider,
       providerId: resolvedProviderId,
-    });
-    const isGpwStockRequest =
-      resolvedKind === "stock" &&
-      (isGpwSymbol(resolvedSymbol) || resolvedMarketCurrency === "PLN");
-    const historyLookupSymbols = isGpwStockRequest
-      ? getGpwScopedHistorySymbols(lookupSymbols, resolvedSymbol)
-      : lookupSymbols;
+      priceScale: resolvedPriceScale,
+      lookupSymbols,
+      historyLookupSymbols,
+    } = resolveHistoryDefinition({ kind, symbol, marketCurrency, provider, providerId, priceScale });
 
     if (resolvedKind === "bond") {
       const points = await fetchTreasuryBondQuoteSeriesServer({

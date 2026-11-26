@@ -8,8 +8,40 @@
  * i tag stary-wyglad-20261126.
  */
 
+/* Source Sans 3 (SIL OFL 1.1, licence in public/fonts), from @fontsource-variable/source-sans-3
+ * 5.3.1; latin-ext holds the Polish letters. Served by Mexo itself, like the other fonts. */
+@font-face {
+  font-family: "Source Sans 3";
+  font-style: normal;
+  font-weight: 200 900;
+  font-display: swap;
+  src: url("/fonts/source-sans-3-latin-ext-wght-normal.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: "Source Sans 3";
+  font-style: normal;
+  font-weight: 200 900;
+  font-display: swap;
+  src: url("/fonts/source-sans-3-latin-wght-normal.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
 :root {
   --font-sans: "Source Sans 3", "Segoe UI", system-ui, -apple-system, Roboto, "Helvetica Neue", Arial, sans-serif;
+  /* Soft colours of actions: buying green, selling and deleting red, dividends amber. */
+  --buy-text: #0e6b42;
+  --buy-bg: #e7f4ed;
+  --buy-bg-hover: #d6ecdf;
+  --buy-line: #a6d3ba;
+  --sell-text: #a32e25;
+  --sell-bg: #fbedeb;
+  --sell-bg-hover: #f6ddda;
+  --sell-line: #eab8b2;
+  --dividend-text: #825607;
+  --dividend-bg: #fdf4e1;
+  --dividend-bg-hover: #faeac6;
+  --dividend-line: #e8cd93;
   --canvas: #f4f5f7;
   --canvas-strong: #ffffff;
   --surface: #ffffff;
@@ -143,6 +175,24 @@ body { background: var(--canvas); color: var(--text); font-family: var(--font-sa
 .workspace-shell .transaction-button:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
 .workspace-shell .ghost-button { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 0 12px; border: 1px solid var(--line-strong); color: var(--text); background: #ffffff; font-size: 13.5px; font-weight: 600; text-decoration: none; }
 .workspace-shell .ghost-button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); background: #f6f8fb; }
+/* Buy, sell, dividend and delete keep a colour of their own, light enough for the flat look. */
+.workspace-shell .transaction-button.transaction-button-buy,
+.workspace-shell .ghost-button.action-buy { border-color: var(--buy-line); color: var(--buy-text); background: var(--buy-bg); }
+.workspace-shell .transaction-button.transaction-button-buy:hover:not(:disabled),
+.workspace-shell .ghost-button.action-buy:hover { border-color: var(--buy-text); color: var(--buy-text); background: var(--buy-bg-hover); }
+.workspace-shell .transaction-button.transaction-button-sell,
+.workspace-shell .ghost-button.action-sell { border-color: var(--sell-line); color: var(--sell-text); background: var(--sell-bg); }
+.workspace-shell .transaction-button.transaction-button-sell:hover:not(:disabled),
+.workspace-shell .ghost-button.action-sell:hover { border-color: var(--sell-text); color: var(--sell-text); background: var(--sell-bg-hover); }
+.workspace-shell .ghost-button.action-dividend { border-color: var(--dividend-line); color: var(--dividend-text); background: var(--dividend-bg); }
+.workspace-shell .ghost-button.action-dividend:hover { border-color: var(--dividend-text); color: var(--dividend-text); background: var(--dividend-bg-hover); }
+.workspace-shell .ghost-button.admin-danger-button { border-color: var(--sell-line); color: var(--sell-text); }
+.workspace-shell .ghost-button.admin-danger-button:hover:not(:disabled) { border-color: var(--sell-text); color: var(--sell-text); background: var(--sell-bg); }
+/* The currency and platform pickers kept the old teal. */
+.workspace-shell .import-platform-logo { border-color: var(--line); color: var(--accent); background: var(--surface-soft); }
+.workspace-shell .import-platform-trigger:hover,
+.workspace-shell .import-platform-trigger:focus-visible { border-color: var(--accent); }
+.workspace-shell .import-platform-trigger-action { border-color: var(--line-strong); color: var(--accent); background: var(--accent-soft); }
 .workspace-shell .field { gap: 4px; }
 .workspace-shell .field > span { color: var(--muted); font-size: 12.5px; font-weight: 600; }
 .workspace-shell .field input,
@@ -205,6 +255,45 @@ body { background: var(--canvas); color: var(--text); font-family: var(--font-sa
 .workspace-shell .mode-card.is-active { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); box-shadow: none; }
 .workspace-shell .mode-title { font-size: 13.5px; }
 
+/* ---------- structure over time, wealth over time, currency exposure ---------- */
+.structure-controls { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.structure-legend { display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 10px 0 0; padding: 0; list-style: none; color: var(--text); font-size: 12.5px; }
+.structure-legend li { display: inline-flex; align-items: center; gap: 6px; }
+.structure-legend i { width: 11px; height: 11px; flex: none; }
+.structure-legend i.is-line { height: 2px; width: 16px; }
+.structure-legend strong { color: var(--muted); font-weight: 600; }
+.structure-chart { height: 320px; margin-top: 8px; }
+.structure-table { margin-top: 8px; font-size: 13px; }
+.structure-table summary { color: var(--accent); font-weight: 600; cursor: pointer; }
+.structure-table .sprint-table-wrap { margin-top: 8px; overflow-x: auto; }
+.structure-table .report-tooltip-swatch { margin-right: 6px; }
+.structure-table ul { margin: 8px 0 0; padding-left: 18px; color: var(--muted); }
+.currency-bars { display: grid; gap: 6px; margin: 10px 0 0; padding: 0; list-style: none; }
+.currency-bars li { display: grid; grid-template-columns: minmax(110px, 170px) minmax(0, 1fr) 56px 120px; align-items: center; gap: 10px; font-size: 13.5px; }
+.currency-bars-label { overflow: hidden; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.currency-bars-track { height: 12px; background: var(--surface-soft); }
+.currency-bars-track i { display: block; height: 100%; background: #2a78d6; }
+.currency-bars-track i.is-unknown { background: #b6bec8; }
+.currency-bars li > strong { text-align: right; font-variant-numeric: tabular-nums; }
+.currency-bars-value { color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
+.currency-etfs h3 { margin: 16px 0 6px; font-size: 14px; }
+.currency-etfs ul { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
+.currency-etfs li { border-bottom: 1px solid var(--line); }
+.currency-etf-line { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 12px; padding: 8px 0; font-size: 13.5px; }
+.currency-etf-line small { display: block; color: var(--muted); font-size: 12px; }
+.currency-split-editor { padding: 4px 0 12px; }
+.currency-split-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; margin-bottom: 8px; }
+.currency-split-row .field { min-width: 130px; }
+.currency-split-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+@media (max-width: 720px) {
+  .structure-chart { height: 260px; }
+  .currency-bars li { grid-template-columns: minmax(0, 1fr) 56px; }
+  .currency-bars-track { grid-column: 1 / -1; grid-row: 2; }
+  .currency-bars-value { grid-column: 1 / -1; text-align: left; }
+  .currency-etf-line { grid-template-columns: minmax(0, 1fr) auto; }
+  .currency-etf-line .ghost-button { grid-column: 1 / -1; justify-self: start; }
+}
+
 /* ---------- choosing a portfolio inside the combined view ---------- */
 .portfolio-chooser { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .portfolio-chooser > span { color: var(--muted); font-size: 13px; }
@@ -264,6 +353,17 @@ body { background: var(--canvas); color: var(--text); font-family: var(--font-sa
 .positions-row:hover .positions-row-icons, .positions-row.is-selected .positions-row-icons, .positions-row-icons:focus-within { opacity: 1; }
 .positions-row-icons a { display: inline-grid; place-items: center; width: 24px; height: 24px; border: 1px solid transparent; border-radius: 3px; color: var(--muted); }
 .positions-row-icons a:hover, .positions-row-icons a:focus-visible { border-color: var(--line); color: var(--accent); background: #ffffff; }
+.positions-row-icons a.action-buy { color: var(--buy-text); }
+.positions-row-icons a.action-sell { color: var(--sell-text); }
+.positions-row-icons a.action-dividend { color: var(--dividend-text); }
+.positions-row-icons a.action-analysis { color: #1f62ad; }
+.positions-row-icons a.action-buy:hover { border-color: var(--buy-line); color: var(--buy-text); background: var(--buy-bg); }
+.positions-row-icons a.action-sell:hover { border-color: var(--sell-line); color: var(--sell-text); background: var(--sell-bg); }
+.positions-row-icons a.action-dividend:hover { border-color: var(--dividend-line); color: var(--dividend-text); background: var(--dividend-bg); }
+.positions-chart-switches { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.workspace-shell .instrument-legend i.is-candle { width: 8px; height: 13px; border: 1px solid #13314a; background: #ffffff; }
+.workspace-shell .instrument-legend i.is-candle.is-down { background: #13314a; }
+.instrument-candle-note { margin: 4px 0 0; }
 @media (hover: none) { .positions-row-icons { opacity: 1; } }
 .positions-facts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0; border: 1px solid var(--line); }
 .positions-facts > div { display: grid; gap: 1px; padding: 6px 10px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); min-width: 0; }
@@ -284,6 +384,8 @@ body { background: var(--canvas); color: var(--text); font-family: var(--font-sa
   .positions-list { border-right: 0; }
 }
 @media (max-width: 720px) {
+  /* A full-width period switch shares its width between the periods. */
+  .workspace-shell .risk-period-selector button { flex: 1 1 auto; }
   .workspace-page-bar { padding-inline: 12px; }
   .workspace-section-tabs { flex-basis: 100%; overflow-x: auto; }
   .workspace-section-tabs a { padding: 10px 10px; }

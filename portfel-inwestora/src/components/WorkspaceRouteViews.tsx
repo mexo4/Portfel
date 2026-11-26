@@ -6,6 +6,9 @@ import { cloneElement, isValidElement, useEffect, useMemo, useState, type ReactN
 import AssetTable from "@/components/AssetTable";
 import ClosedInvestmentsWorkspace from "@/components/ClosedInvestmentsWorkspace";
 import ConfigurableDashboard from "@/components/ConfigurableDashboard";
+import CurrencyExposure from "@/components/CurrencyExposure";
+import StructureOverTime from "@/components/StructureOverTime";
+import WealthTimeline from "@/components/WealthTimeline";
 import CorporateEventsPanel from "@/components/CorporateEventsPanel";
 import DividendIncomeDashboard from "@/components/DividendIncomeDashboard";
 import GpwEventsWorkspace from "@/components/GpwEventsWorkspace";
@@ -168,7 +171,7 @@ export function WorkspaceTaxesPage() {
   return <div className="workspace-page"><TaxReportWorkspace portfolios={workspace.selectedPortfolios} scopeLabel={workspace.portfolioScopeLabel} /></div>;
 }
 
-export function WorkspaceStructurePage() { const workspace = usePortfolioWorkspace(); return <div className="workspace-page workspace-analysis-page"><PortfolioCharts view="structure" {...workspaceChartProps(workspace)} /></div>; }
+export function WorkspaceStructurePage() { const workspace = usePortfolioWorkspace(); return <div className="workspace-page workspace-analysis-page"><PortfolioCharts view="structure" {...workspaceChartProps(workspace)} /><StructureOverTime key={workspace.selectedPortfolioIds.join(",")} /><CurrencyExposure /></div>; }
 export function WorkspaceInstrumentsPage() {
   const workspace = usePortfolioWorkspace();
   const isAllPortfoliosSelected = workspace.isAllPortfoliosSelected;
@@ -264,4 +267,4 @@ function AggregateDividendHistory() {
 }
 
 export function WorkspacePortfoliosPage() { const workspace = usePortfolioWorkspace(); return <div className="workspace-page workspace-portfolios-page"><SelectedPortfolioOverview />{workspace.portfolioManagementWorkspace}</div>; }
-export function WorkspaceWealthPage() { return <div className="workspace-page workspace-wealth-page">{usePortfolioWorkspace().wealthWorkspace}</div>; }
+export function WorkspaceWealthPage() { return <div className="workspace-page workspace-wealth-page">{usePortfolioWorkspace().wealthWorkspace}<WealthTimeline /></div>; }

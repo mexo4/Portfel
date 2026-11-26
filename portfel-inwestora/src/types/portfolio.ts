@@ -994,6 +994,8 @@ export type WealthItem = {
   deposit?: WealthDeposit;
   /** A loan with a repayment schedule: its value is the balance left after the installments due so far. */
   loan?: WealthLoan;
+  /** Earlier typed-in values with the day each took effect; the wealth history is drawn from them. */
+  valueHistory?: Array<{ date: string; value: number }>;
   createdAt: string;
   updatedAt: string;
 };
@@ -1025,6 +1027,17 @@ export type UserProfile = {
   monthlyContributionPln: number;
   investmentGoal: string;
   wealthItems: WealthItem[];
+  /** The currency split of ETFs the user entered from the funds' factsheets. */
+  etfCurrencyProfiles?: EtfCurrencyProfile[];
   createdAt: string;
+  updatedAt: string;
+};
+
+export type EtfCurrencyWeight = { currency: string; percent: number };
+
+export type EtfCurrencyProfile = {
+  /** The instrument key of the ETF, as used on the Pozycje list. */
+  key: string;
+  weights: EtfCurrencyWeight[];
   updatedAt: string;
 };

@@ -20,6 +20,7 @@ export const monthTick = (time: number) => {
 
 /** A filled circle with + for a purchase or − for a sale; its size follows the amount. */
 export function TradeShape({ cx = 0, cy = 0, size = 64, payload }: { cx?: number; cy?: number; size?: number; payload?: InstrumentTrade }) {
+  if (!Number.isFinite(cx) || !Number.isFinite(cy) || cx === null || cy === null) return null;
   const radius = Math.max(5, Math.sqrt(size / Math.PI));
   const isBuy = payload?.side === "buy";
   const arm = Math.min(radius * 0.55, 6);

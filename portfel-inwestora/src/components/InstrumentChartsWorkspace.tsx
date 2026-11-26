@@ -291,8 +291,10 @@ function InstrumentChart({ instruments, initialKey }: { instruments: ChartInstru
       </div>
 
       <div className="instrument-chart-toolbar mt-4">
-        <RangePicker value={range} onChange={setRange} label="Zakres wykresu waloru" />
-        <ChartStyleSwitch />
+        <div className="positions-chart-switches">
+          <ChartStyleSwitch />
+          <RangePicker value={range} onChange={setRange} label="Zakres wykresu waloru" />
+        </div>
         <InstrumentChartLegend hasCandles={data.candles.length > 1} />
       </div>
 

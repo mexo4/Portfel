@@ -129,7 +129,8 @@ export default function InstrumentCandleChart({ candles, trades, averagePriceSte
             <ReferenceLine y={min} stroke={MIN} strokeWidth={1} strokeDasharray="2 3" label={{ value: `min ${percent.format(min)}`, position: "insideBottomLeft", fill: MIN, fontSize: 11, fontWeight: 700 }} />
             <Bar dataKey="range" shape={<CandleShape />} maxBarSize={14} isAnimationActive={false} name="Kurs" />
             <Line dataKey="average" type="stepAfter" stroke={BUY} strokeWidth={2} strokeDasharray="6 4" dot={false} activeDot={false} connectNulls={false} isAnimationActive={false} name="Średnia cena kupna" />
-            <Scatter data={markers} dataKey="price" shape={<TradeShape />} isAnimationActive={false} name="Transakcje" />
+            {/* With an empty list Recharts would draw a mark for every candle. */}
+            {markers.length > 0 ? <Scatter data={markers} dataKey="price" shape={<TradeShape />} isAnimationActive={false} name="Transakcje" /> : null}
           </ComposedChart>
         </ResponsiveContainer>
       </div>

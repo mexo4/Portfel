@@ -26,10 +26,12 @@ export const buildPortfolioDailyMetricPoints = (
       ...point,
       rawValueChangePln: round(point.portfolioValuePln - previous.portfolioValuePln),
       cashFlowNeutralResultPln,
-      cashFlowNeutralResultPercent: calculateCashFlowNeutralDailyReturnPercent(
-        cashFlowNeutralResultPln,
-        previous.portfolioValuePln
-      ),
+      // The history's own daily return where it has one, so every screen shows the same percent.
+      cashFlowNeutralResultPercent: point.dailyTimeWeightedReturnDecimal === undefined
+        ? calculateCashFlowNeutralDailyReturnPercent(cashFlowNeutralResultPln, previous.portfolioValuePln)
+        : point.dailyTimeWeightedReturnDecimal === null
+          ? null
+          : round(point.dailyTimeWeightedReturnDecimal * 100, 2),
     };
   });
 

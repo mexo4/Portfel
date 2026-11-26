@@ -233,20 +233,23 @@ export const deriveDailyCashFlowNeutralReturns = (
   const sorted = sortUniqueHistoryPoints(points);
   return sorted.slice(1).flatMap((point, index) => {
     const previous = sorted[index]!;
-    if (!(previous.portfolioValuePln > 0)) return [];
     if (Object.hasOwn(point, "dailyTimeWeightedReturnDecimal")) {
       const returnDecimal = point.dailyTimeWeightedReturnDecimal;
       if (typeof returnDecimal !== "number" || !Number.isFinite(returnDecimal)) return [];
+      // The history says what the return is a share of; older points mean the previous value.
+      const base = typeof point.dailyReturnBasePln === "number" ? point.dailyReturnBasePln : previous.portfolioValuePln;
+      if (!(base > 0)) return [];
       return [{
         startDate: previous.date,
         endDate: point.date,
         returnDecimal,
-        resultPln: returnDecimal * previous.portfolioValuePln,
+        resultPln: returnDecimal * base,
         netInvestedAmount: point.netInvestedPln,
         previousValuePln: previous.portfolioValuePln,
         valuePln: point.portfolioValuePln,
       }];
     }
+    if (!(previous.portfolioValuePln > 0)) return [];
     const resultPln = point.profitLossPln - previous.profitLossPln;
     const returnDecimal = resultPln / previous.portfolioValuePln;
     if (!Number.isFinite(returnDecimal)) return [];

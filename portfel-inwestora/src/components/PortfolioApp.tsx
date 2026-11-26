@@ -1150,6 +1150,7 @@ export default function PortfolioApp({
   const isPrefilledDraft = prefilledInstrument !== null && draft.query === prefilledInstrument.query && draft.symbol === prefilledInstrument.symbol;
   const [assetSearchFocusKey, setAssetSearchFocusKey] = useState(0);
   const assetSearchFocusSeqRef = useRef(0);
+  const appliedAssetEntryRef = useRef("");
   const [quoteError, setQuoteError] = useState<string | null>(null);
   const [watchlistError, setWatchlistError] = useState<string | null>(null);
   const [bondError, setBondError] = useState<string | null>(null);
@@ -3095,13 +3096,19 @@ export default function PortfolioApp({
     setBondSwapError(null);
     setPrefilledInstrument(null);
     setAssetSearchFocusKey(0);
+    appliedAssetEntryRef.current = "";
   }, []);
 
   /**
    * Prepares a freshly opened form: with a holding ("Kup" / "Sprzedaj" on a Pozycje row) it starts
    * with that instrument, and in every case the cursor goes to the form's search field.
    */
-  const prefillAssetEntry = useCallback(({ lotId, targetPortfolioId, side }: { lotId: string | null; targetPortfolioId: string | null; side: AssetEntrySide }) => {
+  const prefillAssetEntry = useCallback(({ lotId, targetPortfolioId, side, again = false }: { lotId: string | null; targetPortfolioId: string | null; side: AssetEntrySide; again?: boolean }) => {
+    // A click fills the open form at once and the new address asks for the same moments later;
+    // the second request must not erase what has been typed in between.
+    const request = `${lotId ?? ""}|${targetPortfolioId ?? ""}|${side}`;
+    if (!again && appliedAssetEntryRef.current === request) return;
+    appliedAssetEntryRef.current = request;
     if (targetPortfolioId) handleOperationTargetChange(targetPortfolioId);
     const lot = lotId
       ? portfoliosRef.current.flatMap((portfolio) => portfolio.assets).find((asset) => asset.id === lotId)

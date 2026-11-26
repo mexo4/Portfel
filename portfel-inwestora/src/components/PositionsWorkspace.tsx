@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useMemo, useState, type MouseEvent, type ReactNode } from "react";
 import { InstrumentChartLegend, InstrumentPriceChartBody, RangePicker, useInstrumentChartData, type RangeKey } from "@/components/InstrumentChartsWorkspace";
 import { usePortfolioWorkspace } from "@/components/PortfolioWorkspaceContext";
 import { getAssetEntryHref, getDividendEntryHref, getLatestLot, type AssetEntrySide } from "@/lib/asset-entry-prefill";
@@ -63,21 +63,22 @@ function useHoldingActions(group: PortfolioAssetGroup, showPortfolio: boolean, h
   }
   actions.push({ key: "history", label: "Historia operacji", shortLabel: "Operacje", href: workspace.getReadHref(`/portfolio/operations?${operationsParams.toString()}`) });
   if (hasAnalysis) actions.push({ key: "analysis", label: "Wykres i analiza", shortLabel: "Analiza waloru", href: workspace.getReadHref(`/analytics/assets?instrument=${encodeURIComponent(instrumentKeyOf(group))}`) });
-  // Clicking "Kup" again while its form is open does not change the address: fill and focus anyway.
-  const reopen = (action: HoldingAction) => {
-    if (!action.entrySide || !lot || searchParams.get("add") !== "asset" || searchParams.get("walor") !== lot.id) return;
-    if ((searchParams.get("strona") === "sprzedaj" ? "sell" : "buy") !== action.entrySide) return;
-    workspace.prefillAssetEntry({ lotId: lot.id, targetPortfolioId: targetId ?? null, side: action.entrySide });
+  // With the form already open it changes on the click itself. Waiting for the new address would
+  // leave the previous instrument in the form for a moment, ready to be bought or sold.
+  const applyToOpenForm = (action: HoldingAction, event: MouseEvent) => {
+    if (!action.entrySide || !lot || searchParams.get("add") !== "asset") return;
+    if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+    workspace.prefillAssetEntry({ lotId: lot.id, targetPortfolioId: targetId ?? null, side: action.entrySide, again: true });
   };
-  return { actions, reopen };
+  return { actions, applyToOpenForm };
 }
 
 function RowActions({ group, showPortfolio, hasAnalysis }: { group: PortfolioAssetGroup; showPortfolio: boolean; hasAnalysis: boolean }) {
-  const { actions, reopen } = useHoldingActions(group, showPortfolio, hasAnalysis);
+  const { actions, applyToOpenForm } = useHoldingActions(group, showPortfolio, hasAnalysis);
   return (
     <span className="positions-row-icons" onClick={(event) => event.stopPropagation()}>
       {actions.map((action) => (
-        <Link key={action.key} href={action.href} prefetch={false} title={action.label} aria-label={`${action.label}: ${group.name}`} onClick={() => reopen(action)}><Icon name={action.key} /></Link>
+        <Link key={action.key} href={action.href} prefetch={false} title={action.label} aria-label={`${action.label}: ${group.name}`} onClick={(event) => applyToOpenForm(action, event)}><Icon name={action.key} /></Link>
       ))}
     </span>
   );
@@ -108,7 +109,7 @@ function Preview({ group, showPortfolio }: { group: PortfolioAssetGroup; showPor
   const share = total > 0 ? (group.marketValueBase / total) * 100 : null;
   const firstPurchase = group.lots.map((lot) => lot.purchaseDate).filter(Boolean).sort()[0];
   const days = firstPurchase ? Math.max(0, Math.round((now - Date.parse(`${firstPurchase}T00:00:00Z`)) / DAY_MS)) : null;
-  const { actions, reopen } = useHoldingActions(group, showPortfolio, Boolean(instrument));
+  const { actions, applyToOpenForm } = useHoldingActions(group, showPortfolio, Boolean(instrument));
 
   return (
     <div className="positions-preview">
@@ -123,7 +124,7 @@ function Preview({ group, showPortfolio }: { group: PortfolioAssetGroup; showPor
         </div>
         <div className="positions-actions">
           {actions.map((action) => (
-            <Link key={action.key} href={action.href} prefetch={false} className={action.key === "buy" ? "primary-button" : "ghost-button"} onClick={() => reopen(action)}><Icon name={action.key} />{action.shortLabel}</Link>
+            <Link key={action.key} href={action.href} prefetch={false} className={action.key === "buy" ? "primary-button" : "ghost-button"} onClick={(event) => applyToOpenForm(action, event)}><Icon name={action.key} />{action.shortLabel}</Link>
           ))}
         </div>
       </div>

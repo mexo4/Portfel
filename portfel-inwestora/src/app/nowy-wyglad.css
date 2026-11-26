@@ -255,6 +255,45 @@ body { background: var(--canvas); color: var(--text); font-family: var(--font-sa
 .workspace-shell .mode-card.is-active { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); box-shadow: none; }
 .workspace-shell .mode-title { font-size: 13.5px; }
 
+/* ---------- structure over time, wealth over time, currency exposure ---------- */
+.structure-controls { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.structure-legend { display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 10px 0 0; padding: 0; list-style: none; color: var(--text); font-size: 12.5px; }
+.structure-legend li { display: inline-flex; align-items: center; gap: 6px; }
+.structure-legend i { width: 11px; height: 11px; flex: none; }
+.structure-legend i.is-line { height: 2px; width: 16px; }
+.structure-legend strong { color: var(--muted); font-weight: 600; }
+.structure-chart { height: 320px; margin-top: 8px; }
+.structure-table { margin-top: 8px; font-size: 13px; }
+.structure-table summary { color: var(--accent); font-weight: 600; cursor: pointer; }
+.structure-table .sprint-table-wrap { margin-top: 8px; overflow-x: auto; }
+.structure-table .report-tooltip-swatch { margin-right: 6px; }
+.structure-table ul { margin: 8px 0 0; padding-left: 18px; color: var(--muted); }
+.currency-bars { display: grid; gap: 6px; margin: 10px 0 0; padding: 0; list-style: none; }
+.currency-bars li { display: grid; grid-template-columns: minmax(110px, 170px) minmax(0, 1fr) 56px 120px; align-items: center; gap: 10px; font-size: 13.5px; }
+.currency-bars-label { overflow: hidden; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.currency-bars-track { height: 12px; background: var(--surface-soft); }
+.currency-bars-track i { display: block; height: 100%; background: #2a78d6; }
+.currency-bars-track i.is-unknown { background: #b6bec8; }
+.currency-bars li > strong { text-align: right; font-variant-numeric: tabular-nums; }
+.currency-bars-value { color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
+.currency-etfs h3 { margin: 16px 0 6px; font-size: 14px; }
+.currency-etfs ul { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
+.currency-etfs li { border-bottom: 1px solid var(--line); }
+.currency-etf-line { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 12px; padding: 8px 0; font-size: 13.5px; }
+.currency-etf-line small { display: block; color: var(--muted); font-size: 12px; }
+.currency-split-editor { padding: 4px 0 12px; }
+.currency-split-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; margin-bottom: 8px; }
+.currency-split-row .field { min-width: 130px; }
+.currency-split-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+@media (max-width: 720px) {
+  .structure-chart { height: 260px; }
+  .currency-bars li { grid-template-columns: minmax(0, 1fr) 56px; }
+  .currency-bars-track { grid-column: 1 / -1; grid-row: 2; }
+  .currency-bars-value { grid-column: 1 / -1; text-align: left; }
+  .currency-etf-line { grid-template-columns: minmax(0, 1fr) auto; }
+  .currency-etf-line .ghost-button { grid-column: 1 / -1; justify-self: start; }
+}
+
 /* ---------- choosing a portfolio inside the combined view ---------- */
 .portfolio-chooser { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .portfolio-chooser > span { color: var(--muted); font-size: 13px; }

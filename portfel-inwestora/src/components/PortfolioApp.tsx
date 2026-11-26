@@ -6029,6 +6029,8 @@ export default function PortfolioApp({
     summaryTotalInvested: summary.totalInvested, summaryCashValue: summary.cashValue, refreshRevision,
     activeDividendYtd, activeDividendMonth, activeDividendAnnualIncome, activeDividendForecast, activeDividendTotals, summaryPanel, assetEntryWorkspace, operationsWorkspace, incomeWorkspace, aggregateDividendWorkspace, importWorkspace, settingsWorkspace, portfolioManagementWorkspace: portfolioManagement, wealthWorkspace,
     onFilterChange: setFilter, onSortModeChange: setAssetSortMode, onReorderGroups: handleReorderAssetGroups, onRemoveAsset: removeAsset,
+    userProfile: profile,
+    onUpdateEtfCurrencyProfiles: (etfCurrencyProfiles) => setProfile((current) => ({ ...current, etfCurrencyProfiles, updatedAt: new Date().toISOString() })),
   };
 
   return <PortfolioWorkspaceProvider value={workspaceValue}><AppWorkspaceShell account={account} portfolios={portfolios} selectedPortfolioId={selectedPortfolioId} portfolioScope={portfolioScope} activeBaseCurrency={activeBaseCurrency} isPortfolioMutationPending={isPortfolioMutationPending} isLoggingOut={isLoggingOut} isAdmin={isAdmin} onPortfolioScopeChange={workspaceValue.onPortfolioScopeChange} onBaseCurrencyChange={workspaceValue.onBaseCurrencyChange} onQuickAdd={workspaceValue.onQuickAdd} onLogout={workspaceValue.onLogout}>{children}</AppWorkspaceShell></PortfolioWorkspaceProvider>;

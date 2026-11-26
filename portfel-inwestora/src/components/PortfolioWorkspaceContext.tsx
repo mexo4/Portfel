@@ -16,6 +16,8 @@ import type {
   PortfolioBenchmarkDefinition,
   PortfolioSummary,
   DividendForecast,
+  EtfCurrencyProfile,
+  UserProfile,
 } from "@/types/portfolio";
 import type { DividendTotals } from "@/lib/dividend-engine";
 
@@ -94,6 +96,8 @@ export type PortfolioWorkspaceValue = {
   settingsWorkspace: ReactNode;
   portfolioManagementWorkspace: ReactNode;
   wealthWorkspace: ReactNode;
+  userProfile: UserProfile;
+  onUpdateEtfCurrencyProfiles: (profiles: EtfCurrencyProfile[]) => void;
   onFilterChange: (value: string) => void;
   onSortModeChange: (value: PortfolioWorkspaceValue["assetSortMode"]) => void;
   onReorderGroups: (keys: string[]) => void;

@@ -1116,6 +1116,22 @@ export const fetchPortfolioHistory = async ({
   });
 };
 
+/** The weekly make-up of the user's own portfolios; the server reads their saved data. */
+export const fetchPortfolioStructure = async ({
+  portfolioScopeIds,
+  presentationCurrency,
+  signal,
+}: {
+  portfolioScopeIds: string[];
+  presentationCurrency: CurrencyCode;
+  signal?: AbortSignal;
+}) =>
+  requestJson<import("@/lib/portfolio-structure").PortfolioStructureResponse>("/api/portfolio-structure", {
+    method: "POST",
+    signal,
+    body: JSON.stringify({ portfolioScopeIds, presentationCurrency }),
+  });
+
 export type InstrumentHistoryRequestItem = {
   key: string;
   symbol: string;

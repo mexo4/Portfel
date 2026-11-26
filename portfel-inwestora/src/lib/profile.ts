@@ -1,5 +1,6 @@
 import { getTodayDateInputValue, round, toCurrencyCode, toDateInputValue } from "@/lib/utils";
 import type {
+  EtfCurrencyProfile,
   UserProfile,
   WealthAssetCategory,
   WealthCategory,
@@ -95,6 +96,50 @@ const normalizeWealthLoan = (value: unknown): WealthItem["loan"] => {
   };
 };
 
+const MAX_VALUE_HISTORY = 200;
+
+/** One value per day, oldest first. */
+const normalizeValueHistory = (value: unknown) => {
+  if (!Array.isArray(value)) return [];
+  const byDate = new Map<string, number>();
+  for (const entry of value) {
+    const raw = toRecord(entry);
+    const date = normalizeDate(raw.date);
+    const amount = toFiniteNumber(raw.value, -1);
+    if (date && amount >= 0) byDate.set(date, round(amount, 2));
+  }
+  return [...byDate.entries()].map(([date, amount]) => ({ date, value: amount })).sort((left, right) => left.date.localeCompare(right.date)).slice(-MAX_VALUE_HISTORY);
+};
+
+const MAX_ETF_PROFILES = 200;
+const MAX_ETF_WEIGHTS = 20;
+
+/** Splits that name currencies and add up to at most 100%; anything else is dropped. */
+export const normalizeEtfCurrencyProfiles = (value: unknown, now: string): EtfCurrencyProfile[] => {
+  if (!Array.isArray(value)) return [];
+  const byKey = new Map<string, EtfCurrencyProfile>();
+  for (const entry of value) {
+    const raw = toRecord(entry);
+    const key = typeof raw.key === "string" ? raw.key.trim().slice(0, 200) : "";
+    if (!key || !Array.isArray(raw.weights)) continue;
+    const weights = new Map<string, number>();
+    for (const item of raw.weights.slice(0, MAX_ETF_WEIGHTS)) {
+      const weight = toRecord(item);
+      const currency = typeof weight.currency === "string" ? weight.currency.trim().toUpperCase() : "";
+      const percent = toFiniteNumber(weight.percent, 0);
+      if (/^[A-Z]{3}$/.test(currency) && percent > 0 && percent <= 100) weights.set(currency, round((weights.get(currency) ?? 0) + percent, 2));
+    }
+    const total = [...weights.values()].reduce((sum, percent) => sum + percent, 0);
+    if (weights.size === 0 || total > 100.5) continue;
+    byKey.set(key, {
+      key,
+      weights: [...weights.entries()].map(([currency, percent]) => ({ currency, percent })).sort((left, right) => right.percent - left.percent),
+      updatedAt: typeof raw.updatedAt === "string" && raw.updatedAt ? raw.updatedAt : now,
+    });
+  }
+  return [...byKey.values()].slice(-MAX_ETF_PROFILES);
+};
+
 const normalizeWealthItems = (value: unknown, now: string): WealthItem[] => {
   if (!Array.isArray(value)) {
     return [];
@@ -136,6 +181,7 @@ const normalizeWealthItems = (value: unknown, now: string): WealthItem[] => {
         annualChangePercent: round(Math.max(-100, Math.min(1000, rawAnnualChange)), 2),
         ...(kind === "asset" && normalizeWealthDeposit(rawItem.deposit) ? { deposit: normalizeWealthDeposit(rawItem.deposit) } : {}),
         ...(kind === "liability" && normalizeWealthLoan(rawItem.loan) ? { loan: normalizeWealthLoan(rawItem.loan) } : {}),
+        ...(normalizeValueHistory(rawItem.valueHistory).length ? { valueHistory: normalizeValueHistory(rawItem.valueHistory) } : {}),
         createdAt:
           typeof rawItem.createdAt === "string" && rawItem.createdAt
             ? rawItem.createdAt
@@ -222,6 +268,7 @@ export const normalizeUserProfile = (
         ? value.investmentGoal.trim()
         : (fallback?.investmentGoal ?? "Długoterminowe budowanie kapitału"),
     wealthItems: normalizeWealthItems(value?.wealthItems ?? fallback?.wealthItems, freshProfile.updatedAt),
+    etfCurrencyProfiles: normalizeEtfCurrencyProfiles(value?.etfCurrencyProfiles ?? fallback?.etfCurrencyProfiles, freshProfile.updatedAt),
     createdAt:
       typeof value?.createdAt === "string" && value.createdAt
         ? value.createdAt

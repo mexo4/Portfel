@@ -278,6 +278,16 @@ export default function WealthWorkspace({
     }
     const terms = { principal: value, startDate: addedAt, termMonths, annualRatePercent: round(draft.ratePercent, 4) };
 
+    // A new value of a typed-in item applies from today; the earlier one stays in its history.
+    const previous = profile.wealthItems.find((item) => item.id === draft.editingId);
+    const isTypedIn = !isDepositDraft(draft) && !isScheduledLoanDraft(draft);
+    const today = getTodayDateInputValue();
+    const valueHistory = !isTypedIn || !previous || previous.deposit || previous.loan
+      ? undefined
+      : previous.value === value
+        ? previous.valueHistory
+        : [...(previous.valueHistory ?? [{ date: previous.addedAt, value: previous.value }]).filter((entry) => entry.date !== today), { date: today, value }];
+
     const nextItem: WealthItem = {
       id: draft.editingId ?? createWealthItemId(),
       kind: draft.kind,
@@ -293,8 +303,8 @@ export default function WealthWorkspace({
       ),
       ...(isDepositDraft(draft) ? { deposit: { ...terms, capitalization: draft.capitalization, taxed: draft.taxed } } : {}),
       ...(isScheduledLoanDraft(draft) ? { loan: { ...terms, installment: draft.installment } } : {}),
-      createdAt:
-        profile.wealthItems.find((item) => item.id === draft.editingId)?.createdAt ?? now,
+      ...(valueHistory ? { valueHistory } : {}),
+      createdAt: previous?.createdAt ?? now,
       updatedAt: now,
     };
 

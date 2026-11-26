@@ -52,6 +52,7 @@ export type PortfolioWorkspaceValue = {
   getReadHref: (href: string) => string;
   onQuickAdd: () => void;
   resetAssetEntryForm: () => void;
+  prefillAssetEntry: (input: { lotId: string | null; targetPortfolioId: string | null; side: "buy" | "sell"; again?: boolean }) => void;
   onLogout: () => void;
   displayedSyncError: string | null;
   assets: PortfolioAsset[];

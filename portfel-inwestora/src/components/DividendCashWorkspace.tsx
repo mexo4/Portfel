@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { useEffect, useMemo, useRef, useState } from "react";
 import FormattedNumberInput from "@/components/FormattedNumberInput";
 import DividendIncomeDashboard from "@/components/DividendIncomeDashboard";
 import IncomeCurrencyAmount from "@/components/IncomeCurrencyAmount";
@@ -373,6 +374,31 @@ export default function DividendCashWorkspace({
     });
   };
 
+  // "Dodaj dywidendę" on a Pozycje row: the form opens with that instrument already chosen.
+  const searchParams = useSearchParams();
+  const requestedLotId = activeView === "dividends" ? searchParams.get("walor") : null;
+  const requestedTargetId = searchParams.get("cel");
+  const targetRequestRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!requestedLotId || !isAggregateMode || !requestedTargetId || targetRequestRef.current === requestedLotId) return;
+    targetRequestRef.current = requestedLotId;
+    onTargetPortfolioChange?.(requestedTargetId);
+  }, [isAggregateMode, onTargetPortfolioChange, requestedLotId, requestedTargetId]);
+  const [prefilledLotId, setPrefilledLotId] = useState<string | null>(null);
+  const requestedLot = requestedLotId ? portfolio.assets.find((asset) => asset.id === requestedLotId) : undefined;
+  const requestedInstrument = requestedLot
+    ? instruments.find((item) => item.assetKind === requestedLot.kind && normalizeSymbol(item.symbol) === normalizeSymbol(requestedLot.symbol))
+    : undefined;
+  useEffect(() => {
+    if (!prefilledLotId) return;
+    // After the navigation has scrolled the new page to the top.
+    const timeoutId = window.setTimeout(() => {
+      dividendQuantityRef.current?.scrollIntoView({ block: "center" });
+      dividendQuantityRef.current?.focus({ preventScroll: true });
+    }, 60);
+    return () => window.clearTimeout(timeoutId);
+  }, [prefilledLotId]);
+
   const resetDividendDraft = () => {
     setDividendDraft(getDefaultDividendDraft());
     setDividendError(null);
@@ -397,6 +423,11 @@ export default function DividendCashWorkspace({
     }));
     setDividendError(null);
   };
+
+  if (requestedInstrument && requestedLotId && prefilledLotId !== requestedLotId) {
+    setPrefilledLotId(requestedLotId);
+    handleDividendInstrumentChange(requestedInstrument.id);
+  }
 
   const handleDividendCurrencyChange = (value: string) => {
     const currency = toCurrencyCode(value, "PLN");

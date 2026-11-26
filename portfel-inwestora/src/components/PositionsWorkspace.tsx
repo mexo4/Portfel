@@ -78,7 +78,7 @@ function RowActions({ group, showPortfolio, hasAnalysis }: { group: PortfolioAss
   return (
     <span className="positions-row-icons" onClick={(event) => event.stopPropagation()}>
       {actions.map((action) => (
-        <Link key={action.key} href={action.href} prefetch={false} title={action.label} aria-label={`${action.label}: ${group.name}`} onClick={(event) => applyToOpenForm(action, event)}><Icon name={action.key} /></Link>
+        <Link key={action.key} href={action.href} prefetch={false} title={action.label} aria-label={`${action.label}: ${group.name}`} onClick={(event: MouseEvent) => applyToOpenForm(action, event)}><Icon name={action.key} /></Link>
       ))}
     </span>
   );
@@ -124,7 +124,7 @@ function Preview({ group, showPortfolio }: { group: PortfolioAssetGroup; showPor
         </div>
         <div className="positions-actions">
           {actions.map((action) => (
-            <Link key={action.key} href={action.href} prefetch={false} className={action.key === "buy" ? "primary-button" : "ghost-button"} onClick={(event) => applyToOpenForm(action, event)}><Icon name={action.key} />{action.shortLabel}</Link>
+            <Link key={action.key} href={action.href} prefetch={false} className={action.key === "buy" ? "primary-button" : "ghost-button"} onClick={(event: MouseEvent) => applyToOpenForm(action, event)}><Icon name={action.key} />{action.shortLabel}</Link>
           ))}
         </div>
       </div>

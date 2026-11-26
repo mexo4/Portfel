@@ -198,6 +198,13 @@ body { background: var(--canvas); color: var(--text); font-family: var(--font-sa
 .workspace-bottom-nav .workspace-mobile-more.is-active { color: var(--accent); background: transparent; }
 .workspace-mobile-sheet { background: #ffffff; }
 
+/* ---------- asset class choice above the add-transaction form ---------- */
+.workspace-shell .workspace-entry-head { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+.workspace-shell .workspace-entry-head .mode-grid { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 6px; }
+.workspace-shell .mode-card { min-height: 38px; padding: 6px 8px; border-radius: 3px; background: #ffffff; box-shadow: none; }
+.workspace-shell .mode-card.is-active { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); box-shadow: none; }
+.workspace-shell .mode-title { font-size: 13.5px; }
+
 /* ---------- choosing a portfolio inside the combined view ---------- */
 .portfolio-chooser { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .portfolio-chooser > span { color: var(--muted); font-size: 13px; }

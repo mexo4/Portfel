@@ -625,12 +625,18 @@ export type PortfolioHistoryPoint = {
   timeWeightedReturnPercent: number | null;
   /** Precise cash-flow-neutral return for this interval, before cumulative rounding. */
   dailyTimeWeightedReturnDecimal?: number | null;
+  /** The money that return is a share of: value at the start plus money paid in during the day. */
+  dailyReturnBasePln?: number | null;
+  /** Cash the history spends but never received (deposits are missing); zero when absent. */
+  cashShortfallPln?: number;
   /** Values converted with the historical FX rate for the request's presentation currency. */
   presentationPortfolioValue?: number | null;
   presentationNetInvested?: number | null;
   presentationProfitLoss?: number | null;
   presentationTimeWeightedReturnPercent?: number | null;
   presentationDailyTimeWeightedReturnDecimal?: number | null;
+  presentationDailyReturnBase?: number | null;
+  presentationCashShortfall?: number | null;
 };
 
 /**
@@ -926,6 +932,8 @@ export type PortfolioHistoryResponse = {
   twrStatusReason?: string;
   presentationTwrStatus?: "complete" | "incomplete" | "unavailable";
   presentationTwrStatusReason?: string;
+  /** First day the cash ledger falls below zero by more than rounding: deposits are missing. */
+  cashShortfallSince?: string;
   /** External cash movements needed for money-weighted return (XIRR). */
   externalCashFlows?: PortfolioExternalCashFlow[];
   assetSeries: PortfolioAssetHistorySeries[];

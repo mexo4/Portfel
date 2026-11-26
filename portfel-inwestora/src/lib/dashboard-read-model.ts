@@ -106,6 +106,7 @@ export const getDashboardHistoryMetrics = (
               netInvestedPln: point.presentationNetInvested,
               profitLossPln: point.presentationProfitLoss,
               timeWeightedReturnPercent: point.presentationTimeWeightedReturnPercent ?? null,
+              dailyTimeWeightedReturnDecimal: point.presentationDailyTimeWeightedReturnDecimal,
             }]
           : []
       )

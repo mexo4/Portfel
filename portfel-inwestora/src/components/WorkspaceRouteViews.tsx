@@ -72,12 +72,21 @@ export function WorkspaceDashboardPage() {
 
 export function WorkspacePositionsPage() {
   const workspace = usePortfolioWorkspace();
-  const isAddAssetOpen = useSearchParams().get("add") === "asset";
+  const searchParams = useSearchParams();
+  const isAddAssetOpen = searchParams.get("add") === "asset";
+  const entryLotId = searchParams.get("walor");
+  const entryTargetId = workspace.isAllPortfoliosSelected ? searchParams.get("cel") : null;
+  const entrySide = searchParams.get("strona") === "sprzedaj" ? "sell" : "buy";
   const resetAssetEntryForm = workspace.resetAssetEntryForm;
+  const prefillAssetEntry = workspace.prefillAssetEntry;
   useEffect(() => {
     if (isAddAssetOpen) resetAssetEntryForm();
     return () => { if (isAddAssetOpen) resetAssetEntryForm(); };
   }, [isAddAssetOpen, resetAssetEntryForm]);
+  // Declared after the reset on purpose: the form is cleared first, then filled.
+  useEffect(() => {
+    if (isAddAssetOpen) prefillAssetEntry({ lotId: entryLotId, targetPortfolioId: entryTargetId, side: entrySide });
+  }, [entryLotId, entrySide, entryTargetId, isAddAssetOpen, prefillAssetEntry]);
   const [view, setView] = useState<"list" | "table">(() => {
     try { return typeof window !== "undefined" && window.localStorage.getItem("mexo.positions.view") === "table" ? "table" : "list"; } catch { return "list"; }
   });

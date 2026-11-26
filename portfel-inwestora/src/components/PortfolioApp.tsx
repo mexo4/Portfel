@@ -147,6 +147,7 @@ import {
   getTreasuryBondMaturityDate,
   normalizeTreasuryBondCode,
 } from "@/lib/treasury-bonds";
+import { getAssetEntryMode, getHeldInstrumentDraftFields, type AssetEntrySide } from "@/lib/asset-entry-prefill";
 import type {
   AssetEntryMode,
   AssetDraft,
@@ -185,6 +186,7 @@ import type {
 // dividend views) do not belong in the dashboard's first client chunk.
 const AddAssetForm = dynamic<ComponentProps<typeof import("@/components/AddAssetForm").default>>(() => import("@/components/AddAssetForm"));
 const BrokerImportPanel = dynamic(() => import("@/components/BrokerImportPanel"));
+const PortfolioChooser = dynamic<ComponentProps<typeof import("@/components/PortfolioChooser").default>>(() => import("@/components/PortfolioChooser"));
 const ChangePasswordPanel = dynamic(() => import("@/components/ChangePasswordPanel"));
 const PortfolioIncomeWorkspace = dynamic(
   () => import("@/components/PortfolioIncomeWorkspace")
@@ -1142,6 +1144,12 @@ export default function PortfolioApp({
   const [isBondSwapLoading, setIsBondSwapLoading] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [assetSuccess, setAssetSuccess] = useState<string | null>(null);
+  // An instrument taken from a holding keeps its identity: while the form still shows it, the
+  // search must not replace it with its own best match.
+  const [prefilledInstrument, setPrefilledInstrument] = useState<{ query: string; symbol: string } | null>(null);
+  const isPrefilledDraft = prefilledInstrument !== null && draft.query === prefilledInstrument.query && draft.symbol === prefilledInstrument.symbol;
+  const [assetSearchFocusKey, setAssetSearchFocusKey] = useState(0);
+  const assetSearchFocusSeqRef = useRef(0);
   const [quoteError, setQuoteError] = useState<string | null>(null);
   const [watchlistError, setWatchlistError] = useState<string | null>(null);
   const [bondError, setBondError] = useState<string | null>(null);
@@ -2437,7 +2445,7 @@ export default function PortfolioApp({
     const trimmedQuery = draft.query.trim();
     const minimumSearchLength = getMinimumSearchLength(searchMode);
 
-    if (trimmedQuery.length < minimumSearchLength) {
+    if (trimmedQuery.length < minimumSearchLength || isPrefilledDraft) {
       return;
     }
 
@@ -2542,7 +2550,7 @@ export default function PortfolioApp({
       controller.abort();
       window.clearTimeout(timeoutId);
     };
-  }, [draft.kind, draft.query, searchMode]);
+  }, [draft.kind, draft.query, isPrefilledDraft, searchMode]);
 
   useEffect(() => {
     const trimmedSymbol = draft.symbol.trim();
@@ -3053,6 +3061,7 @@ export default function PortfolioApp({
     setQuoteError(null);
     setSearchMode(mode);
     setDraft(createDraftFromMode(mode));
+    setPrefilledInstrument(null);
     setLastAddedResult(null);
     setResults([]);
     setEtfResultGroups([]);
@@ -3084,7 +3093,48 @@ export default function PortfolioApp({
     setBondSuccess(null);
     setBondRedemptionError(null);
     setBondSwapError(null);
+    setPrefilledInstrument(null);
+    setAssetSearchFocusKey(0);
   }, []);
+
+  /**
+   * Prepares a freshly opened form: with a holding ("Kup" / "Sprzedaj" on a Pozycje row) it starts
+   * with that instrument, and in every case the cursor goes to the form's search field.
+   */
+  const prefillAssetEntry = useCallback(({ lotId, targetPortfolioId, side }: { lotId: string | null; targetPortfolioId: string | null; side: AssetEntrySide }) => {
+    if (targetPortfolioId) handleOperationTargetChange(targetPortfolioId);
+    const lot = lotId
+      ? portfoliosRef.current.flatMap((portfolio) => portfolio.assets).find((asset) => asset.id === lotId)
+      : undefined;
+
+    if (lot) {
+      const mode = getAssetEntryMode(lot);
+      if (mode === "bond") {
+        setEntryMode("bond");
+        setBondDraft({ ...createEmptyTreasuryBondDraft(), code: normalizeTreasuryBondCode(lot.symbol) });
+      } else if (isAssetEntryModeEnabled(mode)) {
+        quoteRequestSeqRef.current += 1;
+        lastPreviewRequestKeyRef.current = "";
+        isManualSymbolRef.current = false;
+        // Buying an ETF needs a verified listing; without one the user picks it from the results.
+        const needsListing = side === "buy" && mode === "etf" &&
+          !hasStableEtfListingIdentity(lot.instrumentIdentity, Boolean(lot.instrumentIdentity?.currency));
+        const fields: Partial<AssetDraft> = needsListing ? { query: lot.symbol } : getHeldInstrumentDraftFields(lot);
+        setEntryMode(mode);
+        setSearchMode(mode);
+        setDraft({ ...createDraftFromMode(mode), ...fields });
+        setPrefilledInstrument(needsListing ? null : { query: lot.name, symbol: lot.symbol });
+        setResults([]);
+        setEtfResultGroups([]);
+        setIsSearching(false);
+        setSearchError(null);
+        setQuoteError(null);
+      }
+    }
+
+    assetSearchFocusSeqRef.current += 1;
+    setAssetSearchFocusKey(assetSearchFocusSeqRef.current);
+  }, [handleOperationTargetChange]);
 
   const handleToggleWatchlist = async (result: AssetSearchResult) => {
     const canonicalKey = getGpwWatchlistCanonicalKey(result.symbol);
@@ -5859,7 +5909,7 @@ export default function PortfolioApp({
 
   const assetEntryWorkspace = <>
     <section className="panel panel-compact workspace-entry-head"><div><p className="eyebrow">Nowa operacja</p><h2 className="section-title">Dodaj instrument</h2><p className="section-copy">Wybierz klasę aktywa i dodaj zakup lub sprzedaż {isAllPortfoliosSelected ? "do wybranego portfela docelowego z bieżącego zakresu" : "do aktywnego portfela"}.</p></div><AssetModeSelector value={entryMode} onChange={handleEntryModeChange} /></section>
-    {entryMode === "bond" ? <TreasuryBondForm draft={bondDraft} series={bondSeries} quote={bondQuote} redemptionPreview={bondRedemptionPreview} swapPreview={bondSwapPreview} isLoadingSeries={isBondLoading} isLoadingRedemption={isBondRedemptionLoading} isLoadingSwap={isBondSwapLoading} error={bondError} redemptionError={bondRedemptionError} swapError={bondSwapError} successMessage={bondSuccess} targetPortfolios={isAllPortfoliosSelected ? selectedPortfolios : undefined} targetPortfolioId={operationTargetPortfolioId} onTargetPortfolioChange={isAllPortfoliosSelected ? handleOperationTargetChange : undefined} isTargetPortfolioPending={isPortfolioMutationPending || isBondRedemptionLoading || isBondSwapLoading} onChange={(nextDraft: TreasuryBondDraft) => { if (nextDraft.code !== bondDraft.code || nextDraft.purchaseDate !== bondDraft.purchaseDate) { setBondSeries(null); setBondQuote(null); setBondError(null); setIsBondLoading(false); } setBondDraft(nextDraft); setBondSuccess(null); resetBondInteractionState(); }} onCodeChange={(code: string) => { setBondDraft((currentDraft) => ({ ...currentDraft, code: normalizeTreasuryBondCode(code) })); setBondSeries(null); setBondQuote(null); setIsBondLoading(false); setBondError(null); setBondSuccess(null); resetBondInteractionState(); }} onBuySubmit={() => { void handleAddBondAsset(); }} onSellSubmit={() => { void handleSellBondAsset(); }} onRedeemSubmit={() => { void handleRedeemBondAsset(); }} onSwapSubmit={() => { void handleSwapBondAsset(); }} /> : <AddAssetForm showModeSelector={false} searchMode={searchMode} draft={draft} results={results} etfResultGroups={etfResultGroups} lastAddedResult={lastAddedResult} isSearching={isSearching} isQuoteLoading={isQuoteLoading} isBuyPending={isAssetAddPending} searchError={searchError} quoteError={quoteError} successMessage={assetSuccess} targetPortfolios={isAllPortfoliosSelected ? selectedPortfolios : undefined} targetPortfolioId={operationTargetPortfolioId} onTargetPortfolioChange={isAllPortfoliosSelected ? handleOperationTargetChange : undefined} isTargetPortfolioPending={isPortfolioMutationPending} watchlistKeys={watchlistKeys} isWatchlistTogglePending={isWatchlistTogglePending} watchlistError={watchlistError} onToggleWatchlist={(result: AssetSearchResult) => { void handleToggleWatchlist(result); }} onDraftChange={setDraft} onSearchModeChange={handleSearchModeChange} onQueryChange={(query: string) => { const trimmedQuery = query.trim(); const minimumSearchLength = getMinimumSearchLength(searchMode); quoteRequestSeqRef.current += 1; lastPreviewRequestKeyRef.current = ""; isManualSymbolRef.current = false; setIsSearching(trimmedQuery.length >= minimumSearchLength); setIsQuoteLoading(false); setResults([]); setEtfResultGroups([]); setSearchError(null); setAssetSuccess(null); setQuoteError(null); setWatchlistError(null); setDraft((currentDraft) => ({ ...currentDraft, query, name: query, symbol: "", providerId: undefined, priceScale: undefined, issuerCountry: undefined, instrumentIdentity: undefined, marketCurrencyConfirmed: undefined, latestPrice: undefined, latestPriceDate: undefined, previousClose: undefined })); }} onSymbolChange={(symbol: string) => { quoteRequestSeqRef.current += 1; lastPreviewRequestKeyRef.current = ""; isManualSymbolRef.current = true; setIsSearching(false); setIsQuoteLoading(false); setResults([]); setEtfResultGroups([]); setSearchError(null); setAssetSuccess(null); setQuoteError(null); setWatchlistError(null); setDraft((currentDraft) => ({ ...currentDraft, symbol: symbol.toUpperCase(), query: "", name: "", providerId: undefined, priceScale: undefined, issuerCountry: undefined, instrumentIdentity: undefined, marketCurrencyConfirmed: undefined, latestPrice: undefined, latestPriceDate: undefined, previousClose: undefined })); }} onPickResult={(result: AssetSearchResult) => { void handlePickResult(result); }} onReuseLastAddedResult={(result: AssetSearchResult) => { void handlePickResult(result); }} onBuySubmit={() => { void handleAddAsset(); }} onSellSubmit={() => { void handleSellAsset(); }} />}
+    {entryMode === "bond" ? <TreasuryBondForm draft={bondDraft} series={bondSeries} quote={bondQuote} redemptionPreview={bondRedemptionPreview} swapPreview={bondSwapPreview} isLoadingSeries={isBondLoading} isLoadingRedemption={isBondRedemptionLoading} isLoadingSwap={isBondSwapLoading} error={bondError} redemptionError={bondRedemptionError} swapError={bondSwapError} successMessage={bondSuccess} targetPortfolios={isAllPortfoliosSelected ? selectedPortfolios : undefined} targetPortfolioId={operationTargetPortfolioId} onTargetPortfolioChange={isAllPortfoliosSelected ? handleOperationTargetChange : undefined} isTargetPortfolioPending={isPortfolioMutationPending || isBondRedemptionLoading || isBondSwapLoading} onChange={(nextDraft: TreasuryBondDraft) => { if (nextDraft.code !== bondDraft.code || nextDraft.purchaseDate !== bondDraft.purchaseDate) { setBondSeries(null); setBondQuote(null); setBondError(null); setIsBondLoading(false); } setBondDraft(nextDraft); setBondSuccess(null); resetBondInteractionState(); }} onCodeChange={(code: string) => { setBondDraft((currentDraft) => ({ ...currentDraft, code: normalizeTreasuryBondCode(code) })); setBondSeries(null); setBondQuote(null); setIsBondLoading(false); setBondError(null); setBondSuccess(null); resetBondInteractionState(); }} onBuySubmit={() => { void handleAddBondAsset(); }} onSellSubmit={() => { void handleSellBondAsset(); }} onRedeemSubmit={() => { void handleRedeemBondAsset(); }} onSwapSubmit={() => { void handleSwapBondAsset(); }} /> : <AddAssetForm showModeSelector={false} searchMode={searchMode} draft={draft} results={results} etfResultGroups={etfResultGroups} lastAddedResult={lastAddedResult} isSearching={isSearching} isQuoteLoading={isQuoteLoading} isBuyPending={isAssetAddPending} searchError={searchError} quoteError={quoteError} successMessage={assetSuccess} isPrefilled={isPrefilledDraft} searchFocusKey={assetSearchFocusKey} onSearchFocused={() => setAssetSearchFocusKey(0)} targetPortfolios={isAllPortfoliosSelected ? selectedPortfolios : undefined} targetPortfolioId={operationTargetPortfolioId} onTargetPortfolioChange={isAllPortfoliosSelected ? handleOperationTargetChange : undefined} isTargetPortfolioPending={isPortfolioMutationPending} watchlistKeys={watchlistKeys} isWatchlistTogglePending={isWatchlistTogglePending} watchlistError={watchlistError} onToggleWatchlist={(result: AssetSearchResult) => { void handleToggleWatchlist(result); }} onDraftChange={setDraft} onSearchModeChange={handleSearchModeChange} onQueryChange={(query: string) => { const trimmedQuery = query.trim(); const minimumSearchLength = getMinimumSearchLength(searchMode); quoteRequestSeqRef.current += 1; lastPreviewRequestKeyRef.current = ""; isManualSymbolRef.current = false; setIsSearching(trimmedQuery.length >= minimumSearchLength); setIsQuoteLoading(false); setResults([]); setEtfResultGroups([]); setSearchError(null); setAssetSuccess(null); setQuoteError(null); setWatchlistError(null); setDraft((currentDraft) => ({ ...currentDraft, query, name: query, symbol: "", providerId: undefined, priceScale: undefined, issuerCountry: undefined, instrumentIdentity: undefined, marketCurrencyConfirmed: undefined, latestPrice: undefined, latestPriceDate: undefined, previousClose: undefined })); }} onSymbolChange={(symbol: string) => { quoteRequestSeqRef.current += 1; lastPreviewRequestKeyRef.current = ""; isManualSymbolRef.current = true; setIsSearching(false); setIsQuoteLoading(false); setResults([]); setEtfResultGroups([]); setSearchError(null); setAssetSuccess(null); setQuoteError(null); setWatchlistError(null); setDraft((currentDraft) => ({ ...currentDraft, symbol: symbol.toUpperCase(), query: "", name: "", providerId: undefined, priceScale: undefined, issuerCountry: undefined, instrumentIdentity: undefined, marketCurrencyConfirmed: undefined, latestPrice: undefined, latestPriceDate: undefined, previousClose: undefined })); }} onPickResult={(result: AssetSearchResult) => { void handlePickResult(result); }} onReuseLastAddedResult={(result: AssetSearchResult) => { void handlePickResult(result); }} onBuySubmit={() => { void handleAddAsset(); }} onSellSubmit={() => { void handleSellAsset(); }} />}
   </>;
 
   const portfolioManagement = <PortfolioAccountManagement portfolios={portfolios} activePortfolio={activePortfolio} activePortfolioId={activePortfolioId} isAllPortfoliosSelected={isAllPortfoliosSelected} canCreateAnotherPortfolio={canCreatePortfolio(account, portfolios.length)} summaries={portfolioSummaries} isPending={isSavingPortfolio || isPortfolioMutationPending} onSelect={(portfolioId: string) => { void handleSelectPortfolio(portfolioId); }} onRename={() => { void handleRenamePortfolio(); }} onDelete={() => { void handleDeletePortfolio(); }} onCreate={handleCreatePortfolio} onRestore={handleRestorePortfolio} onUpdateAccount={(input: Parameters<ComponentProps<typeof PortfolioAccountManagement>["onUpdateAccount"]>[0]) => { void handleUpdatePortfolioAccount(input); }} />;
@@ -5877,18 +5927,22 @@ export default function PortfolioApp({
       baseCurrency={activeBaseCurrency}
       fxRates={fxRates}
       headerAction={(
-        <button
-          className="primary-button"
-          type="button"
-          onClick={() => router.push(getWorkspaceReadHref(
-            isAllPortfoliosSelected ? "/portfolios" : "/portfolio/positions?add=asset",
-            selectedPortfolioId,
-            activeBaseCurrency,
-            portfolioScope
-          ))}
-        >
-          {isAllPortfoliosSelected ? "Wybierz portfel do zmian" : "Dodaj operację"}
-        </button>
+        <div className="operations-header-actions">
+          <button
+            className="primary-button"
+            type="button"
+            onClick={() => router.push(getWorkspaceReadHref(
+              "/portfolio/positions?add=asset",
+              selectedPortfolioId,
+              activeBaseCurrency,
+              portfolioScope
+            ))}
+          >
+            Dodaj operację
+          </button>
+          {/* Undoing and deleting entries works on one portfolio; choosing it keeps this page. */}
+          {isAllPortfoliosSelected ? <PortfolioChooser label="Zmiany we wpisach w portfelu:" /> : null}
+        </div>
       )}
       canUndoSale={!isAllPortfoliosSelected ? (saleId: string) => canUndoPortfolioSale(sales, saleId) : undefined}
       onUndoSale={!isAllPortfoliosSelected ? handleUndoSale : undefined}
@@ -5947,8 +6001,9 @@ export default function PortfolioApp({
     },
     onBaseCurrencyChange: (currency) => { void handleBaseCurrencyChange(currency); },
     getReadHref: (href) => getWorkspaceReadHref(href, selectedPortfolioId, activeBaseCurrency, portfolioScope),
-    onQuickAdd: () => { router.push("/portfolio/positions?add=asset"); },
+    onQuickAdd: () => { router.push(getWorkspaceReadHref("/portfolio/positions?add=asset", selectedPortfolioId, activeBaseCurrency, portfolioScope)); },
     resetAssetEntryForm,
+    prefillAssetEntry,
     onLogout: () => { void handleLogout(); },
     displayedSyncError, assets: displayedAssets, sales: displayedSales, realizedAdjustments: displayedRealizedAdjustments, effectiveRealizedAdjustments, fxRates, verifiedFxCurrencies, groupedAssets,
     watchlistItems, isWatchlistLoading, watchlistReadError,

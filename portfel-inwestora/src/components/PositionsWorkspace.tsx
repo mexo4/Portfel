@@ -1,9 +1,11 @@
 "use client";
 
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
 import { InstrumentChartLegend, InstrumentPriceChartBody, RangePicker, useInstrumentChartData, type RangeKey } from "@/components/InstrumentChartsWorkspace";
 import { usePortfolioWorkspace } from "@/components/PortfolioWorkspaceContext";
+import { getAssetEntryHref, getDividendEntryHref, getLatestLot, type AssetEntrySide } from "@/lib/asset-entry-prefill";
 import { getAssetClassGroup } from "@/lib/geographic-allocation";
 import { instrumentKeyOf, listChartInstruments } from "@/lib/instrument-chart";
 import type { PortfolioAssetGroup } from "@/lib/portfolio-engine";
@@ -24,13 +26,61 @@ const DAY_MS = 86_400_000;
 
 const rowId = (group: PortfolioAssetGroup) => `${group.portfolioId ?? "p"}|${group.key}`;
 
-function Icon({ name }: { name: "add" | "chart" | "history" }) {
+type ActionKey = "buy" | "sell" | "dividend" | "history" | "analysis";
+
+function Icon({ name }: { name: ActionKey }) {
   const paths = {
-    add: <><path d="M3 5h10v8H3z" /><path d="M8 7v4M6 9h4" /></>,
-    chart: <><path d="M2.5 12.5h11" /><path d="M3.5 10l3-3 2.5 2 4-4.5" /></>,
+    buy: <><path d="M3 5h10v8H3z" /><path d="M8 7v4M6 9h4" /></>,
+    sell: <><path d="M3 5h10v8H3z" /><path d="M6 9h4" /></>,
+    dividend: <><circle cx="8" cy="8" r="5.5" /><path d="M8 5v6M6.5 6.5h2.2a1.2 1.2 0 0 1 0 2.4H7.3a1.2 1.2 0 0 0 0 2.4h2.2" /></>,
     history: <><path d="M3 8a5 5 0 1 0 1.5-3.5" /><path d="M3 3v2.5h2.5" /><path d="M8 5.5V8l1.8 1.2" /></>,
+    analysis: <><path d="M2.5 12.5h11" /><path d="M3.5 10l3-3 2.5 2 4-4.5" /></>,
   };
   return <svg viewBox="0 0 16 16" aria-hidden="true" className="positions-icon">{paths[name]}</svg>;
+}
+
+type HoldingAction = { key: ActionKey; label: string; shortLabel: string; href: string; entrySide?: AssetEntrySide };
+
+/**
+ * The actions of one holding, shown as icons on its row and as buttons in its preview. In the
+ * combined view each one carries the portfolio that holds the position.
+ */
+function useHoldingActions(group: PortfolioAssetGroup, showPortfolio: boolean, hasAnalysis: boolean) {
+  const workspace = usePortfolioWorkspace();
+  const searchParams = useSearchParams();
+  const lot = getLatestLot(group.lots);
+  const targetId = showPortfolio ? group.portfolioId : undefined;
+  const paysDividends = (group.kind === "stock" || group.kind === "etf") && group.instrumentType !== "CFD" && group.positionDirection !== "SHORT";
+  const operationsParams = new URLSearchParams({ walor: group.symbol });
+  if (targetId) operationsParams.set("cel", targetId);
+  const actions: HoldingAction[] = [];
+  if (lot) {
+    actions.push(
+      { key: "buy", label: "Kup", shortLabel: "Kup", entrySide: "buy", href: workspace.getReadHref(getAssetEntryHref(lot.id, "buy", targetId)) },
+      { key: "sell", label: "Sprzedaj", shortLabel: "Sprzedaj", entrySide: "sell", href: workspace.getReadHref(getAssetEntryHref(lot.id, "sell", targetId)) },
+    );
+    if (paysDividends) actions.push({ key: "dividend", label: "Dodaj dywidendę", shortLabel: "Dywidenda", href: workspace.getReadHref(getDividendEntryHref(lot.id, targetId)) });
+  }
+  actions.push({ key: "history", label: "Historia operacji", shortLabel: "Operacje", href: workspace.getReadHref(`/portfolio/operations?${operationsParams.toString()}`) });
+  if (hasAnalysis) actions.push({ key: "analysis", label: "Wykres i analiza", shortLabel: "Analiza waloru", href: workspace.getReadHref(`/analytics/assets?instrument=${encodeURIComponent(instrumentKeyOf(group))}`) });
+  // Clicking "Kup" again while its form is open does not change the address: fill and focus anyway.
+  const reopen = (action: HoldingAction) => {
+    if (!action.entrySide || !lot || searchParams.get("add") !== "asset" || searchParams.get("walor") !== lot.id) return;
+    if ((searchParams.get("strona") === "sprzedaj" ? "sell" : "buy") !== action.entrySide) return;
+    workspace.prefillAssetEntry({ lotId: lot.id, targetPortfolioId: targetId ?? null, side: action.entrySide });
+  };
+  return { actions, reopen };
+}
+
+function RowActions({ group, showPortfolio, hasAnalysis }: { group: PortfolioAssetGroup; showPortfolio: boolean; hasAnalysis: boolean }) {
+  const { actions, reopen } = useHoldingActions(group, showPortfolio, hasAnalysis);
+  return (
+    <span className="positions-row-icons" onClick={(event) => event.stopPropagation()}>
+      {actions.map((action) => (
+        <Link key={action.key} href={action.href} prefetch={false} title={action.label} aria-label={`${action.label}: ${group.name}`} onClick={() => reopen(action)}><Icon name={action.key} /></Link>
+      ))}
+    </span>
+  );
 }
 
 function useNarrow(query = "(max-width: 1100px)") {
@@ -58,9 +108,7 @@ function Preview({ group, showPortfolio }: { group: PortfolioAssetGroup; showPor
   const share = total > 0 ? (group.marketValueBase / total) * 100 : null;
   const firstPurchase = group.lots.map((lot) => lot.purchaseDate).filter(Boolean).sort()[0];
   const days = firstPurchase ? Math.max(0, Math.round((now - Date.parse(`${firstPurchase}T00:00:00Z`)) / DAY_MS)) : null;
-  const addHref = workspace.getReadHref(workspace.isAllPortfoliosSelected ? "/portfolios" : "/portfolio/positions?add=asset");
-  const analysisHref = workspace.getReadHref(`/analytics/assets?instrument=${encodeURIComponent(instrumentKey)}`);
-  const operationsHref = workspace.getReadHref("/portfolio/operations");
+  const { actions, reopen } = useHoldingActions(group, showPortfolio, Boolean(instrument));
 
   return (
     <div className="positions-preview">
@@ -74,9 +122,9 @@ function Preview({ group, showPortfolio }: { group: PortfolioAssetGroup; showPor
           </p>
         </div>
         <div className="positions-actions">
-          <Link href={addHref} className="primary-button"><Icon name="add" />Dodaj transakcję</Link>
-          {instrument ? <Link href={analysisHref} className="ghost-button"><Icon name="chart" />Analiza waloru</Link> : null}
-          <Link href={operationsHref} className="ghost-button"><Icon name="history" />Operacje</Link>
+          {actions.map((action) => (
+            <Link key={action.key} href={action.href} prefetch={false} className={action.key === "buy" ? "primary-button" : "ghost-button"} onClick={() => reopen(action)}><Icon name={action.key} />{action.shortLabel}</Link>
+          ))}
         </div>
       </div>
 
@@ -151,6 +199,7 @@ export default function PositionsWorkspace({ toolbar }: { toolbar?: ReactNode })
   }, [filter, workspace.groupedAssets]);
 
   const allRows = useMemo(() => sections.flatMap((section) => section.rows), [sections]);
+  const chartInstrumentKeys = useMemo(() => new Set(listChartInstruments(workspace.selectedPortfolios).map((item) => item.key)), [workspace.selectedPortfolios]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const selected = allRows.find((group) => rowId(group) === selectedId) ?? (isNarrow ? undefined : allRows[0]);
 
@@ -186,12 +235,12 @@ export default function PositionsWorkspace({ toolbar }: { toolbar?: ReactNode })
             <p className="empty-row">{workspace.groupedAssets.length === 0 ? "Nie masz jeszcze pozycji. Dodaj pierwszą transakcję albo zaimportuj historię od brokera." : "Żaden walor nie pasuje do filtra."}</p>
           ) : (
             <table className="positions-table">
-              <thead><tr><th>Walor</th><th className="num">Wartość</th><th className="num">Dziś</th><th className="num">Zysk</th></tr></thead>
+              <thead><tr><th>Walor</th>{isNarrow ? null : <th aria-label="Akcje" />}<th className="num">Wartość</th><th className="num">Dziś</th><th className="num">Zysk</th></tr></thead>
               <tbody>
                 {sections.map((section) => (
                   <Fragment key={section.id}>
                     <tr className="positions-group">
-                      <th scope="rowgroup">{section.label} · {section.rows.length}</th>
+                      <th scope="rowgroup" colSpan={isNarrow ? 1 : 2}>{section.label} · {section.rows.length}</th>
                       <td className="num">{formatCurrency(section.value, base)}</td>
                       <td className={`num ${tone(section.daily) ?? ""}`}>{section.value - section.daily > 0 ? formatPercent((section.daily / (section.value - section.daily)) * 100) : "—"}</td>
                       <td className={`num ${tone(section.profit) ?? ""}`}>{signed(section.profit, base)}</td>
@@ -209,12 +258,13 @@ export default function PositionsWorkspace({ toolbar }: { toolbar?: ReactNode })
                                 <small>{group.symbol} · {qty.format(group.quantity)} szt.{showPortfolio && group.portfolioName ? ` · ${group.portfolioName}` : ""}</small>
                               </button>
                             </td>
+                            {isNarrow ? null : <td className="positions-actions-cell"><RowActions group={group} showPortfolio={showPortfolio} hasAnalysis={chartInstrumentKeys.has(instrumentKeyOf(group))} /></td>}
                             <td className="num">{formatCurrency(group.marketValueBase, base)}<small>{pct.format(share)}%</small></td>
                             <td className={`num ${tone(group.dailyChangePercent) ?? ""}`}>{group.hasDailyChange ? formatPercent(group.dailyChangePercent) : "—"}</td>
                             <td className={`num ${tone(group.profitLossBase) ?? ""}`}>{signed(group.profitLossBase, base)}<small>{formatPercent(group.profitLossPercent)}</small></td>
                           </tr>
                           {isNarrow && isSelected ? (
-                            <tr className="positions-inline-preview"><td colSpan={4}><Preview key={id} group={group} showPortfolio={showPortfolio} /></td></tr>
+                            <tr className="positions-inline-preview"><td colSpan={isNarrow ? 4 : 5}><Preview key={id} group={group} showPortfolio={showPortfolio} /></td></tr>
                           ) : null}
                         </Fragment>
                       );

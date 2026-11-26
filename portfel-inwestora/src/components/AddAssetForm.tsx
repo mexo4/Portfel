@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   VISIBLE_SEARCH_MODE_OPTIONS,
   SUPPORTED_CURRENCIES,
@@ -47,6 +47,11 @@ type AddAssetFormProps = {
   onTargetPortfolioChange?: (portfolioId: string) => void;
   isTargetPortfolioPending?: boolean;
   successMessage?: string | null;
+  /** The instrument comes from a holding, so there are no suggestions to show for it. */
+  isPrefilled?: boolean;
+  /** A new non-zero value moves the cursor to the search field. */
+  searchFocusKey?: number;
+  onSearchFocused?: () => void;
 };
 
 const parseNumericInput = (value: string) => {
@@ -103,7 +108,26 @@ export default function AddAssetForm({
   onTargetPortfolioChange,
   isTargetPortfolioPending = false,
   successMessage,
+  isPrefilled = false,
+  searchFocusKey = 0,
+  onSearchFocused,
 }: AddAssetFormProps) {
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const onSearchFocusedRef = useRef(onSearchFocused);
+  useEffect(() => { onSearchFocusedRef.current = onSearchFocused; }, [onSearchFocused]);
+  useEffect(() => {
+    if (!searchFocusKey) return;
+    // After the navigation has scrolled the new page to the top.
+    const timeoutId = window.setTimeout(() => {
+      const input = searchInputRef.current;
+      if (!input) return;
+      input.scrollIntoView({ block: "center" });
+      input.focus({ preventScroll: true });
+      input.select();
+      onSearchFocusedRef.current?.();
+    }, 60);
+    return () => window.clearTimeout(timeoutId);
+  }, [searchFocusKey]);
   const [selectedEtfListing, setSelectedEtfListing] = useState<EtfListing | null>(null);
   const [expandedEtfGroupId, setExpandedEtfGroupId] = useState<string | null>(null);
   const trimmedQuery = draft.query.trim();
@@ -121,6 +145,7 @@ export default function AddAssetForm({
     selectedEtfListing !== null &&
     selectedEtfListing.symbol.trim().toUpperCase() === trimmedSymbol.toUpperCase();
   const shouldShowSearchPanel =
+    !isPrefilled &&
     !activeSelectedEtfListing &&
     (isEtfSearch || hasActiveSearchText || hasSearchResults || isSearching);
   const shouldShowLastAdded =
@@ -264,6 +289,7 @@ export default function AddAssetForm({
           <label className="field">
             <span>Wyszukiwarka</span>
             <input
+              ref={searchInputRef}
               value={draft.query}
               onChange={(event) => handleQueryChange(event.target.value)}
               placeholder={getSearchPlaceholder(searchMode)}
@@ -279,7 +305,7 @@ export default function AddAssetForm({
                 Wybrany listing: {getListingLabel(selectedEtfListing)}
               </small>
             ) : !isSearching && draft.symbol ? (
-              <small className="field-note">Wybrany ticker: {draft.symbol}</small>
+              <small className="field-note">Wybrany ticker: {draft.symbol}{isPrefilled ? " (z Twojej pozycji). Aby wybrać inny walor, wpisz go w wyszukiwarce." : ""}</small>
             ) : null}
             {!hasActiveSearchText && searchError ? (
               <small className="field-note field-note-error">{searchError}</small>

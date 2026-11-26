@@ -1,5 +1,6 @@
 "use client";
 
+import { useSearchParams } from "next/navigation";
 import { useMemo, useState, type ReactNode } from "react";
 import TruncatedText from "@/components/TruncatedText";
 import {
@@ -64,10 +65,12 @@ export default function OperationsHistory({
   onRemoveRealizedAdjustment,
   children,
 }: OperationsHistoryProps) {
+  const searchParams = useSearchParams();
   const [query, setQuery] = useState("");
-  const [portfolioId, setPortfolioId] = useState("all");
+  // "Historia operacji" on a Pozycje row opens the list filtered to that holding.
+  const [portfolioId, setPortfolioId] = useState(() => searchParams.get("cel") ?? "all");
   const [operationType, setOperationType] = useState("all");
-  const [instrument, setInstrument] = useState("all");
+  const [selectedInstrument, setInstrument] = useState(() => searchParams.get("walor") ?? "all");
   const [currency, setCurrency] = useState("all");
   const [account, setAccount] = useState("all");
   const [dateFrom, setDateFrom] = useState("");
@@ -90,6 +93,7 @@ export default function OperationsHistory({
     ? portfolioId
     : "all";
   const instruments = useMemo(() => uniqueOptions(rows.map((row) => row.instrumentSymbol ?? row.instrumentName)), [rows]);
+  const instrument = instruments.find((option) => option.toUpperCase() === selectedInstrument.toUpperCase()) ?? "all";
   const currencies = useMemo(() => uniqueOptions(rows.flatMap((row) => [
     row.operation.currency,
     getMetadataCurrency(row.operation, "marketCurrency"),

@@ -17,16 +17,26 @@ type Props = {
   totalPortfolioValue?: number;
   isAdmin: boolean;
   onPortfolioChange: (portfolio: InvestmentPortfolio) => void | Promise<void>;
+  /** Show only this view, without the switch (Dywidendy and Gotówka are separate pages). */
+  view?: "dividends" | "cash";
 };
 
-export default function PortfolioIncomeWorkspace(props: Props) {
+export default function PortfolioIncomeWorkspace({ view: fixedView, ...props }: Props) {
   const [view, setView] = useState<"dividends" | "cash">("dividends");
-  const activeView = view;
+  const activeView = fixedView ?? view;
 
   if (props.isAllPortfoliosSelected) {
     return (
       <section className="workspace-income">
         <CashWorkspace portfolio={props.portfolio} portfolios={props.portfolios} activePortfolioId={props.activePortfolioId ?? props.portfolio.id} isAllPortfoliosSelected isPortfolioMutationPending={props.isPortfolioMutationPending} fxRates={props.fxRates} baseCurrency={props.baseCurrency} totalPortfolioValue={props.totalPortfolioValue} onPortfolioChange={props.onPortfolioChange} />
+      </section>
+    );
+  }
+
+  if (fixedView) {
+    return (
+      <section className="workspace-income">
+        {activeView === "dividends" ? <DividendCashWorkspace {...props} activeView="dividends" /> : <CashWorkspace portfolio={props.portfolio} portfolios={props.portfolios} activePortfolioId={props.activePortfolioId ?? props.portfolio.id} isPortfolioMutationPending={props.isPortfolioMutationPending} fxRates={props.fxRates} baseCurrency={props.baseCurrency} totalPortfolioValue={props.totalPortfolioValue} onPortfolioChange={props.onPortfolioChange} />}
       </section>
     );
   }

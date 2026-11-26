@@ -2,6 +2,7 @@ import { getPortfolioDividends } from "@/lib/dividend-engine";
 import type { PortfolioAssetGroup } from "@/lib/portfolio-engine";
 import { getAssetMarketValuePln, getAssetProfitLossPln, getAssetPurchaseValuePln, hasAssetBaseCurrencyValuation } from "@/lib/portfolio-engine";
 import { buildCalendarReturns, deriveDailyCashFlowNeutralReturns } from "@/lib/portfolio-risk-analytics";
+import { instrumentKeyOf } from "@/lib/instrument-chart";
 import { getPortfolioAssetGroupKey } from "@/lib/ticker";
 import { round } from "@/lib/utils";
 import type { AssetKind, FxRates, InstrumentType, InvestmentPortfolio, PortfolioAccount, PortfolioHistoryPoint } from "@/types/portfolio";
@@ -266,7 +267,8 @@ export const buildHeatmapCells = (groups: PortfolioAssetGroup[]): HeatmapCell[] 
   const cells = new Map<string, { name: string; symbol: string; valuePln: number; costPln: number; profitPln: number; dailyBase: number; dailyValue: number; hasDaily: boolean }>();
   for (const group of groups) {
     if (!(group.totalValuePln > 0) || !group.hasBaseValuation) continue;
-    const cell = cells.get(group.key) ?? { name: group.name, symbol: group.symbol, valuePln: 0, costPln: 0, profitPln: 0, dailyBase: 0, dailyValue: 0, hasDaily: false };
+    const key = instrumentKeyOf(group);
+    const cell = cells.get(key) ?? { name: group.name, symbol: group.symbol, valuePln: 0, costPln: 0, profitPln: 0, dailyBase: 0, dailyValue: 0, hasDaily: false };
     cell.valuePln += group.totalValuePln;
     cell.costPln += group.totalInvestedPln;
     cell.profitPln += group.totalProfitLossPln;
@@ -276,7 +278,7 @@ export const buildHeatmapCells = (groups: PortfolioAssetGroup[]): HeatmapCell[] 
       cell.dailyValue += group.dailyChangePercent * group.totalValuePln;
       cell.hasDaily = true;
     }
-    cells.set(group.key, cell);
+    cells.set(key, cell);
   }
   const total = [...cells.values()].reduce((sum, cell) => sum + cell.valuePln, 0);
   return [...cells.entries()]

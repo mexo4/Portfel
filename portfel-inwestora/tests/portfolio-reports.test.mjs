@@ -98,6 +98,11 @@ test("the heat map merges one instrument held in two portfolios and weights the 
   assert.equal(cells[0].dailyChangePercent, 1, "(2 × 3000 − 2 × 1000) / 4000");
   assert.equal(cells[0].profitPercent, Math.round((1000 / 3000) * 10000) / 100);
   assert.equal(cells[0].sharePercent, 80);
+
+  // In the all-portfolios view a group key carries its portfolio: still one cell per instrument.
+  const prefixed = buildHeatmapCells([{ ...group("p", 3000, 2, 2000), key: "p:AAPL" }, { ...group("q", 1000, -2, 1000), key: "q:AAPL" }]);
+  assert.equal(prefixed.length, 1);
+  assert.equal(prefixed[0].valuePln, 4000);
 });
 
 const point = (date, value, daily) => ({ date, portfolioValuePln: value, netInvestedPln: 1000, profitLossPln: value - 1000, timeWeightedReturnPercent: null, dailyTimeWeightedReturnDecimal: daily });

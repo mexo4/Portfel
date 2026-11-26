@@ -815,7 +815,10 @@ const buildAdjustmentOperation = (
         : null;
 
   return createOperation({
-    id: `op-adjustment-${adjustment.id}`,
+    // Operation ids are global in the database, while an imported adjustment's id comes only from
+    // the broker's operation id, so the portfolio must be part of this one: without it the same
+    // statement in two portfolios, or in two accounts, produced the same row id.
+    id: `op-adjustment-${portfolioId}-${adjustment.id}`,
     portfolioId,
     accountId:
       currency === BASE_CURRENCY

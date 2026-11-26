@@ -198,6 +198,11 @@ body { background: var(--canvas); color: var(--text); font-family: var(--font-sa
 .workspace-bottom-nav .workspace-mobile-more.is-active { color: var(--accent); background: transparent; }
 .workspace-mobile-sheet { background: #ffffff; }
 
+/* ---------- warnings ---------- */
+.workspace-content > .workspace-warning { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 16px; margin: 0 clamp(12px, 2vw, 24px) 14px; padding: 8px 12px; border: 1px solid #e2b768; background: #fff7e6; color: #5c3c05; }
+.workspace-warning p { margin: 0; font-size: 13.5px; }
+.workspace-warning a { color: var(--accent); font-weight: 600; white-space: nowrap; }
+
 /* ---------- summary strip (one line of key numbers) ---------- */
 .summary-strip { display: flex; flex-wrap: wrap; margin: 0; border: 1px solid var(--line); background: #ffffff; }
 .summary-strip > div { display: grid; gap: 0; padding: 6px 18px; border-right: 1px solid var(--line); }

@@ -126,6 +126,8 @@ import {
   getImportedCommissionMetadata,
   getImportedStatementAccount,
   getImportedStandaloneExpense,
+  findImportedInOtherPortfolios,
+  getImportedElsewhereMessage,
   getStoredImportedOperationKeys,
   prepareXtbImportOperations,
   requireImportedHistoricalFxRate,
@@ -4552,6 +4554,14 @@ export default function PortfolioApp({
     const portfolioId = portfolioForImport.id;
     const existingImportKeys = getStoredImportedOperationKeys(portfolioForImport.operations ?? []);
     const operations = prepareXtbImportOperations(inputOperations, existingImportKeys);
+    // A statement already held by another portfolio would be counted twice in the combined view.
+    const importedElsewhere = findImportedInOtherPortfolios(
+      operations,
+      portfoliosRef.current.filter((portfolio) => portfolio.id !== portfolioId)
+    );
+    if (importedElsewhere.length > 0) {
+      throw new Error(getImportedElsewhereMessage(importedElsewhere, portfolioForImport.name));
+    }
     const importWarnings = operations.flatMap((operation) => operation.importWarning ? [operation.importWarning] : []);
     const importCurrencies = Array.from(
       new Set(

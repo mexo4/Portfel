@@ -223,6 +223,67 @@ export const getImportedCommissionMetadata = (operation: PreparedXtbImportOperat
   linkedFeeImportKey: operation.linkedFeeImportKey,
 });
 
+/** The broker's own identity of a stored imported operation (account-qualified for XTB). */
+const getStoredBrokerIdentity = (operation: PortfolioOperation) => {
+  const metadata = operation.metadata;
+  if (metadata.importSource === "XTB" && metadata.accountNumber && metadata.brokerOperationId) {
+    return `xtb:v2:${metadata.accountNumber}:${metadata.brokerOperationId}`;
+  }
+  return typeof metadata.importKey === "string" && metadata.importKey ? metadata.importKey : undefined;
+};
+
+type PortfolioWithOperations = { id: string; name: string; operations?: PortfolioOperation[] };
+
+/**
+ * Broker operations from the incoming file that another portfolio already holds. Importing them
+ * again would count the same trades, cash and result twice in the all-portfolios view. Only the
+ * primary (account-qualified) identity is compared, so two legs of one transfer on two accounts
+ * never match each other.
+ */
+export const findImportedInOtherPortfolios = (
+  operations: ImportedBrokerOperation[],
+  otherPortfolios: PortfolioWithOperations[]
+) =>
+  otherPortfolios.flatMap((portfolio) => {
+    const stored = new Set((portfolio.operations ?? []).map(getStoredBrokerIdentity).filter(Boolean));
+    const count = operations.filter((operation) => {
+      const identity = getImportIdentity(operation);
+      return Boolean(identity && stored.has(identity));
+    }).length;
+    return count > 0 ? [{ portfolioId: portfolio.id, portfolioName: portfolio.name, count }] : [];
+  });
+
+export const getImportedElsewhereMessage = (
+  matches: Array<{ portfolioName: string; count: number }>,
+  targetName: string
+) => {
+  const places = matches.map((match) => `„${match.portfolioName}” (${match.count} operacji)`).join(" i ");
+  const [first] = matches;
+  return `Ten plik zawiera operacje, które są już w portfelu ${places}. Nic nie zapisano, bo w widoku wszystkich portfeli ` +
+    "liczyłyby się dwa razy, czyli zysk i wartość byłyby podwojone. " +
+    `Nowsze pliki z tego rachunku importuj do portfela „${first.portfolioName}”. ` +
+    `Jeśli chcesz przenieść rachunek do portfela „${targetName}”, usuń najpierw portfel „${first.portfolioName}”.`;
+};
+
+/** Broker operations stored in more than one of the given portfolios (already double counted). */
+export const findOperationsHeldTwice = (portfolios: PortfolioWithOperations[]) => {
+  const owners = new Map<string, Set<string>>();
+  for (const portfolio of portfolios) {
+    for (const operation of portfolio.operations ?? []) {
+      const identity = getStoredBrokerIdentity(operation);
+      if (!identity) continue;
+      const names = owners.get(identity) ?? new Set<string>();
+      names.add(portfolio.name);
+      owners.set(identity, names);
+    }
+  }
+  const shared = [...owners.values()].filter((names) => names.size > 1);
+  return {
+    count: shared.length,
+    portfolioNames: [...new Set(shared.flatMap((names) => [...names]))],
+  };
+};
+
 export const getStoredImportedOperationKeys = (operations: PortfolioOperation[]) => {
   const keys = new Set<string>();
   operations.forEach((operation) => {

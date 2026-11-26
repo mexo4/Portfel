@@ -3,9 +3,10 @@
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { getWorkspaceRoute, type WorkspaceRouteKey } from "@/lib/workspace-routes";
-import { getWorkspaceReadHref, type PortfolioScopeSelection } from "@/lib/portfolio-selection";
+import { getPortfolioScopeIds, getWorkspaceReadHref, type PortfolioScopeSelection } from "@/lib/portfolio-selection";
+import { findOperationsHeldTwice } from "@/lib/xtb-import-valuation";
 import PortfolioScopePicker from "@/components/PortfolioScopePicker";
 import type { AuthenticatedUser, CurrencyCode, InvestmentPortfolio } from "@/types/portfolio";
 import { canAccessFeature, type EntitlementFeature } from "@/lib/entitlements";
@@ -204,6 +205,13 @@ export default function AppWorkspaceShell({ account, portfolios, selectedPortfol
   const commandTriggerRef = useRef<HTMLButtonElement | null>(null);
   const meta = routeMeta[route];
   const hasAllPortfoliosSelected = portfolioScope.mode !== "SINGLE";
+  // The same broker operations in two selected portfolios would be counted twice in the combined view.
+  const doubleCounted = useMemo(() => {
+    if (!hasAllPortfoliosSelected) return null;
+    const ids = new Set(getPortfolioScopeIds(portfolioScope, portfolios.map((portfolio) => portfolio.id)));
+    const result = findOperationsHeldTwice(portfolios.filter((portfolio) => ids.has(portfolio.id)));
+    return result.count > 0 ? result : null;
+  }, [hasAllPortfoliosSelected, portfolioScope, portfolios]);
   const visibleNavigationGroups = navigationGroups.map((group) => ({
     ...group,
     items: group.items.filter((item) => !item.featureGate || canAccessFeature(account, item.featureGate)),
@@ -341,6 +349,7 @@ export default function AppWorkspaceShell({ account, portfolios, selectedPortfol
           <header className="workspace-page-header"><div><span className="workspace-breadcrumb">{meta.breadcrumb}</span><h1>{meta.title} <span className="workspace-page-help" title={meta.description} aria-label={`O stronie: ${meta.description}`} role="img">?</span></h1><p>{meta.description}</p></div></header>
           {showSectionTabs ? <nav className="workspace-section-tabs" aria-label={`Sekcja ${currentNavigationGroup.label}`}>{currentNavigationGroup.items.map((item) => <Link key={item.key} href={getWorkspaceHref(item.href)} prefetch={false} className={route === item.key ? "is-active" : undefined} aria-current={route === item.key ? "page" : undefined}>{item.label}</Link>)}</nav> : null}
         </div>
+        {doubleCounted ? <div className="workspace-warning"><p role="alert">Widok łączny liczy te same operacje brokera dwa razy ({doubleCounted.count}) w portfelach {doubleCounted.portfolioNames.map((name) => `„${name}”`).join(" i ")}, więc zysk i wartość są zawyżone. Usuń jeden z tych portfeli albo oglądaj je osobno.</p><Link href={getWorkspaceHref("/portfolios")} prefetch={false}>Przejdź do portfeli</Link></div> : null}
         {children}
       </main>
     </div>

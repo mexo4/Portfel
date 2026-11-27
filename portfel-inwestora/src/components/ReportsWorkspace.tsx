@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import { Bar, BarChart, CartesianGrid, Cell, ReferenceLine, ResponsiveContainer, Tooltip, Treemap, XAxis, YAxis } from "recharts";
 import { usePortfolioWorkspace } from "@/components/PortfolioWorkspaceContext";
+import { usePageView } from "@/components/usePageView";
 import { useWorkspaceHistory } from "@/components/useWorkspaceHistory";
 import {
   buildHeatmapCells,
@@ -317,6 +318,11 @@ export default function ReportsWorkspace() {
   const { selectedPortfolios, fxRates } = usePortfolioWorkspace();
   const byType = useMemo(() => buildProfitByType(selectedPortfolios, fxRates), [fxRates, selectedPortfolios]);
   const byAccount = useMemo(() => buildProfitByAccount(selectedPortfolios, fxRates), [fxRates, selectedPortfolios]);
+  const { view } = usePageView("reports");
+
+  if (view === "konta") return <div className="reports-workspace"><AccountHoldings /></div>;
+  if (view === "mapa") return <div className="reports-workspace"><PortfolioHeatmap /></div>;
+  if (view === "okresy") return <div className="reports-workspace"><PeriodReturnsChart /></div>;
 
   return (
     <div className="reports-workspace">
@@ -343,10 +349,6 @@ export default function ReportsWorkspace() {
         {byAccount.rows.length === 0 ? <p className="empty-row mt-4">Brak pozycji i sprzedaży.</p> : <ProfitTable report={byAccount} firstColumn="Konto" caption="Wynik według konta" />}
         <p className="field-note mt-4">Transakcja trafia na konto, z którego ją zapisano (np. z importu XTB). Pozycje dodane ręcznie, obligacje i wyniki dopisane bez konta są na koncie głównym portfela.</p>
       </section>
-
-      <AccountHoldings />
-      <PortfolioHeatmap />
-      <PeriodReturnsChart />
     </div>
   );
 }

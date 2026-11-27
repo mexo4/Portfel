@@ -4,7 +4,10 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { cloneElement, isValidElement, useEffect, useMemo, useState, type ReactNode } from "react";
 import AssetTable from "@/components/AssetTable";
+import ClosedCalendar from "@/components/ClosedCalendar";
 import ClosedInvestmentsWorkspace from "@/components/ClosedInvestmentsWorkspace";
+import PortfolioHealthWorkspace from "@/components/PortfolioHealthWorkspace";
+import { usePageView } from "@/components/usePageView";
 import ConfigurableDashboard from "@/components/ConfigurableDashboard";
 import CurrencyExposure from "@/components/CurrencyExposure";
 import StructureOverTime from "@/components/StructureOverTime";
@@ -114,6 +117,7 @@ export function WorkspaceOperationsPage() {
 
 export function WorkspaceDividendsPage() {
   const workspace = usePortfolioWorkspace();
+  const { view } = usePageView("dividends");
   const aggregateDividends = useMemo(() => workspace.selectedPortfolios.flatMap((portfolio) =>
     getPortfolioDividends(ensurePortfolioCoreModel(portfolio), workspace.fxRates)
   ), [workspace.fxRates, workspace.selectedPortfolios]);
@@ -130,21 +134,19 @@ export function WorkspaceDividendsPage() {
         </div>
         <span className="income-currency-tag">Waluta prezentacji <strong>{workspace.presentationCurrency}</strong></span>
       </section>
-      {(
-        <>
-          <DividendIncomeDashboard
-            dividends={aggregateDividends}
-            portfolios={workspace.selectedPortfolios}
-            fxRates={workspace.fxRates}
-            verifiedFxCurrencies={workspace.verifiedFxCurrencies}
-            currency={workspace.presentationCurrency}
-            mode="aggregate"
-          />
-          {workspace.aggregateDividendWorkspace}
-          <UpcomingDividendsPanel key={`${workspace.portfolioScopeLabel}:${workspace.selectedPortfolioIds.join(",")}`} {...eventScopeProps} presentationCurrency={workspace.presentationCurrency} fxRates={workspace.fxRates} verifiedFxCurrencies={workspace.verifiedFxCurrencies} />
-          <AggregateDividendHistory />
-        </>
-      )}
+      {view === "dochod" ? (
+        <DividendIncomeDashboard
+          dividends={aggregateDividends}
+          portfolios={workspace.selectedPortfolios}
+          fxRates={workspace.fxRates}
+          verifiedFxCurrencies={workspace.verifiedFxCurrencies}
+          currency={workspace.presentationCurrency}
+          mode="aggregate"
+        />
+      ) : null}
+      {view === "dodaj" ? workspace.aggregateDividendWorkspace : null}
+      {view === "nadchodzace" ? <UpcomingDividendsPanel key={`${workspace.portfolioScopeLabel}:${workspace.selectedPortfolioIds.join(",")}`} {...eventScopeProps} presentationCurrency={workspace.presentationCurrency} fxRates={workspace.fxRates} verifiedFxCurrencies={workspace.verifiedFxCurrencies} /> : null}
+      {view === "historia" ? <AggregateDividendHistory /> : null}
     </div>
   );
 }
@@ -155,7 +157,8 @@ export function WorkspacePerformancePage() { const workspace = usePortfolioWorks
 export function WorkspaceChartsPage() { const workspace = usePortfolioWorkspace(); return <div className="workspace-page workspace-analysis-page"><PortfolioLineCharts initialMode="value" historyUserId={workspace.account.id} {...workspaceHistoryProps(workspace)} onBenchmarksChange={workspace.isAllPortfoliosSelected ? undefined : workspace.onBenchmarksChange} /></div>; }
 export function WorkspaceClosedInvestmentsPage() {
   const workspace = usePortfolioWorkspace();
-  return <div className="workspace-page"><ClosedInvestmentsWorkspace portfolios={workspace.selectedPortfolios} /></div>;
+  const { view } = usePageView("closed");
+  return <div className="workspace-page">{view === "kalendarz" ? <ClosedCalendar portfolios={workspace.selectedPortfolios} /> : <ClosedInvestmentsWorkspace portfolios={workspace.selectedPortfolios} />}</div>;
 }
 
 export function WorkspaceReportsPage() {
@@ -171,7 +174,21 @@ export function WorkspaceTaxesPage() {
   return <div className="workspace-page"><TaxReportWorkspace portfolios={workspace.selectedPortfolios} scopeLabel={workspace.portfolioScopeLabel} /></div>;
 }
 
-export function WorkspaceStructurePage() { const workspace = usePortfolioWorkspace(); return <div className="workspace-page workspace-analysis-page"><PortfolioCharts view="structure" {...workspaceChartProps(workspace)} /><StructureOverTime key={workspace.selectedPortfolioIds.join(",")} /><CurrencyExposure /></div>; }
+export function WorkspaceStructurePage() {
+  const workspace = usePortfolioWorkspace();
+  const { view } = usePageView("structure");
+  return (
+    <div className="workspace-page workspace-analysis-page">
+      {view === "sklad" ? <PortfolioCharts view="structure" {...workspaceChartProps(workspace)} /> : null}
+      {view === "w-czasie" ? <StructureOverTime key={workspace.selectedPortfolioIds.join(",")} /> : null}
+      {view === "waluty" ? <CurrencyExposure /> : null}
+    </div>
+  );
+}
+
+export function WorkspaceHealthPage() {
+  return <div className="workspace-page workspace-analysis-page"><PortfolioHealthWorkspace /></div>;
+}
 export function WorkspaceInstrumentsPage() {
   const workspace = usePortfolioWorkspace();
   const isAllPortfoliosSelected = workspace.isAllPortfoliosSelected;
@@ -267,4 +284,14 @@ function AggregateDividendHistory() {
 }
 
 export function WorkspacePortfoliosPage() { const workspace = usePortfolioWorkspace(); return <div className="workspace-page workspace-portfolios-page"><SelectedPortfolioOverview />{workspace.portfolioManagementWorkspace}</div>; }
-export function WorkspaceWealthPage() { return <div className="workspace-page workspace-wealth-page">{usePortfolioWorkspace().wealthWorkspace}<WealthTimeline /></div>; }
+export function WorkspaceWealthPage() {
+  const workspace = usePortfolioWorkspace();
+  const { view } = usePageView("wealth");
+  return (
+    <div className="workspace-page workspace-wealth-page">
+      {/* The form keeps what was typed while another tab is open, so it is hidden, not removed. */}
+      <div hidden={view === "w-czasie"}>{workspace.wealthWorkspace}</div>
+      {view === "w-czasie" ? <WealthTimeline /> : null}
+    </div>
+  );
+}

@@ -81,7 +81,7 @@ test("aggregate income view separates dividends from cash and preserves scope co
   assert.doesNotMatch(styles, /\.income-dividend-kpi > strong \{[^}]*text-overflow: ellipsis/);
   assert.match(dividendWorkspace, /Wypłata od/);
   assert.match(dividendWorkspace, /Wypłata do/);
-  assert.match(dividendWorkspace, /!entryOnly && !isAggregateMode && activeView === "dividends" \? <UpcomingDividendsPanel/);
+  assert.match(dividendWorkspace, /!entryOnly && !isAggregateMode && activeView === "dividends" && dividendView === "nadchodzace" \? <UpcomingDividendsPanel/);
   const singleRouteStart = route.indexOf("if (!workspace.isAllPortfoliosSelected) return");
   const aggregateRouteStart = route.indexOf("\n  return (", singleRouteStart);
   const singleRoute = route.slice(singleRouteStart, aggregateRouteStart);

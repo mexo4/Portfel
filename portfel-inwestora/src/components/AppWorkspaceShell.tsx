@@ -3,7 +3,9 @@
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
+import PageViewTabs from "@/components/PageViewTabs";
+import { getPageViews, withPageView } from "@/lib/page-views";
 import { getWorkspaceRoute, type WorkspaceRouteKey } from "@/lib/workspace-routes";
 import { getPortfolioScopeIds, getWorkspaceReadHref, type PortfolioScopeSelection } from "@/lib/portfolio-selection";
 import { findOperationsHeldTwice } from "@/lib/xtb-import-valuation";
@@ -39,6 +41,7 @@ type WorkspaceIconName =
   | "cash"
   | "import"
   | "performance"
+  | "health"
   | "charts"
   | "structure"
   | "closed"
@@ -66,6 +69,7 @@ const WORKSPACE_ICON_DRAWINGS: Record<WorkspaceIconName, ReactNode> = {
   dividends: <><circle cx="12" cy="12" r="8" /><path d="M9 9.5c0-1 1.2-1.8 3-1.8s3 .8 3 1.8-1 1.6-3 2-3 1-3 2 1.2 1.8 3 1.8 3-.8 3-1.8M12 6v12" /></>,
   import: <><path d="M12 3v12M7 10l5 5 5-5" /><path d="M4 18v3h16v-3" /></>,
   performance: <><path d="M4 18V9M10 18V5M16 18v-7M22 18V3" /></>,
+  health: <><path d="M12 3 4 6v6c0 5 3.5 7.6 8 9 4.500-1.400 8-4 8-9V6z" /><path d="M8.5 12h2l1.5-3 2 6 1-3h1.5" /></>,
   charts: <><path d="M3 18l5-6 4 3 7-9" /><path d="M16 6h3v3" /></>,
   structure: <><circle cx="12" cy="12" r="3" /><path d="M12 3v6M12 15v6M3 12h6M15 12h6" /></>,
   closed: <><rect x="4" y="4" width="16" height="16" rx="2" /><path d="m8 12 3 3 5-6" /></>,
@@ -131,6 +135,7 @@ const navigationGroups: NavigationGroup[] = [
   ] },
   { id: "analysis", label: "Analiza", items: [
     { key: "performance", href: "/analytics/performance", label: "Wyniki", icon: "performance", keywords: "wynik ryzyko stopa zwrotu" },
+    { key: "health", href: "/analytics/health", label: "Kondycja", icon: "health", keywords: "kondycja koncentracja dywersyfikacja ocena portfela uwagi" },
     { key: "charts", href: "/analytics/charts", label: "Wykresy", icon: "charts", keywords: "historia benchmark" },
     { key: "structure", href: "/analytics/structure", label: "Struktura", icon: "structure", keywords: "alokacja klasy aktywów" },
     { key: "closed", href: "/analytics/closed", label: "Zamknięte", icon: "closed", keywords: "zamknięte inwestycje sprzedaże fifo wynik zrealizowany" },
@@ -158,6 +163,7 @@ const routeMeta: Record<WorkspaceRouteKey, { eyebrow: string; title: string; bre
   cash: { eyebrow: "Portfel", title: "Gotówka", breadcrumb: "Portfel / Gotówka", description: "Salda kont, wpłaty, wypłaty, przelewy i operacje cykliczne." },
   import: { eyebrow: "Narzędzia", title: "Import operacji", breadcrumb: "Narzędzia / Import", description: "Dodaj historię rachunku z obsługiwanego pliku brokera." },
   performance: { eyebrow: "Analiza", title: "Wyniki portfela", breadcrumb: "Analiza / Wyniki", description: "Wynik, ryzyko i jakość zwrotu w wybranym okresie." },
+  health: { eyebrow: "Analiza", title: "Kondycja portfela", breadcrumb: "Analiza / Kondycja", description: "Koncentracja, waluty, gotówka i jakość danych według stałych reguł." },
   charts: { eyebrow: "Analiza", title: "Wykresy", breadcrumb: "Analiza / Wykresy", description: "Historia wartości, wyniku i porównanie z benchmarkiem." },
   structure: { eyebrow: "Analiza", title: "Struktura portfela", breadcrumb: "Analiza / Struktura", description: "Rozkład aktywów, rynków i koncentracji portfela." },
   closed: { eyebrow: "Analiza", title: "Zamknięte inwestycje", breadcrumb: "Analiza / Zamknięte", description: "Sprzedaże z zamkniętymi zakupami (FIFO), wynik i skuteczność." },
@@ -232,7 +238,17 @@ export default function AppWorkspaceShell({ account, portfolios, selectedPortfol
     searchText: `${item.label} ${item.keywords ?? ""} ${routeMeta[item.key]?.breadcrumb ?? ""}`,
     action: undefined as "quick-add" | undefined,
   }));
-  const commandEntries = [...pageCommands, {
+  // Each function with a tab of its own can be searched for by name.
+  const viewCommands = visibleNavigationGroups.flatMap((group) => group.items).flatMap((item) => getPageViews(item.key).slice(1).map((view) => ({
+    id: `view:${item.key}:${view.id}`,
+    label: view.label,
+    description: `${routeMeta[item.key].breadcrumb} / ${view.label}`,
+    icon: item.icon,
+    href: getWorkspaceHref(withPageView(item.href, item.key, view.id)),
+    searchText: `${view.label} ${view.keywords ?? ""} ${item.label}`,
+    action: undefined as "quick-add" | undefined,
+  })));
+  const commandEntries = [...pageCommands, ...viewCommands, {
     id: "action:quick-add", label: "Dodaj transakcję", description: hasAllPortfoliosSelected ? "Najpierw wybierz realny portfel" : "Kup, sprzedaj lub dodaj zapis ręcznie", icon: "plus" as const, href: undefined, searchText: "dodaj transakcję kup sprzedaj operacja", action: "quick-add" as const,
   }];
   const normalizedCommandQuery = normalizeSearchText(commandQuery);
@@ -349,6 +365,7 @@ export default function AppWorkspaceShell({ account, portfolios, selectedPortfol
           <header className="workspace-page-header"><div><span className="workspace-breadcrumb">{meta.breadcrumb}</span><h1>{meta.title} <span className="workspace-page-help" title={meta.description} aria-label={`O stronie: ${meta.description}`} role="img">?</span></h1><p>{meta.description}</p></div></header>
           {showSectionTabs ? <nav className="workspace-section-tabs" aria-label={`Sekcja ${currentNavigationGroup.label}`}>{currentNavigationGroup.items.map((item) => <Link key={item.key} href={getWorkspaceHref(item.href)} prefetch={false} className={route === item.key ? "is-active" : undefined} aria-current={route === item.key ? "page" : undefined}>{item.label}</Link>)}</nav> : null}
         </div>
+        <Suspense fallback={null}><PageViewTabs route={route} getHref={getWorkspaceHref} label={meta.title} /></Suspense>
         {doubleCounted ? <div className="workspace-warning"><p role="alert">W portfelach {doubleCounted.portfolioNames.map((name) => `„${name}”`).join(" i ")} są te same operacje brokera (liczba: {doubleCounted.count}). Widok łączny liczy je dwa razy, więc zysk i wartość są zawyżone. Usuń jeden z tych portfeli albo oglądaj je osobno.</p><Link href={getWorkspaceHref("/portfolios")} prefetch={false}>Przejdź do portfeli</Link></div> : null}
         {children}
       </main>

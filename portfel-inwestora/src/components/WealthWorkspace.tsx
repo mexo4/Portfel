@@ -13,6 +13,7 @@ import {
 } from "@/lib/utils";
 import { addMonths, getDepositState, getLoanState, getWealthItemValue } from "@/lib/wealth-instruments";
 import WealthReportPanel from "@/components/WealthReportPanel";
+import { usePageView } from "@/components/usePageView";
 import type {
   CurrencyCode,
   FxRates,
@@ -146,6 +147,7 @@ export default function WealthWorkspace({
   onChange,
   portfolioSummaries = [],
 }: WealthWorkspaceProps) {
+  const { view: openView } = usePageView("wealth");
   const nameRef = useRef<HTMLInputElement | null>(null);
   const valueRef = useRef<HTMLInputElement | null>(null);
   const dateRef = useRef<HTMLInputElement | null>(null);
@@ -349,8 +351,12 @@ export default function WealthWorkspace({
     }
   };
 
+  // Both groups stay mounted, so a half-filled form survives a visit to another tab.
+  const group = (view: "pulpit" | "lista") => ({ display: openView === view ? "contents" : "none" });
+
   return (
     <section className="wealth-workspace">
+      <div style={group("pulpit")}>
       <WealthReportPanel portfolioSummaries={portfolioSummaries} wealthItems={profile.wealthItems} fxRates={fxRates} />
       <section className="panel wealth-summary-panel">
         <div className="sprint-panel-head">
@@ -392,6 +398,8 @@ export default function WealthWorkspace({
         ) : null}
       </section>
 
+      </div>
+      <div style={group("lista")}>
       <section className="panel wealth-entry-panel">
         <div className="sprint-panel-head">
           <div>
@@ -654,6 +662,7 @@ export default function WealthWorkspace({
           ) : null}
         </div>
       </section>
+      </div>
     </section>
   );
 }

@@ -1,14 +1,16 @@
 "use client";
 
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Fragment, useEffect, useMemo, useState, type MouseEvent, type ReactNode } from "react";
 import { ChartEventNotes, ChartReportList, ChartStyleSwitch, InstrumentChartLegend, InstrumentPriceChartBody, RangePicker, useInstrumentChartData, type RangeKey } from "@/components/InstrumentChartsWorkspace";
 import { usePortfolioWorkspace } from "@/components/PortfolioWorkspaceContext";
 import { getAssetEntryHref, getDividendEntryHref, getLatestLot, type AssetEntrySide } from "@/lib/asset-entry-prefill";
 import { getAssetClassGroup } from "@/lib/geographic-allocation";
 import { instrumentKeyOf, listChartInstruments } from "@/lib/instrument-chart";
-import type { PortfolioAssetGroup } from "@/lib/portfolio-engine";
+import { getAssetInvestedPln, getAssetMarketValuePln, getAssetProfitLossPln, hasAssetBaseCurrencyValuation, type PortfolioAssetGroup } from "@/lib/portfolio-engine";
+import { convertFromPln } from "@/lib/pricing";
+import type { CurrencyCode, FxRates, PortfolioAsset } from "@/types/portfolio";
 import { formatCurrency, formatDate } from "@/lib/utils";
 
 /**
@@ -19,6 +21,18 @@ import { formatCurrency, formatDate } from "@/lib/utils";
 
 /** The newest company reports under the chart; the rest are on the instrument's own page. */
 const PREVIEW_REPORTS = 4;
+
+/** What one purchase is worth today and what it has earned, in the presentation currency. */
+const getLotResult = (lot: PortfolioAsset, fxRates: FxRates, base: CurrencyCode) => {
+  if (!hasAssetBaseCurrencyValuation(lot, fxRates)) return null;
+  const invested = getAssetInvestedPln(lot, fxRates);
+  const profit = getAssetProfitLossPln(lot, fxRates);
+  return {
+    value: convertFromPln(getAssetMarketValuePln(lot, fxRates), base, fxRates),
+    profit: convertFromPln(profit, base, fxRates),
+    percent: invested > 0 ? (profit / invested) * 100 : null,
+  };
+};
 
 const pct = new Intl.NumberFormat("pl-PL", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const qty = new Intl.NumberFormat("pl-PL", { maximumFractionDigits: 6 });
@@ -113,6 +127,8 @@ function Preview({ group, showPortfolio }: { group: PortfolioAssetGroup; showPor
   const firstPurchase = group.lots.map((lot) => lot.purchaseDate).filter(Boolean).sort()[0];
   const days = firstPurchase ? Math.max(0, Math.round((now - Date.parse(`${firstPurchase}T00:00:00Z`)) / DAY_MS)) : null;
   const { actions, applyToOpenForm } = useHoldingActions(group, showPortfolio, Boolean(instrument));
+  const router = useRouter();
+  const analysisHref = actions.find((action) => action.key === "analysis")?.href;
 
   return (
     <div className="positions-preview">
@@ -153,7 +169,10 @@ function Preview({ group, showPortfolio }: { group: PortfolioAssetGroup; showPor
             </div>
           </div>
           <InstrumentChartLegend data={data} />
-          <InstrumentPriceChartBody instrument={instrument} data={data} height={300} />
+          {/* The same place as „Analiza waloru”, which stays the way in from the keyboard. */}
+          <div className="positions-chart-open" title="Kliknij dwukrotnie, aby otworzyć wykres i analizę waloru" onDoubleClick={() => { if (analysisHref) router.push(analysisHref); }}>
+            <InstrumentPriceChartBody instrument={instrument} data={data} height={300} />
+          </div>
           <ChartEventNotes data={data} />
         </section>
       ) : group.kind === "bond" ? (
@@ -171,19 +190,24 @@ function Preview({ group, showPortfolio }: { group: PortfolioAssetGroup; showPor
       ) : null}
 
       <section className="positions-card">
-        <h3>Zakupy w pozycji</h3>
+        <h3>Zakupy w pozycji i ich zysk</h3>
         <div className="sprint-table-wrap">
           <table className="portfolio-table positions-lots">
-            <thead><tr><th>Data</th><th className="num">Ilość</th><th className="num">Cena</th><th className="num">Prowizja</th></tr></thead>
+            <thead><tr><th>Data</th><th className="num">Ilość</th><th className="num">Cena</th><th className="num lot-fee">Prowizja</th><th className="num">Wartość dziś</th><th className="num">Zysk</th></tr></thead>
             <tbody>
-              {[...group.lots].sort((left, right) => right.purchaseDate.localeCompare(left.purchaseDate)).map((lot) => (
-                <tr key={lot.id}>
-                  <td>{formatDate(lot.purchaseDate)}</td>
-                  <td className="num">{qty.format(lot.quantity)}</td>
-                  <td className="num">{formatCurrency(lot.purchasePrice, lot.purchasePriceCurrency ?? lot.purchaseCurrency)}</td>
-                  <td className="num">{formatCurrency(lot.feePln ?? 0, "PLN")}</td>
-                </tr>
-              ))}
+              {[...group.lots].sort((left, right) => right.purchaseDate.localeCompare(left.purchaseDate)).map((lot) => {
+                const result = getLotResult(lot, workspace.fxRates, base);
+                return (
+                  <tr key={lot.id}>
+                    <td>{formatDate(lot.purchaseDate)}</td>
+                    <td className="num">{qty.format(lot.quantity)}</td>
+                    <td className="num">{formatCurrency(lot.purchasePrice, lot.purchasePriceCurrency ?? lot.purchaseCurrency)}</td>
+                    <td className="num lot-fee">{formatCurrency(lot.feePln ?? 0, "PLN")}</td>
+                    <td className="num">{result ? formatCurrency(result.value, base) : "—"}</td>
+                    <td className={`num ${result ? tone(result.profit) ?? "" : ""}`}>{result ? <>{signed(result.profit, base)}{result.percent === null ? null : <small>{formatPercent(result.percent)}</small>}</> : "—"}</td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>

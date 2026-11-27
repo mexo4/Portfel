@@ -1,6 +1,7 @@
 "use client";
 
 import { useSearchParams } from "next/navigation";
+import { usePageView } from "@/components/usePageView";
 import { useEffect, useMemo, useRef, useState } from "react";
 import FormattedNumberInput from "@/components/FormattedNumberInput";
 import DividendIncomeDashboard from "@/components/DividendIncomeDashboard";
@@ -376,6 +377,10 @@ export default function DividendCashWorkspace({
 
   // "Dodaj dywidendę" on a Pozycje row: the form opens with that instrument already chosen.
   const searchParams = useSearchParams();
+  // On the dividend page each function has a tab; the entry form of the combined view is one of them.
+  const { view: dividendView, openView: openDividendView } = usePageView("dividends");
+  const showsEntry = entryOnly || dividendView === "dodaj";
+  const showsHistory = !entryOnly && dividendView === "historia";
   const requestedLotId = activeView === "dividends" ? searchParams.get("walor") : null;
   const requestedTargetId = searchParams.get("cel");
   const targetRequestRef = useRef<string | null>(null);
@@ -481,7 +486,9 @@ export default function DividendCashWorkspace({
       notes: dividend.notes,
     });
     setDividendError(null);
-    dividendInstrumentRef.current?.focus();
+    openDividendView("dodaj");
+    // The form is on another tab, so it takes focus once that tab has rendered.
+    window.setTimeout(() => dividendInstrumentRef.current?.focus(), 120);
   };
 
   const deleteDividend = (dividend: PortfolioDividend) => {
@@ -789,7 +796,7 @@ export default function DividendCashWorkspace({
 
   return (
     <>
-      {!entryOnly && activeView === "dividends" ? <DividendIncomeDashboard
+      {!entryOnly && activeView === "dividends" && dividendView === "dochod" ? <DividendIncomeDashboard
         dividends={dividends}
         portfolios={[portfolio]}
         fxRates={fxRates}
@@ -797,11 +804,11 @@ export default function DividendCashWorkspace({
         currency={baseCurrency}
         mode="single"
       /> : null}
-      {!entryOnly && !isAggregateMode && activeView === "dividends" ? <UpcomingDividendsPanel key={`upcoming:${portfolio.id}`} portfolioId={portfolio.id} presentationCurrency={baseCurrency} fxRates={fxRates} verifiedFxCurrencies={verifiedFxCurrencies} /> : null}
+      {!entryOnly && !isAggregateMode && activeView === "dividends" && dividendView === "nadchodzace" ? <UpcomingDividendsPanel key={`upcoming:${portfolio.id}`} portfolioId={portfolio.id} presentationCurrency={baseCurrency} fxRates={fxRates} verifiedFxCurrencies={verifiedFxCurrencies} /> : null}
 
-      {activeView === "dividends" ? (
+      {activeView === "dividends" && (showsEntry || showsHistory) ? (
         <section className={entryOnly ? "sprint-two-grid dividend-workspace-grid dividend-entry-only-grid" : "sprint-two-grid dividend-workspace-grid"}>
-          <article className="panel sprint-wide-panel dividend-entry-panel">
+          {showsEntry ? <article className="panel sprint-wide-panel dividend-entry-panel">
             <div className="sprint-panel-head">
               <div>
                 <p className="eyebrow">Dywidendy</p>
@@ -1151,9 +1158,9 @@ export default function DividendCashWorkspace({
                 </button>
               ) : null}
             </div>
-          </article>
+          </article> : null}
 
-          {!entryOnly ? <>
+          {showsHistory ? <>
           <article className="panel sprint-wide-panel">
             <div className="sprint-panel-head">
               <div>

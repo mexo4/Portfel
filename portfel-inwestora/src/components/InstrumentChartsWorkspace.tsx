@@ -13,6 +13,7 @@ import { setChartStyle, useChartStyle } from "@/components/useChartStyle";
 import { toggleChartEvents, useHiddenChartEvents } from "@/components/useHiddenChartEvents";
 import { usePageView } from "@/components/usePageView";
 import { fetchInstrumentHistories } from "@/lib/api";
+import { getCfdQuoteSource } from "@/lib/cfd";
 import { findEventSlot, getEspiChartTicker, listChartDividends, niceTicks, placeChartEvents, toEventMarks, type ChartEvent, type EventMark, type EventSlot } from "@/lib/chart-events";
 import { canAccessFeature } from "@/lib/entitlements";
 import { calculatePeriodReturns, RETURN_PERIODS, type ReturnPeriodId } from "@/lib/period-returns";
@@ -85,6 +86,12 @@ const rangeStart = (range: RangeKey, firstTradeDate: string) => {
     default: return shiftIso(firstTradeDate || today, { days: -14 });
   }
 };
+/** A CFD is often hours old, so its chart starts two months back to show where it was opened. */
+const chartStart = (range: RangeKey, instrument: ChartInstrument) => {
+  const start = rangeStart(range, instrument.firstTradeDate);
+  const twoMonths = shiftIso(todayIso(), { months: -2 });
+  return instrument.isCfd && range === "ALL" && twoMonths < start ? twoMonths : start;
+};
 
 /** Phones get fewer dates on the time axis. */
 function useNarrowScreen() {
@@ -110,7 +117,7 @@ const loadHistory = (instrument: ChartInstrument): Promise<SeriesResult> => {
   if (cached) return cached;
   const request = fetchInstrumentHistories({
     startDate,
-    instruments: [{ key: instrument.key, symbol: instrument.symbol, kind: instrument.kind, marketCurrency: instrument.marketCurrency, provider: instrument.provider, providerId: instrument.providerId, priceScale: instrument.priceScale }],
+    instruments: [{ key: instrument.key, symbol: instrument.symbol, kind: instrument.kind, marketCurrency: instrument.marketCurrency, provider: instrument.provider, providerId: instrument.providerId, priceScale: instrument.priceScale, isCfd: instrument.isCfd }],
   }).then((response) => {
     const series = response.series[0];
     return { points: series?.points ?? [], ...(series?.candles ? { candles: series.candles } : {}), ...(series?.warning ? { warning: series.warning } : {}) };
@@ -177,7 +184,7 @@ export function useInstrumentChartData(instrument: ChartInstrument | undefined, 
 
   const timeline = useMemo(() => (instrument ? buildInstrumentTimeline(portfolios, instrument) : null), [instrument, portfolios]);
   const current = state && instrument && state.key === instrument.key ? state : null;
-  const start = instrument ? rangeStart(range, instrument.firstTradeDate) : "";
+  const start = instrument ? chartStart(range, instrument) : "";
   const points = useMemo(() => (current?.result?.points ?? []).filter((point) => point.date >= start), [current, start]);
   const candles = useMemo(() => (current?.result?.candles ?? []).filter((candle) => candle.date >= start), [current, start]);
   const rows = useMemo<PriceRow[]>(() => points.map((point) => ({ t: toTime(point.date), date: point.date, close: point.close, average: timeline ? averagePriceOn(timeline.averagePriceSteps, point.date) : null })), [points, timeline]);
@@ -242,7 +249,12 @@ export function InstrumentPriceChartBody({ instrument, data, height }: { instrum
   const buys = timeline?.trades.filter((trade) => trade.side === "buy").length ?? 0;
   const sells = (timeline?.trades.length ?? 0) - buys;
   if (!current) return <p className="empty-row mt-4">Wczytywanie notowań…</p>;
-  if (current.error || points.length === 0) return <p className="empty-row mt-4">{current.error ?? "Brak notowań tego waloru w wybranym zakresie."}</p>;
+  if (current.error || points.length === 0) {
+    const missing = instrument.isCfd && !getCfdQuoteSource({ instrumentType: "CFD", symbol: instrument.symbol })
+      ? "Mexo nie ma notowań dla tego CFD, więc nie rysuje wykresu. Kurs pochodzi z ostatniego zaimportowanego pliku."
+      : "Brak notowań tego waloru w wybranym zakresie.";
+    return <p className="empty-row mt-4">{current.error ?? missing}</p>;
+  }
   const shownDividends = events.filter((event) => event.kind === "dividend").length;
   const shownReports = events.length - shownDividends;
   const description = `Kurs ${instrument.name} od ${formatDate(points[0]!.date)} do ${formatDate(lastDate)}: ${buys} zakupów i ${sells} sprzedaży zaznaczonych na wykresie.${events.length > 0 ? ` Pod kursem: dywidendy (${shownDividends}) i komunikaty ESPI (${shownReports}).` : ""}`;
@@ -323,6 +335,11 @@ export function InstrumentChartLegend({ data }: { data: ChartData }) {
 }
 
 /** Why some reports may be missing from the chart, if they are. */
+export function CfdSourceNote({ symbol, isCfd }: { symbol: string; isCfd?: boolean }) {
+  const source = getCfdQuoteSource({ instrumentType: isCfd ? "CFD" : undefined, symbol });
+  return source ? <p className="field-note">Kurs i wykres pochodzą z {source.label} (Yahoo Finance). To przybliżenie: broker może pokazywać cenę różniącą się o kilkanaście lub kilkadziesiąt punktów.</p> : null;
+}
+
 export function ChartEventNotes({ data }: { data: ChartData }) {
   const oldest = data.espi.items[0];
   if (data.espi.status === "error") return <p className="field-note">Nie udało się pobrać komunikatów ESPI. Odśwież stronę, aby spróbować ponownie.</p>;
@@ -398,6 +415,7 @@ function InstrumentChart({ instruments, initialKey }: { instruments: ChartInstru
       </div>
 
       <InstrumentPriceChartBody instrument={instrument} data={data} />
+      <CfdSourceNote symbol={instrument.symbol} isCfd={instrument.isCfd} />
       <ChartEventNotes data={data} />
 
       <div className="risk-metric-grid risk-metric-grid-summary mt-4">

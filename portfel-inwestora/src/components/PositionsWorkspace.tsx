@@ -3,9 +3,10 @@
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Fragment, useEffect, useMemo, useState, type MouseEvent, type ReactNode } from "react";
-import { ChartEventNotes, ChartReportList, ChartStyleSwitch, InstrumentChartLegend, InstrumentPriceChartBody, RangePicker, useInstrumentChartData, type RangeKey } from "@/components/InstrumentChartsWorkspace";
+import { CfdSourceNote, ChartEventNotes, ChartReportList, ChartStyleSwitch, InstrumentChartLegend, InstrumentPriceChartBody, RangePicker, useInstrumentChartData, type RangeKey } from "@/components/InstrumentChartsWorkspace";
 import { usePortfolioWorkspace } from "@/components/PortfolioWorkspaceContext";
 import { getAssetEntryHref, getDividendEntryHref, getLatestLot, type AssetEntrySide } from "@/lib/asset-entry-prefill";
+import { getCfdFigures, getCfdQuoteSource } from "@/lib/cfd";
 import { getAssetClassGroup } from "@/lib/geographic-allocation";
 import { instrumentKeyOf, listChartInstruments } from "@/lib/instrument-chart";
 import { getAssetInvestedPln, getAssetMarketValuePln, getAssetProfitLossPln, hasAssetBaseCurrencyValuation, type PortfolioAssetGroup } from "@/lib/portfolio-engine";
@@ -42,6 +43,10 @@ const signed = (value: number, currency: string) => `${value > 0 ? "+" : ""}${fo
 const DAY_MS = 86_400_000;
 
 const rowId = (group: PortfolioAssetGroup) => `${group.portfolioId ?? "p"}|${group.key}`;
+const isCfdGroup = (group: PortfolioAssetGroup) => group.instrumentType === "CFD";
+/** A CFD's return is shown on its margin, as the broker does; without the leverage, as the price move. */
+const rowReturnPercent = (group: PortfolioAssetGroup) =>
+  isCfdGroup(group) ? getCfdFigures(group.lots).returnOnMarginPercent ?? group.profitLossPercent : group.profitLossPercent;
 
 type ActionKey = "buy" | "sell" | "dividend" | "history" | "analysis";
 
@@ -128,6 +133,8 @@ function Preview({ group, showPortfolio }: { group: PortfolioAssetGroup; showPor
   const days = firstPurchase ? Math.max(0, Math.round((now - Date.parse(`${firstPurchase}T00:00:00Z`)) / DAY_MS)) : null;
   const { actions, applyToOpenForm } = useHoldingActions(group, showPortfolio, Boolean(instrument));
   const router = useRouter();
+  const cfd = isCfdGroup(group) ? getCfdFigures(group.lots) : null;
+  const quoteSource = getCfdQuoteSource(group);
   const analysisHref = actions.find((action) => action.key === "analysis")?.href;
 
   return (
@@ -138,7 +145,7 @@ function Preview({ group, showPortfolio }: { group: PortfolioAssetGroup; showPor
           <p>
             {typeof group.currentUnitPrice === "number" ? formatCurrency(group.currentUnitPrice, group.marketCurrency) : "brak kursu"}
             {group.hasDailyChange ? <> <span className={tone(group.dailyChangePercent)}>{formatPercent(group.dailyChangePercent)}</span></> : null}
-            {group.latestPriceDate ? <> · kurs z {formatDate(group.latestPriceDate)}</> : null}
+            {group.latestPriceDate ? <> · kurs z {formatDate(group.latestPriceDate)}{cfd ? (quoteSource ? ` (z ${quoteSource.label})` : " (z pliku brokera lub ręczny)") : ""}</> : null}
           </p>
         </div>
         <div className="positions-actions">
@@ -148,16 +155,33 @@ function Preview({ group, showPortfolio }: { group: PortfolioAssetGroup; showPor
         </div>
       </div>
 
-      <dl className="positions-facts">
-        <div><dt>Wartość</dt><dd>{formatCurrency(group.marketValueBase, base)}</dd></div>
-        <div><dt>Zysk</dt><dd className={tone(group.profitLossBase)}>{signed(group.profitLossBase, base)}</dd></div>
-        <div><dt>Zwrot</dt><dd className={tone(group.profitLossPercent)}>{formatPercent(group.profitLossPercent)}</dd></div>
-        <div><dt>Udział</dt><dd>{share === null ? "—" : `${pct.format(share)}%`}</dd></div>
-        <div><dt>Ilość</dt><dd>{qty.format(group.quantity)}</dd></div>
-        <div><dt>Śr. cena kupna</dt><dd>{formatCurrency(group.averagePurchasePrice, group.averagePurchasePriceCurrency)}</dd></div>
-        <div><dt>Dni w portfelu</dt><dd>{days ?? "—"}</dd></div>
-        <div><dt>{showPortfolio ? "Portfel" : "Zakupy"}</dt><dd>{showPortfolio ? group.portfolioName ?? "—" : group.lotsCount}</dd></div>
-      </dl>
+      {cfd ? (
+        <>
+          {/* A CFD is not owned: it has a result, a margin deposit and a contract size, not a value. */}
+          <dl className="positions-facts">
+            <div><dt>Wynik</dt><dd className={tone(group.profitLossBase)}>{signed(group.profitLossBase, base)}</dd></div>
+            <div><dt>Zwrot od depozytu</dt><dd className={tone(cfd.returnOnMarginPercent)}>{formatPercent(cfd.returnOnMarginPercent)}</dd></div>
+            <div><dt>Ruch ceny</dt><dd className={tone(cfd.priceMovePercent)}>{formatPercent(cfd.priceMovePercent)}</dd></div>
+            <div><dt>Dźwignia</dt><dd>{cfd.leverage === null ? "—" : `1:${qty.format(cfd.leverage)}`}</dd></div>
+            <div><dt>Depozyt</dt><dd>{cfd.margin === null ? "—" : formatCurrency(cfd.margin, group.marketCurrency)}</dd></div>
+            <div><dt>Wielkość pozycji</dt><dd>{cfd.exposure === null ? "—" : formatCurrency(cfd.exposure, group.marketCurrency)}</dd></div>
+            <div><dt>Ilość</dt><dd>{qty.format(group.quantity)}</dd></div>
+            <div><dt>Cena otwarcia</dt><dd>{formatCurrency(group.averagePurchasePrice, group.averagePurchasePriceCurrency)}</dd></div>
+          </dl>
+          {cfd.margin === null ? <p className="field-note">Dźwignia i depozyt pojawią się po imporcie eksportu XTB z tą otwartą pozycją.</p> : null}
+        </>
+      ) : (
+        <dl className="positions-facts">
+            <div><dt>Wartość</dt><dd>{formatCurrency(group.marketValueBase, base)}</dd></div>
+            <div><dt>Zysk</dt><dd className={tone(group.profitLossBase)}>{signed(group.profitLossBase, base)}</dd></div>
+            <div><dt>Zwrot</dt><dd className={tone(group.profitLossPercent)}>{formatPercent(group.profitLossPercent)}</dd></div>
+            <div><dt>Udział</dt><dd>{share === null ? "—" : `${pct.format(share)}%`}</dd></div>
+            <div><dt>Ilość</dt><dd>{qty.format(group.quantity)}</dd></div>
+            <div><dt>Śr. cena kupna</dt><dd>{formatCurrency(group.averagePurchasePrice, group.averagePurchasePriceCurrency)}</dd></div>
+            <div><dt>Dni w portfelu</dt><dd>{days ?? "—"}</dd></div>
+            <div><dt>{showPortfolio ? "Portfel" : "Zakupy"}</dt><dd>{showPortfolio ? group.portfolioName ?? "—" : group.lotsCount}</dd></div>
+        </dl>
+      )}
 
       {instrument ? (
         <section className="positions-card">
@@ -173,6 +197,7 @@ function Preview({ group, showPortfolio }: { group: PortfolioAssetGroup; showPor
           <div className="positions-chart-open" title="Kliknij dwukrotnie, aby otworzyć wykres i analizę waloru" onDoubleClick={() => { if (analysisHref) router.push(analysisHref); }}>
             <InstrumentPriceChartBody instrument={instrument} data={data} height={300} />
           </div>
+          <CfdSourceNote symbol={group.symbol} isCfd={Boolean(cfd)} />
           <ChartEventNotes data={data} />
         </section>
       ) : group.kind === "bond" ? (
@@ -190,21 +215,24 @@ function Preview({ group, showPortfolio }: { group: PortfolioAssetGroup; showPor
       ) : null}
 
       <section className="positions-card">
-        <h3>Zakupy w pozycji i ich zysk</h3>
-        <div className="sprint-table-wrap">
+        <h3>{cfd ? "Otwarte pozycje i ich wynik" : "Zakupy w pozycji i ich zysk"}</h3>
+        <div className="sprint-table-wrap positions-lots-wrap">
           <table className="portfolio-table positions-lots">
-            <thead><tr><th>Data</th><th className="num">Ilość</th><th className="num">Cena</th><th className="num lot-fee">Prowizja</th><th className="num">Wartość dziś</th><th className="num">Zysk</th></tr></thead>
+            <thead><tr><th>Data</th><th className="num">Ilość</th><th className="num">Cena</th>{cfd ? null : <><th className="num lot-fee">Prowizja</th><th className="num">Wartość dziś</th></>}<th className="num">Zysk</th></tr></thead>
             <tbody>
               {[...group.lots].sort((left, right) => right.purchaseDate.localeCompare(left.purchaseDate)).map((lot) => {
                 const result = getLotResult(lot, workspace.fxRates, base);
+                const percent = cfd ? getCfdFigures([lot]).returnOnMarginPercent ?? result?.percent ?? null : result?.percent ?? null;
                 return (
                   <tr key={lot.id}>
                     <td>{formatDate(lot.purchaseDate)}</td>
                     <td className="num">{qty.format(lot.quantity)}</td>
                     <td className="num">{formatCurrency(lot.purchasePrice, lot.purchasePriceCurrency ?? lot.purchaseCurrency)}</td>
-                    <td className="num lot-fee">{formatCurrency(lot.feePln ?? 0, "PLN")}</td>
-                    <td className="num">{result ? formatCurrency(result.value, base) : "—"}</td>
-                    <td className={`num ${result ? tone(result.profit) ?? "" : ""}`}>{result ? <>{signed(result.profit, base)}{result.percent === null ? null : <small>{formatPercent(result.percent)}</small>}</> : "—"}</td>
+                    {cfd ? null : <>
+                      <td className="num lot-fee">{formatCurrency(lot.feePln ?? 0, "PLN")}</td>
+                      <td className="num">{result ? formatCurrency(result.value, base) : "—"}</td>
+                    </>}
+                    <td className={`num ${result ? tone(result.profit) ?? "" : ""}`}>{result ? <>{signed(result.profit, base)}{percent === null ? null : <small>{formatPercent(percent)}</small>}</> : "—"}</td>
                   </tr>
                 );
               })}
@@ -283,7 +311,7 @@ export default function PositionsWorkspace({ toolbar }: { toolbar?: ReactNode })
                   <Fragment key={section.id}>
                     <tr className="positions-group">
                       <th scope="rowgroup" colSpan={isNarrow ? 1 : 2}>{section.label} · {section.rows.length}</th>
-                      <td className="num">{formatCurrency(section.value, base)}</td>
+                      <td className="num">{section.id === "cfd" ? "—" : formatCurrency(section.value, base)}</td>
                       <td className={`num ${tone(section.daily) ?? ""}`}>{section.value - section.daily > 0 ? formatPercent((section.daily / (section.value - section.daily)) * 100) : "—"}</td>
                       <td className={`num ${tone(section.profit) ?? ""}`}>{signed(section.profit, base)}</td>
                     </tr>
@@ -301,9 +329,9 @@ export default function PositionsWorkspace({ toolbar }: { toolbar?: ReactNode })
                               </button>
                             </td>
                             {isNarrow ? null : <td className="positions-actions-cell"><RowActions group={group} showPortfolio={showPortfolio} hasAnalysis={chartInstrumentKeys.has(instrumentKeyOf(group))} /></td>}
-                            <td className="num">{formatCurrency(group.marketValueBase, base)}<small>{pct.format(share)}%</small></td>
+                            <td className="num">{isCfdGroup(group) ? <>—<small>CFD</small></> : <>{formatCurrency(group.marketValueBase, base)}<small>{pct.format(share)}%</small></>}</td>
                             <td className={`num ${tone(group.dailyChangePercent) ?? ""}`}>{group.hasDailyChange ? formatPercent(group.dailyChangePercent) : "—"}</td>
-                            <td className={`num ${tone(group.profitLossBase) ?? ""}`}>{signed(group.profitLossBase, base)}<small>{formatPercent(group.profitLossPercent)}</small></td>
+                            <td className={`num ${tone(group.profitLossBase) ?? ""}`}>{signed(group.profitLossBase, base)}<small>{formatPercent(rowReturnPercent(group))}</small></td>
                           </tr>
                           {isNarrow && isSelected ? (
                             <tr className="positions-inline-preview"><td colSpan={isNarrow ? 4 : 5}><Preview key={id} group={group} showPortfolio={showPortfolio} /></td></tr>

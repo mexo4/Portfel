@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { Fragment, useMemo, useState } from "react";
-import { buildClosedInvestments, type ClosedInvestmentTrade } from "@/lib/closed-investments";
+import { buildClosedInvestments, listImportedCfdCloses, type ClosedInvestmentTrade } from "@/lib/closed-investments";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import type { InvestmentPortfolio } from "@/types/portfolio";
 
@@ -25,25 +25,26 @@ function TradeDetails({ trades, showPortfolio }: { trades: ClosedInvestmentTrade
       {trades.map((trade) => (
         <article key={trade.id} className="closed-trade">
           <header>
-            <strong>{TRANSACTION_LABELS[trade.transactionKind]} {formatDate(trade.saleDate)}</strong>
+            <strong>{trade.cfd ? "Zamknięcie CFD" : TRANSACTION_LABELS[trade.transactionKind]} {formatDate(trade.saleDate)}</strong>
             <span>
-              {quantityFormatter.format(trade.quantity)} szt. po {formatCurrency(trade.salePrice, trade.saleCurrency)}
-              {trade.direction === "SHORT" ? " · short" : ""}
+              {quantityFormatter.format(trade.quantity)} {trade.cfd ? "lota" : "szt."} po {formatCurrency(trade.salePrice, trade.saleCurrency)}
+              {trade.direction === "SHORT" ? " · short" : trade.cfd ? " · long" : ""}
+              {trade.cfd?.leverage ? ` · dźwignia 1:${quantityFormatter.format(trade.cfd.leverage)}` : ""}
               {showPortfolio ? ` · ${trade.portfolioName}` : ""}
             </span>
           </header>
           <dl>
-            <div><dt>Koszt</dt><dd>{formatCurrency(trade.investedPln, "PLN")}</dd></div>
-            <div><dt>Przychód</dt><dd>{formatCurrency(trade.proceedsPln, "PLN")}</dd></div>
+            <div><dt>{trade.cfd ? "Depozyt" : "Koszt"}</dt><dd>{trade.cfd && trade.investedPln === 0 ? "—" : formatCurrency(trade.investedPln, "PLN")}</dd></div>
+            <div><dt>{trade.cfd ? "Depozyt z wynikiem" : "Przychód"}</dt><dd>{trade.cfd && trade.investedPln === 0 ? "—" : formatCurrency(trade.proceedsPln, "PLN")}</dd></div>
             <div><dt>Wynik</dt><dd className={tone(trade.profitLossPln)}>{formatCurrency(trade.profitLossPln, "PLN")} · {formatPercent(trade.returnPercent)}</dd></div>
             <div><dt>Czas trzymania</dt><dd>{formatDays(trade.holdingDays)}</dd></div>
           </dl>
           {trade.lots.length > 0 ? (
-            <ul aria-label="Zamknięte zakupy (FIFO)">
+            <ul aria-label={trade.cfd ? "Otwarcie pozycji" : "Zamknięte zakupy (FIFO)"}>
               {trade.lots.map((lot) => (
                 <li key={`${trade.id}-${lot.lotId}-${lot.purchaseDate}`}>
-                  {quantityFormatter.format(lot.quantity)} szt. kupione {formatDate(lot.purchaseDate)} po {formatCurrency(lot.purchasePrice, lot.priceCurrency)}
-                  <span> · koszt {formatCurrency(lot.investedPln, "PLN")}{lot.buyFeePln > 0 ? ` (w tym prowizja ${formatCurrency(lot.buyFeePln, "PLN")})` : ""} · {formatDays(lot.holdingDays)}</span>
+                  {quantityFormatter.format(lot.quantity)} {trade.cfd ? "lota otwarte" : "szt. kupione"} {formatDate(lot.purchaseDate)} po {formatCurrency(lot.purchasePrice, lot.priceCurrency)}
+                  <span>{trade.cfd ? "" : <> · koszt {formatCurrency(lot.investedPln, "PLN")}{lot.buyFeePln > 0 ? ` (w tym prowizja ${formatCurrency(lot.buyFeePln, "PLN")})` : ""}</>} · {formatDays(lot.holdingDays)}</span>
                 </li>
               ))}
             </ul>
@@ -61,7 +62,9 @@ export default function ClosedInvestmentsWorkspace({ portfolios }: { portfolios:
   const report = useMemo(() => buildClosedInvestments(portfolios, { year }), [portfolios, year]);
   const allYears = useMemo(() => buildClosedInvestments(portfolios).years, [portfolios]);
   const unlinkedResults = useMemo(
-    () => portfolios.flatMap((portfolio) => portfolio.realizedAdjustments ?? []).filter((adjustment) => adjustment.source !== "bond-coupon").length,
+    () => portfolios.reduce((total, portfolio) => total +
+      (portfolio.realizedAdjustments ?? []).filter((adjustment) => adjustment.source !== "bond-coupon").length -
+      listImportedCfdCloses(portfolio).length, 0),
     [portfolios]
   );
   const showPortfolio = portfolios.length > 1;
@@ -94,7 +97,7 @@ export default function ClosedInvestmentsWorkspace({ portfolios }: { portfolios:
         </div>
 
         <p className="field-note mt-4">
-          Koszt zamkniętych pozycji ustala się metodą FIFO: każda sprzedaż zamyka najpierw najstarsze zakupy. Kwoty są w PLN po kursach zapisanych przy transakcjach, tak samo jak w wynikach portfela. Do zeznania podatkowego przelicz je kursami NBP w <Link href="/tools/taxes" className="auth-link">zestawieniu PIT-38</Link>.
+          Koszt zamkniętych pozycji ustala się metodą FIFO: każda sprzedaż zamyka najpierw najstarsze zakupy. Przy CFD z importu kosztem jest depozyt, a wynik jest przed swapami (swapy liczą się osobno). Kwoty są w PLN po kursach zapisanych przy transakcjach, tak samo jak w wynikach portfela. Do zeznania podatkowego przelicz je kursami NBP w <Link href="/tools/taxes" className="auth-link">zestawieniu PIT-38</Link>.
         </p>
         {unlinkedResults > 0 ? (
           <p className="field-note">Wyniki dopisane ręcznie albo zaimportowane bez danych zakupu ({unlinkedResults}) nie mają przypisanych zakupów, więc nie ma ich w tej tabeli.</p>

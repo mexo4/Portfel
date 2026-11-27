@@ -105,7 +105,8 @@ test("an index CFD keeps XTB's quote, and its result matches the broker's", asyn
   assert.equal(operations[0].metadata.cfdPositionKey, getCfdPositionKey(open));
   // (20200 − 20000) × 0.02 × 25 = 100 USD, at 4 PLN.
   assert.equal(getAssetProfitLossPln(lot, { PLN: 1, USD: 4 }), 400);
-  assert.equal(getOpenCfdLotPrice({ ...open, rawSymbol: "AAA.US" }).priceSource, "AUTOMATIC");
+  assert.equal(getOpenCfdLotPrice({ ...open, symbol: "AAA", rawSymbol: "AAA.US" }).priceSource, "MANUAL", "only a CFD with a checked source is refreshed");
+  assert.equal(getOpenCfdLotPrice({ ...open, symbol: "US100" }).priceSource, "AUTOMATIC");
   assert.deepEqual(getOpenCfdLotPrice({ ...open, importKey: "xtb:v2:111111:1" }), {});
 });
 

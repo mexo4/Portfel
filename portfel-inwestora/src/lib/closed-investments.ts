@@ -1,3 +1,4 @@
+import { readClosedCfdTrade } from "@/lib/cfd";
 import type { AssetKind, CurrencyCode, InstrumentType, InvestmentPortfolio, PortfolioSale } from "@/types/portfolio";
 import { round } from "@/lib/utils";
 
@@ -45,6 +46,8 @@ export type ClosedInvestmentTrade = {
   /** Average holding period of the closed units, weighted by quantity. */
   holdingDays: number;
   lots: ClosedInvestmentLot[];
+  /** A CFD from the broker's file: its cost is the margin deposit, and null leverage means no deposit is known. */
+  cfd?: { leverage: number | null };
 };
 
 export type ClosedInvestmentSummaryRow = {
@@ -147,12 +150,63 @@ const toTrade = (portfolio: InvestmentPortfolio, sale: PortfolioSale): ClosedInv
   };
 };
 
+/*
+ * Closed CFDs imported from a broker are not sales: their money is the "Close trade" cash row and
+ * the result booked from it. The row carries the details, and the amount shown here is the booked
+ * one, so this list and the results always agree.
+ */
+export const listImportedCfdCloses = (portfolio: InvestmentPortfolio) => {
+  const results = new Map((portfolio.realizedAdjustments ?? []).flatMap((adjustment) =>
+    adjustment.importKey ? [[adjustment.importKey, adjustment] as const] : []));
+  return (portfolio.operations ?? []).flatMap((operation) => {
+    const trade = readClosedCfdTrade(operation.metadata.cfdTrade);
+    const adjustment = typeof operation.metadata.importKey === "string" ? results.get(`${operation.metadata.importKey}:result`) : undefined;
+    return trade && adjustment ? [{ operation, trade, adjustment }] : [];
+  });
+};
+
+const toCfdTrade = (portfolio: InvestmentPortfolio, { operation, trade, adjustment }: ReturnType<typeof listImportedCfdCloses>[number]): ClosedInvestmentTrade => {
+  const profitLossPln = round(adjustment.amountPlnSnapshot);
+  // The rate the result was booked at also converts the deposit.
+  const rate = adjustment.amount !== 0 ? adjustment.amountPlnSnapshot / adjustment.amount : 0;
+  const margin = trade.leverage ? (trade.openPrice * trade.volume * trade.contractMultiplier) / trade.leverage : 0;
+  const investedPln = rate > 0 ? round(margin * rate) : 0;
+  const holdingDays = daysBetween(trade.openDate, trade.closeDate);
+  return {
+    id: operation.id,
+    portfolioId: portfolio.id,
+    portfolioName: portfolio.name,
+    instrumentKey: `cfd:${trade.ticker.trim().toUpperCase()}`,
+    name: trade.name,
+    symbol: trade.ticker,
+    kind: "stock",
+    instrumentType: "CFD",
+    direction: trade.side === "SELL" ? "SHORT" : "LONG",
+    transactionKind: "sale",
+    saleDate: trade.closeDate,
+    quantity: trade.volume,
+    salePrice: trade.closePrice,
+    saleCurrency: trade.currency,
+    saleFeePln: 0,
+    investedPln,
+    proceedsPln: round(investedPln + profitLossPln),
+    profitLossPln,
+    returnPercent: percentOf(profitLossPln, investedPln),
+    holdingDays,
+    lots: [{ lotId: `cfd:${trade.positionId}`, purchaseDate: trade.openDate, quantity: trade.volume, purchasePrice: trade.openPrice, priceCurrency: trade.currency, investedPln, buyFeePln: 0, holdingDays }],
+    cfd: { leverage: trade.leverage ?? null },
+  };
+};
+
 export const buildClosedInvestments = (
   portfolios: InvestmentPortfolio[],
   options: { year?: number | null } = {}
 ): ClosedInvestmentsReport => {
   const allTrades = portfolios
-    .flatMap((portfolio) => (portfolio.sales ?? []).map((sale) => toTrade(portfolio, sale)))
+    .flatMap((portfolio) => [
+      ...(portfolio.sales ?? []).map((sale) => toTrade(portfolio, sale)),
+      ...listImportedCfdCloses(portfolio).map((close) => toCfdTrade(portfolio, close)),
+    ])
     .sort((left, right) => right.saleDate.localeCompare(left.saleDate) || left.name.localeCompare(right.name, "pl"));
   const years = [...new Set(allTrades.map((trade) => Number(trade.saleDate.slice(0, 4))).filter(Number.isFinite))].sort(
     (left, right) => right - left

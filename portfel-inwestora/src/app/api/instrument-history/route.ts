@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
+import { getCfdQuoteSource } from "@/lib/cfd";
 import { getCurrentAuthenticatedUser } from "@/lib/server/auth";
+import { fetchYahooDailyHistory } from "@/lib/server/yahoo";
 import { fetchInstrumentCandles } from "@/lib/server/instrument-candles";
 import { fetchInstrumentPriceHistory } from "@/lib/server/portfolio-history";
 import { toCurrencyCode } from "@/lib/utils";
@@ -26,6 +28,7 @@ type RequestItem = {
   provider?: unknown;
   providerId?: unknown;
   priceScale?: unknown;
+  isCfd?: unknown;
 };
 
 const text = (value: unknown, max: number) => (typeof value === "string" ? value.trim().slice(0, max) : "");
@@ -69,6 +72,7 @@ export async function POST(request: Request) {
       provider: PROVIDERS.has(provider) ? provider : "catalog",
       providerId: text(item?.providerId, 120) || undefined,
       priceScale,
+      isCfd: item?.isCfd === true,
     };
   });
   if (instruments.some((item) => !item.key || !item.symbol || !PRICE_KINDS.has(item.kind))) {
@@ -79,7 +83,14 @@ export async function POST(request: Request) {
     point.date >= startDate && point.date <= today && Number.isFinite(point.close) && point.close > 0;
 
   const series = await Promise.all(
-    instruments.map(async ({ key, ...definition }) => {
+    instruments.map(async ({ key, isCfd, ...definition }) => {
+      if (isCfd) {
+        // Searching by the CFD's ticker could draw another instrument that shares its letters.
+        const source = getCfdQuoteSource({ instrumentType: "CFD", symbol: definition.symbol });
+        const history = source ? await fetchYahooDailyHistory({ symbol: source.yahooSymbol, startDate, endDate: today }).catch(() => null) : null;
+        const candles = history?.currency?.toUpperCase() === "USD" ? (history.candles ?? []).filter(inRange) : [];
+        return { key, points: candles.map(({ date, close }) => ({ date, close })), candles };
+      }
       const candles = (await fetchInstrumentCandles(definition, startDate, today)).filter(inRange);
       // Candles that start about when asked need no second source.
       if (candles.length > 1 && candles[0]!.date <= shiftDays(startDate, COVERAGE_TOLERANCE_DAYS)) {

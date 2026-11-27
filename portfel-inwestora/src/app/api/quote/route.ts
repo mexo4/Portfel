@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+import { getCfdQuoteSource } from "@/lib/cfd";
+import { fetchCfdQuoteServer } from "@/lib/server/cfd-quotes";
 import { fetchAssetQuoteServer } from "@/lib/server/market-data";
 import { fetchTreasuryBondQuoteServer } from "@/lib/server/treasury-bonds";
 import { getCurrentAuthenticatedUser } from "@/lib/server/auth";
@@ -37,8 +39,13 @@ export async function GET(request: Request) {
 
   try {
     let quote;
+    const isCfd = searchParams.get("cfd") === "1";
+    const cfdSource = isCfd ? getCfdQuoteSource({ instrumentType: "CFD", symbol }) : null;
 
-    if (kind === "bond") {
+    if (isCfd) {
+      // A CFD without its own source gets no quote, never a share with the same letters.
+      quote = cfdSource ? await fetchCfdQuoteServer(cfdSource, { symbol, marketCurrency, provider, providerId }) : null;
+    } else if (kind === "bond") {
       quote = await fetchTreasuryBondQuoteServer({
         code: symbol,
         purchaseDate: bondPurchaseDate!,

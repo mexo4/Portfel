@@ -4,7 +4,10 @@ import test from "node:test";
 import {
   classifyEspiCategory,
   classifyEspiReportType,
+  getEspiSourceFamily,
   getEspiSourceLabel,
+  hasOwnEspiReportNumber,
+  isEspiCorrection,
   parsePapEspiList,
   parsePapEspiReport,
   parseGpwEspiList,
@@ -242,6 +245,29 @@ test("a formal correction remains a separate source report and points to its ori
   assert.equal(parsed.reportNumber, "17/2026");
   assert.equal(parsed.isCorrection, true);
   assert.equal(parsed.correctionTargetReportNumber, "16/2026");
+});
+
+test("only a number with a sequence identifies a report: a year alone repeats every quarter", () => {
+  for (const number of ["5/2026", "12/2025/KOR", "RB 7 / 2026", "31/2026 K"]) assert.equal(hasOwnEspiReportNumber(number), true, number);
+  for (const number of ["/2026", "/2025", "/", "", null, undefined]) assert.equal(hasOwnEspiReportNumber(number), false, String(number));
+  assert.deepEqual(["gpw:1", "newconnect:2", "pap:node/3"].map(getEspiSourceFamily), ["gpw", "newconnect", "pap"]);
+});
+
+test("the empty correction sheet of a periodic form does not make a report a correction", () => {
+  const body = "QSr:\n\nSpis tresci:\n\n1. STRONA TYTUŁOWA\n\n4. KOREKTA RAPORTU\n\n5. ZAWARTOŚĆ RAPORTU\n\nNazwa arkusza: KOREKTA RAPORTU\n\nINFORMACJA O KOREKCIE RAPORTU\nSkorygowany raportem bieżącym nr\nz dnia\no treści:";
+  assert.equal(isEspiCorrection("TESTOWA SA Raport ESPI /2026", body), false);
+  assert.equal(isEspiCorrection("TESTOWA SA Korekta raportu /2026", body), true, "the title says so");
+  assert.equal(isEspiCorrection("TESTOWA SA Raport ESPI /2026", body.replace("raportem bieżącym nr\n", "raportem bieżącym nr 9/2026\n")), true, "the sheet is filled in");
+  assert.equal(isEspiCorrection("TESTOWA SA (17/2026) Raport", "Korekta raportu bieżącego nr 16/2026."), true, "the text says so");
+  assert.equal(isEspiCorrection("TESTOWA SA (17/2026) Raport", "KOREKTA RAPORTU\nZmieniono załącznik."), true, "a heading of its own is not the form's sheet");
+});
+
+test("two reports without their own number stay apart unless they are copies from two channels", async () => {
+  const serverSource = await readFile(new URL("../src/lib/server/espi.ts", import.meta.url), "utf8");
+  // The stored row, the list check and the feed all use the same rule.
+  assert.equal(serverSource.match(/AND \$\{sameFilingSql\(\{ hasOwn: "\$9", minute: "\$10", family: "\$11" \}\)\}/g).length, 2);
+  assert.match(serverSource, /return hasOwnEspiReportNumber\(candidate\.reportNumber\) \|\|\s+\(getEspiSourceFamily\(row\.source_id\) !== getEspiSourceFamily\(candidate\.sourceId\)/);
+  assert.match(serverSource, /split_part\(preferred\.source_id, ':', 1\) <> split_part\(report\.source_id, ':', 1\)/);
 });
 
 test("list parsing deduplicates repeated source records by the stable PAP node id", () => {

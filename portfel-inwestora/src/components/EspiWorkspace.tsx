@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import EspiCompanyField from "@/components/EspiCompanyField";
 import { usePortfolioWorkspace } from "@/components/PortfolioWorkspaceContext";
 import { ApiError, fetchEspiFeed, refreshEspi } from "@/lib/api";
 import {
@@ -170,7 +171,8 @@ export default function EspiWorkspace() {
         market,
         cursor,
         query: filters.query || undefined,
-        company: filters.company || undefined,
+        // A chosen company is searched by its ticker alone; its name in the field is only a label.
+        company: filters.ticker ? undefined : filters.company || undefined,
         ticker: filters.ticker || undefined,
         category: filters.category || undefined,
         reportType: filters.reportType || undefined,
@@ -259,8 +261,17 @@ export default function EspiWorkspace() {
         setFilters(draftFilters);
       }}>
         <label className="espi-filter-search"><span>Szukaj w raportach</span><input value={draftFilters.query} onChange={(event) => setDraftFilters((current) => ({ ...current, query: event.target.value }))} placeholder="Tytuł, treść, emitent…" /></label>
-        <label><span>Spółka</span><input value={draftFilters.company} onChange={(event) => setDraftFilters((current) => ({ ...current, company: event.target.value }))} placeholder="np. CD Projekt" /></label>
-        <label><span>Ticker</span><input value={draftFilters.ticker} onChange={(event) => setDraftFilters((current) => ({ ...current, ticker: event.target.value }))} placeholder="np. CDR" autoCapitalize="characters" /></label>
+        <EspiCompanyField
+          value={draftFilters.company}
+          market={market}
+          onType={(company) => setDraftFilters((current) => ({ ...current, company, ticker: "" }))}
+          // Choosing a company shows its reports at once, together with the other fields as typed.
+          onChoose={(issuer) => {
+            const chosen = { ...draftFilters, company: `${issuer.name} (${issuer.ticker})`, ticker: issuer.ticker };
+            setDraftFilters(chosen);
+            setFilters(chosen);
+          }}
+        />
         <label><span>Kategoria</span><select value={draftFilters.category} onChange={(event) => setDraftFilters((current) => ({ ...current, category: event.target.value }))}><option value="">Wszystkie</option>{ESPI_CATEGORIES.map((category) => <option value={category} key={category}>{ESPI_CATEGORY_LABELS[category]}</option>)}</select></label>
         <label><span>Typ raportu</span><select value={draftFilters.reportType} onChange={(event) => setDraftFilters((current) => ({ ...current, reportType: event.target.value }))}><option value="">Wszystkie</option>{ESPI_REPORT_TYPES.map((type) => <option value={type} key={type}>{ESPI_REPORT_TYPE_LABELS[type]}</option>)}</select></label>
         <label><span>Od</span><input type="date" value={draftFilters.dateFrom} onChange={(event) => setDraftFilters((current) => ({ ...current, dateFrom: event.target.value }))} /></label>

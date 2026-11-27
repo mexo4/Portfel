@@ -987,9 +987,14 @@ const reconcileStoredEspiMetadata = async () => {
   for (const row of rows) {
     try {
       const classifiedReportType = classifyEspiReportType(row.source_title);
-      const reportType = classifiedReportType === "OTHER" && row.report_number
-        ? "CURRENT"
-        : classifiedReportType;
+      // GPW's periodic reports often have no title: the type read from the list then stays.
+      const reportType = classifiedReportType !== "OTHER"
+        ? classifiedReportType
+        : row.report_type !== "OTHER"
+          ? row.report_type
+          : row.report_number
+            ? "CURRENT"
+            : "OTHER";
       const category = classifyEspiCategory({
         title: row.source_title,
         body: row.body_text,

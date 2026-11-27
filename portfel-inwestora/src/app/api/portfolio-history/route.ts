@@ -59,7 +59,7 @@ type HistoryCacheStatus = "hit" | "stored" | "miss" | "shared";
  * 2: purchases imported from a broker without a lotId are no longer counted as
  *    new capital (net invested, P/L and the flow-neutral returns were wrong).
  */
-const HISTORY_ENGINE_VERSION = "3";
+const HISTORY_ENGINE_VERSION = "4";
 
 /**
  * `key` identifies a calculation in memory; `storeKey` is the same identity

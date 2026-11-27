@@ -170,5 +170,5 @@ test("the stored history and the browser copy of the old, wrong results are not 
 
   assert.match(route, /HISTORY_ENGINE_VERSION/);
   assert.match(route, /const storeKey = `\$\{HISTORY_ENGINE_VERSION\}:\$\{revision\}:/);
-  assert.match(client, /"mexo\.portfolio-history\.v3"/);
+  assert.match(client, /"mexo\.portfolio-history\.v4"/);
 });

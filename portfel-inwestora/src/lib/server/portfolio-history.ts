@@ -53,6 +53,7 @@ import {
 } from "@/lib/ticker-aliases";
 import { round, toCurrencyCode, toDateInputValue } from "@/lib/utils";
 import { CASH_SHORTFALL_NOTICE_PLN, MIN_DAILY_RETURN_BASE, calculateDailyReturn, getDailyReturnBase } from "@/lib/daily-return";
+import { toSplitAdjustedCloses, type PriceBasis } from "@/lib/price-basis";
 import type {
   AssetKind,
   CurrencyCode,
@@ -111,6 +112,8 @@ type InstrumentHistoryDefinition = {
   providerId?: string;
   priceScale?: number;
   purchaseDate: string;
+  /** Holdings by default; benchmarks ask for total return. */
+  priceBasis?: PriceBasis;
 };
 
 type InstrumentHistoryResult = {
@@ -428,7 +431,7 @@ export const getCachedOrFetchHistoryRange = async <TPoint extends { date: string
     const sourceParts = key.split(":");
     logHistoryDiagnostic("range-cache", {
       source:
-        sourceParts[2] === "v2"
+        /^v\d+$/.test(sourceParts[2] ?? "")
           ? sourceParts[3] ?? "history"
           : sourceParts[2] ?? "history",
       cacheAction: resolution.cacheStatus,
@@ -592,12 +595,16 @@ const fetchYahooStockHistory = async (
   symbol: string,
   startDate: string,
   endDate: string,
-  fallbackPriceScale = 1
+  fallbackPriceScale = 1,
+  priceBasis: PriceBasis = "traded"
 ) => {
   const yahooSymbol = toYahooStockSymbol(symbol);
+  // Traded prices live in their own cache family (v3); the older entries hold dividend-adjusted
+  // closes, which only total return may still use.
+  const isTotalReturn = priceBasis === "total-return";
 
   return getCachedOrFetchHistoryRange<PricePoint>(
-    `portfolio-history:v2:yahoo:${isGpwSymbol(yahooSymbol) ? "gpw-v2:" : ""}${normalizeSymbol(
+    `portfolio-history:${isTotalReturn ? "v2" : "v3"}:yahoo:${isGpwSymbol(yahooSymbol) ? "gpw-v2:" : ""}${normalizeSymbol(
       yahooSymbol
     )}:${startDate}:${
       fallbackPriceScale ?? 1
@@ -624,13 +631,16 @@ const fetchYahooStockHistory = async (
       return dedupeAndSortPricePoints(
         timestamps.map((timestamp, index) => ({
           date: formatDateOnly(new Date(timestamp * 1_000)),
-          close: Number(adjustedCloses[index] ?? closes[index]) * priceScale,
+          // Yahoo restates `close` for splits only and `adjclose` for dividends too.
+          close: Number(isTotalReturn ? adjustedCloses[index] ?? closes[index] : closes[index]) * priceScale,
         }))
       );
     },
-    `portfolio-history:yahoo:${isGpwSymbol(yahooSymbol) ? "gpw-v2:" : ""}${normalizeSymbol(
-      yahooSymbol
-    )}:${startDate}:${endDate}:${fallbackPriceScale ?? 1}`
+    isTotalReturn
+      ? `portfolio-history:yahoo:${isGpwSymbol(yahooSymbol) ? "gpw-v2:" : ""}${normalizeSymbol(
+          yahooSymbol
+        )}:${startDate}:${endDate}:${fallbackPriceScale ?? 1}`
+      : undefined
   );
 };
 
@@ -703,14 +713,16 @@ const fetchStockHistory = async (
   symbol: string,
   startDate: string,
   endDate: string,
-  yahooFallbackPriceScale?: number
+  yahooFallbackPriceScale?: number,
+  priceBasis: PriceBasis = "traded"
 ) => {
   return fetchPreferredHistoryWithHedge(
     () => fetchYahooStockHistory(
       symbol,
       startDate,
       endDate,
-      yahooFallbackPriceScale
+      yahooFallbackPriceScale,
+      priceBasis
     ),
     () => fetchStooqStockHistory(symbol, startDate, endDate),
   );
@@ -735,16 +747,18 @@ const fetchEodhdHistoryForProviderId = async (
   providerId: string,
   startDate: string,
   endDate: string,
-  priceScale?: number
+  priceScale?: number,
+  priceBasis: PriceBasis = "traded"
 ) => {
   if (!EODHD_API_KEY) {
     return [];
   }
 
   const normalizedProviderId = normalizeSymbol(providerId);
+  const isTotalReturn = priceBasis === "total-return";
 
   return getCachedOrFetchHistoryRange<PricePoint>(
-    `portfolio-history:v2:eodhd:${normalizedProviderId}:${startDate}:${
+    `portfolio-history:${isTotalReturn ? "v2" : "v3"}:eodhd:${normalizedProviderId}:${startDate}:${
       priceScale ?? 1
     }`,
     startDate,
@@ -765,17 +779,20 @@ const fetchEodhdHistoryForProviderId = async (
         25_000
       );
 
+      const rows = (payload ?? [])
+        .map((item) => ({ date: item.date ?? "", close: item.close ?? 0, adjustedClose: item.adjusted_close }))
+        .sort((left, right) => left.date.localeCompare(right.date));
+      const closes = isTotalReturn
+        ? rows.map((row) => ({ date: row.date, close: row.adjustedClose && row.adjustedClose > 0 ? row.adjustedClose : row.close }))
+        : toSplitAdjustedCloses(rows.filter((row) => row.close > 0));
+
       return dedupeAndSortPricePoints(
-        (payload ?? []).map((item) => ({
-          date: item.date ?? "",
-          close:
-            ((typeof item.adjusted_close === "number" && item.adjusted_close > 0
-              ? item.adjusted_close
-              : item.close) ?? 0) * (priceScale ?? 1),
-        }))
+        closes.map(({ date, close }) => ({ date, close: close * (priceScale ?? 1) }))
       );
     },
-    `portfolio-history:eodhd:${normalizedProviderId}:${startDate}:${endDate}:${priceScale ?? 1}`
+    isTotalReturn
+      ? `portfolio-history:eodhd:${normalizedProviderId}:${startDate}:${endDate}:${priceScale ?? 1}`
+      : undefined
   );
 };
 
@@ -783,11 +800,12 @@ const fetchEodhdHistory = async (
   providerId: string,
   startDate: string,
   endDate: string,
-  priceScale?: number
+  priceScale?: number,
+  priceBasis: PriceBasis = "traded"
 ) => {
   const candidates = getEodhdHistoryProviderIdCandidates(providerId);
   const fetchCandidate = (candidate: string) =>
-    fetchEodhdHistoryForProviderId(candidate, startDate, endDate, priceScale);
+    fetchEodhdHistoryForProviderId(candidate, startDate, endDate, priceScale, priceBasis);
 
   if (candidates.length <= 1) {
     return fetchCandidate(candidates[0] ?? providerId);
@@ -1004,6 +1022,7 @@ const fetchInstrumentHistory = async ({
   providerId,
   priceScale,
   purchaseDate,
+  priceBasis = "traded",
 }: InstrumentHistoryDefinition,
   startDate: string,
   endDate: string
@@ -1045,7 +1064,8 @@ const fetchInstrumentHistory = async ({
             stockHistorySymbol,
             startDate,
             endDate,
-            resolvedPriceScale
+            resolvedPriceScale,
+            priceBasis
           );
           if (points.length > 0) return points;
         }
@@ -1053,7 +1073,7 @@ const fetchInstrumentHistory = async ({
       };
       const points = resolvedProvider === "eodhd" && resolvedProviderId
         ? await fetchPreferredHistoryWithHedge(
-            () => fetchEodhdHistory(resolvedProviderId, startDate, endDate, resolvedPriceScale),
+            () => fetchEodhdHistory(resolvedProviderId, startDate, endDate, resolvedPriceScale, priceBasis),
             symbolHistory,
           )
         : await symbolHistory();
@@ -1072,7 +1092,8 @@ const fetchInstrumentHistory = async ({
             etfHistorySymbol,
             startDate,
             endDate,
-            resolvedPriceScale
+            resolvedPriceScale,
+            priceBasis
           );
           if (points.length > 0) return points;
         }
@@ -1080,7 +1101,7 @@ const fetchInstrumentHistory = async ({
       };
       const points = resolvedProvider === "eodhd" && resolvedProviderId
         ? await fetchPreferredHistoryWithHedge(
-            () => fetchEodhdHistory(resolvedProviderId, startDate, endDate, resolvedPriceScale),
+            () => fetchEodhdHistory(resolvedProviderId, startDate, endDate, resolvedPriceScale, priceBasis),
             symbolHistory,
           )
         : await symbolHistory();
@@ -1848,14 +1869,18 @@ const buildInstrumentDefinitions = (segments: PortfolioHistorySegment[]) => {
 const expandBenchmarks = (benchmarks: PortfolioBenchmarkDefinition[]) =>
   benchmarks.flatMap((benchmark) => (isMixBenchmark(benchmark) ? (benchmark.components ?? []).map((part) => part.benchmark) : [benchmark]));
 
+/**
+ * A benchmark has a key of its own even when the same instrument is held: the holding is valued at
+ * traded prices, the benchmark at total return, and the two series must not replace each other.
+ */
 const getBenchmarkHistoryKey = (benchmark: PortfolioBenchmarkDefinition) =>
   isSyntheticBenchmark(benchmark)
     ? `mexo:${benchmark.id}`
     : benchmark.kind === "crypto" ||
   benchmark.kind === "etf" ||
   (benchmark.kind === "stock" && benchmark.providerId)
-    ? `${benchmark.kind}:${normalizeSymbol(benchmark.providerId ?? benchmark.symbol)}`
-    : `${benchmark.kind}:${normalizeSymbol(benchmark.symbol)}`;
+    ? `benchmark:${benchmark.kind}:${normalizeSymbol(benchmark.providerId ?? benchmark.symbol)}`
+    : `benchmark:${benchmark.kind}:${normalizeSymbol(benchmark.symbol)}`;
 
 const buildBenchmarkInstrumentDefinitions = ({
   benchmarks,
@@ -1883,6 +1908,7 @@ const buildBenchmarkInstrumentDefinitions = ({
       providerId: benchmark.providerId,
       priceScale: benchmark.priceScale,
       purchaseDate: startDate,
+      priceBasis: "total-return",
     });
   }
 

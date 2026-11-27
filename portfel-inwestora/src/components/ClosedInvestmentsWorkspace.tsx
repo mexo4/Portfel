@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { Fragment, useMemo, useState } from "react";
+import { getQuantityUnit } from "@/lib/cfd";
 import { buildClosedInvestments, listImportedCfdCloses, type ClosedInvestmentTrade } from "@/lib/closed-investments";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import type { InvestmentPortfolio } from "@/types/portfolio";
@@ -27,7 +28,7 @@ function TradeDetails({ trades, showPortfolio }: { trades: ClosedInvestmentTrade
           <header>
             <strong>{trade.cfd ? "Zamknięcie CFD" : TRANSACTION_LABELS[trade.transactionKind]} {formatDate(trade.saleDate)}</strong>
             <span>
-              {quantityFormatter.format(trade.quantity)} {trade.cfd ? "lota" : "szt."} po {formatCurrency(trade.salePrice, trade.saleCurrency)}
+              {quantityFormatter.format(trade.quantity)} {getQuantityUnit(trade.quantity, Boolean(trade.cfd))} po{formatCurrency(trade.salePrice, trade.saleCurrency)}
               {trade.direction === "SHORT" ? " · short" : trade.cfd ? " · long" : ""}
               {trade.cfd?.leverage ? ` · dźwignia 1:${quantityFormatter.format(trade.cfd.leverage)}` : ""}
               {showPortfolio ? ` · ${trade.portfolioName}` : ""}
@@ -43,7 +44,7 @@ function TradeDetails({ trades, showPortfolio }: { trades: ClosedInvestmentTrade
             <ul aria-label={trade.cfd ? "Otwarcie pozycji" : "Zamknięte zakupy (FIFO)"}>
               {trade.lots.map((lot) => (
                 <li key={`${trade.id}-${lot.lotId}-${lot.purchaseDate}`}>
-                  {quantityFormatter.format(lot.quantity)} {trade.cfd ? "lota otwarte" : "szt. kupione"} {formatDate(lot.purchaseDate)} po {formatCurrency(lot.purchasePrice, lot.priceCurrency)}
+                  {quantityFormatter.format(lot.quantity)} {trade.cfd ? `${getQuantityUnit(lot.quantity, true)}, otwarcie` : "szt. kupione"} {formatDate(lot.purchaseDate)} po {formatCurrency(lot.purchasePrice, lot.priceCurrency)}
                   <span>{trade.cfd ? "" : <> · koszt {formatCurrency(lot.investedPln, "PLN")}{lot.buyFeePln > 0 ? ` (w tym prowizja ${formatCurrency(lot.buyFeePln, "PLN")})` : ""}</>} · {formatDays(lot.holdingDays)}</span>
                 </li>
               ))}
@@ -134,7 +135,7 @@ export default function ClosedInvestmentsWorkspace({ portfolios }: { portfolios:
                   return (
                     <Fragment key={row.instrumentKey}>
                       <tr>
-                        <td><strong>{row.name}</strong><small className="block">{row.symbol} · {quantityFormatter.format(row.quantity)} {row.instrumentKey.startsWith("cfd:") ? "lota" : "szt."}</small></td>
+                        <td><strong>{row.name}</strong><small className="block">{row.symbol} · {quantityFormatter.format(row.quantity)} {getQuantityUnit(row.quantity, row.instrumentKey.startsWith("cfd:"))}</small></td>
                         <td data-label="Zamknięcia">{row.trades}<small className="block">{row.winningTrades} z zyskiem</small></td>
                         <td data-label="Koszt">{formatCurrency(row.investedPln, "PLN")}</td>
                         <td data-label="Przychód">{formatCurrency(row.proceedsPln, "PLN")}</td>

@@ -6,7 +6,7 @@ import { Fragment, useEffect, useMemo, useState, type MouseEvent, type ReactNode
 import { CfdSourceNote, ChartEventNotes, ChartReportList, ChartStyleSwitch, InstrumentChartLegend, InstrumentPriceChartBody, RangePicker, useInstrumentChartData, type RangeKey } from "@/components/InstrumentChartsWorkspace";
 import { usePortfolioWorkspace } from "@/components/PortfolioWorkspaceContext";
 import { getAssetEntryHref, getDividendEntryHref, getLatestLot, type AssetEntrySide } from "@/lib/asset-entry-prefill";
-import { getCfdFigures, getCfdQuoteSource } from "@/lib/cfd";
+import { getCfdFigures, getCfdQuoteSource, getQuantityUnit } from "@/lib/cfd";
 import { getAssetClassGroup } from "@/lib/geographic-allocation";
 import { instrumentKeyOf, listChartInstruments } from "@/lib/instrument-chart";
 import { getAssetInvestedPln, getAssetMarketValuePln, getAssetProfitLossPln, hasAssetBaseCurrencyValuation, type PortfolioAssetGroup } from "@/lib/portfolio-engine";
@@ -325,7 +325,7 @@ export default function PositionsWorkspace({ toolbar }: { toolbar?: ReactNode })
                             <td>
                               <button type="button" className="positions-name" aria-expanded={isNarrow ? isSelected : undefined} aria-pressed={isNarrow ? undefined : isSelected} onClick={(event) => { event.stopPropagation(); select(group); }}>
                                 <strong>{group.name}</strong>
-                                <small>{group.symbol} · {qty.format(group.quantity)} szt.{showPortfolio && group.portfolioName ? ` · ${group.portfolioName}` : ""}</small>
+                                <small>{group.symbol} · {qty.format(group.quantity)} {getQuantityUnit(group.quantity, isCfdGroup(group))}{showPortfolio && group.portfolioName ? ` · ${group.portfolioName}` : ""}</small>
                               </button>
                             </td>
                             {isNarrow ? null : <td className="positions-actions-cell"><RowActions group={group} showPortfolio={showPortfolio} hasAnalysis={chartInstrumentKeys.has(instrumentKeyOf(group))} /></td>}

@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { strToU8, zipSync } from "fflate";
 
-const { getCfdFigures, getCfdLeverage, getCfdQuoteSource, readClosedCfdTrade } = await import("../src/lib/cfd.ts");
+const { getCfdFigures, getCfdLeverage, getCfdQuoteSource, getQuantityUnit, readClosedCfdTrade } = await import("../src/lib/cfd.ts");
 const { mergeQuoteIntoPortfolioAsset, refreshPortfolioQuotesWithProgress, applyRefreshedPortfolioAssetSnapshot } = await import("../src/lib/api.ts");
 const { fetchCfdQuoteServer } = await import("../src/lib/server/cfd-quotes.ts");
 const { parseBrokerOperationsXlsx } = await import("../src/lib/import-operations.ts");
@@ -17,6 +17,12 @@ test("only a checked CFD has a quote source", () => {
   assert.equal(getCfdQuoteSource(lot()).yahooSymbol, "NQ=F");
   assert.equal(getCfdQuoteSource(lot({ symbol: "GOLD" })), null);
   assert.equal(getCfdQuoteSource(lot({ instrumentType: undefined })), null, "a share with the same letters is not the CFD");
+});
+
+test("a CFD is counted in lots, everything else in pieces", () => {
+  assert.deepEqual([0.01, 2.5, 1, 2, 4, 5, 12, 13, 21, 22, 112].map((volume) => getQuantityUnit(volume, true)),
+    ["lota", "lota", "lot", "loty", "loty", "lotów", "lotów", "lotów", "lotów", "loty", "lotów"]);
+  assert.deepEqual([getQuantityUnit(1), getQuantityUnit(0.5, false)], ["szt.", "szt."]);
 });
 
 test("leverage, margin and the return on the margin follow the broker", () => {

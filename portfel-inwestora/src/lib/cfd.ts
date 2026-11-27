@@ -18,6 +18,15 @@ export const getCfdQuoteSource = ({ instrumentType, symbol }: { instrumentType?:
   return instrumentType === "CFD" && Object.hasOwn(CFD_QUOTE_SOURCES, key) ? CFD_QUOTE_SOURCES[key]! : null;
 };
 
+/** The Polish unit of a held or traded quantity: a CFD's volume is in lots, as the broker names it. */
+export const getQuantityUnit = (quantity: number, isCfd?: boolean) => {
+  if (!isCfd) return "szt.";
+  if (!Number.isInteger(quantity)) return "lota";
+  if (quantity === 1) return "lot";
+  const [last, lastTwo] = [quantity % 10, quantity % 100];
+  return last >= 2 && last <= 4 && (lastTwo < 12 || lastTwo > 14) ? "loty" : "lotów";
+};
+
 /** The leverage behind a margin deposit. Brokers offer whole steps, and the margin is rounded to cents. */
 export const getCfdLeverage = (notional: number, margin: number) => {
   if (!(notional > 0) || !(margin > 0)) return undefined;

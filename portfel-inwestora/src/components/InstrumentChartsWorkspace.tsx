@@ -13,7 +13,7 @@ import { setChartStyle, useChartStyle } from "@/components/useChartStyle";
 import { toggleChartEvents, useHiddenChartEvents } from "@/components/useHiddenChartEvents";
 import { usePageView } from "@/components/usePageView";
 import { fetchInstrumentHistories } from "@/lib/api";
-import { getCfdQuoteSource } from "@/lib/cfd";
+import { getCfdQuoteSource, getQuantityUnit } from "@/lib/cfd";
 import { findEventSlot, getEspiChartTicker, listChartDividends, niceTicks, placeChartEvents, toEventMarks, type ChartEvent, type EventMark, type EventSlot } from "@/lib/chart-events";
 import { canAccessFeature } from "@/lib/entitlements";
 import { calculatePeriodReturns, RETURN_PERIODS, type ReturnPeriodId } from "@/lib/period-returns";
@@ -146,7 +146,7 @@ type PriceRow = { t: number; date: string; close: number; average: number | null
 
 type LineEventMark = EventMark & { t: number; date: string };
 
-function PriceTooltip({ active, payload, currency, tradesByDate, eventSlots, eventInterval }: { active?: boolean; payload?: Array<{ payload?: PriceRow | TradeMarker | LineEventMark }>; currency: string; tradesByDate: Map<string, InstrumentTrade[]>; eventSlots: Array<EventSlot<ChartEvent>>; eventInterval: CandleInterval }) {
+function PriceTooltip({ active, payload, currency, isCfd, tradesByDate, eventSlots, eventInterval }: { active?: boolean; payload?: Array<{ payload?: PriceRow | TradeMarker | LineEventMark }>; currency: string; isCfd?: boolean; tradesByDate: Map<string, InstrumentTrade[]>;eventSlots: Array<EventSlot<ChartEvent>>; eventInterval: CandleInterval }) {
   const row = active ? payload?.[0]?.payload : undefined;
   if (!row || !("date" in row)) return null;
   const date = row.date;
@@ -160,7 +160,7 @@ function PriceTooltip({ active, payload, currency, tradesByDate, eventSlots, eve
       {average !== null ? <span>Średnia cena kupna: {formatCurrency(average, currency)}</span> : null}
       {trades.map((trade) => (
         <span key={trade.id} className={trade.side === "buy" ? "tone-positive" : "tone-negative"}>
-          {trade.side === "buy" ? "Kupno" : "Sprzedaż"} {quantityFormatter.format(trade.quantity)} szt. po {formatCurrency(trade.price, currency)}
+          {trade.side === "buy" ? "Kupno" : "Sprzedaż"} {quantityFormatter.format(trade.quantity)} {getQuantityUnit(trade.quantity, isCfd)} po{formatCurrency(trade.price, currency)}
         </span>
       ))}
       <EventTooltipLines slot={findEventSlot(eventSlots, date)} interval={eventInterval} />
@@ -259,7 +259,7 @@ export function InstrumentPriceChartBody({ instrument, data, height }: { instrum
   const shownReports = events.length - shownDividends;
   const description = `Kurs ${instrument.name} od ${formatDate(points[0]!.date)} do ${formatDate(lastDate)}: ${buys} zakupów i ${sells} sprzedaży zaznaczonych na wykresie.${events.length > 0 ? ` Pod kursem: dywidendy (${shownDividends}) i komunikaty ESPI (${shownReports}).` : ""}`;
   if (style === "candle" && candles.length > 1) {
-    return <InstrumentCandleChart candles={candles} trades={markers} averagePriceSteps={timeline?.averagePriceSteps ?? []} events={events} currency={currency} height={height} isNarrow={isNarrow} ariaLabel={description} />;
+    return <InstrumentCandleChart candles={candles} trades={markers} averagePriceSteps={timeline?.averagePriceSteps ?? []} events={events} currency={currency} isCfd={instrument.isCfd} height={height} isNarrow={isNarrow} ariaLabel={description} />;
   }
   // With marks under the price, the scale leaves them room below the lowest value drawn.
   const hasEventMarks = placement.slots.length > 0;
@@ -279,7 +279,7 @@ export function InstrumentPriceChartBody({ instrument, data, height }: { instrum
           <CartesianGrid stroke="rgba(20, 35, 48, 0.08)" strokeDasharray="3 10" vertical={false} />
           <XAxis dataKey="t" type="number" scale="time" domain={[toTime(points[0]!.date), toTime(lastDate)]} ticks={monthTicks(toTime(points[0]!.date), toTime(lastDate), isNarrow ? 4 : 7)} axisLine={false} tickLine={false} tick={AXIS} tickFormatter={monthTick} allowDuplicatedCategory={false} />
           <YAxis type="number" {...priceScale} axisLine={false} tickLine={false} tick={AXIS} orientation="right" width={64} tickFormatter={(value: number) => percentFormatter.format(value)} />
-          <Tooltip content={<PriceTooltip currency={currency} tradesByDate={tradesByPoint}eventSlots={placement.slots} eventInterval={placement.interval} />} cursor={{ stroke: "rgba(20, 35, 48, 0.16)", strokeDasharray: "6 8" }} wrapperStyle={{ outline: "none", zIndex: 20 }} />
+          <Tooltip content={<PriceTooltip currency={currency} isCfd={instrument.isCfd} tradesByDate={tradesByPoint} eventSlots={placement.slots} eventInterval={placement.interval} />} cursor={{ stroke: "rgba(20, 35, 48, 0.16)", strokeDasharray: "6 8" }} wrapperStyle={{ outline: "none", zIndex: 20 }} />
           {extremes ? (
             <>
               <ReferenceLine y={extremes.max.close} stroke={MAX} strokeWidth={1.5} label={{ value: `max ${percentFormatter.format(extremes.max.close)}`, position: "insideTopLeft", fill: MAX, fontSize: 11, fontWeight: 700 }} />
@@ -421,7 +421,7 @@ function InstrumentChart({ instruments, initialKey }: { instruments: ChartInstru
       <div className="risk-metric-grid risk-metric-grid-summary mt-4">
         <article className="risk-metric-card"><div className="risk-metric-label"><span>Ostatni kurs</span></div><strong>{lastPrice === null ? "—" : formatCurrency(lastPrice, currency)}</strong><small>{extremes ? formatDate(extremes.last.date) : "brak notowań"}</small></article>
         <article className="risk-metric-card"><div className="risk-metric-label"><span>Średnia cena kupna</span></div><strong>{averageNow === null ? "—" : formatCurrency(averageNow, currency)}</strong><small>{averageNow === null ? "nic nie zostało w portfelu" : <>kurs vs średnia: <span className={tone(vsAverage ?? 0)}>{formatPercent(vsAverage)}</span></>}</small></article>
-        <article className="risk-metric-card"><div className="risk-metric-label"><span>W portfelu</span></div><strong>{quantityFormatter.format(instrument.quantity)} szt.</strong><small>{instrument.portfolioNames.join(", ")}</small></article>
+        <article className="risk-metric-card"><div className="risk-metric-label"><span>W portfelu</span></div><strong>{quantityFormatter.format(instrument.quantity)} {getQuantityUnit(instrument.quantity, instrument.isCfd)}</strong><small>{instrument.portfolioNames.join(", ")}</small></article>
         <article className="risk-metric-card"><div className="risk-metric-label"><span>Transakcje</span></div><strong>{buys} / {sells}</strong><small>zakupy / sprzedaże</small></article>
         {extremes ? <article className="risk-metric-card"><div className="risk-metric-label"><span>Zakres kursu</span></div><strong>{percentFormatter.format(extremes.min.close)} – {percentFormatter.format(extremes.max.close)}</strong><small>min {formatDate(extremes.min.date)} · max {formatDate(extremes.max.date)}</small></article> : null}
       </div>

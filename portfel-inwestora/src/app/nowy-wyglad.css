@@ -156,6 +156,11 @@ body { background: var(--canvas); color: var(--text); font-family: var(--font-sa
 .workspace-section-tabs a:focus-visible { color: var(--text); }
 .workspace-section-tabs a.is-active { color: var(--accent); font-weight: 600; }
 .workspace-section-tabs a.is-active::after { background: var(--accent); }
+/* The second row: one tab for each function of the open page. */
+.workspace-view-tabs { display: flex; gap: 4px; margin: -6px 0 14px; overflow-x: auto; scrollbar-width: thin; }
+.workspace-view-tabs a { flex: none; padding: 7px 13px; border: 1px solid var(--line); border-radius: 4px; color: var(--muted); background: #ffffff; font-size: 13.5px; font-weight: 500; white-space: nowrap; }
+.workspace-view-tabs a:hover, .workspace-view-tabs a:focus-visible { color: var(--text); border-color: #b9c3cf; }
+.workspace-view-tabs a.is-active { color: #ffffff; border-color: var(--accent); background: var(--accent); font-weight: 600; }
 
 /* ---------- surfaces ---------- */
 .workspace-shell .panel,
@@ -363,6 +368,81 @@ body { background: var(--canvas); color: var(--text); font-family: var(--font-sa
 .positions-chart-switches { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .workspace-shell .instrument-legend i.is-candle { width: 8px; height: 13px; background: #26a269; }
 .workspace-shell .instrument-legend i.is-candle.is-down { background: #e0453a; }
+/* Purchases with their results: the commission gives way first on narrow screens. */
+.positions-lots td small { display: block; font-size: 12px; }
+@media (max-width: 720px) { .positions-lots .lot-fee { display: none; } }
+
+/* Kondycja portfela */
+.health-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 22px; }
+.health-score { position: relative; display: grid; place-content: center; width: 112px; height: 112px; text-align: center; }
+.health-score svg { position: absolute; inset: 0; transform: rotate(-90deg); }
+.health-score circle { fill: none; stroke-width: 3.2; }
+.health-score-track { stroke: #e5e9ef; }
+.health-score-value { stroke: var(--accent); stroke-linecap: round; }
+.health-score strong { font-size: 30px; line-height: 1; }
+.health-score small { color: var(--muted); font-size: 12px; }
+.health-summary-text { display: grid; flex: 1 1 280px; gap: 4px; min-width: 0; }
+.health-findings { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr)); gap: 12px; margin: 0; padding: 0; list-style: none; }
+.health-card { display: grid; align-content: start; gap: 6px; padding: 14px 16px; border: 1px solid var(--line); border-top: 3px solid var(--health-tone); border-radius: 4px; background: #ffffff; }
+.health-card.is-important { --health-tone: #c3352b; }
+.health-card.is-attention { --health-tone: #c47f0e; }
+.health-card.is-note { --health-tone: #2a6fc0; }
+.health-card-head { display: flex; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .05em; }
+.health-card-head em { color: var(--health-tone); font-style: normal; font-weight: 700; }
+.health-card h3 { margin: 0; font-size: 15.5px; font-weight: 700; }
+.health-card p { margin: 0; font-size: 13.5px; }
+.health-card small { color: var(--muted); font-size: 12px; }
+.health-passed summary { cursor: pointer; font-weight: 700; }
+.health-passed ul { display: grid; gap: 4px; margin: 10px 0 0; padding-left: 18px; color: var(--muted); font-size: 13.5px; }
+
+/* Kalendarz zamknięć */
+.closed-calendar-month::first-letter { text-transform: uppercase; }
+.closed-calendar-nav { display: flex; align-items: center; gap: 6px; }
+.closed-calendar-nav .field { margin: 0; }
+.closed-calendar-total { margin: 12px 0 8px; font-size: 14px; }
+.closed-calendar-grid { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.closed-calendar-grid th { padding: 4px; color: var(--muted); font-size: 12px; font-weight: 700; }
+.closed-calendar-grid td { height: 74px; padding: 0; border: 1px solid var(--line); vertical-align: top; }
+.closed-calendar-grid td.is-outside { background: #f7f8fa; }
+.closed-calendar-grid td > .closed-calendar-number { display: block; padding: 4px 6px; }
+.closed-calendar-grid button { display: grid; align-content: start; justify-items: start; gap: 1px; width: 100%; height: 100%; min-height: 73px; padding: 4px 6px; border: 0; color: var(--text); background: transparent; font: inherit; text-align: left; cursor: pointer; }
+.closed-calendar-grid button[aria-pressed="true"] { box-shadow: inset 0 0 0 2px var(--accent); }
+.closed-calendar-number { color: var(--muted); font-size: 11.5px; }
+.closed-calendar-grid strong { font-size: 13.5px; font-variant-numeric: tabular-nums; }
+.closed-calendar-grid small { font-size: 11.5px; }
+.closed-calendar-days { margin-top: 16px; }
+.closed-calendar-days-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.closed-calendar-days-head h3 { margin: 0; font-size: 15px; font-weight: 700; }
+@media (max-width: 640px) {
+  .closed-calendar-grid td { height: 58px; }
+  .closed-calendar-grid button { min-height: 57px; padding: 3px; }
+  .closed-calendar-grid strong { font-size: 11.5px; }
+  .closed-calendar-unit, .closed-calendar-grid small { display: none; }
+}
+
+/* Zwroty w okresach */
+.period-returns-table th .table-sort { padding: 0; border: 0; color: inherit; background: none; font: inherit; font-weight: inherit; cursor: pointer; }
+.period-returns-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* Skąd wynik: kaskada */
+.waterfall { display: grid; margin: 14px 0 0; padding: 0; list-style: none; }
+.waterfall li { display: grid; grid-template-columns: minmax(150px, 280px) minmax(0, 1fr) minmax(104px, auto); align-items: center; gap: 12px; padding: 5px 0; border-bottom: 1px solid var(--line); font-size: 13.5px; }
+.waterfall li.is-total { border-bottom: 0; font-weight: 700; }
+.waterfall-track { position: relative; display: block; height: 18px; }
+.waterfall-zero { position: absolute; top: -5px; bottom: -5px; width: 1px; background: #aab4c0; }
+.waterfall-bar { position: absolute; top: 2px; bottom: 2px; border-radius: 2px; background: #26a269; }
+.waterfall-bar.is-negative { background: #e0453a; }
+.waterfall-bar.is-total { background: var(--accent); }
+.waterfall-value { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.profit-details { margin-top: 14px; }
+.profit-details summary { cursor: pointer; font-weight: 700; font-size: 13.5px; }
+.profit-details .profit-breakdown { margin-top: 10px; }
+@media (max-width: 640px) {
+  .waterfall li { grid-template-columns: minmax(0, 1fr) auto; }
+  .waterfall-track { grid-column: 1 / -1; grid-row: 2; height: 10px; }
+  .waterfall-zero { top: -2px; bottom: -2px; }
+}
+
 /* A double click on the preview chart opens the instrument's own page. */
 .positions-chart-open { cursor: zoom-in; touch-action: manipulation; }
 .instrument-candle-note { margin: 4px 0 0; }

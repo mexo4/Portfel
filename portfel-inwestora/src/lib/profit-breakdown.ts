@@ -40,6 +40,35 @@ export type ProfitSourceKey =
 
 export type ProfitSource = { key: ProfitSourceKey; label: string; description: string; amountPln: number };
 
+export type WaterfallStep = {
+  key: ProfitSourceKey | "total";
+  label: string;
+  amountPln: number;
+  /** The running result before and after this step. */
+  fromPln: number;
+  toPln: number;
+};
+
+/**
+ * The sources as a waterfall: each one starts where the previous one ended and the last bar is the
+ * whole result. `scale` holds every bar and the zero line.
+ */
+export const buildWaterfall = (breakdown: ProfitBreakdown) => {
+  const steps: WaterfallStep[] = [];
+  let running = 0;
+  for (const source of breakdown.sources) {
+    if (Math.abs(source.amountPln) < 0.005) continue;
+    const next = round(running + source.amountPln);
+    steps.push({ key: source.key, label: source.label, amountPln: source.amountPln, fromPln: running, toPln: next });
+    running = next;
+  }
+  const total = breakdown.flowsProfitLossPln ?? breakdown.explainedPln;
+  const values = [0, total, ...steps.flatMap((step) => [step.fromPln, step.toPln])];
+  const low = Math.min(...values);
+  const high = Math.max(...values);
+  return { steps, total: { key: "total" as const, label: "Wynik razem", amountPln: total, fromPln: 0, toPln: total }, scale: { low, high: high === low ? low + 1 : high } };
+};
+
 export type ProfitBreakdown = {
   sources: ProfitSource[];
   /** Sum of the position sources: the same figure as the nominal result in the summary. */

@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
-import { buildProfitBreakdown, type ProfitSource } from "@/lib/profit-breakdown";
+import { buildProfitBreakdown, buildWaterfall, type ProfitSource, type WaterfallStep } from "@/lib/profit-breakdown";
 import { formatCurrency } from "@/lib/utils";
 import type { FxRates, InvestmentPortfolio } from "@/types/portfolio";
 
@@ -22,6 +22,28 @@ function SourceRow({ item, scale }: { item: ProfitSource; scale: number }) {
       </div>
     </li>
   );
+}
+
+/** One bar for each source, from the running result before it to the result after it. */
+function Waterfall({ breakdown }: { breakdown: ReturnType<typeof buildProfitBreakdown> }) {
+  const { steps, total, scale } = buildWaterfall(breakdown);
+  const position = (value: number) => ((value - scale.low) / (scale.high - scale.low)) * 100;
+  const row = (step: WaterfallStep) => {
+    const isTotal = step.key === "total";
+    const left = position(Math.min(step.fromPln, step.toPln));
+    const width = Math.max(0.5, position(Math.max(step.fromPln, step.toPln)) - left);
+    return (
+      <li key={step.key} className={isTotal ? "is-total" : undefined}>
+        <span className="waterfall-label">{step.label}</span>
+        <span className="waterfall-track" aria-hidden="true">
+          <i className="waterfall-zero" style={{ left: `${position(0)}%` }} />
+          <i className={`waterfall-bar${isTotal ? " is-total" : step.amountPln < 0 ? " is-negative" : ""}`} style={{ left: `${left}%`, width: `${width}%` }} />
+        </span>
+        <span className={`waterfall-value ${tone(step.amountPln) ?? ""}`}>{step.amountPln > 0 && !isTotal ? "+" : ""}{formatCurrency(step.amountPln, "PLN")}</span>
+      </li>
+    );
+  };
+  return <ol className="waterfall" aria-label="Skąd wynik, krok po kroku">{steps.map(row)}{row(total)}</ol>;
 }
 
 export default function ProfitBreakdownPanel({
@@ -52,6 +74,9 @@ export default function ProfitBreakdownPanel({
         </div>
         <span>Od początku · w PLN</span>
       </div>
+      <Waterfall breakdown={breakdown} />
+      <details className="profit-details">
+        <summary>Opis każdego źródła i sumy grup</summary>
       <div className="profit-breakdown">
         <div className="profit-group">
           <div className="profit-group-head"><span>Pozycje: ceny, kursy walut i prowizje</span><strong className={tone(breakdown.nominalPln)}>{formatCurrency(breakdown.nominalPln, "PLN")}</strong></div>
@@ -74,6 +99,7 @@ export default function ProfitBreakdownPanel({
           <strong className={tone(breakdown.flowsProfitLossPln ?? breakdown.explainedPln)}>{formatCurrency(breakdown.flowsProfitLossPln ?? breakdown.explainedPln, "PLN")}</strong>
         </div>
       </div>
+      </details>
       <p className="risk-source-note">
         „Wynik nominalny” w podsumowaniu to pierwsza grupa: ceny, kursy i prowizje pozycji. Dywidendy, odsetki, opłaty i podatki trafiają na rachunek gotówkowy, więc liczą się dopiero w wyniku całego portfela. Kwoty w walutach są przeliczone po kursach zapisanych przy operacjach albo, gdy ich brak, po dzisiejszych.
       </p>

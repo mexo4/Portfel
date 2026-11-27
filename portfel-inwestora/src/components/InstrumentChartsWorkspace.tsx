@@ -11,9 +11,11 @@ import { usePortfolioWorkspace } from "@/components/PortfolioWorkspaceContext";
 import { useChartAnnouncements } from "@/components/useChartAnnouncements";
 import { setChartStyle, useChartStyle } from "@/components/useChartStyle";
 import { toggleChartEvents, useHiddenChartEvents } from "@/components/useHiddenChartEvents";
+import { usePageView } from "@/components/usePageView";
 import { fetchInstrumentHistories } from "@/lib/api";
 import { findEventSlot, getEspiChartTicker, listChartDividends, niceTicks, placeChartEvents, toEventMarks, type ChartEvent, type EventMark, type EventSlot } from "@/lib/chart-events";
 import { canAccessFeature } from "@/lib/entitlements";
+import { calculatePeriodReturns, RETURN_PERIODS, type ReturnPeriodId } from "@/lib/period-returns";
 import {
   averagePriceOn,
   buildComparisonRows,
@@ -566,10 +568,94 @@ function InstrumentComparison({ instruments }: { instruments: ChartInstrument[] 
   );
 }
 
+// ---------------------------------------------------------------------------------------------
+// Every open holding over fixed periods
+
+type PeriodSortKey = ReturnPeriodId | "name";
+
+/** Requests in flight at once, so a long portfolio does not ask for every history together. */
+const PARALLEL_HISTORIES = 4;
+
+function InstrumentPeriodReturns({ instruments }: { instruments: ChartInstrument[] }) {
+  const { getReadHref } = usePortfolioWorkspace();
+  const open = useMemo(() => instruments.filter((item) => item.isOpen), [instruments]);
+  const [loaded, setLoaded] = useState<Map<string, SeriesResult | null>>(new Map());
+  const [sort, setSort] = useState<{ key: PeriodSortKey; descending: boolean }>({ key: "30d", descending: true });
+
+  useEffect(() => {
+    let cancelled = false;
+    const queue = [...open];
+    const next = async (): Promise<void> => {
+      const instrument = queue.shift();
+      if (!instrument || cancelled) return;
+      const result = await loadHistory(instrument).catch(() => null);
+      if (!cancelled) setLoaded((current) => (current.has(instrument.key) && current.get(instrument.key) === result ? current : new Map(current).set(instrument.key, result)));
+      return next();
+    };
+    for (let index = 0; index < PARALLEL_HISTORIES; index += 1) void next();
+    return () => { cancelled = true; };
+  }, [open]);
+
+  const today = todayIso();
+  const rows = open.map((instrument) => ({ instrument, returns: calculatePeriodReturns(loaded.get(instrument.key)?.points ?? [], today), last: loaded.get(instrument.key)?.points.at(-1) }));
+  const sorted = [...rows].sort((left, right) => {
+    if (sort.key === "name") return (sort.descending ? -1 : 1) * left.instrument.name.localeCompare(right.instrument.name, "pl");
+    const a = left.returns[sort.key];
+    const b = right.returns[sort.key];
+    // Holdings without a value stay at the bottom whichever way the column is sorted.
+    if (a === null || b === null) return a === b ? 0 : a === null ? 1 : -1;
+    return sort.descending ? b - a : a - b;
+  });
+  const pending = open.filter((item) => !loaded.has(item.key)).length;
+  const failed = open.filter((item) => loaded.has(item.key) && !loaded.get(item.key));
+  const sortBy = (key: PeriodSortKey) => setSort((current) => (current.key === key ? { key, descending: !current.descending } : { key, descending: key !== "name" }));
+  const header = (key: PeriodSortKey, label: string) => (
+    <th key={key} aria-sort={sort.key === key ? (sort.descending ? "descending" : "ascending") : "none"} className={key === "name" ? undefined : "num"}>
+      <button type="button" className="table-sort" onClick={() => sortBy(key)}>{label}{sort.key === key ? <span aria-hidden="true">{sort.descending ? " ↓" : " ↑"}</span> : null}</button>
+    </th>
+  );
+
+  return (
+    <section className="panel">
+      <div className="risk-section-heading">
+        <div>
+          <p className="eyebrow">Zwroty w okresach</p>
+          <h2 className="section-title">Zmiana kursu Twoich walorów</h2>
+        </div>
+        <span>{pending > 0 ? `Wczytywanie notowań: ${open.length - pending} z ${open.length}` : `${open.length} w portfelu`}</span>
+      </div>
+      {open.length === 0 ? (
+        <p className="empty-row mt-4">W portfelu nie ma teraz walorów z notowaniami.</p>
+      ) : (
+        <div className="sprint-table-wrap mt-4">
+          <table className="portfolio-table sprint-table report-table period-returns-table">
+            <thead><tr>{header("name", "Walor")}<th className="num">Ostatni kurs</th>{RETURN_PERIODS.map((period) => header(period.id, period.label))}</tr></thead>
+            <tbody>
+              {sorted.map(({ instrument, returns, last }) => (
+                <tr key={instrument.key}>
+                  <td><Link href={getReadHref(`/analytics/assets?instrument=${encodeURIComponent(instrument.key)}`)} prefetch={false}><strong>{instrument.name}</strong></Link><small className="block">{instrument.symbol}</small></td>
+                  <td className="num" data-label="Ostatni kurs">{last ? formatCurrency(last.close, instrument.marketCurrency) : loaded.has(instrument.key) ? "brak danych" : "…"}</td>
+                  {RETURN_PERIODS.map((period) => {
+                    const value = returns[period.id];
+                    return <td key={period.id} data-label={period.label} className={`num ${value === null ? "" : tone(value) ?? ""}`}>{loaded.has(instrument.key) ? formatPercent(value) : "…"}</td>;
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {failed.length > 0 ? <p className="field-note mt-3">Nie udało się pobrać notowań: {failed.map((item) => item.name).join(", ")}.</p> : null}
+      <p className="field-note mt-3">Zmiana kursu giełdowego w walucie notowania, bez dywidend i bez zmian kursów walut. Kreska oznacza, że historia nie sięga tak daleko albo ostatnie notowanie jest starsze niż 10 dni. Kliknij nazwę, aby otworzyć wykres.</p>
+    </section>
+  );
+}
+
 export default function InstrumentChartsWorkspace() {
   const { selectedPortfolios } = usePortfolioWorkspace();
   const instruments = useMemo(() => listChartInstruments(selectedPortfolios), [selectedPortfolios]);
   const initialKey = useSearchParams().get("instrument") ?? undefined;
+  const { view } = usePageView("assetCharts");
 
   if (instruments.length === 0) {
     return <section className="panel"><p className="empty-row">Dodaj akcje, ETF lub kryptowaluty, aby zobaczyć ich wykresy. Obligacje skarbowe nie mają notowań rynkowych.</p></section>;
@@ -577,8 +663,9 @@ export default function InstrumentChartsWorkspace() {
 
   return (
     <div className="reports-workspace">
-      <InstrumentChart key={initialKey ?? "first"} instruments={instruments} initialKey={initialKey} />
-      <InstrumentComparison instruments={instruments} />
+      {view === "wykres" ? <InstrumentChart key={initialKey ?? "first"} instruments={instruments} initialKey={initialKey} /> : null}
+      {view === "okresy" ? <InstrumentPeriodReturns instruments={instruments} /> : null}
+      {view === "porownanie" ? <InstrumentComparison instruments={instruments} /> : null}
     </div>
   );
 }

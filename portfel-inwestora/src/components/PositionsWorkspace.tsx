@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Fragment, useEffect, useMemo, useState, type MouseEvent, type ReactNode } from "react";
-import { ChartStyleSwitch, InstrumentChartLegend, InstrumentPriceChartBody, RangePicker, useInstrumentChartData, type RangeKey } from "@/components/InstrumentChartsWorkspace";
+import { ChartEventNotes, ChartReportList, ChartStyleSwitch, InstrumentChartLegend, InstrumentPriceChartBody, RangePicker, useInstrumentChartData, type RangeKey } from "@/components/InstrumentChartsWorkspace";
 import { usePortfolioWorkspace } from "@/components/PortfolioWorkspaceContext";
 import { getAssetEntryHref, getDividendEntryHref, getLatestLot, type AssetEntrySide } from "@/lib/asset-entry-prefill";
 import { getAssetClassGroup } from "@/lib/geographic-allocation";
@@ -16,6 +16,9 @@ import { formatCurrency, formatDate } from "@/lib/utils";
  * holding on the right (price chart with the user's trades, key numbers, purchases). On a narrow
  * screen the preview opens under the selected row.
  */
+
+/** The newest company reports under the chart; the rest are on the instrument's own page. */
+const PREVIEW_REPORTS = 4;
 
 const pct = new Intl.NumberFormat("pl-PL", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const qty = new Intl.NumberFormat("pl-PL", { maximumFractionDigits: 6 });
@@ -149,11 +152,22 @@ function Preview({ group, showPortfolio }: { group: PortfolioAssetGroup; showPor
               <RangePicker value={range} onChange={setRange} label="Zakres wykresu" />
             </div>
           </div>
-          <InstrumentChartLegend hasCandles={data.candles.length > 1} />
+          <InstrumentChartLegend data={data} />
           <InstrumentPriceChartBody instrument={instrument} data={data} height={300} />
+          <ChartEventNotes data={data} />
         </section>
       ) : group.kind === "bond" ? (
         <p className="field-note">Obligacje skarbowe nie mają notowań rynkowych: ich wartość rośnie z naliczonymi odsetkami.</p>
+      ) : null}
+
+      {instrument && data.announcements.length > 0 ? (
+        <section className="positions-card">
+          <div className="positions-card-bar">
+            <h3>Komunikaty spółki (ESPI)</h3>
+            {data.announcements.length > PREVIEW_REPORTS ? <Link href={workspace.getReadHref(`/analytics/assets?instrument=${encodeURIComponent(instrumentKey)}`)} prefetch={false}>Wszystkie ({data.announcements.length}) →</Link> : null}
+          </div>
+          <ChartReportList data={data} limit={PREVIEW_REPORTS} />
+        </section>
       ) : null}
 
       <section className="positions-card">

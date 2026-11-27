@@ -1,13 +1,19 @@
 "use client";
 
+import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { CartesianGrid, ComposedChart, Line, LineChart, ReferenceLine, ResponsiveContainer, Scatter, Tooltip, XAxis, YAxis, ZAxis } from "recharts";
+import { EventMarkShape, EventTooltipLines, LANE_ROOM, describeDividendDates, maxEventSlots } from "@/components/chart-event-parts";
 import InstrumentCandleChart from "@/components/InstrumentCandleChart";
 import { AXIS, BUY, MAX, MIN, PRICE, SELL, TradeShape, monthTick } from "@/components/instrument-chart-parts";
 import { usePortfolioWorkspace } from "@/components/PortfolioWorkspaceContext";
+import { useChartAnnouncements } from "@/components/useChartAnnouncements";
 import { setChartStyle, useChartStyle } from "@/components/useChartStyle";
+import { toggleChartEvents, useHiddenChartEvents } from "@/components/useHiddenChartEvents";
 import { fetchInstrumentHistories } from "@/lib/api";
+import { findEventSlot, getEspiChartTicker, listChartDividends, niceTicks, placeChartEvents, toEventMarks, type ChartEvent, type EventMark, type EventSlot } from "@/lib/chart-events";
+import { canAccessFeature } from "@/lib/entitlements";
 import {
   averagePriceOn,
   buildComparisonRows,
@@ -16,6 +22,7 @@ import {
   listChartInstruments,
   priceExtremes,
   type Candle,
+  type CandleInterval,
   type ChartInstrument,
   type InstrumentTrade,
   type PricePoint,
@@ -127,9 +134,11 @@ type TradeMarker = InstrumentTrade & { t: number };
 
 type PriceRow = { t: number; date: string; close: number; average: number | null };
 
-function PriceTooltip({ active, payload, currency, tradesByDate }: { active?: boolean; payload?: Array<{ payload?: PriceRow | TradeMarker }>; currency: string; tradesByDate: Map<string, InstrumentTrade[]> }) {
+type LineEventMark = EventMark & { t: number; date: string };
+
+function PriceTooltip({ active, payload, currency, tradesByDate, eventSlots, eventInterval }: { active?: boolean; payload?: Array<{ payload?: PriceRow | TradeMarker | LineEventMark }>; currency: string; tradesByDate: Map<string, InstrumentTrade[]>; eventSlots: Array<EventSlot<ChartEvent>>; eventInterval: CandleInterval }) {
   const row = active ? payload?.[0]?.payload : undefined;
-  if (!row) return null;
+  if (!row || !("date" in row)) return null;
   const date = row.date;
   const trades = tradesByDate.get(date) ?? [];
   const price = "close" in row ? row.close : null;
@@ -144,12 +153,14 @@ function PriceTooltip({ active, payload, currency, tradesByDate }: { active?: bo
           {trade.side === "buy" ? "Kupno" : "Sprzedaż"} {quantityFormatter.format(trade.quantity)} szt. po {formatCurrency(trade.price, currency)}
         </span>
       ))}
+      <EventTooltipLines slot={findEventSlot(eventSlots, date)} interval={eventInterval} />
     </div>
   );
 }
 
-/** Price history, trades and the average purchase price of one instrument, for the chart. */
+/** Price history, trades, the average purchase price and events of one instrument, for the chart. */
 export function useInstrumentChartData(instrument: ChartInstrument | undefined, portfolios: InvestmentPortfolio[], range: RangeKey) {
+  const { account, fxRates } = usePortfolioWorkspace();
   const [state, setState] = useState<{ key: string; result: SeriesResult | null; error: string | null } | null>(null);
 
   useEffect(() => {
@@ -176,7 +187,18 @@ export function useInstrumentChartData(instrument: ChartInstrument | undefined, 
     return map;
   }, [timeline]);
 
-  return { current, timeline, points, candles, rows, extremes, lastDate, markers, tradesByDate };
+  const espiTicker = instrument && canAccessFeature(account, "espi") ? getEspiChartTicker(instrument) : null;
+  const espi = useChartAnnouncements(espiTicker, instrument ? fetchStartFor(instrument) : "");
+  const allDividends = useMemo(() => (instrument ? listChartDividends(portfolios, instrument, fxRates) : []), [fxRates, instrument, portfolios]);
+  const dividends = useMemo(() => allDividends.filter((dividend) => dividend.date >= start), [allDividends, start]);
+  const announcements = useMemo(() => espi.items.filter((report) => report.date >= start), [espi.items, start]);
+  const hidden = useHiddenChartEvents();
+  const events = useMemo<ChartEvent[]>(
+    () => [...(hidden.includes("dividend") ? [] : dividends), ...(hidden.includes("espi") ? [] : announcements)],
+    [announcements, dividends, hidden]
+  );
+
+  return { current, timeline, points, candles, rows, extremes, lastDate, markers, tradesByDate, events, dividends, announcements, espi, hidden };
 }
 
 type ChartData = ReturnType<typeof useInstrumentChartData>;
@@ -191,32 +213,50 @@ export function ChartStyleSwitch() {
   );
 }
 
-/** The price line or candles with purchases (+), sales (−), the average purchase price and max/min. */
+/** The price line or candles with purchases (+), sales (−), the average purchase price, max/min and events. */
 export function InstrumentPriceChartBody({ instrument, data, height }: { instrument: ChartInstrument; data: ChartData; height?: number }) {
   const isNarrow = useNarrowScreen();
   const style = useChartStyle();
-  const { current, points, candles, rows, extremes, lastDate, markers, tradesByDate, timeline } = data;
+  const [width, setWidth] = useState(0);
+  const { current, points, candles, rows, extremes, lastDate, markers, tradesByDate, timeline, events } = data;
+  const placement = useMemo(() => placeChartEvents(points.map((point) => point.date), events, maxEventSlots(width, isNarrow)), [events, isNarrow, points, width]);
+  const eventMarks = useMemo(() => {
+    const toMarks = (kind: ChartEvent["kind"]): LineEventMark[] => toEventMarks(placement.slots, kind).map((mark) => ({ ...mark, t: toTime(mark.session), date: mark.session }));
+    return { dividend: toMarks("dividend"), espi: toMarks("espi") };
+  }, [placement]);
   const currency = instrument.marketCurrency;
   const lastPrice = extremes?.last.close ?? null;
   const buys = timeline?.trades.filter((trade) => trade.side === "buy").length ?? 0;
   const sells = (timeline?.trades.length ?? 0) - buys;
   if (!current) return <p className="empty-row mt-4">Wczytywanie notowań…</p>;
   if (current.error || points.length === 0) return <p className="empty-row mt-4">{current.error ?? "Brak notowań tego waloru w wybranym zakresie."}</p>;
-  const description = `Kurs ${instrument.name} od ${formatDate(points[0]!.date)} do ${formatDate(lastDate)}: ${buys} zakupów i ${sells} sprzedaży zaznaczonych na wykresie.`;
+  const shownDividends = events.filter((event) => event.kind === "dividend").length;
+  const shownReports = events.length - shownDividends;
+  const description = `Kurs ${instrument.name} od ${formatDate(points[0]!.date)} do ${formatDate(lastDate)}: ${buys} zakupów i ${sells} sprzedaży zaznaczonych na wykresie.${events.length > 0 ? ` Pod kursem: dywidendy (${shownDividends}) i komunikaty ESPI (${shownReports}).` : ""}`;
   if (style === "candle" && candles.length > 1) {
-    return <InstrumentCandleChart candles={candles} trades={markers} averagePriceSteps={timeline?.averagePriceSteps ?? []} currency={currency} height={height} isNarrow={isNarrow} ariaLabel={description} />;
+    return <InstrumentCandleChart candles={candles} trades={markers} averagePriceSteps={timeline?.averagePriceSteps ?? []} events={events} currency={currency} height={height} isNarrow={isNarrow} ariaLabel={description} />;
   }
+  // With marks under the price, the scale leaves them room below the lowest value drawn.
+  const hasEventMarks = placement.slots.length > 0;
+  const drawn = [...rows.flatMap((row) => (row.average === null ? [row.close] : [row.close, row.average])), ...markers.map((marker) => marker.price)];
+  const lowest = Math.min(...drawn);
+  const highest = Math.max(...drawn);
+  const span = highest - lowest || highest || 1;
+  const priceScale = hasEventMarks
+    ? { domain: [lowest - span * LANE_ROOM, highest + span * 0.06] as [number, number], ticks: niceTicks(lowest, highest + span * 0.06), allowDataOverflow: true }
+    : { domain: ["auto", "auto"] as ["auto", "auto"] };
   return (
     <>
     {style === "candle" ? <p className="field-note mt-2">Yahoo Finance nie ma danych do świec dla tego waloru w jego walucie, więc pokazuję wykres liniowy.</p> : null}
     <div className="instrument-chart mt-3" style={height ? { height } : undefined} role="img" aria-label={description}>
-      <ResponsiveContainer width="100%" height="100%">
+      <ResponsiveContainer width="100%" height="100%" onResize={(nextWidth) => setWidth(nextWidth)}>
         <ComposedChart margin={{ top: 16, right: 8, bottom: 0, left: 4 }}>
           <CartesianGrid stroke="rgba(20, 35, 48, 0.08)" strokeDasharray="3 10" vertical={false} />
           <XAxis dataKey="t" type="number" scale="time" domain={[toTime(points[0]!.date), toTime(lastDate)]} ticks={monthTicks(toTime(points[0]!.date), toTime(lastDate), isNarrow ? 4 : 7)} axisLine={false} tickLine={false} tick={AXIS} tickFormatter={monthTick} allowDuplicatedCategory={false} />
-          <YAxis type="number" domain={["auto", "auto"]} axisLine={false} tickLine={false} tick={AXIS} orientation="right" width={64} tickFormatter={(value: number) => percentFormatter.format(value)} />
+          <YAxis type="number" {...priceScale} axisLine={false} tickLine={false} tick={AXIS} orientation="right" width={64} tickFormatter={(value: number) => percentFormatter.format(value)} />
+          <YAxis yAxisId="events" type="number" dataKey="lane" domain={[0, 1]} hide />
           <ZAxis dataKey="amount" type="number" range={[60, 520]} />
-          <Tooltip content={<PriceTooltip currency={currency} tradesByDate={tradesByDate} />} cursor={{ stroke: "rgba(20, 35, 48, 0.16)", strokeDasharray: "6 8" }} wrapperStyle={{ outline: "none", zIndex: 20 }} />
+          <Tooltip content={<PriceTooltip currency={currency} tradesByDate={tradesByDate} eventSlots={placement.slots} eventInterval={placement.interval} />} cursor={{ stroke: "rgba(20, 35, 48, 0.16)", strokeDasharray: "6 8" }} wrapperStyle={{ outline: "none", zIndex: 20 }} />
           {extremes ? (
             <>
               <ReferenceLine y={extremes.max.close} stroke={MAX} strokeWidth={1.5} label={{ value: `max ${percentFormatter.format(extremes.max.close)}`, position: "insideTopLeft", fill: MAX, fontSize: 11, fontWeight: 700 }} />
@@ -226,6 +266,9 @@ export function InstrumentPriceChartBody({ instrument, data, height }: { instrum
           <Line data={rows} dataKey="close" type="linear" stroke={PRICE} strokeWidth={2} dot={false} isAnimationActive={false} name="Kurs" />
           <Line data={rows} dataKey="average" type="stepAfter" stroke={BUY} strokeWidth={2} strokeDasharray="6 4" dot={false} connectNulls={false} isAnimationActive={false} name="Średnia cena kupna" />
           <Scatter data={markers} dataKey="price" shape={<TradeShape />} isAnimationActive={false} name="Transakcje" />
+          {/* With an empty list Recharts would draw a mark for every price. */}
+          {eventMarks.espi.length > 0 ? <Scatter yAxisId="events" data={eventMarks.espi} dataKey="lane" shape={<EventMarkShape />} isAnimationActive={false} name="Komunikaty ESPI" /> : null}
+          {eventMarks.dividend.length > 0 ? <Scatter yAxisId="events" data={eventMarks.dividend} dataKey="lane" shape={<EventMarkShape />} isAnimationActive={false} name="Dywidendy" /> : null}
           {lastPrice !== null ? <ReferenceLine y={lastPrice} stroke="transparent" label={{ value: `ostatni ${percentFormatter.format(lastPrice)}`, position: "insideBottomRight", fill: PRICE, fontSize: 11, fontWeight: 800 }} /> : null}
         </ComposedChart>
       </ResponsiveContainer>
@@ -234,8 +277,21 @@ export function InstrumentPriceChartBody({ instrument, data, height }: { instrum
   );
 }
 
-export function InstrumentChartLegend({ hasCandles = false }: { hasCandles?: boolean }) {
-  const showCandles = useChartStyle() === "candle" && hasCandles;
+/** A legend entry that also switches its marks on and off. */
+function EventLegendToggle({ kind, isShown, label }: { kind: ChartEvent["kind"]; isShown: boolean; label: string }) {
+  return (
+    <li>
+      <button type="button" aria-pressed={isShown} title={isShown ? "Ukryj na wykresie" : "Pokaż na wykresie"} onClick={() => toggleChartEvents(kind)}>
+        <i className={kind === "dividend" ? "is-dividend" : "is-espi"} aria-hidden="true">{kind === "dividend" ? "D" : null}</i>
+        {label}
+      </button>
+    </li>
+  );
+}
+
+export function InstrumentChartLegend({ data }: { data: ChartData }) {
+  const showCandles = useChartStyle() === "candle" && data.candles.length > 1;
+  const { dividends, announcements, espi, hidden } = data;
   return (
     <ul className="instrument-legend" aria-label="Legenda">
       {showCandles ? (
@@ -249,6 +305,39 @@ export function InstrumentChartLegend({ hasCandles = false }: { hasCandles?: boo
       <li><i className="is-dash" style={{ borderColor: BUY }} />Średnia cena kupna</li>
       <li><i className="is-line" style={{ background: MAX }} />Maksimum</li>
       <li><i className="is-line" style={{ background: MIN }} />Minimum</li>
+      {dividends.length > 0 ? <EventLegendToggle kind="dividend" isShown={!hidden.includes("dividend")} label={`Dywidendy (${dividends.length})`} /> : null}
+      {announcements.length > 0 ? <EventLegendToggle kind="espi" isShown={!hidden.includes("espi")} label={`Komunikaty ESPI (${announcements.length})`} /> : null}
+      {espi.status === "loading" ? <li>Wczytywanie komunikatów ESPI…</li> : null}
+    </ul>
+  );
+}
+
+/** Why some reports may be missing from the chart, if they are. */
+export function ChartEventNotes({ data }: { data: ChartData }) {
+  const oldest = data.espi.items[0];
+  if (data.espi.status === "error") return <p className="field-note">Nie udało się pobrać komunikatów ESPI. Odśwież stronę, aby spróbować ponownie.</p>;
+  if (data.espi.isCut && oldest) return <p className="field-note">Wykres pokazuje komunikaty ESPI od {formatDate(oldest.date)}. Starsze znajdziesz w zakładce Raporty ESPI.</p>;
+  return null;
+}
+
+/** The newest ESPI reports of the company, linked to their text in Mexo and at the source. */
+export function ChartReportList({ data, limit }: { data: ChartData; limit?: number }) {
+  const { getReadHref } = usePortfolioWorkspace();
+  const newestFirst = [...data.announcements].reverse();
+  const shown = limit ? newestFirst.slice(0, limit) : newestFirst;
+  return (
+    <ul className="chart-reports">
+      {shown.map((report) => (
+        <li key={report.id}>
+          <time dateTime={report.publishedAt}>{formatDate(report.date)}</time>
+          <span>
+            <Link href={getReadHref(`/market/espi/${report.id}`)} prefetch={false}>{report.title}</Link>
+            <small>
+              {report.categoryLabel}{report.reportNumber ? ` · ${report.reportNumber}` : ""}{report.isCorrection ? " · korekta" : ""} · <a href={report.sourceUrl} target="_blank" rel="noreferrer">źródło ↗</a>
+            </small>
+          </span>
+        </li>
+      ))}
     </ul>
   );
 }
@@ -295,10 +384,11 @@ function InstrumentChart({ instruments, initialKey }: { instruments: ChartInstru
           <ChartStyleSwitch />
           <RangePicker value={range} onChange={setRange} label="Zakres wykresu waloru" />
         </div>
-        <InstrumentChartLegend hasCandles={data.candles.length > 1} />
+        <InstrumentChartLegend data={data} />
       </div>
 
       <InstrumentPriceChartBody instrument={instrument} data={data} />
+      <ChartEventNotes data={data} />
 
       <div className="risk-metric-grid risk-metric-grid-summary mt-4">
         <article className="risk-metric-card"><div className="risk-metric-label"><span>Ostatni kurs</span></div><strong>{lastPrice === null ? "—" : formatCurrency(lastPrice, currency)}</strong><small>{extremes ? formatDate(extremes.last.date) : "brak notowań"}</small></article>
@@ -309,6 +399,35 @@ function InstrumentChart({ instruments, initialKey }: { instruments: ChartInstru
       </div>
       {timeline.skippedTrades > 0 ? <p className="field-note">Transakcje zapisane w innej walucie niż notowanie ({timeline.skippedTrades}) nie są zaznaczone na wykresie.</p> : null}
       {current?.result?.warning ? <p className="field-note">{current.result.warning}</p> : null}
+
+      {data.dividends.length > 0 ? (
+        <details className="instrument-trades mt-4">
+          <summary>Dywidendy w tym zakresie ({data.dividends.length})</summary>
+          <div className="sprint-table-wrap mt-3">
+            <table className="portfolio-table sprint-table report-table">
+              <thead><tr><th>Terminy</th><th>Netto</th><th>Na akcję</th><th>Ilość</th><th>Portfel</th></tr></thead>
+              <tbody>
+                {[...data.dividends].reverse().map((dividend) => (
+                  <tr key={dividend.id}>
+                    <td><strong>{describeDividendDates(dividend)}</strong></td>
+                    <td data-label="Netto">{formatCurrency(dividend.netAmount, dividend.currency)}</td>
+                    <td data-label="Na akcję">{dividend.dividendPerShare > 0 ? formatCurrency(dividend.dividendPerShare, dividend.currency) : "—"}</td>
+                    <td data-label="Ilość">{dividend.quantity > 0 ? quantityFormatter.format(dividend.quantity) : "—"}</td>
+                    <td data-label="Portfel">{dividend.portfolioName}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </details>
+      ) : null}
+
+      {data.announcements.length > 0 ? (
+        <details className="instrument-trades mt-4">
+          <summary>Komunikaty ESPI w tym zakresie ({data.announcements.length})</summary>
+          <ChartReportList data={data} />
+        </details>
+      ) : null}
 
       {timeline.trades.length > 0 ? (
         <details className="instrument-trades mt-4">

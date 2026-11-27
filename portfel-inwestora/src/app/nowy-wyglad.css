@@ -364,6 +364,24 @@ body { background: var(--canvas); color: var(--text); font-family: var(--font-sa
 .workspace-shell .instrument-legend i.is-candle { width: 8px; height: 13px; border: 1px solid #13314a; background: #ffffff; }
 .workspace-shell .instrument-legend i.is-candle.is-down { background: #13314a; }
 .instrument-candle-note { margin: 4px 0 0; }
+
+/* Dividend and ESPI marks: legend entries that switch them, tooltip lines and the report list. */
+.workspace-shell .instrument-legend button { display: inline-flex; align-items: center; gap: 6px; min-height: 24px; padding: 0; border: 0; color: inherit; background: none; font: inherit; cursor: pointer; }
+.workspace-shell .instrument-legend button:hover { color: var(--text); }
+.workspace-shell .instrument-legend button[aria-pressed="false"] { opacity: 0.5; text-decoration: line-through; }
+.workspace-shell .instrument-legend i.is-dividend { width: 14px; height: 14px; border-radius: 3px; color: #13314a; background: #eda100; font-size: 9.5px; font-weight: 800; line-height: 1; }
+.workspace-shell .instrument-legend i.is-espi { width: 10px; height: 10px; border-radius: 50%; background: #6250d6; }
+.report-tooltip .chart-tooltip-heading { color: var(--muted); font-weight: 700; }
+.report-tooltip .chart-tooltip-dividend { color: var(--dividend-text, #825607); }
+.report-tooltip .chart-tooltip-espi { color: #4b3bb0; }
+.chart-reports { display: grid; margin: 0; padding: 0; list-style: none; }
+.chart-reports li { display: grid; grid-template-columns: 86px minmax(0, 1fr); gap: 10px; padding: 6px 0; border-top: 1px solid var(--line); font-size: 13px; }
+.chart-reports li:first-child { border-top: 0; }
+.chart-reports time { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.chart-reports span { display: grid; gap: 1px; overflow-wrap: anywhere; }
+.chart-reports small { color: var(--muted); font-size: 12px; }
+.chart-reports a:hover { text-decoration: underline; }
+.instrument-trades .chart-reports { max-height: 420px; margin-top: 10px; overflow: auto; }
 @media (hover: none) { .positions-row-icons { opacity: 1; } }
 .positions-facts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0; border: 1px solid var(--line); }
 .positions-facts > div { display: grid; gap: 1px; padding: 6px 10px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); min-width: 0; }

@@ -1,8 +1,15 @@
 import { formatCurrency } from "@/lib/utils";
 import type { CurrencyCode } from "@/types/portfolio";
 
-/** The confirmation shown after a purchase or a sale has been saved. */
-export type TradeNotice = { id: number; side: "buy" | "sell"; title: string; detail: string };
+/** The confirmation shown after a purchase or a sale has been saved, or that it was not. */
+export type TradeNotice = { id: number; side: "buy" | "sell" | "error"; title: string; detail: string };
+
+export const getUnsavedTradeNotice = (): TradeNotice => ({
+  id: Date.now(),
+  side: "error",
+  title: "Transakcja nie została zapisana",
+  detail: "Portfel zmienił się w innym oknie lub na serwerze. Pokazujemy zapisany stan. Sprawdź go i wprowadź transakcję ponownie.",
+});
 
 export type TradeAction =
   | "buy" | "sell"

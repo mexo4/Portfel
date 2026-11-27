@@ -7,7 +7,7 @@ import AppWorkspaceShell from "@/components/AppWorkspaceShell";
 import AssetModeSelector from "@/components/AssetModeSelector";
 import { useListingVenues } from "@/components/useListingVenues";
 import TradeNoticeToast from "@/components/TradeNoticeToast";
-import { describeTrade, type TradeNotice } from "@/lib/trade-notice";
+import { describeTrade, getUnsavedTradeNotice, type TradeNotice } from "@/lib/trade-notice";
 import { getOpenCfdLotPrice, getOpenCfdMetadata, reconcileXtbOpenCfds } from "@/lib/xtb-open-cfd";
 import { PortfolioWorkspaceProvider, type PortfolioWorkspaceValue } from "@/components/PortfolioWorkspaceContext";
 import {
@@ -1160,9 +1160,9 @@ export default function PortfolioApp({
   const [bondError, setBondError] = useState<string | null>(null);
   const [bondSuccess, setBondSuccess] = useState<string | null>(null);
   const [tradeNotice, setTradeNotice] = useState<TradeNotice | null>(null);
-  const announceTrade = useCallback((trade: Parameters<typeof describeTrade>[0]) => {
-    setTradeNotice({ ...describeTrade(trade), id: Date.now() });
-  }, []);
+  // With one portfolio open a trade is saved a moment after the form is done, so its notice waits
+  // for the server. In the combined view the form itself waits for the save.
+  const tradeAwaitingSaveRef = useRef<TradeNotice | null>(null);
   const closeTradeNotice = useCallback(() => setTradeNotice(null), []);
   const [bondRedemptionError, setBondRedemptionError] = useState<string | null>(null);
   const [bondSwapError, setBondSwapError] = useState<string | null>(null);
@@ -1212,6 +1212,12 @@ export default function PortfolioApp({
     currentRouteKeyRef.current = currentRouteKey;
     currentPortfolioScopeRef.current = portfolioScope;
   }, [currentRouteKey, pathname, portfolioScope, searchParams]);
+  const announceTrade = useCallback((trade: Parameters<typeof describeTrade>[0]) => {
+    const notice = { ...describeTrade(trade), id: Date.now() };
+    const waits = currentPortfolioScopeRef.current.mode === "SINGLE";
+    tradeAwaitingSaveRef.current = waits ? notice : null;
+    setTradeNotice(waits ? null : notice);
+  }, []);
   const selectedPortfolioIds = useMemo(
     () => getPortfolioScopeIds(portfolioScope, portfolioIds),
     [portfolioIds, portfolioScope]
@@ -1971,9 +1977,12 @@ export default function PortfolioApp({
       setIsSavingPortfolio(true);
 
       try {
+        // A save that was already under way when a trade was made does not carry it.
+        let lastSaveStartedAt = 0;
         while (pendingPortfolioSaveRef.current) {
           const nextSave = pendingPortfolioSaveRef.current;
           pendingPortfolioSaveRef.current = null;
+          lastSaveStartedAt = Date.now();
           inFlightPortfolioSaveFingerprintRef.current = nextSave.fingerprint;
 
           try {
@@ -2037,6 +2046,14 @@ export default function PortfolioApp({
                   preferredActivePortfolioId
                 );
                 restoredFromConflict = true;
+                // The server's state replaced the change, so a waiting trade is gone.
+                if (tradeAwaitingSaveRef.current) {
+                  tradeAwaitingSaveRef.current = null;
+                  setTradeNotice(getUnsavedTradeNotice());
+                  // The forms already said the trade was saved.
+                  setAssetSuccess(null);
+                  setBondSuccess(null);
+                }
               }
             }
 
@@ -2050,6 +2067,11 @@ export default function PortfolioApp({
         }
 
         setSyncError(null);
+        const waitingTrade = tradeAwaitingSaveRef.current;
+        if (waitingTrade && lastSaveStartedAt >= waitingTrade.id && portfolioSaveTimerRef.current === null) {
+          tradeAwaitingSaveRef.current = null;
+          setTradeNotice(waitingTrade);
+        }
       } catch (error) {
         setSyncError(toErrorMessage(error, "Nie udało się zapisać portfela."));
         throw error;

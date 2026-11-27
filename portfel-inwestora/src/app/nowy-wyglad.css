@@ -239,6 +239,9 @@ body { background: var(--canvas); color: var(--text); font-family: var(--font-sa
 .trade-notice { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: 6px; color: #ffffff; box-shadow: var(--elevation) !important; pointer-events: auto; }
 .trade-notice.is-buy { background: var(--solid-buy); }
 .trade-notice.is-sell { background: var(--solid-sell); }
+.trade-notice.is-error { border: 2px solid var(--solid-sell); color: var(--text); background: #ffffff; }
+.trade-notice.is-error .trade-notice-mark { border-color: var(--solid-sell); color: var(--solid-sell); }
+.trade-notice.is-error button { color: var(--text); }
 .trade-notice-mark { display: grid; flex: none; width: 30px; height: 30px; place-items: center; border: 2px solid #ffffff; border-radius: 50%; font-size: 20px; font-weight: 700; line-height: 1; }
 .trade-notice p { display: grid; flex: 1 1 auto; gap: 2px; margin: 0; min-width: 0; }
 .trade-notice p strong { font-size: 15px; }

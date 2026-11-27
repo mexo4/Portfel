@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const { describeTrade } = await import("../src/lib/trade-notice.ts");
+const { describeTrade, getUnsavedTradeNotice } = await import("../src/lib/trade-notice.ts");
 const read = (path) => readFile(new URL(`../src/${path}`, import.meta.url), "utf8");
 
 test("the instrument charts draw their marks outside the tooltip", async () => {
@@ -28,6 +28,14 @@ test("a saved purchase or sale is announced with what, how much, at what price a
   );
   const swapped = describeTrade({ action: "swap-bond", quantity: 3, name: "EDO0136", symbol: "EDO0136", portfolioName: "Główny" });
   assert.equal(swapped.detail, "3 × EDO0136 · portfel „Główny”");
+});
+
+test("with one portfolio open the notice waits for the server, and a rejected save says so", async () => {
+  const app = await read("components/PortfolioApp.tsx");
+  assert.match(app, /const waits = currentPortfolioScopeRef\.current\.mode === "SINGLE";/);
+  assert.match(app, /lastSaveStartedAt >= waitingTrade\.id && portfolioSaveTimerRef\.current === null/);
+  assert.match(app, /restoredFromConflict = true;[\s\S]{0,300}setTradeNotice\(getUnsavedTradeNotice\(\)\)/);
+  assert.equal(getUnsavedTradeNotice().side, "error");
 });
 
 test("every way of saving a trade announces it, and „Dodaj transakcję” has its own colour", async () => {

@@ -84,6 +84,12 @@ const GPW_DIVIDEND_BACKFILL_DAYS_PER_SYNC = 21;
 const GPW_DIVIDEND_MAX_ROWS_PER_DAY = 2_000;
 const ESPI_FETCH_ATTEMPTS = 2;
 const ARTICLE_CONCURRENCY = 4;
+// Small enough that a batch of slow pages ends well within the lock's time.
+const ESPI_STORE_BATCH_SIZE = 20;
+const ESPI_QUEUE_EVERY_PAGES = 10;
+// Reports missed before periodic ones were told apart come back only through the full walk, so
+// one is due after this moment whatever the daily clock says.
+const ESPI_FULL_WALK_DUE_SINCE = "2026-11-27T22:55:00.000Z";
 const ISSUER_METADATA_VERSION = 3;
 const ISSUER_RETRY_AFTER_DAYS = 7;
 const ISSUER_RECONCILIATION_BATCH_SIZE = 100;
@@ -356,6 +362,17 @@ const acquireSyncLock = async (source: string = PAP_SOURCE) => {
     [source, token, expiresAt, now]
   );
   return row?.lock_token === token ? token : null;
+};
+
+/*
+ * A run that is still working keeps its lock, so a visit does not start a second one beside it. A
+ * run that died frees the lock after the usual time.
+ */
+const extendSyncLock = async (token: string, source: string = PAP_SOURCE) => {
+  await execute(
+    "UPDATE espi_sync_state SET lock_expires_at = $1 WHERE source = $2 AND lock_token = $3",
+    [new Date(Date.now() + ESPI_LOCK_TTL_MS).toISOString(), source, token]
+  );
 };
 
 const releaseSyncLock = async ({
@@ -1139,6 +1156,12 @@ export const synchronizePapEspi = async ({
   let nextBackfillPage = state.nextBackfillPage;
   let backfillComplete = state.backfillComplete;
   let lastOverlapAt: string | undefined;
+  let attempted = 0;
+  let parsedCount = 0;
+  let savedCount = 0;
+  let createdCount = 0;
+  let firstDetailFailure: EspiSourceStatus | null = null;
+  let storing: Promise<void> = Promise.resolve();
   try {
     try {
       const repaired = await repairFalseCorrections();
@@ -1200,10 +1223,103 @@ export const synchronizePapEspi = async ({
       : requestedFrom
         ? boundedEarliest
         : addDays(today, -(ESPI_OVERLAP_DAYS - 1));
-    const overlapDue = force || Boolean(requestedFrom) || !isFresh(state.lastOverlapAt ?? null, ESPI_OVERLAP_TTL_MS);
+    const overlapDue = force || Boolean(requestedFrom) || !isFresh(state.lastOverlapAt ?? null, ESPI_OVERLAP_TTL_MS) ||
+      (state.lastOverlapAt ?? "") < ESPI_FULL_WALK_DUE_SINCE;
     let overlapSucceeded = errors === 0;
 
+    const detailRefreshBoundary = addDays(today, -90);
+    const handled = new Set<string>();
+    /*
+     * Reads and stores the reports of the listed rows that were not read yet in this run. New ones
+     * come first, newest first. They are stored a few at a time, so a long run shows its reports as
+     * it goes and an interrupted one keeps them. With `refresh`, recent stored ones are re-read too.
+     */
+    const storeCandidates = async (listed: PapEspiListCandidate[], refresh: boolean) => {
+      const unique = Array.from(new Map(
+        listed.filter((candidate) => !handled.has(candidate.sourceId)).map((item) => [item.sourceId, item])
+      ).values());
+      if (unique.length === 0) return;
+      const storedState = await getStoredSourceState(unique);
+      const isNew = (candidate: PapEspiListCandidate) => !storedState.storedIds.has(candidate.sourceId);
+      const pending = unique.filter((candidate) => {
+        if (isNew(candidate)) return true;
+        // Re-read only recent exact source documents at most once per day. This
+        // detects source-side corrections/attachment edits without re-downloading
+        // the entire archive on every feed request. Cross-source duplicates are
+        // not fetched because their source id has no exact stored check record.
+        if (!refresh || !storedState.sourceCheckedAt.has(candidate.sourceId)) return false;
+        const publishedDay = candidate.sourcePublishedAt?.slice(0, 10);
+        if (!publishedDay || publishedDay < detailRefreshBoundary) return false;
+        return !isFresh(storedState.sourceCheckedAt.get(candidate.sourceId) ?? null, 24 * 60 * 60 * 1_000);
+      }).sort((left, right) => Number(isNew(right)) - Number(isNew(left)) ||
+        (right.sourcePublishedAt ?? "").localeCompare(left.sourcePublishedAt ?? ""));
+      for (const candidate of pending) handled.add(candidate.sourceId);
+      attempted += pending.length;
+
+      for (let start = 0; start < pending.length; start += ESPI_STORE_BATCH_SIZE) {
+        const fetched = await mapWithConcurrency(pending.slice(start, start + ESPI_STORE_BATCH_SIZE), ARTICLE_CONCURRENCY, async (candidate) => {
+          try {
+            const response = await fetchOfficialHtml(candidate.sourceUrl);
+            if (response.status !== "SUCCESS") return { status: response.status, report: null };
+            const report = candidate.sourceKind === "GPW" || candidate.sourceKind === "NEWCONNECT"
+              ? parseGpwEspiReport(response.document, candidate)
+              : parsePapEspiReport(response.document, candidate);
+            return { status: report ? "SUCCESS" as const : "PARSE_ERROR" as const, report };
+          } catch {
+            return { status: "PARSE_ERROR" as const, report: null };
+          }
+        });
+        for (const entry of fetched) {
+          if (entry.status === "SUCCESS" && entry.report) continue;
+          errors += 1;
+          firstDetailFailure ??= entry.status;
+          if (entry.status === "PARSE_ERROR") parseErrors += 1;
+          else sourceFailure ??= entry.status;
+        }
+        const stored: Array<{ report: ParsedPapEspiReport; id: string; issuerId: string | null }> = [];
+        for (const report of fetched.flatMap((entry) => entry.report ? [entry.report] : [])) {
+          parsedCount += 1;
+          try {
+            const saved = await upsertEspiReport(report);
+            stored.push({ report, ...saved });
+            savedCount += 1;
+            if (saved.created) createdCount += 1;
+          } catch (error) {
+            errors += 1;
+            diagnose({ provider: PAP_SOURCE, phase: "store", sourceId: report.sourceId, error: error instanceof Error ? error.name : "unknown" });
+          }
+        }
+        // A correction stored before its original is linked by reconcileCorrectionLinks at the end.
+        for (const entry of stored) {
+          try {
+            await linkCorrection(entry.id, entry.report, entry.issuerId);
+          } catch (error) {
+            errors += 1;
+            sourceFailure ??= "TEMPORARILY_UNAVAILABLE";
+            diagnose({ provider: PAP_SOURCE, phase: "correction-link", sourceId: entry.report.sourceId, error: error instanceof Error ? error.name : "unknown" });
+          }
+        }
+        await extendSyncLock(token);
+      }
+    };
+
     if (officialSourcesAvailable && overlapDue) {
+      // The walk takes long. Its reports are stored beside it: waiting would let new publications
+      // move the list under it.
+      let queuedUpTo = 0;
+      let pagesSinceQueue = 0;
+      const queueListed = () => {
+        const listed = candidates.slice(queuedUpTo);
+        queuedUpTo = candidates.length;
+        pagesSinceQueue = 0;
+        storing = storing.then(() => storeCandidates(listed, false)).catch((error: unknown) => {
+          errors += 1;
+          sourceFailure ??= "TEMPORARILY_UNAVAILABLE";
+          diagnose({ provider: PAP_SOURCE, phase: "queued-store", error: error instanceof Error ? error.name : "unknown" });
+        });
+      };
+      queueListed();
+
       // Date-specific GPW filtering is useful but has historically omitted an
       // occasional non-session day. Page overlap is therefore the completeness
       // guard: it walks until reaching the full WZA repair horizon, instead of
@@ -1241,6 +1357,8 @@ export const synchronizePapEspi = async ({
             overlapSucceeded = false;
           }
           candidates.push(...pageCandidates);
+          await extendSyncLock(token);
+          if (++pagesSinceQueue >= ESPI_QUEUE_EVERY_PAGES) queueListed();
           if (parsedPage.eligibleRows === 0) break;
           const introducedNewCandidate = pageCandidates.some((candidate) => {
             if (seenPageIds.has(candidate.sourceId)) return false;
@@ -1292,6 +1410,7 @@ export const synchronizePapEspi = async ({
               overlapSucceeded = false;
             }
             candidates.push(...parsedPage.candidates);
+            await extendSyncLock(token);
             if (parsedPage.eligibleRows === 0) break;
             const introducedNewCandidate = parsedPage.candidates.some((candidate) => {
               if (seenDateIds.has(candidate.sourceId)) return false;
@@ -1354,59 +1473,11 @@ export const synchronizePapEspi = async ({
       }
     }
 
-    const uniqueCandidates = Array.from(new Map(candidates.map((item) => [item.sourceId, item])).values());
-    const storedState = await getStoredSourceState(uniqueCandidates);
-    const detailRefreshBoundary = addDays(today, -90);
-    const pending = uniqueCandidates.filter((candidate) => {
-      if (!storedState.storedIds.has(candidate.sourceId)) return true;
-      // Re-read only recent exact source documents at most once per day. This
-      // detects source-side corrections/attachment edits without re-downloading
-      // the entire archive on every feed request. Cross-source duplicates are
-      // not fetched because their source id has no exact stored check record.
-      if (!storedState.sourceCheckedAt.has(candidate.sourceId)) return false;
-      const publishedDay = candidate.sourcePublishedAt?.slice(0, 10);
-      if (!publishedDay || publishedDay < detailRefreshBoundary) return false;
-      return !isFresh(storedState.sourceCheckedAt.get(candidate.sourceId) ?? null, 24 * 60 * 60 * 1_000);
-    });
-    skippedExisting = uniqueCandidates.length - pending.length;
-    const fetched = await mapWithConcurrency(pending, ARTICLE_CONCURRENCY, async (candidate) => {
-      try {
-        const response = await fetchOfficialHtml(candidate.sourceUrl);
-        if (response.status !== "SUCCESS") return { status: response.status, report: null };
-        const report = candidate.sourceKind === "GPW" || candidate.sourceKind === "NEWCONNECT"
-          ? parseGpwEspiReport(response.document, candidate)
-          : parsePapEspiReport(response.document, candidate);
-        return { status: report ? "SUCCESS" as const : "PARSE_ERROR" as const, report };
-      } catch {
-        return { status: "PARSE_ERROR" as const, report: null };
-      }
-    });
-    const parsedReports = fetched.flatMap((entry) => entry.report ? [entry.report] : []);
-    for (const entry of fetched) {
-      if (entry.status === "SUCCESS" && entry.report) continue;
-      errors += 1;
-      if (entry.status === "PARSE_ERROR") parseErrors += 1;
-      else sourceFailure ??= entry.status;
-    }
-    const storedReports: Array<{ report: ParsedPapEspiReport; id: string; issuerId: string | null; created: boolean }> = [];
-    for (const report of parsedReports) {
-      try {
-        const stored = await upsertEspiReport(report);
-        storedReports.push({ report, ...stored });
-      } catch (error) {
-        errors += 1;
-        diagnose({ provider: PAP_SOURCE, phase: "store", sourceId: report.sourceId, error: error instanceof Error ? error.name : "unknown" });
-      }
-    }
-    for (const stored of storedReports) {
-      try {
-        await linkCorrection(stored.id, stored.report, stored.issuerId);
-      } catch (error) {
-        errors += 1;
-        sourceFailure ??= "TEMPORARILY_UNAVAILABLE";
-        diagnose({ provider: PAP_SOURCE, phase: "correction-link", sourceId: stored.report.sourceId, error: error instanceof Error ? error.name : "unknown" });
-      }
-    }
+    // Whatever the walk has not stored yet, and the daily re-reading of recent reports.
+    await storing;
+    await storeCandidates(candidates, true);
+    const uniqueCandidates = new Set(candidates.map((candidate) => candidate.sourceId)).size;
+    skippedExisting = uniqueCandidates - attempted;
     let metadataChanges = 0;
     try {
       const reconciliation = await reconcileStoredEspiMetadata();
@@ -1431,8 +1502,8 @@ export const synchronizePapEspi = async ({
       status = parseErrors > 0 ? "PARSE_ERROR" : sourceFailure ?? "TEMPORARILY_UNAVAILABLE";
     }
 
-    if (pending.length > 0 && storedReports.length === 0) {
-      status = fetched.find((entry) => entry.status !== "SUCCESS")?.status ?? "PARSE_ERROR";
+    if (attempted > 0 && savedCount === 0) {
+      status = firstDetailFailure ?? "PARSE_ERROR";
     }
 
     await releaseSyncLock({ token, status, nextBackfillPage, backfillComplete, lastOverlapAt });
@@ -1440,8 +1511,8 @@ export const synchronizePapEspi = async ({
       provider: PAP_SOURCE,
       status,
       pagesRead,
-      candidates: uniqueCandidates.length,
-      parsed: parsedReports.length,
+      candidates: uniqueCandidates,
+      parsed: parsedCount,
       skippedExisting,
       metadataChanges,
       errors,
@@ -1450,14 +1521,13 @@ export const synchronizePapEspi = async ({
       overlapComplete: overlapDue ? Boolean(lastOverlapAt) : undefined,
       durationMs: Date.now() - startedAt,
     });
-    const created = storedReports.filter((entry) => entry.created).length;
-    const duplicates = skippedExisting + storedReports.length - created;
-    console.info(`[ESPI SYNC] fetched=${uniqueCandidates.length} new=${created} duplicates=${duplicates} saved=${storedReports.length} titleFallbacks=${titleFallbacks} errors=${errors}`);
+    const duplicates = skippedExisting + savedCount - createdCount;
+    console.info(`[ESPI SYNC] fetched=${uniqueCandidates} new=${createdCount} duplicates=${duplicates} saved=${savedCount} titleFallbacks=${titleFallbacks} errors=${errors}`);
     return {
       status,
-      insertedOrUpdated: storedReports.length,
+      insertedOrUpdated: savedCount,
       skippedExisting,
-      parsed: parsedReports.length,
+      parsed: parsedCount,
       pagesRead,
       locked: false,
       errors,
@@ -1467,6 +1537,8 @@ export const synchronizePapEspi = async ({
       overlapComplete: overlapDue ? Boolean(lastOverlapAt) : undefined,
     };
   } catch (error) {
+    // The lock stays held until the reports already queued are stored.
+    await storing;
     await releaseSyncLock({
       token,
       status,

@@ -7,12 +7,13 @@ import { CfdSourceNote, ChartEventNotes, ChartReportList, ChartStyleSwitch, Inst
 import { usePortfolioWorkspace } from "@/components/PortfolioWorkspaceContext";
 import { getAssetEntryHref, getDividendEntryHref, getLatestLot, type AssetEntrySide } from "@/lib/asset-entry-prefill";
 import { getCfdFigures, getCfdQuoteSource, getQuantityUnit } from "@/lib/cfd";
+import { getCfdDailyPercent, getCfdHeldValue } from "@/lib/cfd-holding";
 import { getAssetClassGroup } from "@/lib/geographic-allocation";
 import { instrumentKeyOf, listChartInstruments } from "@/lib/instrument-chart";
 import { getAssetInvestedPln, getAssetMarketValuePln, getAssetProfitLossPln, hasAssetBaseCurrencyValuation, type PortfolioAssetGroup } from "@/lib/portfolio-engine";
 import { convertFromPln } from "@/lib/pricing";
 import type { CurrencyCode, FxRates, PortfolioAsset } from "@/types/portfolio";
-import { formatCurrency, formatDate } from "@/lib/utils";
+import { formatCurrency, formatDate, round } from "@/lib/utils";
 
 /**
  * Pozycje as a list with a preview: holdings grouped by asset class on the left, the selected
@@ -163,7 +164,7 @@ function Preview({ group, showPortfolio }: { group: PortfolioAssetGroup; showPor
             <div><dt>Zwrot od depozytu</dt><dd className={tone(cfd.returnOnMarginPercent)}>{formatPercent(cfd.returnOnMarginPercent)}</dd></div>
             <div><dt>Ruch ceny</dt><dd className={tone(cfd.priceMovePercent)}>{formatPercent(cfd.priceMovePercent)}</dd></div>
             <div><dt>Dźwignia</dt><dd>{cfd.leverage === null ? "—" : `1:${qty.format(cfd.leverage)}`}</dd></div>
-            <div><dt>Depozyt</dt><dd>{cfd.margin === null ? "—" : formatCurrency(cfd.margin, group.marketCurrency)}</dd></div>
+            <div><dt>Depozyt</dt><dd>{cfd.margin === null ? "—" : formatCurrency(round(cfd.margin), group.marketCurrency)}</dd></div>
             <div><dt>Wielkość pozycji</dt><dd>{cfd.exposure === null ? "—" : formatCurrency(cfd.exposure, group.marketCurrency)}</dd></div>
             <div><dt>Ilość</dt><dd>{qty.format(group.quantity)}</dd></div>
             <div><dt>Cena otwarcia</dt><dd>{formatCurrency(group.averagePurchasePrice, group.averagePurchasePriceCurrency)}</dd></div>
@@ -252,21 +253,32 @@ export default function PositionsWorkspace({ toolbar }: { toolbar?: ReactNode })
   const filter = workspace.filter.trim().toLocaleLowerCase("pl-PL");
 
   const sections = useMemo(() => {
-    const map = new Map<string, { id: string; label: string; rows: PortfolioAssetGroup[]; value: number; profit: number; daily: number }>();
+    const map = new Map<string, { id: string; label: string; rows: PortfolioAssetGroup[]; value: number; valueKnown: boolean; profit: number; daily: number }>();
+    // A CFD is listed with its deposit and result; its market value alone is just the result.
+    const listedValue = (group: PortfolioAssetGroup) => (isCfdGroup(group) ? getCfdHeldValue(group, workspace.fxRates) : group.marketValueBase);
     for (const group of workspace.groupedAssets) {
       if (filter && !`${group.name} ${group.symbol} ${group.portfolioName ?? ""}`.toLocaleLowerCase("pl-PL").includes(filter)) continue;
       const bucket = getAssetClassGroup(group);
-      const section = map.get(bucket.id) ?? { id: bucket.id, label: bucket.label, rows: [], value: 0, profit: 0, daily: 0 };
+      const section = map.get(bucket.id) ?? { id: bucket.id, label: bucket.label, rows: [], value: 0, valueKnown: true, profit: 0, daily: 0 };
+      const value = listedValue(group);
       section.rows.push(group);
-      section.value += group.marketValueBase;
+      section.value += value ?? 0;
+      section.valueKnown &&= value !== null;
       section.profit += group.profitLossBase;
       section.daily += group.hasDailyChange ? group.dailyChangeBase ?? 0 : 0;
       map.set(bucket.id, section);
     }
     return [...map.values()]
-      .map((section) => ({ ...section, rows: [...section.rows].sort((left, right) => right.marketValueBase - left.marketValueBase) }))
+      .map((section) => ({
+        ...section,
+        rows: [...section.rows].sort((left, right) => (listedValue(right) ?? 0) - (listedValue(left) ?? 0)),
+        // A CFD section holds only deposits and results, so its day is the move of its prices.
+        dailyPercent: section.id === "cfd"
+          ? getCfdDailyPercent(section.rows, workspace.fxRates)
+          : section.value - section.daily > 0 ? (section.daily / (section.value - section.daily)) * 100 : null,
+      }))
       .sort((left, right) => right.value - left.value);
-  }, [filter, workspace.groupedAssets]);
+  }, [filter, workspace.fxRates, workspace.groupedAssets]);
 
   const allRows = useMemo(() => sections.flatMap((section) => section.rows), [sections]);
   const chartInstrumentKeys = useMemo(() => new Set(listChartInstruments(workspace.selectedPortfolios).map((item) => item.key)), [workspace.selectedPortfolios]);
@@ -311,14 +323,15 @@ export default function PositionsWorkspace({ toolbar }: { toolbar?: ReactNode })
                   <Fragment key={section.id}>
                     <tr className="positions-group">
                       <th scope="rowgroup" colSpan={isNarrow ? 1 : 2}>{section.label} · {section.rows.length}</th>
-                      <td className="num">{section.id === "cfd" ? "—" : formatCurrency(section.value, base)}</td>
-                      <td className={`num ${tone(section.daily) ?? ""}`}>{section.id !== "cfd" && section.value - section.daily > 0 ? formatPercent((section.daily / (section.value - section.daily)) * 100) : "—"}</td>
+                      <td className="num">{section.valueKnown ? formatCurrency(section.value, base) : "—"}</td>
+                      <td className={`num ${tone(section.daily) ?? ""}`}>{formatPercent(section.dailyPercent)}</td>
                       <td className={`num ${tone(section.profit) ?? ""}`}>{signed(section.profit, base)}</td>
                     </tr>
                     {section.rows.map((group) => {
                       const id = rowId(group);
                       const isSelected = selected ? rowId(selected) === id : false;
                       const share = workspace.summaryTotalValue > 0 ? (group.marketValueBase / workspace.summaryTotalValue) * 100 : 0;
+                      const cfdValue = isCfdGroup(group) ? getCfdHeldValue(group, workspace.fxRates) : null;
                       return (
                         <Fragment key={id}>
                           <tr className={isSelected ? "positions-row is-selected" : "positions-row"} onClick={() => select(group)}>
@@ -329,7 +342,8 @@ export default function PositionsWorkspace({ toolbar }: { toolbar?: ReactNode })
                               </button>
                             </td>
                             {isNarrow ? null : <td className="positions-actions-cell"><RowActions group={group} showPortfolio={showPortfolio} hasAnalysis={chartInstrumentKeys.has(instrumentKeyOf(group))} /></td>}
-                            <td className="num">{isCfdGroup(group) ? <>—<small>CFD</small></> : <>{formatCurrency(group.marketValueBase, base)}<small>{pct.format(share)}%</small></>}</td>
+                            {/* No share for a CFD: its deposit is already counted in the cash. */}
+                            <td className="num">{!isCfdGroup(group) ? <>{formatCurrency(group.marketValueBase, base)}<small>{pct.format(share)}%</small></> : cfdValue === null ? <>—<small>CFD</small></> : <>{formatCurrency(cfdValue, base)}<small>depozyt + wynik</small></>}</td>
                             <td className={`num ${tone(group.dailyChangePercent) ?? ""}`}>{group.hasDailyChange ? formatPercent(group.dailyChangePercent) : "—"}</td>
                             <td className={`num ${tone(group.profitLossBase) ?? ""}`}>{signed(group.profitLossBase, base)}<small>{formatPercent(rowReturnPercent(group))}</small></td>
                           </tr>

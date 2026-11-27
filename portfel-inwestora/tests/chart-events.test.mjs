@@ -134,11 +134,11 @@ test("the scale with room for marks still has round values", () => {
   assert.deepEqual(niceTicks(5, 5), [5]);
 });
 
-test("ESPI keeps its access gate, and an empty mark list is never handed to Recharts", async () => {
+test("ESPI keeps its access gate, and both charts draw both kinds of marks", async () => {
   const workspace = await readSource("src/components/InstrumentChartsWorkspace.tsx");
   assert.match(workspace, /canAccessFeature\(account, "espi"\) \? getEspiChartTicker\(instrument\) : null/);
   assert.match(await readSource("src/components/useChartAnnouncements.ts"), /error\.status === 401 \|\| error\.status === 403/);
   for (const source of [workspace, await readSource("src/components/InstrumentCandleChart.tsx")]) {
-    for (const kind of ["espi", "dividend"]) assert.match(source, new RegExp(`eventMarks\\.${kind}\\.length > 0 \\? <Scatter yAxisId="events" data=\\{eventMarks\\.${kind}\\}`));
+    for (const kind of ["espi", "dividend"]) assert.match(source, new RegExp(`\\{eventDots\\(eventMarks\\.${kind},`));
   }
 });

@@ -1,5 +1,8 @@
 "use client";
 
+import { ReferenceDot } from "recharts";
+import { EventMarkShape } from "@/components/chart-event-parts";
+import type { EventMark } from "@/lib/chart-events";
 import type { InstrumentTrade } from "@/lib/instrument-chart";
 
 /** Colours, the trade mark and the date labels shared by the line and the candle chart. */
@@ -46,3 +49,32 @@ export function TradeShape({ cx: center = 0, cy = 0, size = 64, payload, outline
     </g>
   );
 }
+
+/*
+ * The marks are reference dots, not scatter series. A series with its own list of points takes
+ * part in the tooltip: Recharts then limits the hovered position to the number of marks, so the
+ * tooltip stops following the pointer after that many days or candles.
+ */
+
+/** Trade marks; the area of each follows its amount, between the two sizes. */
+export const tradeDots = <T extends InstrumentTrade & { nudge?: number }>(markers: T[], xOf: (marker: T) => string | number, [smallest, largest]: [number, number], outlined = false) => {
+  const highest = Math.max(1, ...markers.map((marker) => marker.amount));
+  return inDrawingOrder(markers).map((marker) => {
+    const size = smallest + (largest - smallest) * (marker.amount / highest);
+    return (
+      <ReferenceDot key={marker.id} x={xOf(marker)} y={marker.price} ifOverflow="visible"
+        shape={({ cx, cy }: { cx?: number; cy?: number }) => <TradeShape cx={cx} cy={cy} size={size} payload={marker} outlined={outlined} />} />
+    );
+  });
+};
+
+/**
+ * Dividend and ESPI marks under the price. A lane is a height from 0 to 1 of the plot; it is put on
+ * the price scale, because Recharts draws nothing on an axis that no series uses.
+ */
+export const eventDots = <T extends EventMark>(marks: T[], xOf: (mark: T) => string | number, [low, high]: readonly [number, number]) =>
+  marks.map((mark, index) => (
+    <ReferenceDot key={`${mark.kind}-${index}-${xOf(mark)}`} x={xOf(mark)} y={low + mark.lane * (high - low)} ifOverflow="visible"
+      shape={({ cx, cy }: { cx?: number; cy?: number }) => <EventMarkShape cx={cx} cy={cy} payload={mark} />} />
+  ));
+

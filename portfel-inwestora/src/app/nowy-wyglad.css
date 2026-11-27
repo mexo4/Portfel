@@ -49,6 +49,8 @@
   --solid-sell-hover: #922820;
   --solid-gold: #8a5a00;
   --solid-gold-hover: #6f4800;
+  --solid-trade: #c2540a;
+  --solid-trade-hover: #a04408;
   --canvas: #f4f5f7;
   --canvas-strong: #ffffff;
   --surface: #ffffff;
@@ -219,13 +221,34 @@ body { background: var(--canvas); color: var(--text); font-family: var(--font-sa
 .workspace-shell .primary-button:disabled,
 .workspace-shell .transaction-button:disabled,
 .workspace-shell .ghost-button:disabled { opacity: 0.5; cursor: not-allowed; }
-/* „Dodaj transakcję” leads the short list of actions. */
-.workspace-quick-actions-popover > button:first-of-type { color: #ffffff; background: var(--accent); }
+/*
+ * „Dodaj transakcję” is orange: navy is also the menu, the active tab and the switches next to it,
+ * so a navy button did not stand out.
+ */
+.workspace-shell .primary-button.button-add-trade { border-color: var(--solid-trade); color: #ffffff; background: var(--solid-trade); }
+.workspace-shell .primary-button.button-add-trade:hover:not(:disabled) { border-color: var(--solid-trade-hover); background: var(--solid-trade-hover); }
+.workspace-quick-actions-popover > button:first-of-type { color: #ffffff; background: var(--solid-trade); }
 .workspace-quick-actions-popover > button:first-of-type:hover,
-.workspace-quick-actions-popover > button:first-of-type:focus-visible { background: var(--accent-hover); }
+.workspace-quick-actions-popover > button:first-of-type:focus-visible { background: var(--solid-trade-hover); }
 .workspace-quick-actions-popover > button:first-of-type :is(strong, small, span, svg) { color: #ffffff; }
-.workspace-mobile-sheet > button.workspace-sheet-action { padding: 0 14px !important; color: #ffffff !important; background: var(--accent) !important; }
+.workspace-mobile-sheet > button.workspace-sheet-action { padding: 0 14px !important; color: #ffffff !important; background: var(--solid-trade) !important; }
 .workspace-mobile-sheet > button.workspace-sheet-action span { color: #ffffff; }
+
+/* The confirmation after a purchase or a sale. */
+.trade-notice-region { position: fixed; right: 16px; bottom: 16px; z-index: 120; width: min(420px, calc(100vw - 32px)); pointer-events: none; }
+.trade-notice { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: 6px; color: #ffffff; box-shadow: var(--elevation) !important; pointer-events: auto; }
+.trade-notice.is-buy { background: var(--solid-buy); }
+.trade-notice.is-sell { background: var(--solid-sell); }
+.trade-notice.is-error { border: 2px solid var(--solid-sell); color: var(--text); background: #ffffff; }
+.trade-notice.is-error .trade-notice-mark { border-color: var(--solid-sell); color: var(--solid-sell); }
+.trade-notice.is-error button { color: var(--text); }
+.trade-notice-mark { display: grid; flex: none; width: 30px; height: 30px; place-items: center; border: 2px solid #ffffff; border-radius: 50%; font-size: 20px; font-weight: 700; line-height: 1; }
+.trade-notice p { display: grid; flex: 1 1 auto; gap: 2px; margin: 0; min-width: 0; }
+.trade-notice p strong { font-size: 15px; }
+.trade-notice p span { font-size: 13.5px; overflow-wrap: anywhere; }
+.trade-notice button { flex: none; width: 28px; height: 28px; border: 0; color: #ffffff; background: transparent; font-size: 20px; line-height: 1; cursor: pointer; }
+.trade-notice button:hover, .trade-notice button:focus-visible { background: rgba(255, 255, 255, 0.18); }
+@media (max-width: 900px) { .trade-notice-region { right: 8px; bottom: calc(76px + env(safe-area-inset-bottom)); width: calc(100vw - 16px); } }
 /* The currency and platform pickers kept the old teal. */
 .workspace-shell .import-platform-logo { border-color: var(--line); color: var(--accent); background: var(--surface-soft); }
 .workspace-shell .import-platform-trigger:hover,

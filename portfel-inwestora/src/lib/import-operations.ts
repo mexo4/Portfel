@@ -22,6 +22,9 @@ export type BrokerImportPreset = "auto" | "xtb" | "bossa" | "degiro" | "ibkr" | 
 export type BrokerOperationSide = "buy" | "sell";
 export type BrokerPositionEffect = "OPEN" | "CLOSE";
 
+/** Import keys of open CFDs read from the "Open Positions" sheet. */
+export const XTB_OPEN_CFD_KEY = "xtb-open-cfd:";
+
 export type ImportedBrokerOperation = {
   rowNumber: number;
   operationType?: OperationType;
@@ -65,6 +68,12 @@ export type ImportedBrokerOperation = {
   counterpartyAccountNumber?: string;
   broker?: string;
   brokerOperationId?: string;
+  /** XTB's number of the position a row belongs to. Set for CFD rows that open or close one. */
+  brokerPositionId?: string;
+  /** When the file listed the open positions; only then does a closing row change an open CFD. */
+  positionSnapshotAt?: string;
+  /** The quote XTB showed for an open position when the file was made. */
+  snapshotPrice?: number;
   importKey?: string;
   rawType?: string;
   rawTime?: string;
@@ -2040,6 +2049,7 @@ type XtbCashRow = {
   comment: string;
   amount: number | null;
   listingCurrency?: CurrencyCode;
+  positionId: string;
 };
 
 const XTB_CASH_HEADER_ALIASES: Record<string, string[]> = {
@@ -2049,6 +2059,7 @@ const XTB_CASH_HEADER_ALIASES: Record<string, string[]> = {
   comment: ["comment", "komentarz", "opis"],
   symbol: ["symbol", "ticker", "instrument"],
   amount: ["amount", "kwota", "wartosc"],
+  positionId: ["position id"],
   instrument: ["instrument", "nazwa instrumentu", "name"],
   listingCurrency: ["price currency", "quote currency", "instrument currency", "waluta ceny", "waluta instrumentu", "waluta notowania"],
 };
@@ -2449,6 +2460,7 @@ const parseXtbCashRows = (rows: string[][], header: XtbHeader): XtbCashRow[] =>
         comment: getMappedCell(row, header, "comment"),
         amount: parseNumber(getMappedCell(row, header, "amount")),
         listingCurrency: getExplicitXtbCurrency(getMappedCell(row, header, "listingCurrency")),
+        positionId: getMappedCell(row, header, "positionId"),
       } satisfies XtbCashRow;
     })
     .filter((row) => row.id && row.rawType && row.normalizedType !== "total");
@@ -2947,6 +2959,155 @@ const appendMissingXtbCfdPositions = (
   return nextOperations;
 };
 
+/*
+ * The "Open Positions" sheet. Stocks and ETFs listed there are already in the cash history
+ * ("OPEN BUY …"), but opening a CFD moves no money, so an open CFD is written down only here.
+ * A row with the whole instrument comes first and carries the category; its positions follow.
+ */
+const XTB_OPEN_HEADER_ALIASES: Record<string, string[]> = {
+  position: ["instrument/position"],
+  ticker: ["ticker", "symbol"],
+  category: ["category"],
+  type: ["type"],
+  volume: ["volume"],
+  value: ["value"],
+  currentPrice: ["current price"],
+  openPrice: ["open price"],
+  openTime: ["open time (utc)", "open time"],
+};
+
+type XtbOpenCfd = {
+  rowNumber: number;
+  positionId: string;
+  ticker: string;
+  instrument: string;
+  tradeSide: "BUY" | "SELL";
+  volume: number;
+  openPrice: number;
+  openDate: string;
+  openTime: string;
+  currentPrice: number;
+  contractMultiplier: number;
+};
+
+/** When the report was made, as the sheet says it; null when it does not say. */
+const getXtbReportTime = (rows: string[][]) => {
+  for (const row of rows.slice(0, 10)) {
+    if (normalizeHeader(row[0] ?? "") !== "data as of report generated") continue;
+    const serial = getXtbExcelSerial(row.slice(1).find((cell) => cell.trim()) ?? "");
+    if (serial !== null) return new Date(Date.UTC(1899, 11, 30) + Math.round(serial * 86_400) * 1_000).toISOString();
+  }
+  return null;
+};
+
+/**
+ * XTB gives the value of a position, and the value is quote × volume × contract size. The value is
+ * rounded to cents, so a size that close to a whole number is that number.
+ */
+const getXtbContractMultiplier = (value: number, price: number, volume: number) => {
+  const exact = Math.abs(value) / (price * volume);
+  const whole = Math.round(exact);
+  return whole >= 1 && Math.abs(exact - whole) / exact < 0.001 ? whole : round(exact, 6);
+};
+
+const parseXtbOpenCfdRows = (rows: string[][]): XtbOpenCfd[] | null => {
+  const header = findFlexibleHeaderRow(rows, XTB_OPEN_HEADER_ALIASES, Object.keys(XTB_OPEN_HEADER_ALIASES));
+  if (!header) return null;
+  const instruments = new Map<string, { category: string; name: string }>();
+  const positions: XtbOpenCfd[] = [];
+  rows.slice(header.rowIndex + 1).forEach((row, index) => {
+    const label = getMappedCell(row, header, "position");
+    const ticker = getMappedCell(row, header, "ticker");
+    const category = getMappedCell(row, header, "category");
+    const tradeSide = normalizeSymbol(getMappedCell(row, header, "type"));
+    if (ticker && category && !tradeSide) {
+      instruments.set(ticker, { category: normalizeHeader(category), name: label });
+      return;
+    }
+    if (!/^\d{5,}$/.test(label) || (tradeSide !== "BUY" && tradeSide !== "SELL")) return;
+    if (instruments.get(ticker)?.category !== "cfd") return;
+    const rawOpenTime = getMappedCell(row, header, "openTime");
+    const volume = parseNumber(getMappedCell(row, header, "volume"));
+    const value = parseNumber(getMappedCell(row, header, "value"));
+    const currentPrice = parseNumber(getMappedCell(row, header, "currentPrice"));
+    const openPrice = parseNumber(getMappedCell(row, header, "openPrice"));
+    const openDate = parseDate(rawOpenTime);
+    const rowNumber = header.rowIndex + index + 2;
+    if (!volume || volume <= 0 || !value || !currentPrice || currentPrice <= 0 || !openPrice || openPrice <= 0 || !openDate) {
+      throw new Error(`Wiersz ${rowNumber} arkusza otwartych pozycji (${ticker}): brak wolumenu, wartości, kursu lub daty otwartej pozycji CFD. Import nie został zapisany.`);
+    }
+    positions.push({
+      rowNumber,
+      positionId: label,
+      ticker,
+      instrument: instruments.get(ticker)?.name || ticker,
+      tradeSide,
+      volume: round(volume, 6),
+      openPrice: round(openPrice, 6),
+      openDate,
+      openTime: rawOpenTime,
+      currentPrice: round(currentPrice, 6),
+      contractMultiplier: getXtbContractMultiplier(value, currentPrice, volume),
+    });
+  });
+  return positions;
+};
+
+/** Adds the open CFDs of the file and marks which rows may close one imported earlier. */
+const appendXtbOpenCfdPositions = (
+  operations: ImportedBrokerOperation[],
+  positions: XtbOpenCfd[],
+  snapshotAt: string
+): ImportedBrokerOperation[] => {
+  const marked = operations.map((operation) =>
+    operation.brokerPositionId ? { ...operation, positionSnapshotAt: snapshotAt } : operation
+  );
+  const account = operations.find((operation) => operation.accountNumber);
+  if (!account) return marked;
+  const accountCurrency = toCurrencyCode(account.accountCurrency ?? account.currency, "PLN");
+  return [
+    ...marked,
+    ...positions.map((position, index): ImportedBrokerOperation => {
+      const positionDirection: PositionDirection = position.tradeSide === "SELL" ? "SHORT" : "LONG";
+      return {
+        rowNumber: 2_000_000 + index,
+        operationType: positionDirection === "SHORT" ? "SELL" : "BUY",
+        side: positionDirection === "SHORT" ? "sell" : "buy",
+        positionEffect: "OPEN",
+        positionDirection,
+        instrumentType: "CFD",
+        kind: "stock",
+        name: position.instrument,
+        symbol: normalizeImportedSymbol(position.ticker, "stock", accountCurrency),
+        rawSymbol: position.ticker,
+        date: position.openDate,
+        quantity: position.volume,
+        price: position.openPrice,
+        contractMultiplier: position.contractMultiplier,
+        currency: accountCurrency,
+        marketCurrency: accountCurrency,
+        cashCurrency: accountCurrency,
+        accountCurrency,
+        accountNumber: account.accountNumber,
+        feePln: 0,
+        fee: 0,
+        amount: 0,
+        cashAmount: 0,
+        marketAmount: round(position.openPrice * position.volume * position.contractMultiplier, 6),
+        broker: "XTB",
+        provider: "catalog",
+        rawType: `CFD OPEN ${position.tradeSide}`,
+        rawTime: position.openTime,
+        importKey: `${XTB_OPEN_CFD_KEY}${account.accountNumber}:${position.positionId}`,
+        brokerPositionId: position.positionId,
+        positionSnapshotAt: snapshotAt,
+        snapshotPrice: position.currentPrice,
+        warnings: [],
+      };
+    }),
+  ];
+};
+
 const mergeXtbClosedPositions = (
   operations: ImportedBrokerOperation[],
   closedPositions: XtbClosedPosition[]
@@ -3421,6 +3582,7 @@ export const parseXtbCashOperationRows = (
         amount: round(signedAmount, 6),
         cashAmount: round(signedAmount, 6),
         realizedProfitLoss: round(signedAmount, 6),
+        brokerPositionId: row.positionId || row.comment.match(/position #(\d+)/i)?.[1],
       });
       cashRows += 1;
       return;
@@ -3901,6 +4063,8 @@ export const parseBrokerOperationsXlsx = async (
   let xtbResult: BrokerImportParseResult | null = null;
   let additionalXtbCashSheets = 0;
   const closedPositions: XtbClosedPosition[] = [];
+  let openCfds: XtbOpenCfd[] | null = null;
+  let reportTime: string | null = null;
 
   for (const worksheet of xtbWorksheetEntries) {
     const worksheetText = await readZipTextEntry(bytes, entriesByName, worksheet.entry.name);
@@ -3911,6 +4075,11 @@ export const parseBrokerOperationsXlsx = async (
 
     const rows = await parseWorksheetRows(worksheetText, sharedStrings);
     closedPositions.push(...parseXtbClosedPositionRows(rows));
+    const openRows = parseXtbOpenCfdRows(rows);
+    if (openRows) {
+      openCfds = [...(openCfds ?? []), ...openRows];
+      reportTime = getXtbReportTime(rows) ?? reportTime;
+    }
 
     if (!xtbResult) {
       xtbResult = parseXtbCashOperationRows(rows, worksheet.sheetName);
@@ -3924,10 +4093,14 @@ export const parseBrokerOperationsXlsx = async (
   }
 
   if (xtbResult) {
-    const enrichedOperations = mergeXtbClosedPositions(
+    const mergedOperations = mergeXtbClosedPositions(
       xtbResult.operations,
       closedPositions
     );
+    // Without the report's own time an older file could not be told from a newer one.
+    const enrichedOperations = openCfds && reportTime
+      ? appendXtbOpenCfdPositions(mergedOperations, openCfds, reportTime)
+      : mergedOperations;
 
     return {
       ...xtbResult,
@@ -3939,6 +4112,11 @@ export const parseBrokerOperationsXlsx = async (
           : "",
         closedPositions.length > 0
           ? `XTB XLSX: odczytano ${closedPositions.length} zamknietych pozycji do weryfikacji wyniku zrealizowanego.`
+          : "",
+        openCfds?.length
+          ? reportTime
+            ? `XTB XLSX: odczytano ${openCfds.length} otwartych pozycji CFD z kursem z chwili wygenerowania raportu.`
+            : "Arkusz otwartych pozycji nie podaje czasu raportu, więc otwarte CFD nie zostały zaimportowane."
           : "",
       ].filter(Boolean),
     };

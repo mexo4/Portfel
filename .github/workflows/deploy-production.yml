@@ -281,7 +281,7 @@ jobs:
             -o ServerAliveCountMax=30 \
             -o TCPKeepAlive=yes \
             "$ORACLE_USER@$ORACLE_HOST" \
-            'bash -se' <<'REMOTE'
+            "REQUESTED_REVISION=$GITHUB_SHA bash -se" <<'REMOTE'
           set -Eeuo pipefail
 
           REPO="/opt/mexo/repo"
@@ -309,8 +309,111 @@ jobs:
             echo "Preflight passed: production branch is $CURRENT_BRANCH."
           fi
 
+          # BEGIN release cleanup
+          # Runs before anything is written, so a nearly full disk can recover.
+          # The active release is never touched: the running service loads
+          # Next.js from that release's own node_modules. The newest other
+          # complete build keeps its dependencies for a rollback. A few older
+          # builds keep their source and compiled output, the rest are removed;
+          # any of them can be rebuilt from Git.
+          RETAINED_OLDER_RELEASES=3
+          MINIMUM_FREE_KB=1572864
+          RELEASE_NAME_PATTERN='^[a-f0-9]{40}-[0-9]{8}T[0-9]{6}Z-[0-9]+$'
+          mkdir -p "$RELEASES"
+          RELEASES_REAL="$(realpath "$RELEASES")"
+          if [ -L "$APP/.next" ]; then
+            ACTIVE_BUILD_REAL="$(realpath "$APP/.next")"
+            case "$ACTIVE_BUILD_REAL" in
+              "$RELEASES_REAL"/*/source/portfel-inwestora/.next) ;;
+              *) echo "ERROR: active Next.js build is outside managed releases; refusing release cleanup."; exit 1 ;;
+            esac
+            ACTIVE_RELEASE_DIR="$(dirname "$(dirname "$(dirname "$ACTIVE_BUILD_REAL")")")"
+
+            # An attempt that stopped before it finished building never served
+            # traffic and cannot be restored.
+            while IFS= read -r candidate; do
+              [ "$candidate" = "$ACTIVE_RELEASE_DIR" ] && continue
+              [[ "$(basename "$candidate")" =~ $RELEASE_NAME_PATTERN ]] || continue
+              [ -d "$candidate/source" ] || continue
+              [ ! -f "$candidate/source/portfel-inwestora/.next/BUILD_ID" ] || continue
+              rm -rf -- "$candidate"
+              echo "Removed unfinished release $(basename "$candidate")."
+            done < <(find "$RELEASES_REAL" -mindepth 1 -maxdepth 1 -type d -printf '%p\n')
+
+            ROLLBACK_RELEASE_DIR=""
+            while IFS= read -r candidate; do
+              [ "$candidate" = "$ACTIVE_RELEASE_DIR" ] && continue
+              [ ! -L "$candidate" ] || continue
+              if [ -f "$candidate/source/portfel-inwestora/.next/BUILD_ID" ]; then
+                ROLLBACK_RELEASE_DIR="$candidate"
+                break
+              fi
+            done < <(find "$RELEASES_REAL" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' | sort -nr | cut -d' ' -f2-)
+
+            OLDER_RELEASES=0
+            while IFS= read -r candidate; do
+              [ "$candidate" = "$ACTIVE_RELEASE_DIR" ] && continue
+              [ ! -L "$candidate" ] || continue
+              candidate_real="$(realpath "$candidate")"
+              case "$candidate_real" in "$RELEASES_REAL"/*) ;; *) echo "ERROR: release cleanup target escaped the managed release directory."; exit 1 ;; esac
+              [ -f "$candidate_real/source/package-lock.json" ] || continue
+              [ -f "$candidate_real/source/portfel-inwestora/.next/BUILD_ID" ] || continue
+              if [ "$candidate" != "$ROLLBACK_RELEASE_DIR" ]; then
+                OLDER_RELEASES=$((OLDER_RELEASES + 1))
+                if [ "$OLDER_RELEASES" -gt "$RETAINED_OLDER_RELEASES" ] && [[ "$(basename "$candidate_real")" =~ $RELEASE_NAME_PATTERN ]]; then
+                  rm -rf -- "$candidate_real"
+                  echo "Removed old release $(basename "$candidate_real")."
+                  continue
+                fi
+                workspace_modules="$candidate_real/source/node_modules"
+                if [ -d "$workspace_modules" ] && [ ! -L "$workspace_modules" ]; then
+                  [ "$(realpath "$workspace_modules")" = "$candidate_real/source/node_modules" ] || { echo "ERROR: release dependency path is not a real directory; refusing cleanup."; exit 1; }
+                  rm -r -- "$workspace_modules"
+                  echo "Pruned reinstallable workspace dependencies from inactive release $(basename "$candidate_real"); preserved its source and rollback build."
+                fi
+              fi
+              webpack_cache="$candidate_real/source/portfel-inwestora/.next/cache/webpack"
+              if [ -d "$webpack_cache" ] && [ ! -L "$webpack_cache" ] && [ "$(realpath "$webpack_cache")" = "$webpack_cache" ]; then
+                rm -r -- "$webpack_cache"
+              fi
+            done < <(find "$RELEASES_REAL" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' | sort -nr | cut -d' ' -f2-)
+          else
+            echo "Current build is not a managed symlink; skipping historical release cleanup."
+          fi
+
+          free_space_kb() { df -Pk "$RELEASES_REAL" | awk 'NR == 2 { print $4 }'; }
+          if [ "$(free_space_kb)" -lt "$MINIMUM_FREE_KB" ]; then
+            echo "Disk space is low; clearing the npm download cache."
+            npm cache clean --force
+          fi
+          FREE_KB="$(free_space_kb)"
+          if [ "$FREE_KB" -lt "$MINIMUM_FREE_KB" ]; then
+            echo "ERROR: only $((FREE_KB / 1024)) MB is free after cleanup and a release needs $((MINIMUM_FREE_KB / 1024)) MB; the live service was not touched."
+            df -h "$RELEASES_REAL"
+            du -sh "$RELEASES_REAL" "$HOME/.npm" 2>/dev/null || true
+            exit 1
+          fi
+          echo "Free disk space before staging: $((FREE_KB / 1024)) MB."
+          # END release cleanup
+
           git fetch origin "$BRANCH"
-          BUILD_REVISION="$(git rev-parse "origin/$BRANCH")"
+          # BEGIN requested revision
+          # Build the commit this run was started for. The branch may already be
+          # ahead of it, and public verification expects exactly this commit.
+          if [[ ! "${REQUESTED_REVISION:-}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "ERROR: the requested revision is missing or malformed; refusing to deploy."
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$REQUESTED_REVISION" "origin/$BRANCH"; then
+            echo "ERROR: requested revision ${REQUESTED_REVISION:0:12} is not part of $BRANCH; refusing to deploy."
+            exit 1
+          fi
+          if [ "$REQUESTED_REVISION" != "$PREVIOUS_REVISION" ] && git merge-base --is-ancestor "$REQUESTED_REVISION" "$PREVIOUS_REVISION"; then
+            echo "ERROR: production already runs a newer commit than ${REQUESTED_REVISION:0:12}. Deploy the newest commit, or use the restore option to go back."
+            exit 1
+          fi
+          BUILD_REVISION="$REQUESTED_REVISION"
+          # END requested revision
           node - "$PREVIOUS_REVISION" "$BUILD_REVISION" <<'NODE'
           const { execFileSync } = require("node:child_process");
           const [previousRevision, buildRevision] = process.argv.slice(2);
@@ -397,49 +500,21 @@ jobs:
             exit "$status"
           }
 
-          mkdir -p "$RELEASES"
-          # Keep the active build and the newest complete rollback build intact.
-          # Older release sources and their compiled .next output remain available;
-          # only their reinstallable workspace node_modules are pruned to prevent
-          # repeated isolated deployments from exhausting the Oracle disk.
-          RELEASES_REAL="$(realpath "$RELEASES")"
-          if [ -L "$APP/.next" ]; then
-            ACTIVE_BUILD_REAL="$(realpath "$APP/.next")"
-            case "$ACTIVE_BUILD_REAL" in
-              "$RELEASES_REAL"/*/source/portfel-inwestora/.next) ;;
-              *) echo "ERROR: active Next.js build is outside managed releases; refusing release cleanup."; exit 1 ;;
-            esac
-            ACTIVE_RELEASE_DIR="$(dirname "$(dirname "$(dirname "$ACTIVE_BUILD_REAL")")")"
-            ROLLBACK_RELEASE_DIR=""
-            while IFS= read -r candidate; do
-              [ "$candidate" = "$ACTIVE_RELEASE_DIR" ] && continue
-              [ ! -L "$candidate" ] || continue
-              if [ -f "$candidate/source/portfel-inwestora/.next/BUILD_ID" ]; then
-                ROLLBACK_RELEASE_DIR="$candidate"
-                break
-              fi
-            done < <(find "$RELEASES_REAL" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' | sort -nr | cut -d' ' -f2-)
-
-            while IFS= read -r candidate; do
-              [ "$candidate" = "$ACTIVE_RELEASE_DIR" ] && continue
-              [ -n "$ROLLBACK_RELEASE_DIR" ] && [ "$candidate" = "$ROLLBACK_RELEASE_DIR" ] && continue
-              [ ! -L "$candidate" ] || continue
-              candidate_real="$(realpath "$candidate")"
-              case "$candidate_real" in "$RELEASES_REAL"/*) ;; *) echo "ERROR: release cleanup target escaped the managed release directory."; exit 1 ;; esac
-              [ -f "$candidate_real/source/package-lock.json" ] || continue
-              [ -f "$candidate_real/source/portfel-inwestora/.next/BUILD_ID" ] || continue
-              workspace_modules="$candidate_real/source/node_modules"
-              if [ -d "$workspace_modules" ] && [ ! -L "$workspace_modules" ]; then
-                [ "$(realpath "$workspace_modules")" = "$candidate_real/source/node_modules" ] || { echo "ERROR: release dependency path is not a real directory; refusing cleanup."; exit 1; }
-                rm -r -- "$workspace_modules"
-                echo "Pruned reinstallable workspace dependencies from inactive release $(basename "$candidate_real"); preserved its source and rollback build."
-              fi
-            done < <(find "$RELEASES_REAL" -mindepth 1 -maxdepth 1 -type d -printf '%p\n')
-          else
-            echo "Current build is not a managed symlink; skipping historical dependency cleanup."
-          fi
           if [[ ! "$RELEASE_TARGET" =~ ^\.mexo-releases/[a-f0-9]{40}-[0-9]{8}T[0-9]{6}Z-[0-9]+$ ]]; then echo "Invalid release directory"; exit 1; fi
           if [ -e "$APP/$RELEASE_TARGET" ]; then echo "Release directory already exists; refusing to overwrite it."; exit 1; fi
+          # BEGIN unfinished release guard
+          # A failed install or build must not leave its files on the disk. The
+          # release name has been validated above and nothing serves it yet.
+          STAGED_BUILD_READY=0
+          discard_unfinished_release() {
+            if [ "$STAGED_BUILD_READY" != "1" ]; then
+              cd "$REPO"
+              rm -rf -- "$APP/$RELEASE_TARGET"
+              echo "Removed the unfinished staged release; the live service was not touched."
+            fi
+          }
+          trap discard_unfinished_release EXIT
+          # END unfinished release guard
           mkdir -p "$RELEASE_SOURCE"
           git -C "$REPO" archive "$BUILD_REVISION" | tar -x -C "$RELEASE_SOURCE"
           test -f "$RELEASE_SOURCE/package-lock.json"
@@ -462,11 +537,15 @@ jobs:
           NODE_OPTIONS="--max-old-space-size=768" \
             npm --workspace portfel-inwestora run build -- --webpack
           test -f "$RELEASE_APP/.next/BUILD_ID"
+          # Each release builds in a new directory, so this cache is never read
+          # again, and it is by far the largest part of the build output.
+          rm -rf -- "$RELEASE_APP/.next/cache/webpack"
+          STAGED_BUILD_READY=1
 
           # Only move the tracked source checkout after the release has built.
           trap rollback_on_error ERR
           git checkout "$BRANCH"
-          git reset --hard "origin/$BRANCH"
+          git reset --hard "$BUILD_REVISION"
           RESET_REVISION="$(git rev-parse HEAD)"
           if [ "$RESET_REVISION" != "$BUILD_REVISION" ]; then
             echo "ERROR: repository reset did not reach requested revision (current ${RESET_REVISION:0:12}, expected ${BUILD_REVISION:0:12})."
@@ -638,10 +717,18 @@ jobs:
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.restore_release == true }}
         run: |
           set -euo pipefail
-          nonce="restore-${GITHUB_RUN_ID}-${RANDOM}"
-          root_code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 -H 'Cache-Control: no-cache, no-store' "https://mexo.com.pl/?health=$nonce" || true)"
-          login_code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 -H 'Cache-Control: no-cache, no-store' "https://mexo.com.pl/login?health=$nonce" || true)"
-          if [ "$root_code" != "200" ] || [ "$login_code" != "200" ]; then
+          healthy=0
+          for attempt in $(seq 1 30); do
+            nonce="restore-${GITHUB_RUN_ID}-${attempt}-${RANDOM}"
+            root_code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 -H 'Cache-Control: no-cache, no-store' "https://mexo.com.pl/?health=$nonce" || true)"
+            login_code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 -H 'Cache-Control: no-cache, no-store' "https://mexo.com.pl/login?health=$nonce" || true)"
+            if [ "$root_code" = "200" ] && [ "$login_code" = "200" ]; then
+              healthy=1
+              break
+            fi
+            sleep 2
+          done
+          if [ "$healthy" != "1" ]; then
             echo "ERROR: restored release is active, but public dashboard/login health checks failed."
             exit 1
           fi
@@ -721,9 +808,18 @@ jobs:
           sudo -n systemctl is-active --quiet mexo
           echo "Previous code and build restored; mexo.service is active. Public landing/login routes will be checked by the runner."
           REMOTE
-          root_code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 12 -H 'Cache-Control: no-cache, no-store' "https://mexo.com.pl/?rollback=$GITHUB_RUN_ID" || true)"
-          login_code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 12 -H 'Cache-Control: no-cache, no-store' "https://mexo.com.pl/login?rollback=$GITHUB_RUN_ID" || true)"
-          if [ "$root_code" != "200" ] || [ "$login_code" != "200" ]; then
+          # The service has only just restarted, so give it time to answer.
+          healthy=0
+          for attempt in $(seq 1 30); do
+            root_code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 12 -H 'Cache-Control: no-cache, no-store' "https://mexo.com.pl/?rollback=$GITHUB_RUN_ID-$attempt" || true)"
+            login_code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 12 -H 'Cache-Control: no-cache, no-store' "https://mexo.com.pl/login?rollback=$GITHUB_RUN_ID-$attempt" || true)"
+            if [ "$root_code" = "200" ] && [ "$login_code" = "200" ]; then
+              healthy=1
+              break
+            fi
+            sleep 2
+          done
+          if [ "$healthy" != "1" ]; then
             echo "ERROR: previous release is restored and systemd is active, but public landing/login routes are not healthy."
             exit 1
           fi

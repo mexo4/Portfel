@@ -3,10 +3,10 @@
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import { CartesianGrid, ComposedChart, Line, LineChart, ReferenceLine, ResponsiveContainer, Scatter, Tooltip, XAxis, YAxis, ZAxis } from "recharts";
-import { EventMarkShape, EventTooltipLines, LANE_ROOM, describeDividendDates, maxEventSlots } from "@/components/chart-event-parts";
+import { CartesianGrid, ComposedChart, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { EventTooltipLines, LANE_ROOM, describeDividendDates, maxEventSlots } from "@/components/chart-event-parts";
 import InstrumentCandleChart from "@/components/InstrumentCandleChart";
-import { AXIS, BUY, MAX, MIN, PRICE, SELL, TradeShape, inDrawingOrder, monthTick } from "@/components/instrument-chart-parts";
+import { AXIS, BUY, MAX, MIN, PRICE, SELL, eventDots, monthTick, tradeDots } from "@/components/instrument-chart-parts";
 import { usePortfolioWorkspace } from "@/components/PortfolioWorkspaceContext";
 import { useChartAnnouncements } from "@/components/useChartAnnouncements";
 import { setChartStyle, useChartStyle } from "@/components/useChartStyle";
@@ -227,6 +227,16 @@ export function InstrumentPriceChartBody({ instrument, data, height }: { instrum
     const toMarks = (kind: ChartEvent["kind"]): LineEventMark[] => toEventMarks(placement.slots, kind).map((mark) => ({ ...mark, t: toTime(mark.session), date: mark.session }));
     return { dividend: toMarks("dividend"), espi: toMarks("espi") };
   }, [placement]);
+  // The tooltip follows the price points, so a trade booked on a day without a quote is listed
+  // with the session before it.
+  const tradesByPoint = useMemo(() => {
+    const map = new Map<string, InstrumentTrade[]>();
+    for (const [date, trades] of tradesByDate) {
+      const session = points.findLast((point) => point.date <= date)?.date ?? date;
+      map.set(session, [...(map.get(session) ?? []), ...trades]);
+    }
+    return map;
+  }, [points, tradesByDate]);
   const currency = instrument.marketCurrency;
   const lastPrice = extremes?.last.close ?? null;
   const buys = timeline?.trades.filter((trade) => trade.side === "buy").length ?? 0;
@@ -245,33 +255,30 @@ export function InstrumentPriceChartBody({ instrument, data, height }: { instrum
   const lowest = Math.min(...drawn);
   const highest = Math.max(...drawn);
   const span = highest - lowest || highest || 1;
-  const priceScale = hasEventMarks
-    ? { domain: [lowest - span * LANE_ROOM, highest + span * 0.06] as [number, number], ticks: niceTicks(lowest, highest + span * 0.06), allowDataOverflow: true }
-    : { domain: ["auto", "auto"] as ["auto", "auto"] };
+  // The scale is set here, because trade prices outside the closes have to fit on it too.
+  const lowerEnd = lowest - span * (hasEventMarks ? LANE_ROOM : 0.06);
+  const priceScale = { domain: [lowerEnd, highest + span * 0.06] as [number, number], ticks: niceTicks(hasEventMarks ? lowest : lowerEnd, highest + span * 0.06), allowDataOverflow: true };
   return (
     <>
     {style === "candle" ? <p className="field-note mt-2">Yahoo Finance nie ma danych do świec dla tego waloru w jego walucie, więc pokazuję wykres liniowy.</p> : null}
     <div className="instrument-chart mt-3" style={height ? { height } : undefined} role="img" aria-label={description}>
       <ResponsiveContainer width="100%" height="100%" onResize={(nextWidth) => setWidth(nextWidth)}>
-        <ComposedChart margin={{ top: 16, right: 8, bottom: 0, left: 4 }}>
+        <ComposedChart data={rows} margin={{ top: 16, right: 8, bottom: 0, left: 4 }}>
           <CartesianGrid stroke="rgba(20, 35, 48, 0.08)" strokeDasharray="3 10" vertical={false} />
           <XAxis dataKey="t" type="number" scale="time" domain={[toTime(points[0]!.date), toTime(lastDate)]} ticks={monthTicks(toTime(points[0]!.date), toTime(lastDate), isNarrow ? 4 : 7)} axisLine={false} tickLine={false} tick={AXIS} tickFormatter={monthTick} allowDuplicatedCategory={false} />
           <YAxis type="number" {...priceScale} axisLine={false} tickLine={false} tick={AXIS} orientation="right" width={64} tickFormatter={(value: number) => percentFormatter.format(value)} />
-          <YAxis yAxisId="events" type="number" dataKey="lane" domain={[0, 1]} hide />
-          <ZAxis dataKey="amount" type="number" range={[60, 520]} />
-          <Tooltip content={<PriceTooltip currency={currency} tradesByDate={tradesByDate} eventSlots={placement.slots} eventInterval={placement.interval} />} cursor={{ stroke: "rgba(20, 35, 48, 0.16)", strokeDasharray: "6 8" }} wrapperStyle={{ outline: "none", zIndex: 20 }} />
+          <Tooltip content={<PriceTooltip currency={currency} tradesByDate={tradesByPoint}eventSlots={placement.slots} eventInterval={placement.interval} />} cursor={{ stroke: "rgba(20, 35, 48, 0.16)", strokeDasharray: "6 8" }} wrapperStyle={{ outline: "none", zIndex: 20 }} />
           {extremes ? (
             <>
               <ReferenceLine y={extremes.max.close} stroke={MAX} strokeWidth={1.5} label={{ value: `max ${percentFormatter.format(extremes.max.close)}`, position: "insideTopLeft", fill: MAX, fontSize: 11, fontWeight: 700 }} />
               <ReferenceLine y={extremes.min.close} stroke={MIN} strokeWidth={1.5} label={{ value: `min ${percentFormatter.format(extremes.min.close)}`, position: "insideBottomLeft", fill: MIN, fontSize: 11, fontWeight: 700 }} />
             </>
           ) : null}
-          <Line data={rows} dataKey="close" type="linear" stroke={PRICE} strokeWidth={2} dot={false} isAnimationActive={false} name="Kurs" />
-          <Line data={rows} dataKey="average" type="stepAfter" stroke={BUY} strokeWidth={2} strokeDasharray="6 4" dot={false} connectNulls={false} isAnimationActive={false} name="Średnia cena kupna" />
-          <Scatter data={inDrawingOrder(markers)} dataKey="price" shape={<TradeShape />} isAnimationActive={false} name="Transakcje" />
-          {/* With an empty list Recharts would draw a mark for every price. */}
-          {eventMarks.espi.length > 0 ? <Scatter yAxisId="events" data={eventMarks.espi} dataKey="lane" shape={<EventMarkShape />} isAnimationActive={false} name="Komunikaty ESPI" /> : null}
-          {eventMarks.dividend.length > 0 ? <Scatter yAxisId="events" data={eventMarks.dividend} dataKey="lane" shape={<EventMarkShape />} isAnimationActive={false} name="Dywidendy" /> : null}
+          <Line dataKey="close" type="linear" stroke={PRICE} strokeWidth={2} dot={false} isAnimationActive={false} name="Kurs" />
+          <Line dataKey="average" type="stepAfter" stroke={BUY} strokeWidth={2} strokeDasharray="6 4" dot={false} connectNulls={false} isAnimationActive={false} name="Średnia cena kupna" />
+          {tradeDots(markers, (marker) => marker.t, [60, 520])}
+          {eventDots(eventMarks.espi, (mark) => mark.t, priceScale.domain)}
+          {eventDots(eventMarks.dividend, (mark) => mark.t, priceScale.domain)}
           {lastPrice !== null ? <ReferenceLine y={lastPrice} stroke="transparent" label={{ value: `ostatni ${percentFormatter.format(lastPrice)}`, position: "insideBottomRight", fill: PRICE, fontSize: 11, fontWeight: 800 }} /> : null}
         </ComposedChart>
       </ResponsiveContainer>

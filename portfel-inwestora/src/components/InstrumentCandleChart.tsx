@@ -1,8 +1,8 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Bar, CartesianGrid, ComposedChart, Line, ReferenceLine, ResponsiveContainer, Scatter, Tooltip, XAxis, YAxis, ZAxis } from "recharts";
-import { EventMarkShape, EventTooltipLines, LANE_ROOM, maxEventSlots } from "@/components/chart-event-parts";
+import { Bar, CartesianGrid, ComposedChart, Line, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { EventTooltipLines, LANE_ROOM, maxEventSlots } from "@/components/chart-event-parts";
 import { findEventSlot, niceTicks, placeChartEvents, toEventMarks, type ChartEvent, type EventMark, type EventSlot } from "@/lib/chart-events";
 import {
   aggregateCandles,
@@ -16,7 +16,7 @@ import {
   type CandleInterval,
   type InstrumentTrade,
 } from "@/lib/instrument-chart";
-import { AXIS, BUY, CANDLE_DOWN, CANDLE_UP, MAX, MIN, TradeShape, inDrawingOrder, monthTick } from "@/components/instrument-chart-parts";
+import { AXIS, BUY, CANDLE_DOWN, CANDLE_UP, MAX, MIN, eventDots, monthTick, tradeDots } from "@/components/instrument-chart-parts";
 import { formatCurrency, formatDate } from "@/lib/utils";
 
 /**
@@ -145,17 +145,14 @@ export default function InstrumentCandleChart({ candles, trades, averagePriceSte
             <CartesianGrid stroke="rgba(20, 35, 48, 0.08)" strokeDasharray="3 10" vertical={false} />
             <XAxis dataKey="key" type="category" allowDuplicatedCategory={false} ticks={ticks} interval={0} axisLine={false} tickLine={false} tick={AXIS} tickFormatter={(key: string) => monthTick(toTime(key))} />
             <YAxis type="number" domain={[lowerEnd, top + padding]} {...(hasEventMarks ? { ticks: niceTicks(bottom, top + padding) } : {})} allowDataOverflow axisLine={false} tickLine={false} tick={AXIS} orientation="right" width={64} tickFormatter={(value: number) => percent.format(value)} />
-            <YAxis yAxisId="events" type="number" dataKey="lane" domain={[0, 1]} hide />
-            <ZAxis dataKey="amount" type="number" range={[60, 380]} />
             <Tooltip content={<CandleTooltip rows={rowsByKey} markers={markers} interval={interval} currency={currency} eventSlots={placement.slots} eventInterval={placement.interval} />} cursor={{ stroke: "rgba(20, 35, 48, 0.16)", strokeDasharray: "6 8", fill: "transparent" }} wrapperStyle={{ outline: "none", zIndex: 20 }} />
             <ReferenceLine y={max} stroke={MAX} strokeWidth={1} strokeDasharray="2 3" label={{ value: `max ${percent.format(max)}`, position: "insideTopLeft", fill: MAX, fontSize: 11, fontWeight: 700 }} />
             <ReferenceLine y={min} stroke={MIN} strokeWidth={1} strokeDasharray="2 3" label={{ value: `min ${percent.format(min)}`, position: "insideBottomLeft", fill: MIN, fontSize: 11, fontWeight: 700 }} />
             <Bar dataKey="range" shape={<CandleShape />} maxBarSize={14} isAnimationActive={false} name="Kurs" />
             <Line dataKey="average" type="stepAfter" stroke={BUY} strokeWidth={2} strokeDasharray="6 4" dot={false} activeDot={false} connectNulls={false} isAnimationActive={false} name="Średnia cena kupna" />
-            {/* With an empty list Recharts would draw a mark for every candle. */}
-            {markers.length > 0 ? <Scatter data={inDrawingOrder(markers)} dataKey="price" shape={<TradeShape outlined />} isAnimationActive={false} name="Transakcje" /> : null}
-            {eventMarks.espi.length > 0 ? <Scatter yAxisId="events" data={eventMarks.espi} dataKey="lane" shape={<EventMarkShape />} isAnimationActive={false} name="Komunikaty ESPI" /> : null}
-            {eventMarks.dividend.length > 0 ? <Scatter yAxisId="events" data={eventMarks.dividend} dataKey="lane" shape={<EventMarkShape />} isAnimationActive={false} name="Dywidendy" /> : null}
+            {tradeDots(markers, (marker) => marker.key, [60, 380], true)}
+            {eventDots(eventMarks.espi, (mark) => mark.key, [lowerEnd, top + padding])}
+            {eventDots(eventMarks.dividend, (mark) => mark.key, [lowerEnd, top + padding])}
           </ComposedChart>
         </ResponsiveContainer>
       </div>

@@ -9070,7 +9070,7 @@ textarea {
 
 .espi-filter-panel {
   display: grid;
-  grid-template-columns: minmax(220px, 1.4fr) minmax(220px, 1.4fr) minmax(170px, 1fr) minmax(180px, 1fr) 138px 138px auto;
+  grid-template-columns: minmax(180px, 1.4fr) minmax(200px, 1.4fr) minmax(150px, 1fr) minmax(160px, 1fr) 138px 138px auto;
   align-items: end;
   gap: 10px;
 }
@@ -9566,7 +9566,8 @@ textarea {
   white-space: nowrap;
 }
 
-@media (max-width: 1240px) {
+/* One row needs about 1200 px beside the menu; narrower than that the filters take two rows. */
+@media (max-width: 1599px) {
   .espi-filter-panel {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }

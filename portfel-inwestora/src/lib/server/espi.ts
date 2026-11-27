@@ -605,8 +605,10 @@ const reclaimAttachmentsSql = `
   DELETE FROM espi_report_attachments
   WHERE source_url = ANY($1::text[]) AND espi_report_id <> $2
     AND espi_report_id IN (
+      -- Every other publication; a copy from another channel in the same minute keeps its files.
       SELECT id FROM espi_reports
-      WHERE LEFT(published_at, 16) <> $3 AND COALESCE(report_number, '') !~ $4
+      WHERE NOT (LEFT(published_at, 16) = $3 AND split_part(source_id, ':', 1) <> $4)
+        AND COALESCE(report_number, '') !~ $5
     )
 `;
 
@@ -790,7 +792,7 @@ const upsertEspiReport = async (report: ParsedPapEspiReport) => {
     if (report.attachments.length > 0) {
       await transaction.execute(reclaimAttachmentsSql, [
         report.attachments.map((attachment) => attachment.sourceUrl), id,
-        report.publishedAt.slice(0, 16), ESPI_OWN_NUMBER_PATTERN,
+        report.publishedAt.slice(0, 16), getEspiSourceFamily(report.sourceId), ESPI_OWN_NUMBER_PATTERN,
       ]);
     }
   });

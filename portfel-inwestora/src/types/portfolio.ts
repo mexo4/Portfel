@@ -305,6 +305,8 @@ export type PortfolioAsset = {
   instrumentType?: InstrumentType;
   positionDirection?: PositionDirection;
   contractMultiplier?: number;
+  /** CFD leverage, from the broker's margin deposit. */
+  leverage?: number;
   purchaseDate: string;
   quantity: number;
   purchasePrice: number;

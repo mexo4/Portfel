@@ -8,7 +8,7 @@ import AssetModeSelector from "@/components/AssetModeSelector";
 import { useListingVenues } from "@/components/useListingVenues";
 import TradeNoticeToast from "@/components/TradeNoticeToast";
 import { describeTrade, getUnsavedTradeNotice, type TradeNotice } from "@/lib/trade-notice";
-import { getOpenCfdLotPrice, getOpenCfdMetadata, reconcileXtbOpenCfds } from "@/lib/xtb-open-cfd";
+import { attachClosedCfdDetails, getOpenCfdLotPrice, getOpenCfdMetadata, reconcileXtbOpenCfds } from "@/lib/xtb-open-cfd";
 import { PortfolioWorkspaceProvider, type PortfolioWorkspaceValue } from "@/components/PortfolioWorkspaceContext";
 import {
   AUTO_REFRESH_INTERVAL_MS,
@@ -1160,10 +1160,12 @@ export default function PortfolioApp({
   const [bondError, setBondError] = useState<string | null>(null);
   const [bondSuccess, setBondSuccess] = useState<string | null>(null);
   const [tradeNotice, setTradeNotice] = useState<TradeNotice | null>(null);
-  // With one portfolio open a trade is saved a moment after the form is done, so its notice waits
-  // for the server. In the combined view the form itself waits for the save.
-  const tradeAwaitingSaveRef = useRef<TradeNotice | null>(null);
   const closeTradeNotice = useCallback(() => setTradeNotice(null), []);
+  /** Called after the trade has been saved. */
+  const announceTrade = useCallback((trade: Parameters<typeof describeTrade>[0]) => {
+    setTradeNotice({ ...describeTrade(trade), id: Date.now() });
+  }, []);
+  const tradeCommitInFlightRef = useRef(false);
   const [bondRedemptionError, setBondRedemptionError] = useState<string | null>(null);
   const [bondSwapError, setBondSwapError] = useState<string | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
@@ -1212,12 +1214,6 @@ export default function PortfolioApp({
     currentRouteKeyRef.current = currentRouteKey;
     currentPortfolioScopeRef.current = portfolioScope;
   }, [currentRouteKey, pathname, portfolioScope, searchParams]);
-  const announceTrade = useCallback((trade: Parameters<typeof describeTrade>[0]) => {
-    const notice = { ...describeTrade(trade), id: Date.now() };
-    const waits = currentPortfolioScopeRef.current.mode === "SINGLE";
-    tradeAwaitingSaveRef.current = waits ? notice : null;
-    setTradeNotice(waits ? null : notice);
-  }, []);
   const selectedPortfolioIds = useMemo(
     () => getPortfolioScopeIds(portfolioScope, portfolioIds),
     [portfolioIds, portfolioScope]
@@ -1977,12 +1973,9 @@ export default function PortfolioApp({
       setIsSavingPortfolio(true);
 
       try {
-        // A save that was already under way when a trade was made does not carry it.
-        let lastSaveStartedAt = 0;
         while (pendingPortfolioSaveRef.current) {
           const nextSave = pendingPortfolioSaveRef.current;
           pendingPortfolioSaveRef.current = null;
-          lastSaveStartedAt = Date.now();
           inFlightPortfolioSaveFingerprintRef.current = nextSave.fingerprint;
 
           try {
@@ -2046,14 +2039,6 @@ export default function PortfolioApp({
                   preferredActivePortfolioId
                 );
                 restoredFromConflict = true;
-                // The server's state replaced the change, so a waiting trade is gone.
-                if (tradeAwaitingSaveRef.current) {
-                  tradeAwaitingSaveRef.current = null;
-                  setTradeNotice(getUnsavedTradeNotice());
-                  // The forms already said the trade was saved.
-                  setAssetSuccess(null);
-                  setBondSuccess(null);
-                }
               }
             }
 
@@ -2067,11 +2052,6 @@ export default function PortfolioApp({
         }
 
         setSyncError(null);
-        const waitingTrade = tradeAwaitingSaveRef.current;
-        if (waitingTrade && lastSaveStartedAt >= waitingTrade.id && portfolioSaveTimerRef.current === null) {
-          tradeAwaitingSaveRef.current = null;
-          setTradeNotice(waitingTrade);
-        }
       } catch (error) {
         setSyncError(toErrorMessage(error, "Nie udało się zapisać portfela."));
         throw error;
@@ -2084,6 +2064,23 @@ export default function PortfolioApp({
     portfolioSavePromiseRef.current = savePromise;
     return savePromise;
   }, [applyPersistedPortfolioBook, portfolioScope]);
+
+  // Closing or reloading while a change is still on its way would lose it. The waiting save is
+  // sent at once and the browser asks before leaving.
+  useEffect(() => {
+    const keepUnsavedChanges = (event: BeforeUnloadEvent) => {
+      if (!pendingPortfolioSaveRef.current && !portfolioSavePromiseRef.current) return;
+      if (portfolioSaveTimerRef.current !== null) {
+        window.clearTimeout(portfolioSaveTimerRef.current);
+        portfolioSaveTimerRef.current = null;
+      }
+      void flushPortfolioSave().catch(() => undefined);
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", keepUnsavedChanges);
+    return () => window.removeEventListener("beforeunload", keepUnsavedChanges);
+  }, [flushPortfolioSave]);
 
   const queuePortfolioSave = useCallback(
     (nextBook: PortfolioBook, immediate = false) => {
@@ -2187,8 +2184,10 @@ export default function PortfolioApp({
           true
         );
       } catch (error) {
-        portfoliosRef.current = previousPortfolios;
-        setPortfolios(previousPortfolios);
+        if (!(error instanceof ApiError && error.status === 409)) {
+          portfoliosRef.current = previousPortfolios;
+          setPortfolios(previousPortfolios);
+        }
         const message = toErrorMessage(
           error,
           "Nie udało się zapisać zmian w portfelu."
@@ -2285,20 +2284,39 @@ export default function PortfolioApp({
       if (nextPortfolio.id !== latestTarget.id) {
         throw new Error("Operacja nie należy do wskazanego portfela docelowego.");
       }
-      if (currentPortfolioScopeRef.current.mode !== "SINGLE") {
-        await persistOperationTargetChange(nextPortfolio, targetPortfolioId, expectedScopeKey);
-        return;
+      // A second trade built while the first is being saved would count the first one twice.
+      if (tradeCommitInFlightRef.current) {
+        throw new Error("Poprzednia transakcja jeszcze się zapisuje. Poczekaj na potwierdzenie.");
       }
-      updateWorkspaceAssets(() => normalizeStoredPortfolioAssets(nextPortfolio.assets));
-      updateWorkspaceSales(() => getSortedPortfolioSales(nextPortfolio.sales));
-      updateWorkspaceRealizedAdjustments(() =>
-        getSortedPortfolioRealizedAdjustments(nextPortfolio.realizedAdjustments)
-      );
-      handlePortfolioCoreModelChange(nextPortfolio);
+      tradeCommitInFlightRef.current = true;
+      // With one portfolio open the form's own lists change together with the saved book. The
+      // save starts at once and the form waits for it: nothing is left to a timer that closing
+      // or reloading the page would cancel.
+      const previousWorkspace = currentPortfolioScopeRef.current.mode === "SINGLE" ? workspaceRef.current : null;
+      try {
+        if (previousWorkspace) {
+          updateWorkspaceAssets(() => normalizeStoredPortfolioAssets(nextPortfolio.assets));
+          updateWorkspaceSales(() => getSortedPortfolioSales(nextPortfolio.sales));
+          updateWorkspaceRealizedAdjustments(() =>
+            getSortedPortfolioRealizedAdjustments(nextPortfolio.realizedAdjustments)
+          );
+        }
+        await persistOperationTargetChange(nextPortfolio, targetPortfolioId, expectedScopeKey);
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 409) {
+          setTradeNotice(getUnsavedTradeNotice());
+        } else if (previousWorkspace) {
+          updateWorkspaceAssets(() => previousWorkspace.assets);
+          updateWorkspaceSales(() => previousWorkspace.sales);
+          updateWorkspaceRealizedAdjustments(() => previousWorkspace.realizedAdjustments);
+        }
+        throw error;
+      } finally {
+        tradeCommitInFlightRef.current = false;
+      }
     },
     [
       getCurrentOperationTarget,
-      handlePortfolioCoreModelChange,
       persistOperationTargetChange,
       updateWorkspaceAssets,
       updateWorkspaceRealizedAdjustments,
@@ -5253,10 +5271,17 @@ export default function PortfolioApp({
     const assetsBeforeCfdState = nextAssets;
     const cfdState = reconcileXtbOpenCfds({ assets: nextAssets, operations: nextOperations, imported: operations });
     nextAssets = cfdState.assets;
+    if (cfdState.completed > 0) importWarnings.push(`Uzupełniono dźwignię pozycji CFD: ${cfdState.completed}.`);
     if (cfdState.closed + cfdState.reduced > 0) {
       importWarnings.push(
         `Pozycje CFD według pliku XTB: zamknięte ${cfdState.closed}, zmniejszone ${cfdState.reduced}. Wynik zamknięcia pochodzi z wiersza „Close trade”.`
       );
+    }
+
+    const cfdDetails = attachClosedCfdDetails(nextOperations, operations);
+    nextOperations = cfdDetails.operations;
+    if (cfdDetails.attached > 0) {
+      importWarnings.push(`Zamknięte pozycje CFD w „Zamkniętych”: ${cfdDetails.attached}. Wynik się nie zmienił, jest liczony raz z wiersza „Close trade”.`);
     }
 
     const importedTotal =
@@ -5279,7 +5304,7 @@ export default function PortfolioApp({
     // imported account that belonged to a stale/removed statement mapping. In
     // that case persist only the safe account cleanup; never recreate a
     // counterparty account just because it appeared in the broker comment.
-    if (importedTotal === 0 && !removedOrphanImportedAccounts && cfdState.assets === assetsBeforeCfdState) {
+    if (importedTotal === 0 && !removedOrphanImportedAccounts && cfdState.assets === assetsBeforeCfdState && cfdDetails.attached === 0) {
       return {
         importedBuys,
         importedSells,

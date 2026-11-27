@@ -21,6 +21,8 @@ export type ChartInstrument = {
   provider: QuoteProvider;
   providerId?: string;
   priceScale?: number;
+  /** A CFD is charted only from its own quote source, never by its ticker. */
+  isCfd?: boolean;
   quantity: number;
   isOpen: boolean;
   portfolioNames: string[];
@@ -82,6 +84,7 @@ export const listChartInstruments = (portfolios: InvestmentPortfolio[]): ChartIn
         provider: asset.provider,
         ...(asset.providerId ? { providerId: asset.providerId } : {}),
         ...(asset.priceScale ? { priceScale: asset.priceScale } : {}),
+        ...(asset.instrumentType === "CFD" ? { isCfd: true } : {}),
       }, portfolio.name, asset.purchaseDate);
       instrument.quantity = round(instrument.quantity + asset.quantity, 8);
       instrument.isOpen = instrument.quantity > 0;
@@ -98,6 +101,7 @@ export const listChartInstruments = (portfolios: InvestmentPortfolio[]): ChartIn
         provider: sale.provider,
         ...(sale.providerId ? { providerId: sale.providerId } : {}),
         ...(sale.priceScale ? { priceScale: sale.priceScale } : {}),
+        ...(sale.instrumentType === "CFD" ? { isCfd: true } : {}),
       }, portfolio.name, firstBuy);
     }
   }

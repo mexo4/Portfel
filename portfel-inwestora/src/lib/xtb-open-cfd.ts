@@ -1,3 +1,4 @@
+import { getCfdQuoteSource } from "@/lib/cfd";
 import { XTB_OPEN_CFD_KEY, type ImportedBrokerOperation } from "@/lib/import-operations";
 import type { PortfolioAsset, PortfolioOperation } from "@/types/portfolio";
 
@@ -13,9 +14,10 @@ export const getCfdPositionKey = (operation: Pick<ImportedBrokerOperation, "acco
 const isOpenCfdRow = (operation: ImportedBrokerOperation) => Boolean(operation.importKey?.startsWith(XTB_OPEN_CFD_KEY));
 
 /**
- * What a new lot of an open CFD knows about its price. Indices and commodities such as US100 have
- * no exchange suffix and no quote source in Mexo, so XTB's price stays until the next import and
- * the automatic refresh leaves it alone. A CFD on a share is refreshed like the share.
+ * What a new lot of an open CFD knows about its price and leverage. It starts at XTB's price; a
+ * CFD with a quote source is then refreshed, the others keep XTB's price until a newer file.
+ * No price source is marked here: only a price the user sets is "manual", and that mark lives in
+ * the quote table, not in the saved lot.
  */
 export const getOpenCfdLotPrice = (operation: ImportedBrokerOperation) =>
   isOpenCfdRow(operation) && operation.snapshotPrice && operation.positionSnapshotAt
@@ -24,7 +26,7 @@ export const getOpenCfdLotPrice = (operation: ImportedBrokerOperation) =>
         latestPriceDate: operation.positionSnapshotAt.slice(0, 10),
         latestPriceFetchedAt: operation.positionSnapshotAt,
         lastUpdatedAt: operation.positionSnapshotAt,
-        priceSource: (operation.rawSymbol ?? operation.symbol).includes(".") ? ("AUTOMATIC" as const) : ("MANUAL" as const),
+        ...(operation.leverage ? { leverage: operation.leverage } : {}),
       }
     : {};
 
@@ -32,6 +34,29 @@ export const getOpenCfdLotPrice = (operation: ImportedBrokerOperation) =>
 export const getOpenCfdMetadata = (operation: ImportedBrokerOperation) => {
   const key = isOpenCfdRow(operation) ? getCfdPositionKey(operation) : null;
   return key ? { cfdPositionKey: key } : {};
+};
+
+/**
+ * Adds the details of closed CFDs to their stored cash rows, including rows imported before Mexo
+ * read them. Only metadata changes: no amount is added or moved.
+ */
+export const attachClosedCfdDetails = (operations: PortfolioOperation[], imported: ImportedBrokerOperation[]) => {
+  const trades = new Map<string, NonNullable<ImportedBrokerOperation["cfdTrade"]>>();
+  for (const operation of imported) {
+    if (!operation.cfdTrade) continue;
+    for (const key of [operation.importKey, ...(operation.legacyImportKeys ?? [])]) {
+      if (key) trades.set(key, operation.cfdTrade);
+    }
+  }
+  let attached = 0;
+  const next = operations.map((operation) => {
+    const key = operation.metadata.importKey;
+    const trade = operation.operationType === "CUSTOM" && typeof key === "string" ? trades.get(key) : undefined;
+    if (!trade || operation.metadata.cfdTrade) return operation;
+    attached += 1;
+    return { ...operation, metadata: { ...operation.metadata, cfdTrade: trade } };
+  });
+  return { operations: attached > 0 ? next : operations, attached };
 };
 
 export const reconcileXtbOpenCfds = ({ assets, operations, imported }: {
@@ -57,6 +82,7 @@ export const reconcileXtbOpenCfds = ({ assets, operations, imported }: {
   let closed = 0;
   let reduced = 0;
   let repriced = 0;
+  let completed = 0;
   const nextAssets = assets.flatMap((asset) => {
     const key = keyByLot.get(asset.id);
     if (!key) return [asset];
@@ -74,16 +100,21 @@ export const reconcileXtbOpenCfds = ({ assets, operations, imported }: {
         next = { ...next, quantity: remaining };
       }
     }
+    // Positions imported before the leverage was read get it from any later file.
+    if (open?.leverage && !next.leverage) {
+      completed += 1;
+      next = { ...next, leverage: open.leverage };
+    }
     if (open?.positionSnapshotAt && open.snapshotPrice && open.positionSnapshotAt > (next.latestPriceFetchedAt ?? "")) {
-      const price = getOpenCfdLotPrice(open);
-      // A price the user or a later refresh keeps automatic stays automatic.
-      if (next.priceSource === "MANUAL" || !next.latestPrice) {
+      // Only a file ever moves the price of a CFD without a quote source, unless the user set one.
+      // A CFD with a source is refreshed, which is newer than any file.
+      if (next.priceSource !== "MANUAL" && (!getCfdQuoteSource(next) || !next.latestPrice)) {
         repriced += 1;
-        next = { ...next, ...price };
+        next = { ...next, ...getOpenCfdLotPrice(open) };
       }
     }
     return [next];
   });
 
-  return { assets: closed + reduced + repriced > 0 ? nextAssets : assets, closed, reduced, repriced };
+  return { assets: closed + reduced + repriced + completed > 0 ? nextAssets : assets, closed, reduced, repriced, completed };
 };

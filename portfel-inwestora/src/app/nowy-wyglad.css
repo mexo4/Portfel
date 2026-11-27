@@ -535,6 +535,11 @@ body { background: var(--canvas); color: var(--text); font-family: var(--font-sa
 .positions-card-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
 .positions-card .instrument-chart { margin-top: 0; }
 .positions-lots { width: 100%; }
+/* The shared table style asks for 760 px, wider than the preview, which hid the profit column. */
+.workspace-shell .portfolio-table.positions-lots { min-width: 0; table-layout: auto; }
+.workspace-shell .portfolio-table.positions-lots :is(th, td) { padding: 7px 8px; }
+.positions-lots-wrap { container-type: inline-size; }
+@container (max-width: 520px) { .positions-lots .lot-fee { display: none; } }
 .positions-lots .num { text-align: right; }
 .positions-inline-preview td { padding: 8px 10px 14px; background: #fbfcfd; }
 

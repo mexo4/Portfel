@@ -32,6 +32,7 @@ import type {
   TreasuryBondSeries,
   UserProfile,
 } from "@/types/portfolio";
+import { getCfdQuoteSource } from "@/lib/cfd";
 import { isGpwSymbol } from "@/lib/ticker";
 import type { CorporateEventsResponse, CorporateEventType } from "@/lib/corporate-events";
 import type { DashboardScopeLayouts } from "@/lib/dashboard-layout";
@@ -52,6 +53,7 @@ type QuoteRequest = Pick<
   "symbol" | "kind" | "marketCurrency" | "provider" | "providerId" | "priceScale"
 > & {
   purchaseDate?: string;
+  instrumentType?: PortfolioAsset["instrumentType"];
 };
 
 export class ApiError extends Error {
@@ -379,6 +381,10 @@ export const fetchQuotePreview = async (request: QuoteRequest) => {
     params.set("providerId", request.providerId);
   }
 
+  if (getCfdQuoteSource(request)) {
+    params.set("cfd", "1");
+  }
+
   if (request.purchaseDate) {
     params.set("purchaseDate", request.purchaseDate);
   }
@@ -557,6 +563,22 @@ export const mergeQuoteIntoPortfolioAsset = (
     return asset;
   }
 
+  if (asset.instrumentType === "CFD") {
+    // A CFD takes only the price and its times: its ticker is the broker's, and a share with the
+    // same letters must not rename it or change its source.
+    if (!getCfdQuoteSource(asset)) return asset;
+    return keepExistingAssetForUnchangedQuote(asset, {
+      ...asset,
+      priceSource: "AUTOMATIC",
+      latestPrice: quote.price,
+      latestPriceDate: quote.priceDate ?? asset.latestPriceDate,
+      latestPriceMarketTimestamp: quote.marketTimestamp ?? asset.latestPriceMarketTimestamp,
+      latestPriceFetchedAt: quote.fetchedAt,
+      previousClose: quote.previousClose,
+      lastUpdatedAt: quote.fetchedAt,
+    });
+  }
+
   const isGpwStock =
     asset.kind === "stock" &&
     (isGpwSymbol(asset.symbol) || asset.marketCurrency === "PLN");
@@ -664,6 +686,7 @@ export const refreshPortfolioQuotesWithProgress = async (
 ): Promise<PortfolioQuoteRefreshResult> => {
   const quoteRequestKey = (asset: PortfolioAsset) =>
     [
+      asset.instrumentType === "CFD" ? "cfd" : "",
       asset.kind,
       asset.symbol,
       asset.marketCurrency,
@@ -675,7 +698,8 @@ export const refreshPortfolioQuotesWithProgress = async (
 
   assets
     .filter(
-      (asset) => asset.instrumentType !== "CFD" && asset.instrumentType !== "OTHER" && asset.priceSource !== "MANUAL"
+      (asset) => (asset.instrumentType !== "CFD" || getCfdQuoteSource(asset) !== null) &&
+        asset.instrumentType !== "OTHER" && asset.priceSource !== "MANUAL"
     )
     .forEach((asset) => {
     const key = quoteRequestKey(asset);
@@ -782,6 +806,16 @@ export const savePortfolioState = async ({
   activePortfolioId?: string;
   portfolioRevision?: number;
 }) => {
+  const body = JSON.stringify(
+    portfolios
+      ? { portfolios, activePortfolioId, portfolioRevision }
+      : {
+          assets: assets ?? [],
+          sales: sales ?? [],
+          realizedAdjustments: realizedAdjustments ?? [],
+          portfolioRevision,
+        }
+  );
   const data = await requestJson<{
     saved: true;
     portfolios: InvestmentPortfolio[];
@@ -789,16 +823,9 @@ export const savePortfolioState = async ({
     portfolioRevision: number;
   }>("/api/portfolio", {
     method: "PUT",
-    body: JSON.stringify(
-      portfolios
-        ? { portfolios, activePortfolioId, portfolioRevision }
-        : {
-            assets: assets ?? [],
-            sales: sales ?? [],
-            realizedAdjustments: realizedAdjustments ?? [],
-            portfolioRevision,
-          }
-    ),
+    body,
+    // The browser lets a request outlive the page only up to 64 KB.
+    keepalive: new TextEncoder().encode(body).length < 60_000,
   });
 
   return data;
@@ -1140,6 +1167,7 @@ export type InstrumentHistoryRequestItem = {
   provider: QuoteProvider;
   providerId?: string;
   priceScale?: number;
+  isCfd?: boolean;
 };
 
 export type InstrumentHistoryResponseItem = {

@@ -30,11 +30,17 @@ test("a saved purchase or sale is announced with what, how much, at what price a
   assert.equal(swapped.detail, "3 × EDO0136 · portfel „Główny”");
 });
 
-test("with one portfolio open the notice waits for the server, and a rejected save says so", async () => {
+test("a trade is saved at once, the form waits for it, and a rejected save says so", async () => {
   const app = await read("components/PortfolioApp.tsx");
-  assert.match(app, /const waits = currentPortfolioScopeRef\.current\.mode === "SINGLE";/);
-  assert.match(app, /lastSaveStartedAt >= waitingTrade\.id && portfolioSaveTimerRef\.current === null/);
-  assert.match(app, /restoredFromConflict = true;[\s\S]{0,300}setTradeNotice\(getUnsavedTradeNotice\(\)\)/);
+  const commit = app.slice(app.indexOf("const commitOperationPortfolioSnapshot"), app.indexOf("const restoreLastPersistedPortfolioBook"));
+  assert.match(commit, /await persistOperationTargetChange\(nextPortfolio, targetPortfolioId, expectedScopeKey\);/);
+  assert.doesNotMatch(commit, /handlePortfolioCoreModelChange/, "no trade is left to the delayed autosave");
+  assert.match(commit, /if \(tradeCommitInFlightRef\.current\) \{\s+throw new Error/, "a second trade waits for the first");
+  assert.match(commit, /error\.status === 409\) \{\s+setTradeNotice\(getUnsavedTradeNotice\(\)\);/);
+  assert.match(commit, /updateWorkspaceAssets\(\(\) => previousWorkspace\.assets\);/, "a failed save restores the lists");
+  assert.match(app, /if \(!\(error instanceof ApiError && error\.status === 409\)\) \{\s+portfoliosRef\.current = previousPortfolios;/);
+  assert.match(app, /window\.addEventListener\("beforeunload", keepUnsavedChanges\);/);
+  assert.match(await read("lib/api.ts"), /keepalive: new TextEncoder\(\)\.encode\(body\)\.length < 60_000/);
   assert.equal(getUnsavedTradeNotice().side, "error");
 });
 

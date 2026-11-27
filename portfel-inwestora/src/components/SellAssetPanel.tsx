@@ -113,7 +113,7 @@ export default function SellAssetPanel({
       {error ? <p className="field-note field-note-error mt-4">{error}</p> : null}
 
       <div className="mt-5 flex flex-wrap gap-3">
-        <button type="button" className="primary-button" onClick={onSubmit}>
+        <button type="button" className="primary-button button-sell" onClick={onSubmit}>
           Zapisz sprzedaż
         </button>
         <button type="button" className="ghost-button" onClick={onCancel}>

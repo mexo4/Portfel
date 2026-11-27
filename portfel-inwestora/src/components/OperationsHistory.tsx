@@ -353,7 +353,7 @@ export default function OperationsHistory({
                           {onUndoSale ? (
                             <div className="aggregate-operation-row-action">
                               {!canUndo ? <p>Tej operacji nie można cofnąć, ponieważ nowsza transakcja rozliczyła te same zakupy.</p> : <p>Cofnięcie przywróci ilość, wynik i statystyki sprzed tej transakcji.</p>}
-                              <button className="ghost-button" type="button" disabled={!canUndo} onClick={() => onUndoSale(sale.id)}>
+                              <button className="ghost-button admin-danger-button" type="button" disabled={!canUndo} onClick={() => onUndoSale(sale.id)}>
                                 Cofnij
                               </button>
                             </div>
@@ -363,7 +363,7 @@ export default function OperationsHistory({
                       {adjustment?.source === "manual" && onRemoveRealizedAdjustment ? (
                         <div className="aggregate-operation-row-action">
                           <p>Usunięcie cofnie wyłącznie tę ręczną korektę historycznego wyniku.</p>
-                          <button className="ghost-button" type="button" onClick={() => onRemoveRealizedAdjustment(adjustment.id)}>Usuń korektę</button>
+                          <button className="ghost-button admin-danger-button" type="button" onClick={() => onRemoveRealizedAdjustment(adjustment.id)}>Usuń korektę</button>
                         </div>
                       ) : null}
                       {adjustment?.source === "bond-coupon" ? <div><span>Źródło</span><strong>Automatyczny kupon obligacji {adjustment.bondCode ?? ""}</strong></div> : null}

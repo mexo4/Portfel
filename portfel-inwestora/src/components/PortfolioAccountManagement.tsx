@@ -506,7 +506,7 @@ export default function PortfolioAccountManagement({
           </div>
           <div className="portfolio-hub-actions">
             <button className="ghost-button" type="button" onClick={onRename} disabled={isPending || isAllPortfoliosSelected}>Zmień nazwę</button>
-            <button className="ghost-button admin-danger-button" type="button" onClick={onDelete} disabled={portfolios.length <= 1 || isPending || isAllPortfoliosSelected}>{isPending ? "Zapisywanie…" : "Usuń portfel"}</button>
+            <button className="primary-button button-danger" type="button" onClick={onDelete} disabled={portfolios.length <= 1 || isPending || isAllPortfoliosSelected}>{isPending ? "Zapisywanie…" : "Usuń portfel"}</button>
             <button ref={createTriggerRef} className="primary-button" type="button" onClick={openCreateModal} disabled={isPending || !canCreateAnotherPortfolio} aria-haspopup="dialog" aria-expanded={isCreating}>Dodaj portfel</button>
           </div>
         </div>

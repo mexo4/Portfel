@@ -184,7 +184,7 @@ export default function TreasuryBondForm({
         </button>
 
         <button
-          className="transaction-button transaction-button-compact bond-transaction-button transaction-button-sell self-end"
+          className="transaction-button transaction-button-compact bond-transaction-button transaction-button-gold self-end"
           type="button"
           onClick={onRedeemSubmit}
           disabled={isLoadingRedemption}
@@ -226,7 +226,7 @@ export default function TreasuryBondForm({
         </label>
 
         <button
-          className="transaction-button transaction-button-compact bond-transaction-button transaction-button-buy self-end"
+          className="transaction-button transaction-button-compact bond-transaction-button transaction-button-gold self-end"
           type="button"
           onClick={onSwapSubmit}
           disabled={isLoadingSwap}

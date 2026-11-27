@@ -249,7 +249,7 @@ export default function ManualAssetPriceDialog({
         <footer className="flex flex-wrap items-center justify-between gap-3">
           <div>
             {isManual ? (
-              <button type="button" className="ghost-button" onClick={() => void handleClear()} disabled={isBusy}>
+              <button type="button" className="ghost-button admin-danger-button" onClick={() => void handleClear()} disabled={isBusy}>
                 {isBusy ? "Zapisywanie…" : "Usuń cenę ręczną"}
               </button>
             ) : null}

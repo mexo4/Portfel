@@ -609,6 +609,19 @@ export const fetchYahooQuote = async ({
   return quote ? { ...quote, symbol: normalizeSymbol(symbol) } : null;
 };
 
+/**
+ * Where Yahoo says a ticker is listed, e.g. "NMS" (NASDAQ) or "NYQ" (NYSE), with the currency it
+ * quotes in. `null` means the request failed or Yahoo does not know the ticker.
+ */
+export const fetchYahooListingExchange = async (symbol: string) => {
+  const payload = await safeFetchJson<YahooChartResponse>(
+    `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=5d&interval=1d`,
+    YAHOO_QUOTE_TIMEOUT_MS
+  );
+  const meta = payload?.chart?.result?.[0]?.meta;
+  return meta ? { exchangeName: meta.exchangeName, currency: meta.currency } : null;
+};
+
 export type YahooEtfSearchItem = {
   symbol: string;
   name: string;

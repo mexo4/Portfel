@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import TruncatedText from "@/components/TruncatedText";
+import { useListingVenues } from "@/components/useListingVenues";
 import { fetchBenchmarkComparisons } from "@/lib/api";
 import { getAssetClassAllocation, getGeographicAllocation } from "@/lib/geographic-allocation";
 import { buildPortfolioBenchmarkInvestments } from "@/lib/portfolio-state";
@@ -87,10 +88,10 @@ export default function PortfolioCharts({
     error: string | null;
   } | null>(null);
 
-  const groupedAssets = useMemo(
+  const groupedAssets = useListingVenues(useMemo(
     () => getGroupedPortfolioAssets(assets, fxRates, baseCurrency),
     [assets, baseCurrency, fxRates]
-  );
+  ));
   const marketValue = groupedAssets.reduce(
     (total, asset) => total + asset.totalValue,
     0

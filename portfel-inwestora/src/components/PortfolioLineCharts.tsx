@@ -3399,7 +3399,7 @@ export default function PortfolioLineCharts({
                     </label>
                     <button
                       type="button"
-                      className="ghost-button line-visual-benchmark-remove"
+                      className="ghost-button admin-danger-button line-visual-benchmark-remove"
                       onClick={() => handleRemoveBenchmark(benchmark.id)}
                     >
                       Usuń

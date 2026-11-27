@@ -88,7 +88,7 @@ export default function RecurringOperationsPanel({
           <h2 id="recurring-title" className="section-title">Stałe wpłaty, wypłaty i opłaty</h2>
           <p className="section-copy">Zaplanuj powtarzalne operacje gotówkowe. Mexo nie księguje ich samo: gdy nadejdzie termin, zobaczysz je tutaj i zaksięgujesz jednym kliknięciem.</p>
         </div>
-        <button type="button" className="ghost-button" onClick={() => setIsOpen((open) => !open)} aria-expanded={isOpen} disabled={isPending || saving || accounts.length === 0}>
+        <button type="button" className={isOpen ? "ghost-button" : "primary-button"} onClick={() => setIsOpen((open) => !open)} aria-expanded={isOpen} disabled={isPending || saving || accounts.length === 0}>
           {isOpen ? "Zamknij" : "Dodaj operację cykliczną"}
         </button>
       </div>
@@ -138,7 +138,7 @@ export default function RecurringOperationsPanel({
                   <strong>{RECURRING_TYPE_LABELS[definition.operationType]} {formatCurrency(definition.amount, definition.currency)} {RECURRING_FREQUENCY_LABELS[definition.frequency]}</strong>
                   <small>{accountName(definition.accountId)} · od {formatDate(definition.startDate)}{definition.endDate ? ` do ${formatDate(definition.endDate)}` : ""} · {next ? `następna ${formatDate(next)}` : "zakończona"}{definition.notes ? ` · ${definition.notes}` : ""}</small>
                 </span>
-                <button type="button" className="ghost-button" onClick={() => removeDefinition(definition.id)} disabled={isPending || saving}>Usuń</button>
+                <button type="button" className="ghost-button admin-danger-button" onClick={() => removeDefinition(definition.id)} disabled={isPending || saving}>Usuń</button>
               </li>
             );
           })}

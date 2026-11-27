@@ -1149,7 +1149,7 @@ export default function DividendCashWorkspace({
             ) : null}
 
             <div className="sprint-action-row mt-5">
-              <button className="primary-button" type="button" onClick={() => void saveDividend()} disabled={isSavingDividend || isPortfolioMutationPending || (isAggregateMode && !selectedTargetPortfolio)}>
+              <button className="primary-button button-gold" type="button" onClick={() => void saveDividend()} disabled={isSavingDividend || isPortfolioMutationPending || (isAggregateMode && !selectedTargetPortfolio)}>
                 {isSavingDividend ? "Zapisywanie…" : isPortfolioMutationPending ? "Zmiana portfela…" : dividendDraft.editingId ? "Zapisz dywidendę" : "Dodaj dywidendę"}
               </button>
               {dividendDraft.editingId ? (

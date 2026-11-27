@@ -67,8 +67,8 @@ test("independent random ETF sample flows safely into Structure allocation", asy
       assert.equal(getPortfolioInstrumentClass(group), expectedClass);
       assert.deepEqual(getAssetClassAllocation([group]), [
         {
-          id: expectedClass,
-          label: expectedClass === "etf" ? "ETF" : "Niezweryfikowany typ",
+          id: expectedClass === "etf" ? "etf:foreign" : expectedClass,
+          label: expectedClass === "etf" ? "ETF-y zagraniczne" : "Niezweryfikowany typ",
           totalValue: 123.45,
         },
       ]);

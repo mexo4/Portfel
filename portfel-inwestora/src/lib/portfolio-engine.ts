@@ -1,5 +1,6 @@
 import { BASE_CURRENCY, FALLBACK_FX_RATES } from "@/lib/constants";
 import { calculateCashBalances, ensurePortfolioCoreModel } from "@/lib/operation-engine";
+import type { VenueId } from "@/lib/listing-venue";
 import { getPortfolioAssetGroupKey } from "@/lib/ticker";
 import { round } from "@/lib/utils";
 import type {
@@ -66,6 +67,8 @@ export type PortfolioAssetGroup = {
   groupOrder: number;
   lotsCount: number;
   lots: PortfolioAsset[];
+  /** The exchange looked up for a ticker whose saved data names none. Never persisted. */
+  listingVenue?: VenueId;
   /** Present only in the virtual all-portfolios read model. Never persisted. */
   portfolioId?: string;
   portfolioName?: string;

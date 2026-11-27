@@ -166,7 +166,7 @@ export default function RealizedAdjustmentsPanel({
                     </span>
 
                     <button
-                      className="ghost-button"
+                      className="ghost-button admin-danger-button"
                       type="button"
                       onClick={() => onRemove(adjustment.id)}
                     >

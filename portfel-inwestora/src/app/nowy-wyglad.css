@@ -42,6 +42,13 @@
   --dividend-bg: #fdf4e1;
   --dividend-bg-hover: #faeac6;
   --dividend-line: #e8cd93;
+  /* Filled action buttons; white text on each keeps a contrast of at least 4.5. */
+  --solid-buy: #11804c;
+  --solid-buy-hover: #0d663d;
+  --solid-sell: #b4332a;
+  --solid-sell-hover: #922820;
+  --solid-gold: #8a5a00;
+  --solid-gold-hover: #6f4800;
   --canvas: #f4f5f7;
   --canvas-strong: #ffffff;
   --surface: #ffffff;
@@ -180,19 +187,45 @@ body { background: var(--canvas); color: var(--text); font-family: var(--font-sa
 .workspace-shell .transaction-button:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
 .workspace-shell .ghost-button { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 0 12px; border: 1px solid var(--line-strong); color: var(--text); background: #ffffff; font-size: 13.5px; font-weight: 600; text-decoration: none; }
 .workspace-shell .ghost-button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); background: #f6f8fb; }
-/* Buy, sell, dividend and delete keep a colour of their own, light enough for the flat look. */
+/*
+ * Buttons that do something are filled with a colour: navy adds and saves (.primary-button),
+ * green buys, red sells, gold is for dividends and for redeeming or swapping bonds. Deleting is
+ * red: a frame for single entries, filled for a whole portfolio. Everything else stays white.
+ */
 .workspace-shell .transaction-button.transaction-button-buy,
-.workspace-shell .ghost-button.action-buy { border-color: var(--buy-line); color: var(--buy-text); background: var(--buy-bg); }
+.workspace-shell .ghost-button.action-buy,
+.workspace-shell .primary-button.button-buy { border-color: var(--solid-buy); color: #ffffff; background: var(--solid-buy); }
 .workspace-shell .transaction-button.transaction-button-buy:hover:not(:disabled),
-.workspace-shell .ghost-button.action-buy:hover { border-color: var(--buy-text); color: var(--buy-text); background: var(--buy-bg-hover); }
+.workspace-shell .ghost-button.action-buy:hover,
+.workspace-shell .primary-button.button-buy:hover:not(:disabled) { border-color: var(--solid-buy-hover); color: #ffffff; background: var(--solid-buy-hover); }
 .workspace-shell .transaction-button.transaction-button-sell,
-.workspace-shell .ghost-button.action-sell { border-color: var(--sell-line); color: var(--sell-text); background: var(--sell-bg); }
+.workspace-shell .ghost-button.action-sell,
+.workspace-shell .primary-button.button-sell { border-color: var(--solid-sell); color: #ffffff; background: var(--solid-sell); }
 .workspace-shell .transaction-button.transaction-button-sell:hover:not(:disabled),
-.workspace-shell .ghost-button.action-sell:hover { border-color: var(--sell-text); color: var(--sell-text); background: var(--sell-bg-hover); }
-.workspace-shell .ghost-button.action-dividend { border-color: var(--dividend-line); color: var(--dividend-text); background: var(--dividend-bg); }
-.workspace-shell .ghost-button.action-dividend:hover { border-color: var(--dividend-text); color: var(--dividend-text); background: var(--dividend-bg-hover); }
-.workspace-shell .ghost-button.admin-danger-button { border-color: var(--sell-line); color: var(--sell-text); }
-.workspace-shell .ghost-button.admin-danger-button:hover:not(:disabled) { border-color: var(--sell-text); color: var(--sell-text); background: var(--sell-bg); }
+.workspace-shell .ghost-button.action-sell:hover,
+.workspace-shell .primary-button.button-sell:hover:not(:disabled) { border-color: var(--solid-sell-hover); color: #ffffff; background: var(--solid-sell-hover); }
+.workspace-shell .transaction-button.transaction-button-gold,
+.workspace-shell .ghost-button.action-dividend,
+.workspace-shell .primary-button.button-gold,
+.workspace-shell .ghost-button.button-gold { border-color: var(--solid-gold); color: #ffffff; background: var(--solid-gold); }
+.workspace-shell .transaction-button.transaction-button-gold:hover:not(:disabled),
+.workspace-shell .ghost-button.action-dividend:hover,
+.workspace-shell .primary-button.button-gold:hover:not(:disabled),
+.workspace-shell .ghost-button.button-gold:hover:not(:disabled) { border-color: var(--solid-gold-hover); color: #ffffff; background: var(--solid-gold-hover); }
+.workspace-shell .ghost-button.admin-danger-button { border-color: var(--solid-sell); color: var(--sell-text); background: #ffffff; }
+.workspace-shell .ghost-button.admin-danger-button:hover:not(:disabled) { border-color: var(--solid-sell-hover); color: var(--sell-text); background: var(--sell-bg); }
+.workspace-shell .primary-button.button-danger { border-color: var(--solid-sell); color: #ffffff; background: var(--solid-sell); }
+.workspace-shell .primary-button.button-danger:hover:not(:disabled) { border-color: var(--solid-sell-hover); background: var(--solid-sell-hover); }
+.workspace-shell .primary-button:disabled,
+.workspace-shell .transaction-button:disabled,
+.workspace-shell .ghost-button:disabled { opacity: 0.5; cursor: not-allowed; }
+/* „Dodaj transakcję” leads the short list of actions. */
+.workspace-quick-actions-popover > button:first-of-type { color: #ffffff; background: var(--accent); }
+.workspace-quick-actions-popover > button:first-of-type:hover,
+.workspace-quick-actions-popover > button:first-of-type:focus-visible { background: var(--accent-hover); }
+.workspace-quick-actions-popover > button:first-of-type :is(strong, small, span, svg) { color: #ffffff; }
+.workspace-mobile-sheet > button.workspace-sheet-action { padding: 0 14px !important; color: #ffffff !important; background: var(--accent) !important; }
+.workspace-mobile-sheet > button.workspace-sheet-action span { color: #ffffff; }
 /* The currency and platform pickers kept the old teal. */
 .workspace-shell .import-platform-logo { border-color: var(--line); color: var(--accent); background: var(--surface-soft); }
 .workspace-shell .import-platform-trigger:hover,

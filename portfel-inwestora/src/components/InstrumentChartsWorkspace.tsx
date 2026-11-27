@@ -6,7 +6,7 @@ import { useEffect, useMemo, useState } from "react";
 import { CartesianGrid, ComposedChart, Line, LineChart, ReferenceLine, ResponsiveContainer, Scatter, Tooltip, XAxis, YAxis, ZAxis } from "recharts";
 import { EventMarkShape, EventTooltipLines, LANE_ROOM, describeDividendDates, maxEventSlots } from "@/components/chart-event-parts";
 import InstrumentCandleChart from "@/components/InstrumentCandleChart";
-import { AXIS, BUY, MAX, MIN, PRICE, SELL, TradeShape, monthTick } from "@/components/instrument-chart-parts";
+import { AXIS, BUY, MAX, MIN, PRICE, SELL, TradeShape, inDrawingOrder, monthTick } from "@/components/instrument-chart-parts";
 import { usePortfolioWorkspace } from "@/components/PortfolioWorkspaceContext";
 import { useChartAnnouncements } from "@/components/useChartAnnouncements";
 import { setChartStyle, useChartStyle } from "@/components/useChartStyle";
@@ -20,6 +20,7 @@ import {
   averagePriceOn,
   buildComparisonRows,
   buildInstrumentTimeline,
+  separateOpposingTrades,
   instrumentKeyOf,
   listChartInstruments,
   priceExtremes,
@@ -182,7 +183,7 @@ export function useInstrumentChartData(instrument: ChartInstrument | undefined, 
   const rows = useMemo<PriceRow[]>(() => points.map((point) => ({ t: toTime(point.date), date: point.date, close: point.close, average: timeline ? averagePriceOn(timeline.averagePriceSteps, point.date) : null })), [points, timeline]);
   const extremes = useMemo(() => priceExtremes(points), [points]);
   const lastDate = points.at(-1)?.date ?? todayIso();
-  const markers = useMemo<TradeMarker[]>(() => (timeline?.trades ?? []).filter((trade) => trade.date >= start && trade.date <= lastDate).map((trade) => ({ ...trade, t: toTime(trade.date) })), [lastDate, start, timeline]);
+  const markers = useMemo<TradeMarker[]>(() => separateOpposingTrades((timeline?.trades ?? []).filter((trade) => trade.date >= start && trade.date <= lastDate), (trade) => trade.date).map((trade) => ({ ...trade, t: toTime(trade.date) })), [lastDate, start, timeline]);
   const tradesByDate = useMemo(() => {
     const map = new Map<string, InstrumentTrade[]>();
     for (const trade of timeline?.trades ?? []) map.set(trade.date, [...(map.get(trade.date) ?? []), trade]);
@@ -267,7 +268,7 @@ export function InstrumentPriceChartBody({ instrument, data, height }: { instrum
           ) : null}
           <Line data={rows} dataKey="close" type="linear" stroke={PRICE} strokeWidth={2} dot={false} isAnimationActive={false} name="Kurs" />
           <Line data={rows} dataKey="average" type="stepAfter" stroke={BUY} strokeWidth={2} strokeDasharray="6 4" dot={false} connectNulls={false} isAnimationActive={false} name="Średnia cena kupna" />
-          <Scatter data={markers} dataKey="price" shape={<TradeShape />} isAnimationActive={false} name="Transakcje" />
+          <Scatter data={inDrawingOrder(markers)} dataKey="price" shape={<TradeShape />} isAnimationActive={false} name="Transakcje" />
           {/* With an empty list Recharts would draw a mark for every price. */}
           {eventMarks.espi.length > 0 ? <Scatter yAxisId="events" data={eventMarks.espi} dataKey="lane" shape={<EventMarkShape />} isAnimationActive={false} name="Komunikaty ESPI" /> : null}
           {eventMarks.dividend.length > 0 ? <Scatter yAxisId="events" data={eventMarks.dividend} dataKey="lane" shape={<EventMarkShape />} isAnimationActive={false} name="Dywidendy" /> : null}

@@ -170,7 +170,7 @@ test("provider ETF metadata survives quote cache and corrects old positions with
   assert.equal(groups.length, 1);
   assert.equal(groups[0].quantity, 3);
   assert.deepEqual(getAssetClassAllocation(groups), [
-    { id: "etf", label: "ETF", totalValue: groups[0].totalValue },
+    { id: "etf:foreign", label: "ETF-y zagraniczne", totalValue: groups[0].totalValue },
   ]);
   assert.deepEqual(getGeographicAllocation(groups), []);
 });

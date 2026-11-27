@@ -22,12 +22,20 @@ export const monthTick = (time: number) => {
 };
 
 /**
+ * The order to draw trade marks in: the largest last. Marks of several sales at one price then
+ * show as one clean circle instead of small rings on top of a big one.
+ */
+export const inDrawingOrder = <T extends { amount: number }>(markers: T[]) => [...markers].sort((left, right) => left.amount - right.amount);
+
+/**
  * A circle with + for a purchase or − for a sale; its size follows the amount. On candles, which
  * are green and red themselves, the circle is white with a coloured ring so it stays visible.
  */
-export function TradeShape({ cx = 0, cy = 0, size = 64, payload, outlined = false }: { cx?: number; cy?: number; size?: number; payload?: InstrumentTrade; outlined?: boolean }) {
-  if (!Number.isFinite(cx) || !Number.isFinite(cy) || cx === null || cy === null) return null;
+export function TradeShape({ cx: center = 0, cy = 0, size = 64, payload, outlined = false }: { cx?: number; cy?: number; size?: number; payload?: InstrumentTrade & { nudge?: number }; outlined?: boolean }) {
+  if (!Number.isFinite(center) || !Number.isFinite(cy) || center === null || cy === null) return null;
   const radius = Math.max(5, Math.sqrt(size / Math.PI));
+  // A mark moved aside stands next to the other side's mark, so both + and − can be seen.
+  const cx = center + (payload?.nudge ?? 0) * radius;
   const isBuy = payload?.side === "buy";
   const arm = Math.min(radius * 0.55, 6);
   const colour = isBuy ? BUY : SELL;

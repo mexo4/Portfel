@@ -15,8 +15,19 @@ export const SERIES_COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87b
 export const CASH_COLOR = "#8d97a3";
 export const OTHER_COLOR = "#c6ccd4";
 
-const CLASS_COLOR_SLOTS: Record<string, number> = { "stock:gpw": 0, "stock:foreign": 1, etf: 2, crypto: 3, bond: 4, fund: 5, cfd: 6 };
+const CLASS_COLOR_SLOTS: Record<string, number> = { "stock:gpw": 0, "stock:nyse": 1, "etf:foreign": 2, crypto: 3, bond: 4, "etf:pl": 5, "stock:nasdaq": 6, "stock:foreign": 7 };
+/** Classes held less often (other exchanges, funds, CFD), in colours no listed class uses. */
+const OTHER_CLASS_COLORS = ["#7a4f2a", "#0b7f8c", "#8e2a6b", "#5d6b22", "#a8431a", "#3d4f9c"];
 const MAX_INSTRUMENTS = 7;
+
+/** The same class gets the same colour whatever else is on the chart. */
+const classColor = (id: string) => {
+  const slot = CLASS_COLOR_SLOTS[id];
+  if (slot !== undefined) return SERIES_COLORS[slot]!;
+  const hash = [...id].reduce((sum, character) => (sum * 31 + character.charCodeAt(0)) % 9973, 0);
+  return OTHER_CLASS_COLORS[hash % OTHER_CLASS_COLORS.length]!;
+};
+const classOrder = (id: string) => CLASS_COLOR_SLOTS[id] ?? SERIES_COLORS.length;
 
 const sumColumns = (columns: number[][], length: number) =>
   Array.from({ length }, (_, index) => round(columns.reduce((total, values) => total + (values[index] ?? 0), 0), 2));
@@ -41,8 +52,8 @@ export const buildStructureSeries = (data: PortfolioStructureResponse, view: Str
       classes.set(instrument.classId, current);
     }
     const series = [...classes.entries()]
-      .map(([id, item]) => ({ id, label: item.label, color: SERIES_COLORS[CLASS_COLOR_SLOTS[id] ?? 7]!, values: sumColumns(item.columns, length) }))
-      .sort((left, right) => (CLASS_COLOR_SLOTS[left.id] ?? 7) - (CLASS_COLOR_SLOTS[right.id] ?? 7) || left.label.localeCompare(right.label, "pl"));
+      .map(([id, item]) => ({ id, label: item.label, color: classColor(id), values: sumColumns(item.columns, length) }))
+      .sort((left, right) => classOrder(left.id) - classOrder(right.id) || left.label.localeCompare(right.label, "pl"));
     return hasCash ? [...series, cash] : series;
   }
 

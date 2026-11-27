@@ -7,6 +7,7 @@ import { strToU8, zipSync } from "fflate";
 const { parseBrokerOperationsXlsx } = await import("../src/lib/import-operations.ts");
 const { getCfdPositionKey, getOpenCfdLotPrice, getOpenCfdMetadata, reconcileXtbOpenCfds } = await import("../src/lib/xtb-open-cfd.ts");
 const { getAssetProfitLossPln } = await import("../src/lib/portfolio-engine.ts");
+const { normalizePortfolioBook } = await import("../src/lib/portfolio-state.ts");
 
 const xml = (value) => String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll('"', "&quot;");
 const column = (index) => String.fromCharCode(65 + index);
@@ -92,21 +93,27 @@ test("the closing row of a CFD knows its position and stays a single cash result
   assert.equal(result.operations.filter((operation) => operation.positionEffect).length, 0);
 });
 
+/** A lot as it comes back from a save, which keeps only the fields it knows. */
+const saved = (assets) => normalizePortfolioBook({ schemaVersion: 2, activePortfolioId: "p", portfolios: [{ id: "p", name: "Główny", assets, sales: [], realizedAdjustments: [], createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" }] }).portfolios[0].assets;
+
 /** The lot and its operation as the import saves them. */
 const imported = (operation) => {
   const lot = { id: "lot-1", symbol: operation.symbol, name: operation.name, kind: "stock", instrumentType: "CFD", positionDirection: "LONG", contractMultiplier: operation.contractMultiplier, purchaseDate: operation.date, quantity: operation.quantity, purchasePrice: operation.price, purchaseCurrency: "USD", purchaseFxRateToPln: 4, feePln: 0, marketCurrency: "USD", provider: "catalog", createdAt: "", ...getOpenCfdLotPrice(operation) };
-  return { lot, operations: [{ id: "op-1", metadata: { lotId: lot.id, ...getOpenCfdMetadata(operation) } }] };
+  return { lot: saved([lot])[0], operations: [{ id: "op-1", metadata: { lotId: lot.id, ...getOpenCfdMetadata(operation) } }] };
 };
 
 test("an index CFD keeps XTB's quote, and its result matches the broker's", async () => {
   const [open] = openCfds(await parse([cash([deposit]), openSheet(dax())]));
   const { lot, operations } = imported(open);
-  assert.deepEqual([lot.latestPrice, lot.priceSource], [20200, "MANUAL"]);
+  assert.deepEqual([lot.latestPrice, lot.priceSource], [20200, undefined]);
   assert.equal(operations[0].metadata.cfdPositionKey, getCfdPositionKey(open));
   // (20200 − 20000) × 0.02 × 25 = 100 USD, at 4 PLN.
   assert.equal(getAssetProfitLossPln(lot, { PLN: 1, USD: 4 }), 400);
-  assert.equal(getOpenCfdLotPrice({ ...open, symbol: "AAA", rawSymbol: "AAA.US" }).priceSource, "MANUAL", "only a CFD with a checked source is refreshed");
-  assert.equal(getOpenCfdLotPrice({ ...open, symbol: "US100" }).priceSource, "AUTOMATIC");
+  assert.equal(saved([{ ...lot, leverage: 20 }])[0].leverage, 20, "the leverage survives a save");
+  const [own] = reconcileXtbOpenCfds({ assets: [{ ...lot, priceSource: "MANUAL", latestPrice: 19000 }], operations, imported: [{ ...open, positionSnapshotAt: "2026-04-01T00:00:00.000Z" }] }).assets;
+  assert.equal(own.latestPrice, 19000, "a price the user set stays");
+  const [live] = reconcileXtbOpenCfds({ assets: [{ ...lot, symbol: "US100" }], operations, imported: [{ ...open, positionSnapshotAt: "2026-04-01T00:00:00.000Z" }] }).assets;
+  assert.equal(live.latestPrice, 20200, "a refreshed CFD keeps its own price");
   assert.deepEqual(getOpenCfdLotPrice({ ...open, importKey: "xtb:v2:111111:1" }), {});
 });
 

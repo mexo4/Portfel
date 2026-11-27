@@ -727,6 +727,7 @@ const normalizePortfolioAsset = (
     instrumentType: normalizeImportedInstrumentType(asset.instrumentType),
     positionDirection: normalizePositionDirection(asset.positionDirection),
     contractMultiplier: normalizeContractMultiplier(asset.contractMultiplier),
+    leverage: hasFiniteNumber(asset.leverage) && asset.leverage > 0 ? round(asset.leverage, 2) : undefined,
     purchaseDate: toDateInputValue(asset.purchaseDate, getTodayDateInputValue()),
     quantity: round(asset.quantity, 6),
     purchasePrice: round(asset.purchasePrice, 6),

@@ -14,8 +14,10 @@ export const getCfdPositionKey = (operation: Pick<ImportedBrokerOperation, "acco
 const isOpenCfdRow = (operation: ImportedBrokerOperation) => Boolean(operation.importKey?.startsWith(XTB_OPEN_CFD_KEY));
 
 /**
- * What a new lot of an open CFD knows about its price and leverage. A CFD with a quote source
- * starts at XTB's price and is then refreshed; the others keep XTB's price until the next import.
+ * What a new lot of an open CFD knows about its price and leverage. It starts at XTB's price; a
+ * CFD with a quote source is then refreshed, the others keep XTB's price until a newer file.
+ * No price source is marked here: only a price the user sets is "manual", and that mark lives in
+ * the quote table, not in the saved lot.
  */
 export const getOpenCfdLotPrice = (operation: ImportedBrokerOperation) =>
   isOpenCfdRow(operation) && operation.snapshotPrice && operation.positionSnapshotAt
@@ -24,7 +26,6 @@ export const getOpenCfdLotPrice = (operation: ImportedBrokerOperation) =>
         latestPriceDate: operation.positionSnapshotAt.slice(0, 10),
         latestPriceFetchedAt: operation.positionSnapshotAt,
         lastUpdatedAt: operation.positionSnapshotAt,
-        priceSource: getCfdQuoteSource(operation) ? ("AUTOMATIC" as const) : ("MANUAL" as const),
         ...(operation.leverage ? { leverage: operation.leverage } : {}),
       }
     : {};
@@ -105,8 +106,9 @@ export const reconcileXtbOpenCfds = ({ assets, operations, imported }: {
       next = { ...next, leverage: open.leverage };
     }
     if (open?.positionSnapshotAt && open.snapshotPrice && open.positionSnapshotAt > (next.latestPriceFetchedAt ?? "")) {
-      // A refreshed price is newer than any file, so only a price that stands still is replaced.
-      if (next.priceSource === "MANUAL" || !next.latestPrice) {
+      // Only a file ever moves the price of a CFD without a quote source, unless the user set one.
+      // A CFD with a source is refreshed, which is newer than any file.
+      if (next.priceSource !== "MANUAL" && (!getCfdQuoteSource(next) || !next.latestPrice)) {
         repriced += 1;
         next = { ...next, ...getOpenCfdLotPrice(open) };
       }

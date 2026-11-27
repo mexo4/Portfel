@@ -1,4 +1,3 @@
-import { getCfdQuoteSource } from "@/lib/cfd";
 import { execute, query, withTransaction } from "@/lib/server/db";
 import { normalizeProviderInstrumentType } from "@/lib/instrument-classification";
 import type { PortfolioAsset, PortfolioBook } from "@/types/portfolio";
@@ -241,16 +240,6 @@ export const getPortfolioQuoteSnapshots = async (portfolioIds: string[]) => {
   return snapshots;
 };
 
-/*
- * The import used to mark the price of an index CFD as manual, which froze it. A price the user
- * set is also kept in the quote table as manual; without that row the mark came from an import,
- * and a CFD that now has a quote source follows it.
- */
-const releaseImportedCfdPrice = (asset: PortfolioAsset, snapshot?: PortfolioQuoteSnapshotInput): PortfolioAsset =>
-  asset.priceSource === "MANUAL" && snapshot?.priceSource !== "MANUAL" && getCfdQuoteSource(asset)
-    ? { ...asset, priceSource: "AUTOMATIC" }
-    : asset;
-
 export const mergePortfolioBookQuoteSnapshots = (
   portfolioBook: PortfolioBook,
   snapshots: Map<string, PortfolioQuoteSnapshotInput>
@@ -260,8 +249,7 @@ export const mergePortfolioBookQuoteSnapshots = (
     ...portfolio,
     assets: portfolio.assets.map((asset) => {
       const snapshot = snapshots.get(`${portfolio.id}:${asset.id}`);
-      const current = releaseImportedCfdPrice(asset, snapshot);
-      return snapshot ? applySnapshot(current, snapshot) : current;
+      return snapshot ? applySnapshot(asset, snapshot) : asset;
     }),
   })),
 });

@@ -312,7 +312,7 @@ export default function PositionsWorkspace({ toolbar }: { toolbar?: ReactNode })
                     <tr className="positions-group">
                       <th scope="rowgroup" colSpan={isNarrow ? 1 : 2}>{section.label} · {section.rows.length}</th>
                       <td className="num">{section.id === "cfd" ? "—" : formatCurrency(section.value, base)}</td>
-                      <td className={`num ${tone(section.daily) ?? ""}`}>{section.value - section.daily > 0 ? formatPercent((section.daily / (section.value - section.daily)) * 100) : "—"}</td>
+                      <td className={`num ${tone(section.daily) ?? ""}`}>{section.id !== "cfd" && section.value - section.daily > 0 ? formatPercent((section.daily / (section.value - section.daily)) * 100) : "—"}</td>
                       <td className={`num ${tone(section.profit) ?? ""}`}>{signed(section.profit, base)}</td>
                     </tr>
                     {section.rows.map((group) => {

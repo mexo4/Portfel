@@ -134,7 +134,7 @@ export default function ClosedInvestmentsWorkspace({ portfolios }: { portfolios:
                   return (
                     <Fragment key={row.instrumentKey}>
                       <tr>
-                        <td><strong>{row.name}</strong><small className="block">{row.symbol} · {quantityFormatter.format(row.quantity)} szt.</small></td>
+                        <td><strong>{row.name}</strong><small className="block">{row.symbol} · {quantityFormatter.format(row.quantity)} {row.instrumentKey.startsWith("cfd:") ? "lota" : "szt."}</small></td>
                         <td data-label="Zamknięcia">{row.trades}<small className="block">{row.winningTrades} z zyskiem</small></td>
                         <td data-label="Koszt">{formatCurrency(row.investedPln, "PLN")}</td>
                         <td data-label="Przychód">{formatCurrency(row.proceedsPln, "PLN")}</td>

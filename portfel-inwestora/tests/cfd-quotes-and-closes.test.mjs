@@ -7,7 +7,6 @@ import { strToU8, zipSync } from "fflate";
 const { getCfdFigures, getCfdLeverage, getCfdQuoteSource, readClosedCfdTrade } = await import("../src/lib/cfd.ts");
 const { mergeQuoteIntoPortfolioAsset, refreshPortfolioQuotesWithProgress, applyRefreshedPortfolioAssetSnapshot } = await import("../src/lib/api.ts");
 const { fetchCfdQuoteServer } = await import("../src/lib/server/cfd-quotes.ts");
-const { mergePortfolioBookQuoteSnapshots } = await import("../src/lib/server/portfolio-quote-snapshots.ts");
 const { parseBrokerOperationsXlsx } = await import("../src/lib/import-operations.ts");
 const { attachClosedCfdDetails } = await import("../src/lib/xtb-open-cfd.ts");
 const { buildClosedInvestments, listImportedCfdCloses } = await import("../src/lib/closed-investments.ts");
@@ -73,15 +72,6 @@ test("the server takes only the price from the source, and only in dollars", asy
   assert.equal((await fetchCfdQuoteServer(source, position, { quote: async () => quote, history: async () => { throw new Error("offline"); } })).previousClose, undefined);
   const route = await readFile(new URL("../src/app/api/quote/route.ts", import.meta.url), "utf8");
   assert.match(route, /if \(isCfd\) \{[\s\S]{0,300}: null;/, "a CFD without a source gets no share quote");
-});
-
-test("a frozen price from an earlier import starts refreshing; the user's own price stays", () => {
-  const book = { portfolios: [{ id: "p", assets: [lot({ priceSource: "MANUAL" }), lot({ id: "lot-2", symbol: "DE40", priceSource: "MANUAL" })] }] };
-  const released = mergePortfolioBookQuoteSnapshots(book, new Map()).portfolios[0].assets;
-  assert.deepEqual(released.map((asset) => asset.priceSource), ["AUTOMATIC", "MANUAL"]);
-  const own = new Map([["p:lot-1", { portfolioId: "p", assetId: "lot-1", latestPrice: 19000, priceSource: "MANUAL", latestPriceFetchedAt: "2026-03-03T09:00:00.000Z" }]]);
-  const kept = mergePortfolioBookQuoteSnapshots(book, own).portfolios[0].assets[0];
-  assert.deepEqual([kept.priceSource, kept.latestPrice], ["MANUAL", 19000]);
 });
 
 test("a CFD is charted from its source, never by its ticker", async () => {

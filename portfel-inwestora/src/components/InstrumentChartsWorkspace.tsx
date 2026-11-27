@@ -300,8 +300,8 @@ export function InstrumentChartLegend({ data }: { data: ChartData }) {
           <li><i className="is-candle is-down" />Spadek</li>
         </>
       ) : <li><i className="is-line" style={{ background: PRICE }} />Kurs</li>}
-      <li><i className="is-dot" style={{ background: BUY }}>+</i>Kupno</li>
-      <li><i className="is-dot" style={{ background: SELL }}>−</i>Sprzedaż</li>
+      <li><i className="is-dot" style={showCandles ? { background: "#ffffff", color: BUY, border: `2px solid ${BUY}` } : { background: BUY }}>+</i>Kupno</li>
+      <li><i className="is-dot" style={showCandles ? { background: "#ffffff", color: SELL, border: `2px solid ${SELL}` } : { background: SELL }}>−</i>Sprzedaż</li>
       <li><i className="is-dash" style={{ borderColor: BUY }} />Średnia cena kupna</li>
       <li><i className="is-line" style={{ background: MAX }} />Maksimum</li>
       <li><i className="is-line" style={{ background: MIN }} />Minimum</li>

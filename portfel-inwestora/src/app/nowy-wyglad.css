@@ -361,8 +361,10 @@ body { background: var(--canvas); color: var(--text); font-family: var(--font-sa
 .positions-row-icons a.action-sell:hover { border-color: var(--sell-line); color: var(--sell-text); background: var(--sell-bg); }
 .positions-row-icons a.action-dividend:hover { border-color: var(--dividend-line); color: var(--dividend-text); background: var(--dividend-bg); }
 .positions-chart-switches { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-.workspace-shell .instrument-legend i.is-candle { width: 8px; height: 13px; border: 1px solid #13314a; background: #ffffff; }
-.workspace-shell .instrument-legend i.is-candle.is-down { background: #13314a; }
+.workspace-shell .instrument-legend i.is-candle { width: 8px; height: 13px; background: #26a269; }
+.workspace-shell .instrument-legend i.is-candle.is-down { background: #e0453a; }
+/* A double click on the preview chart opens the instrument's own page. */
+.positions-chart-open { cursor: zoom-in; touch-action: manipulation; }
 .instrument-candle-note { margin: 4px 0 0; }
 
 /* Dividend and ESPI marks: legend entries that switch them, tooltip lines and the report list. */

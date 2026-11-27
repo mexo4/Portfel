@@ -15,12 +15,12 @@ import {
   type CandleInterval,
   type InstrumentTrade,
 } from "@/lib/instrument-chart";
-import { AXIS, BUY, MAX, MIN, PRICE, TradeShape, monthTick } from "@/components/instrument-chart-parts";
+import { AXIS, BUY, CANDLE_DOWN, CANDLE_UP, MAX, MIN, TradeShape, monthTick } from "@/components/instrument-chart-parts";
 import { formatCurrency, formatDate } from "@/lib/utils";
 
 /**
  * Candles of an instrument with the user's purchases, sales and average purchase price. A rising
- * candle is hollow and a falling one filled, so the green and red trade marks stay readable.
+ * candle is green and a falling one red; trade marks are white with a coloured ring.
  * When there are more sessions than the width can show, weeks or months are drawn.
  */
 
@@ -46,10 +46,11 @@ function CandleShape({ x = 0, y = 0, width = 0, height = 0, payload }: { x?: num
   const bodyTop = yOf(Math.max(open, close));
   const bodyHeight = Math.max(1, yOf(Math.min(open, close)) - bodyTop);
   const center = x + width / 2;
+  const colour = close >= open ? CANDLE_UP : CANDLE_DOWN;
   return (
     <g>
-      <line x1={center} x2={center} y1={top} y2={top + Math.abs(height)} stroke={PRICE} strokeWidth={1} />
-      <rect x={x} y={bodyTop} width={Math.max(1, width)} height={bodyHeight} fill={close >= open ? "#ffffff" : PRICE} stroke={PRICE} strokeWidth={1} />
+      <line x1={center} x2={center} y1={top} y2={top + Math.abs(height)} stroke={colour} strokeWidth={1} />
+      <rect x={x} y={bodyTop} width={Math.max(1, width)} height={bodyHeight} fill={colour} stroke={colour} strokeWidth={1} />
     </g>
   );
 }
@@ -150,7 +151,7 @@ export default function InstrumentCandleChart({ candles, trades, averagePriceSte
             <Bar dataKey="range" shape={<CandleShape />} maxBarSize={14} isAnimationActive={false} name="Kurs" />
             <Line dataKey="average" type="stepAfter" stroke={BUY} strokeWidth={2} strokeDasharray="6 4" dot={false} activeDot={false} connectNulls={false} isAnimationActive={false} name="Średnia cena kupna" />
             {/* With an empty list Recharts would draw a mark for every candle. */}
-            {markers.length > 0 ? <Scatter data={markers} dataKey="price" shape={<TradeShape />} isAnimationActive={false} name="Transakcje" /> : null}
+            {markers.length > 0 ? <Scatter data={markers} dataKey="price" shape={<TradeShape outlined />} isAnimationActive={false} name="Transakcje" /> : null}
             {eventMarks.espi.length > 0 ? <Scatter yAxisId="events" data={eventMarks.espi} dataKey="lane" shape={<EventMarkShape />} isAnimationActive={false} name="Komunikaty ESPI" /> : null}
             {eventMarks.dividend.length > 0 ? <Scatter yAxisId="events" data={eventMarks.dividend} dataKey="lane" shape={<EventMarkShape />} isAnimationActive={false} name="Dywidendy" /> : null}
           </ComposedChart>

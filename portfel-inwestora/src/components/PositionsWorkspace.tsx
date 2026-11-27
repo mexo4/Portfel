@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Fragment, useEffect, useMemo, useState, type MouseEvent, type ReactNode } from "react";
 import { ChartEventNotes, ChartReportList, ChartStyleSwitch, InstrumentChartLegend, InstrumentPriceChartBody, RangePicker, useInstrumentChartData, type RangeKey } from "@/components/InstrumentChartsWorkspace";
 import { usePortfolioWorkspace } from "@/components/PortfolioWorkspaceContext";
@@ -113,6 +113,8 @@ function Preview({ group, showPortfolio }: { group: PortfolioAssetGroup; showPor
   const firstPurchase = group.lots.map((lot) => lot.purchaseDate).filter(Boolean).sort()[0];
   const days = firstPurchase ? Math.max(0, Math.round((now - Date.parse(`${firstPurchase}T00:00:00Z`)) / DAY_MS)) : null;
   const { actions, applyToOpenForm } = useHoldingActions(group, showPortfolio, Boolean(instrument));
+  const router = useRouter();
+  const analysisHref = actions.find((action) => action.key === "analysis")?.href;
 
   return (
     <div className="positions-preview">
@@ -153,7 +155,10 @@ function Preview({ group, showPortfolio }: { group: PortfolioAssetGroup; showPor
             </div>
           </div>
           <InstrumentChartLegend data={data} />
-          <InstrumentPriceChartBody instrument={instrument} data={data} height={300} />
+          {/* The same place as „Analiza waloru”, which stays the way in from the keyboard. */}
+          <div className="positions-chart-open" title="Kliknij dwukrotnie, aby otworzyć wykres i analizę waloru" onDoubleClick={() => { if (analysisHref) router.push(analysisHref); }}>
+            <InstrumentPriceChartBody instrument={instrument} data={data} height={300} />
+          </div>
           <ChartEventNotes data={data} />
         </section>
       ) : group.kind === "bond" ? (

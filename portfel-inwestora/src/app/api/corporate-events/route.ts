@@ -142,7 +142,7 @@ const synchronizeAutomaticDividends = async ({
       today,
     });
 
-    if (application.addedCount === 0) {
+    if (application.addedCount + application.repairedCount === 0) {
       return {
         portfolioBook,
         addedCount: 0,

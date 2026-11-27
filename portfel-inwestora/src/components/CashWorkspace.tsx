@@ -637,7 +637,7 @@ export default function CashWorkspace({
                   <td className={entry.amount < 0 ? "tone-negative" : "tone-positive"}>{formatCurrency(entry.amount, entry.currency)}</td>
                   <td>{formatCurrency(entry.balanceAfter, entry.currency)}</td>
                   <td><span className="table-note">{entry.notes || "—"}</span></td>
-                  <td>{op && !aggregate && isEditableCashOperation(op) ? <span className="inline-actions"><button type="button" className="ghost-button" onClick={() => edit(op)}>Edytuj</button><button type="button" className="ghost-button" onClick={() => void remove(op)} disabled={pending}>Usuń</button></span> : <span className="table-note">—</span>}</td>
+                  <td>{op && !aggregate && isEditableCashOperation(op) ? <span className="inline-actions"><button type="button" className="ghost-button" onClick={() => edit(op)}>Edytuj</button><button type="button" className="ghost-button admin-danger-button" onClick={() => void remove(op)} disabled={pending}>Usuń</button></span> : <span className="table-note">—</span>}</td>
                 </tr>;
               })}
               {filteredHistory.length === 0 ? <tr><td colSpan={7}><p className="empty-row">{history.length ? "Brak operacji pasujących do filtrów." : "Brak historii gotówki."}</p></td></tr> : null}
@@ -650,7 +650,7 @@ export default function CashWorkspace({
             return <article key={`mobile-${entry.sourcePortfolioId}-${entry.id}`} className="cash-mobile-row">
               <div><strong>{op ? operationLabel(op) : entry.operationType}</strong><span>{formatDate(entry.date)} · {entry.accountName}</span></div>
               <strong className={entry.amount < 0 ? "tone-negative" : "tone-positive"}>{formatCurrency(entry.amount, entry.currency)}</strong>
-              {op && !aggregate && isEditableCashOperation(op) ? <div className="inline-actions"><button type="button" className="ghost-button" onClick={() => edit(op)}>Edytuj</button><button type="button" className="ghost-button" onClick={() => void remove(op)} disabled={pending}>Usuń</button></div> : null}
+              {op && !aggregate && isEditableCashOperation(op) ? <div className="inline-actions"><button type="button" className="ghost-button" onClick={() => edit(op)}>Edytuj</button><button type="button" className="ghost-button admin-danger-button" onClick={() => void remove(op)} disabled={pending}>Usuń</button></div> : null}
             </article>;
           })}
         </div>

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-const { listChartInstruments, buildInstrumentTimeline, averagePriceOn, priceExtremes, buildComparisonRows } = await import("../src/lib/instrument-chart.ts");
+const { listChartInstruments, buildInstrumentTimeline, averagePriceOn, priceExtremes, buildComparisonRows, separateOpposingTrades } =await import("../src/lib/instrument-chart.ts");
 
 const lot = (id, date, quantity, price) => ({ id, name: "XTB", symbol: "XTB.PL", kind: "stock", purchaseDate: date, quantity, purchasePrice: price, purchaseCurrency: "PLN", feePln: 0, marketCurrency: "PLN", provider: "yahoo", latestPrice: 80, createdAt: "" });
 const allocation = (lotId, quantity, purchaseDate, purchasePrice) => ({ lotId, quantity, purchaseDate, purchasePrice, purchaseCurrency: "PLN", allocatedBuyFeePln: 0, investedPln: quantity * purchasePrice });
@@ -45,6 +45,42 @@ test("the average purchase price follows the FIFO allocations of each sale", () 
   assert.equal(averagePriceOn(averagePriceSteps, "2025-04-15"), 70, "the sale closed all of lot a and 2 of lot b");
   assert.equal(averagePriceOn(averagePriceSteps, "2025-06-15"), 76.666667, "(8 × 70 + 4 × 90) / 12 after the buy of lot c");
   assert.equal(averagePriceOn(averagePriceSteps, "2025-07-15"), 80, "(4 × 70 + 4 × 90) / 8");
+});
+
+test("one order filled in parts is one purchase, also after the parts were sold", () => {
+  // The way XTB saves one order of 12 shares: four parts, later closed by four sales.
+  const parts = {
+    ...portfolio,
+    assets: [],
+    sales: [
+      sale("s1", "2026-03-16", 1, 51.1, [allocation("f1", 1, "2026-03-16", 51.2)]),
+      sale("s2", "2026-03-16", 3, 51.1, [allocation("f1", 3, "2026-03-16", 51.2)]),
+      sale("s3", "2026-03-16", 7, 51.1, [allocation("f1", 3, "2026-03-16", 51.2), allocation("f2", 2, "2026-03-16", 51.2), allocation("f3", 2, "2026-03-16", 51.2)]),
+      sale("s4", "2026-03-16", 1, 51.1, [allocation("f4", 1, "2026-03-16", 51.2)]),
+    ],
+  };
+  const [instrument] = listChartInstruments([parts]);
+  const { trades } = buildInstrumentTimeline([parts], instrument);
+  assert.deepEqual(trades.filter((trade) => trade.side === "buy").map((trade) => [trade.quantity, trade.price, trade.amount]), [[12, 51.2, 614.4]]);
+  assert.equal(trades.filter((trade) => trade.side === "sell").length, 4, "sales stay as they were booked");
+});
+
+test("purchases at another price, on another day or in another portfolio stay apart", () => {
+  const first = { ...portfolio, sales: [], assets: [lot("a", "2025-01-10", 1, 50), lot("b", "2025-01-10", 2, 50), lot("c", "2025-01-10", 1, 51), lot("d", "2025-01-11", 1, 50)] };
+  const second = { ...portfolio, id: "q", name: "Drugi", sales: [], assets: [lot("e", "2025-01-10", 1, 50)] };
+  const [instrument] = listChartInstruments([first, second]);
+  const { trades } = buildInstrumentTimeline([first, second], instrument);
+  assert.deepEqual(trades.map((trade) => [trade.date, trade.quantity, trade.price, trade.portfolioName]).sort(), [
+    ["2025-01-10", 1, 50, "Drugi"], ["2025-01-10", 1, 51, "Główny"], ["2025-01-10", 3, 50, "Główny"], ["2025-01-11", 1, 50, "Główny"],
+  ]);
+});
+
+test("a purchase and a sale in the same place are moved apart so neither hides the other", () => {
+  const marks = [
+    { side: "buy", date: "2026-03-16" }, { side: "sell", date: "2026-03-16" }, { side: "sell", date: "2026-03-16" },
+    { side: "buy", date: "2026-03-17" }, { side: "sell", date: "2026-03-18" },
+  ];
+  assert.deepEqual(separateOpposingTrades(marks, (mark) => mark.date).map((mark) => mark.nudge), [-1, 1, 1, 0, 0]);
 });
 
 test("trades priced in another currency are counted, not drawn", () => {

@@ -126,7 +126,7 @@ test("legacy XTB holdings are enriched through per-portfolio instrument IDs and 
   assert.deepEqual(totalsByClass, {
     "stock:foreign": 2069.55,
     "stock:gpw": 4800.1,
-    etf: 2478.42,
+    "etf:foreign": 2478.42,
   });
   const displayedAllocation = [...allocation, { id: "cash", label: "Gotówka", totalValue: 23.42 }];
   assert.equal(displayedAllocation.reduce((total, item) => total + item.totalValue, 0), 9371.49);

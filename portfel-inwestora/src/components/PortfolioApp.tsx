@@ -5,6 +5,7 @@ import dynamic from "next/dynamic";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type ComponentProps } from "react";
 import AppWorkspaceShell from "@/components/AppWorkspaceShell";
 import AssetModeSelector from "@/components/AssetModeSelector";
+import { useListingVenues } from "@/components/useListingVenues";
 import { PortfolioWorkspaceProvider, type PortfolioWorkspaceValue } from "@/components/PortfolioWorkspaceContext";
 import {
   AUTO_REFRESH_INTERVAL_MS,
@@ -1398,7 +1399,7 @@ export default function PortfolioApp({
     () => getDraftQuotePreviewRequest(draft, searchMode),
     [draft, searchMode]
   );
-  const groupedAssets = useMemo(() => {
+  const valuedGroups = useMemo(() => {
     if (!isAllPortfoliosSelected) {
       return getGroupedPortfolioAssets(assets, fxRates, activeBaseCurrency);
     }
@@ -1407,6 +1408,7 @@ export default function PortfolioApp({
     // global identity and a shared ticker must stay attributable to its owner.
     return getAllPortfolioScopedGroups(selectedPortfolios, fxRates, activeBaseCurrency);
   }, [activeBaseCurrency, assets, fxRates, isAllPortfoliosSelected, selectedPortfolios]);
+  const groupedAssets = useListingVenues(valuedGroups);
   const effectiveRealizedAdjustments = useMemo(() => {
     const automaticBondCoupons = isAllPortfoliosSelected
       ? selectedPortfolios.flatMap((portfolio) => {

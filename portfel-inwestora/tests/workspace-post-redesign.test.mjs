@@ -225,7 +225,7 @@ test("asset-class allocation orders actual value and classifies stocks by their 
   assert.deepEqual(allocation, [
     { id: "stock:gpw", label: "Akcje GPW", totalValue: 5_138.26 },
     { id: "crypto", label: "Krypto", totalValue: 470.82 },
-    { id: "etf", label: "ETF", totalValue: 300.95 },
+    { id: "etf:foreign", label: "ETF-y zagraniczne", totalValue: 300.95 },
     { id: "stock:foreign", label: "Akcje zagraniczne", totalValue: 250 },
   ]);
 });
@@ -260,7 +260,7 @@ test("verified ETF metadata corrects stale stock classification in the structure
 
   assert.deepEqual(allocation, [
     { id: "stock:gpw", label: "Akcje GPW", totalValue: 3_000 },
-    { id: "etf", label: "ETF", totalValue: 2_000 },
+    { id: "etf:foreign", label: "ETF-y zagraniczne", totalValue: 2_000 },
   ]);
   assert.equal(allocation.reduce((sum, item) => sum + item.totalValue, 0), 5_000);
 });

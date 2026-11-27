@@ -2,6 +2,7 @@ import type { PortfolioAssetGroup } from "@/lib/pricing";
 import { LOCAL_STOCK_CATALOG } from "@/lib/constants";
 import { getGpwTickerCore, isGpwSymbol, normalizeSymbol } from "@/lib/ticker";
 import { classifyInstrument, type InstrumentClass } from "@/lib/instrument-classification";
+import { VENUE_LABELS, getStoredListingVenue } from "@/lib/listing-venue";
 
 export const UNKNOWN_COUNTRY_LABEL = "Inne / Brak danych";
 
@@ -147,36 +148,26 @@ export const getConfirmedIssuerCountry = (group: PortfolioAssetGroup) => {
 };
 
 export const getStockMarketClass = (group: PortfolioAssetGroup) => {
-  // GPW is listing identity, so it takes precedence over issuer metadata.
-  // The stored Stooq + PLN pair is likewise a market-aware legacy identity
-  // in Mexo; neither condition uses a bare ticker or a company name.
-  const isGpwListing = group.lots.some(
-    (asset) =>
-      isGpwSymbol(asset.symbol ?? "") ||
-      isGpwSymbol(asset.providerId ?? "") ||
-      (asset.provider === "stooq" && asset.marketCurrency === "PLN")
-  );
-
-  if (isGpwListing) {
-    return { id: "stock:gpw", label: "Akcje GPW" };
-  }
-
-  // Issuer-country metadata is not complete enough across old broker imports
-  // to split non-GPW equities reliably into USA vs. international. In
-  // particular, an unknown issuer must not silently look like a confirmed
-  // non-US company. Keep the asset-class view to the two auditable listing
-  // buckets; verified issuer country remains available to geographic analysis.
-  return { id: "stock:foreign", label: "Akcje zagraniczne" };
+  // Stocks are grouped by where they are listed, never by the issuer's country: a Japanese
+  // company bought on the NYSE is an NYSE share. Verified issuer country remains
+  // available to the geographic analysis.
+  const venue = getStoredListingVenue(group) ?? group.listingVenue;
+  return venue
+    ? { id: `stock:${venue}`, label: `Akcje ${VENUE_LABELS[venue]}` }
+    : { id: "stock:foreign", label: "Akcje zagraniczne" };
 };
 
-/** The asset-class bucket of one holding (Akcje GPW, Akcje zagraniczne, ETF, Krypto, Obligacje…). */
+/** The asset-class bucket of one holding (Akcje NYSE, ETF-y polskie, Krypto, Obligacje…). */
 export const getAssetClassGroup = (group: PortfolioAssetGroup) => {
   const instrumentClass = getPortfolioInstrumentClass(group);
-  const stockClass = instrumentClass === "stock" ? getStockMarketClass(group) : null;
-  if (stockClass) return stockClass;
-  const label = instrumentClass === "etf"
-    ? "ETF"
-    : instrumentClass === "crypto"
+  if (instrumentClass === "stock") return getStockMarketClass(group);
+  // "Polish" means listed on the GPW.
+  if (instrumentClass === "etf") {
+    return getStoredListingVenue(group) === "gpw"
+      ? { id: "etf:pl", label: "ETF-y polskie" }
+      : { id: "etf:foreign", label: "ETF-y zagraniczne" };
+  }
+  const label = instrumentClass === "crypto"
       ? "Krypto"
       : instrumentClass === "bond"
         ? "Obligacje"
@@ -193,12 +184,11 @@ export const getAssetClassGroup = (group: PortfolioAssetGroup) => {
 };
 
 /**
- * Ordinary stocks are grouped by confirmed GPW listing vs. other listings.
- * Issuer-country metadata remains available separately through
- * getGeographicAllocation; incomplete provenance cannot create a misleading
- * USA/international split in the asset-class chart.
- * ETFs intentionally remain a separate class because no look-through
- * allocation exists yet.
+ * Ordinary stocks are grouped by the exchange they are listed on; those whose
+ * exchange is not known stay together as foreign. Issuer-country metadata
+ * remains available separately through getGeographicAllocation.
+ * ETFs are split only into Polish and foreign listings because no
+ * look-through allocation exists yet.
  */
 export const getAssetClassAllocation = (groups: PortfolioAssetGroup[]) => {
   const allocation = new Map<string, AssetClassAllocationItem>();

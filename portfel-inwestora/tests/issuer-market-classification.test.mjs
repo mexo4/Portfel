@@ -94,7 +94,7 @@ test("ETF and non-stock asset classes stay untouched and no fourth stock country
     { kind: "stock", symbol: "UNKNOWN", totalValue: 20, lots: [{ issuerCountry: "USA" }] },
   ]);
   assert.deepEqual(result, [
-    { id: "etf", label: "ETF", totalValue: 40 },
+    { id: "etf:foreign", label: "ETF-y zagraniczne", totalValue: 40 },
     { id: "crypto", label: "Krypto", totalValue: 30 },
     { id: "stock:foreign", label: "Akcje zagraniczne", totalValue: 20 },
   ]);
@@ -196,7 +196,7 @@ test("random stock sample sums to total without changing the ETF bucket", () => 
     { kind: "etf", totalValue: 100, lots: [{ kind: "etf", instrumentType: "ETF" }] },
   ]);
   assert.equal(allocation.reduce((sum, item) => sum + item.totalValue, 0), 155);
-  assert.equal(allocation.find((item) => item.id === "etf")?.totalValue, 100);
+  assert.equal(allocation.find((item) => item.id === "etf:foreign")?.totalValue, 100);
   assert.equal(allocation.find((item) => item.id === "stock:foreign")?.totalValue, 55);
   assert.equal(allocation.some((item) => item.id === "stock:usa" || item.id === "stock:international"), false);
 });

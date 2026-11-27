@@ -92,6 +92,23 @@ test("Yahoo's daily history carries open, high and low, flat where they are miss
   }
 });
 
+test("the buttons that sell, book dividends, redeem and delete have their colours", async () => {
+  const read = (name) => readFile(new URL(`../src/components/${name}.tsx`, import.meta.url), "utf8");
+  const [sell, dividend, bonds, accounts, history, cash] = await Promise.all(
+    ["SellAssetPanel", "DividendCashWorkspace", "TreasuryBondForm", "PortfolioAccountManagement", "OperationsHistory", "CashWorkspace"].map(read)
+  );
+  assert.match(sell, /primary-button button-sell" onClick=\{onSubmit\}/);
+  assert.match(dividend, /primary-button button-gold" type="button" onClick=\{\(\) => void saveDividend\(\)\}/);
+  assert.equal(bonds.match(/transaction-button-gold/g)?.length, 2, "redeem and swap");
+  assert.match(accounts, /primary-button button-danger" type="button" onClick=\{onDelete\}/);
+  assert.match(history, /admin-danger-button" type="button" disabled=\{!canUndo\}/);
+  assert.equal(cash.match(/admin-danger-button" onClick=\{\(\) => void remove\(op\)\}/g)?.length, 2);
+  const css = await readFile(new URL("../src/app/nowy-wyglad.css", import.meta.url), "utf8");
+  for (const rule of [".primary-button.button-sell", ".primary-button.button-gold", ".transaction-button.transaction-button-gold", ".primary-button.button-danger"]) {
+    assert.ok(css.includes(rule), rule);
+  }
+});
+
 test("the chart offers both styles, and buy, sell and delete keep their colours", async () => {
   const read = (path) => readFile(new URL(`../${path}`, import.meta.url), "utf8");
   const [charts, positions, css] = await Promise.all([read("src/components/InstrumentChartsWorkspace.tsx"), read("src/components/PositionsWorkspace.tsx"), read("src/app/nowy-wyglad.css")]);

@@ -158,10 +158,23 @@ export const buildInstrumentTimeline = (portfolios: InvestmentPortfolio[], instr
 
   const trades: InstrumentTrade[] = [];
   let skippedTrades = 0;
+  // A broker may fill one order in parts, and each part is saved as its own lot (XTB writes
+  // "OPEN BUY 3/5 @ 100.00"). Lots of one portfolio bought on one day at one price are shown as
+  // one purchase; the lots themselves stay apart, because sales are matched against them.
+  const purchases = new Map<string, InstrumentTrade>();
   for (const lot of lots.values()) {
     if (lot.currency !== instrument.marketCurrency) { skippedTrades += 1; continue; }
-    trades.push({ id: `buy:${lot.id}`, side: "buy", date: lot.date, quantity: lot.quantity, price: lot.price, currency: lot.currency, amount: round(lot.price * lot.quantity * lot.multiplier, 2), portfolioName: lot.portfolioName });
+    const amount = round(lot.price * lot.quantity * lot.multiplier, 2);
+    const key = [lot.id.slice(0, lot.id.indexOf("|")), lot.date, round(lot.price, 6), lot.multiplier].join("|");
+    const purchase = purchases.get(key);
+    if (purchase) {
+      purchase.quantity = round(purchase.quantity + lot.quantity, 8);
+      purchase.amount = round(purchase.amount + amount, 2);
+    } else {
+      purchases.set(key, { id: `buy:${lot.id}`, side: "buy", date: lot.date, quantity: lot.quantity, price: lot.price, currency: lot.currency, amount, portfolioName: lot.portfolioName });
+    }
   }
+  trades.push(...purchases.values());
   for (const { sale, portfolioName } of sales) {
     if (sale.marketCurrency !== instrument.marketCurrency) { skippedTrades += 1; continue; }
     const multiplier = sale.contractMultiplier && sale.contractMultiplier > 0 ? sale.contractMultiplier : 1;
@@ -205,6 +218,17 @@ export const buildInstrumentTimeline = (portfolios: InvestmentPortfolio[], instr
   }
 
   return { instrument, trades, skippedTrades, averagePriceSteps: steps };
+};
+
+/**
+ * A purchase and a sale at about the same price on the same day would sit on top of each other and
+ * one would hide the other. Where both sides share a place on the time axis, purchases move left
+ * (-1) and sales right (1).
+ */
+export const separateOpposingTrades = <T extends InstrumentTrade>(markers: T[], placeOf: (marker: T) => string): Array<T & { nudge: -1 | 0 | 1 }> => {
+  const sides = new Map<string, Set<InstrumentTrade["side"]>>();
+  for (const marker of markers) sides.set(placeOf(marker), (sides.get(placeOf(marker)) ?? new Set()).add(marker.side));
+  return markers.map((marker) => ({ ...marker, nudge: sides.get(placeOf(marker))!.size > 1 ? (marker.side === "buy" ? -1 : 1) : 0 }));
 };
 
 /** The average purchase price in force on a date (null before the first buy and after selling all). */

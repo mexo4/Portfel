@@ -397,7 +397,7 @@ const SortableGroupSection = ({
 
                       <button
                         type="button"
-                        className="ghost-button"
+                        className="ghost-button admin-danger-button"
                         onClick={() => onRemove(lot.id)}
                       >
                         Usuń zakup

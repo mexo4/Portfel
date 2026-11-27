@@ -1151,6 +1151,13 @@ export type InstrumentHistoryResponseItem = {
 };
 
 /** Daily closes of up to eight instruments since `startDate`, in each instrument's quote currency. */
+export const fetchListingVenues = async (symbols: string[], signal?: AbortSignal) =>
+  requestJson<{ venues: Record<string, string> }>("/api/instruments/venues", {
+    method: "POST",
+    signal,
+    body: JSON.stringify({ symbols }),
+  });
+
 export const fetchInstrumentHistories = async ({
   instruments,
   startDate,

@@ -9,13 +9,14 @@ import {
   averagePriceOn,
   findCandleBar,
   pickCandleInterval,
+  separateOpposingTrades,
   type AveragePriceStep,
   type Candle,
   type CandleBar,
   type CandleInterval,
   type InstrumentTrade,
 } from "@/lib/instrument-chart";
-import { AXIS, BUY, CANDLE_DOWN, CANDLE_UP, MAX, MIN, TradeShape, monthTick } from "@/components/instrument-chart-parts";
+import { AXIS, BUY, CANDLE_DOWN, CANDLE_UP, MAX, MIN, TradeShape, inDrawingOrder, monthTick } from "@/components/instrument-chart-parts";
 import { formatCurrency, formatDate } from "@/lib/utils";
 
 /**
@@ -101,10 +102,11 @@ export default function InstrumentCandleChart({ candles, trades, averagePriceSte
   const rowsByKey = useMemo(() => new Map(rows.map((row) => [row.key, row])), [rows]);
   const markers = useMemo<Marker[]>(() => {
     const lastDay = rows.at(-1)?.to ?? "";
-    return trades.flatMap((trade) => {
+    const placed = trades.flatMap((trade) => {
       const bar = trade.date <= lastDay ? findCandleBar(rows, trade.date) : null;
       return bar ? [{ ...trade, key: bar.from }] : [];
     });
+    return separateOpposingTrades(placed, (marker) => marker.key);
   }, [rows, trades]);
 
   // Marks are never finer than the candles, so each candle has at most one slot of events.
@@ -151,7 +153,7 @@ export default function InstrumentCandleChart({ candles, trades, averagePriceSte
             <Bar dataKey="range" shape={<CandleShape />} maxBarSize={14} isAnimationActive={false} name="Kurs" />
             <Line dataKey="average" type="stepAfter" stroke={BUY} strokeWidth={2} strokeDasharray="6 4" dot={false} activeDot={false} connectNulls={false} isAnimationActive={false} name="Średnia cena kupna" />
             {/* With an empty list Recharts would draw a mark for every candle. */}
-            {markers.length > 0 ? <Scatter data={markers} dataKey="price" shape={<TradeShape outlined />} isAnimationActive={false} name="Transakcje" /> : null}
+            {markers.length > 0 ? <Scatter data={inDrawingOrder(markers)} dataKey="price" shape={<TradeShape outlined />} isAnimationActive={false} name="Transakcje" /> : null}
             {eventMarks.espi.length > 0 ? <Scatter yAxisId="events" data={eventMarks.espi} dataKey="lane" shape={<EventMarkShape />} isAnimationActive={false} name="Komunikaty ESPI" /> : null}
             {eventMarks.dividend.length > 0 ? <Scatter yAxisId="events" data={eventMarks.dividend} dataKey="lane" shape={<EventMarkShape />} isAnimationActive={false} name="Dywidendy" /> : null}
           </ComposedChart>

@@ -130,9 +130,11 @@ export type EventSlot<T> = {
   key: string;
   from: string;
   to: string;
-  /** The session the mark is drawn on. */
+  /** The session of the first event. */
   session: string;
   events: T[];
+  /** The session of each event, in the same order, so a mark can sit where its event happened. */
+  eventSessions: string[];
 };
 
 /** An event this long after the last known price still belongs to the last session. */
@@ -166,15 +168,30 @@ export const placeChartEvents = <T extends { date: string }>(
     if (event.date < first || (event.date > last && daysBetween(last, event.date) > MAX_DAYS_AFTER_LAST_SESSION)) continue;
     const date = event.date > last ? last : event.date;
     const bucket = findCandleBar(buckets, date)!;
+    const session = findCandleBar(sessionBars, date)!.from;
     const slot = slots.get(bucket.from);
-    if (slot) slot.events.push(event);
-    else slots.set(bucket.from, { key: bucket.from, from: bucket.from, to: bucket.to, session: findCandleBar(sessionBars, date)!.from, events: [event] });
+    if (slot) {
+      slot.events.push(event);
+      slot.eventSessions.push(session);
+    } else slots.set(bucket.from, { key: bucket.from, from: bucket.from, to: bucket.to, session, events: [event], eventSessions: [session] });
   }
   return { interval, slots: [...slots.values()] };
 };
 
+/** Heights of the two mark lanes on a hidden 0–1 scale over the plot. */
+const LANES = { dividend: 0.105, espi: 0.035 } as const;
+
+export type EventMark = { kind: ChartEvent["kind"]; lane: number; session: string };
+
+/** One mark for each kind of event in a slot, on the day of the first event of that kind. */
+export const toEventMarks = <T extends { kind: ChartEvent["kind"] }>(slots: Array<EventSlot<T>>, kind: ChartEvent["kind"]): EventMark[] =>
+  slots.flatMap((slot) => {
+    const index = slot.events.findIndex((event) => event.kind === kind);
+    return index < 0 ? [] : [{ kind, lane: LANES[kind], session: slot.eventSessions[index]! }];
+  });
+
 /** Round axis values between `low` and `high`, for a scale whose ends are not round themselves. */
-export const niceTicks = (low: number, high: number, count = 5) => {
+export const niceTicks = (low: number, high: number, count = 6) => {
   const span = high - low;
   if (!(span > 0)) return [low];
   const rough = span / (count - 1);

@@ -9,19 +9,11 @@ import { formatCurrency, formatDate } from "@/lib/utils";
 export const DIVIDEND_MARK = "#eda100";
 export const ESPI_MARK = "#6250d6";
 
-/** Heights of the lanes on a hidden 0–1 scale over the plot. */
-const LANES = { dividend: 0.105, espi: 0.035 } as const;
 /** The part of the price range left free under the lowest price, so the marks cover no price. */
 export const LANE_ROOM = 0.18;
 
 /** About one mark for every 12 px, so neighbouring marks stay apart. */
 export const maxEventSlots = (width: number, isNarrow: boolean) => Math.max(16, Math.round((width || (isNarrow ? 340 : 900)) / 12));
-
-export type EventMark = { kind: ChartEvent["kind"]; lane: number; slot: EventSlot<ChartEvent> };
-
-/** One mark for each kind of event in a slot. */
-export const toEventMarks = (slots: Array<EventSlot<ChartEvent>>, kind: ChartEvent["kind"]): EventMark[] =>
-  slots.filter((slot) => slot.events.some((event) => event.kind === kind)).map((slot) => ({ kind, lane: LANES[kind], slot }));
 
 export function EventMarkShape({ cx = 0, cy = 0, payload }: { cx?: number; cy?: number; payload?: { kind?: ChartEvent["kind"] } }) {
   if (!Number.isFinite(cx) || !Number.isFinite(cy) || cx === null || cy === null) return null;
@@ -37,7 +29,8 @@ export function EventMarkShape({ cx = 0, cy = 0, payload }: { cx?: number; cy?: 
 }
 
 const TOOLTIP_REPORTS = 3;
-const shorten = (text: string) => (text.length > 90 ? `${text.slice(0, 87).trimEnd()}…` : text);
+/** Short enough for the tooltip to stay compact on a phone; the list below has the whole title. */
+const shorten = (text: string) => (text.length > 70 ? `${text.slice(0, 67).trimEnd()}…` : text);
 
 export const describeDividendDates = (dividend: ChartDividend) =>
   dividend.exDividendDate && dividend.exDividendDate < dividend.paymentDate

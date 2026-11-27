@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const { collectEspiHistory, ESPI_CHART_MAX_PAGES, findEventSlot, getEspiChartTicker, listChartDividends, niceTicks, placeChartEvents, toWarsawDay } = await import("../src/lib/chart-events.ts");
+const { collectEspiHistory, ESPI_CHART_MAX_PAGES, findEventSlot, getEspiChartTicker, listChartDividends, niceTicks, placeChartEvents, toEventMarks, toWarsawDay } = await import("../src/lib/chart-events.ts");
 const { buildDividendOperation } = await import("../src/lib/dividend-engine.ts");
 const { getPortfolioInstrumentId } = await import("../src/lib/operation-engine.ts");
 const { listChartInstruments } = await import("../src/lib/instrument-chart.ts");
@@ -96,6 +96,14 @@ test("an event without a session joins the session before it, a fresh one the la
 
   assert.equal(placed.interval, "D");
   assert.deepEqual(describe(placed), [["2025-01-03", ["2025-01-03", "2025-01-04"]], ["2025-01-08", ["2025-01-10"]]]);
+  assert.deepEqual(placed.slots.map((slot) => slot.eventSessions), [["2025-01-03", "2025-01-03"], ["2025-01-08"]]);
+});
+
+test("in a grouped slot each kind of event is marked on its own day", () => {
+  const monthly = placeChartEvents(sessions, [{ date: "2025-01-02", kind: "espi" }, { date: "2025-01-07", kind: "dividend" }], 100, "M");
+
+  assert.deepEqual(toEventMarks(monthly.slots, "dividend").map((mark) => mark.session), ["2025-01-07"]);
+  assert.deepEqual(toEventMarks(monthly.slots, "espi").map((mark) => mark.session), ["2025-01-02"]);
 });
 
 test("events are grouped by week or month when single days would be too close", () => {

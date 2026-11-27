@@ -2,8 +2,8 @@
 
 import { useMemo, useState } from "react";
 import { Bar, CartesianGrid, ComposedChart, Line, ReferenceLine, ResponsiveContainer, Scatter, Tooltip, XAxis, YAxis, ZAxis } from "recharts";
-import { EventMarkShape, EventTooltipLines, LANE_ROOM, maxEventSlots, toEventMarks, type EventMark } from "@/components/chart-event-parts";
-import { findEventSlot, niceTicks, placeChartEvents, type ChartEvent, type EventSlot } from "@/lib/chart-events";
+import { EventMarkShape, EventTooltipLines, LANE_ROOM, maxEventSlots } from "@/components/chart-event-parts";
+import { findEventSlot, niceTicks, placeChartEvents, toEventMarks, type ChartEvent, type EventMark, type EventSlot } from "@/lib/chart-events";
 import {
   aggregateCandles,
   averagePriceOn,
@@ -110,7 +110,7 @@ export default function InstrumentCandleChart({ candles, trades, averagePriceSte
   const placement = useMemo(() => placeChartEvents(candles.map((candle) => candle.date), events, maxEventSlots(width, isNarrow), interval), [candles, events, interval, isNarrow, width]);
   const eventMarks = useMemo(() => {
     const toMarks = (kind: ChartEvent["kind"]): CandleEventMark[] => toEventMarks(placement.slots, kind).flatMap((mark) => {
-      const bar = findCandleBar(rows, mark.slot.session);
+      const bar = findCandleBar(rows, mark.session);
       return bar ? [{ ...mark, key: bar.from }] : [];
     });
     return { dividend: toMarks("dividend"), espi: toMarks("espi") };

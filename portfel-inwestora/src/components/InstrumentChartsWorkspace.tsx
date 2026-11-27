@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { CartesianGrid, ComposedChart, Line, LineChart, ReferenceLine, ResponsiveContainer, Scatter, Tooltip, XAxis, YAxis, ZAxis } from "recharts";
-import { EventMarkShape, EventTooltipLines, LANE_ROOM, describeDividendDates, maxEventSlots, toEventMarks, type EventMark } from "@/components/chart-event-parts";
+import { EventMarkShape, EventTooltipLines, LANE_ROOM, describeDividendDates, maxEventSlots } from "@/components/chart-event-parts";
 import InstrumentCandleChart from "@/components/InstrumentCandleChart";
 import { AXIS, BUY, MAX, MIN, PRICE, SELL, TradeShape, monthTick } from "@/components/instrument-chart-parts";
 import { usePortfolioWorkspace } from "@/components/PortfolioWorkspaceContext";
@@ -12,7 +12,7 @@ import { useChartAnnouncements } from "@/components/useChartAnnouncements";
 import { setChartStyle, useChartStyle } from "@/components/useChartStyle";
 import { toggleChartEvents, useHiddenChartEvents } from "@/components/useHiddenChartEvents";
 import { fetchInstrumentHistories } from "@/lib/api";
-import { findEventSlot, getEspiChartTicker, listChartDividends, niceTicks, placeChartEvents, type ChartEvent, type EventSlot } from "@/lib/chart-events";
+import { findEventSlot, getEspiChartTicker, listChartDividends, niceTicks, placeChartEvents, toEventMarks, type ChartEvent, type EventMark, type EventSlot } from "@/lib/chart-events";
 import { canAccessFeature } from "@/lib/entitlements";
 import {
   averagePriceOn,
@@ -221,7 +221,7 @@ export function InstrumentPriceChartBody({ instrument, data, height }: { instrum
   const { current, points, candles, rows, extremes, lastDate, markers, tradesByDate, timeline, events } = data;
   const placement = useMemo(() => placeChartEvents(points.map((point) => point.date), events, maxEventSlots(width, isNarrow)), [events, isNarrow, points, width]);
   const eventMarks = useMemo(() => {
-    const toMarks = (kind: ChartEvent["kind"]): LineEventMark[] => toEventMarks(placement.slots, kind).map((mark) => ({ ...mark, t: toTime(mark.slot.session), date: mark.slot.session }));
+    const toMarks = (kind: ChartEvent["kind"]): LineEventMark[] => toEventMarks(placement.slots, kind).map((mark) => ({ ...mark, t: toTime(mark.session), date: mark.session }));
     return { dividend: toMarks("dividend"), espi: toMarks("espi") };
   }, [placement]);
   const currency = instrument.marketCurrency;

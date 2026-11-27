@@ -24,6 +24,8 @@ type Props = {
 };
 
 const EMPTY_HISTORY: PortfolioHistoryResponse = { points: [], warnings: [], assetSeries: [], benchmarkSeries: [] };
+const RISK_VIEW_METRICS: PerformanceMetricId[] = ["volatility", "max-drawdown", "time-under-water", "sharpe", "sortino", "calmar", "beta", "alpha", "information-ratio", "tracking-error"];
+const PERIOD_VIEW_METRICS: PerformanceMetricId[] = ["latest-value-change", "best-day", "best-daily-result", "worst-day", "best-month", "worst-month", "best-year", "worst-year", "calendar-results"];
 const PERIOD_LABELS: Record<RiskAnalyticsPeriod, string> = { YTD: "YTD", "1Y": "1 rok", "3Y": "3 lata", "5Y": "5 lat", MAX: "MAX" };
 const MONTH_LABELS = ["Sty", "Lut", "Mar", "Kwi", "Maj", "Cze", "Lip", "Sie", "Wrz", "Paź", "Lis", "Gru"];
 const XIRR_UNAVAILABLE_LABELS: Record<XirrUnavailableCode, string> = {
@@ -320,6 +322,10 @@ export default function PortfolioPerformanceResults({ assets, sales, realizedAdj
         <p className="risk-source-note">Prosta stopa kapitałowa = wynik kwotowy okresu ÷ kapitał netto na jego koniec. Jest wrażliwa na wpłaty i wypłaty oraz ich moment; zwrot portfela w tabeli osobno koryguje wpływ przepływów.</p>
       </> : <p className="risk-inline-notice">Kalendarz zwrotów wymaga kompletnej historii dla wybranego zakresu.</p>}</section> : null}
     </div> : null}
+    {/* A tab with nothing to show says why instead of staying empty. */}
+    {!isHistoryLoading && !historyError && history.points.length > 0 && ((view === "ryzyko" && !isVisible(...RISK_VIEW_METRICS)) || (view === "okresy" && !isVisible(...PERIOD_VIEW_METRICS)))
+      ? <p className="risk-inline-notice">{view === "ryzyko" ? "Nie ma teraz żadnej miary ryzyka do pokazania." : "Nie ma teraz żadnego wyniku okresowego do pokazania."} Pojawią się, gdy historia wycen, przepływów i kursów walut będzie wystarczająco długa i kompletna, o ile nie są wyłączone w „Edytuj wyniki”.</p>
+      : null}
     {preferencesNotice ? <p className={`field-note mt-4${preferencesNotice.isError ? " field-note-error" : ""}`}>{preferencesNotice.message}</p> : null}
   </section></div>;
 }

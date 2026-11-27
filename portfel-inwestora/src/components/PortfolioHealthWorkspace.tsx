@@ -61,7 +61,7 @@ export default function PortfolioHealthWorkspace() {
         <div className="health-summary-text">
           <p className="eyebrow">Kondycja portfela</p>
           <h2 className="section-title">{health.findings.length === 0 ? "Żadna reguła nie zgłosiła uwag." : `Reguły zgłosiły uwagi: ${health.findings.length}.`}</h2>
-          <p className="section-copy">
+          <p className="health-counts">
             Ważne: {health.counts.important} · Uwagi: {health.counts.attention} · Obserwacje: {health.counts.note}. Od 100 odejmujemy {HEALTH_WEIGHTS.important} punktów za ważną, {HEALTH_WEIGHTS.attention} za uwagę i {HEALTH_WEIGHTS.note} za obserwację.
           </p>
           <p className="field-note">Stałe reguły, bez sztucznej inteligencji. To nie jest ocena opłacalności ani rekomendacja inwestycyjna.</p>

@@ -197,6 +197,21 @@ test("NewConnect uses a separate stable source namespace while retaining ESPI-on
   assert.equal(parsed.candidates[0].sourceId, "newconnect:243663");
   assert.equal(parsed.candidates[0].market, "NEWCONNECT");
   assert.equal(parsed.candidates[0].sourceUrl, "https://newconnect.pl/komunikat?geru_id=243663");
+  // The EBI row is not stored, but it counts towards the page being full.
+  assert.deepEqual([parsed.listedRows, parsed.eligibleRows], [2, 1]);
+});
+
+test("the archive walk ends by all listed rows: ESPI alone does not fill a NewConnect page", async () => {
+  const page = Array.from({ length: 50 }, (_, index) => `<li><span class="date">06-09-2026 10:00:00 | Bieżący | EBI | ${index + 1}/2026</span></li>`).join("");
+  const parsed = parseGpwEspiList(page, { sourcePrefix: "newconnect", sourceKind: "NEWCONNECT" });
+  assert.deepEqual([parsed.listedRows, parsed.eligibleRows, parsed.malformedRows], [50, 0, 0], "a full page without any ESPI report is not the end");
+
+  const serverSource = await readFile(new URL("../src/lib/server/espi.ts", import.meta.url), "utf8");
+  const walk = serverSource.slice(serverSource.indexOf("export const synchronizePapEspi"), serverSource.indexOf("const isPotentialGpwGeneralMeetingCandidate"));
+  assert.equal(walk.match(/parsedPage\.listedRows === 0\) break/g).length, 2);
+  assert.equal(walk.match(/parsedPage\.listedRows < 50/g).length, 2);
+  assert.doesNotMatch(walk, /eligibleRows/);
+  assert.match(walk, /!\(await queryOne\("SELECT 1 AS done FROM espi_sync_state WHERE source = \$1", \[ESPI_FULL_WALK_MARKER\]\)\)/);
 });
 
 test("periodic report classification wins over incidental dividend words in its body", () => {

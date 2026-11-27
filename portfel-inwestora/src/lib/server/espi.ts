@@ -87,9 +87,9 @@ const ARTICLE_CONCURRENCY = 4;
 // Small enough that a batch of slow pages ends well within the lock's time.
 const ESPI_STORE_BATCH_SIZE = 20;
 const ESPI_QUEUE_EVERY_PAGES = 10;
-// Reports missed before periodic ones were told apart come back only through the full walk, so
-// one is due after this moment whatever the daily clock says.
-const ESPI_FULL_WALK_DUE_SINCE = "2026-11-27T22:55:00.000Z";
+// Reports missed by a faulty rule come back only through the full walk. After such a fix one walk
+// is due whatever the daily clock says: raise the number, and the marker is not there yet.
+const ESPI_FULL_WALK_MARKER = "ESPI_FULL_WALK:2";
 const ISSUER_METADATA_VERSION = 3;
 const ISSUER_RETRY_AFTER_DAYS = 7;
 const ISSUER_RECONCILIATION_BATCH_SIZE = 100;
@@ -1224,7 +1224,7 @@ export const synchronizePapEspi = async ({
         ? boundedEarliest
         : addDays(today, -(ESPI_OVERLAP_DAYS - 1));
     const overlapDue = force || Boolean(requestedFrom) || !isFresh(state.lastOverlapAt ?? null, ESPI_OVERLAP_TTL_MS) ||
-      (state.lastOverlapAt ?? "") < ESPI_FULL_WALK_DUE_SINCE;
+      !(await queryOne("SELECT 1 AS done FROM espi_sync_state WHERE source = $1", [ESPI_FULL_WALK_MARKER]));
     let overlapSucceeded = errors === 0;
 
     const detailRefreshBoundary = addDays(today, -90);
@@ -1359,7 +1359,9 @@ export const synchronizePapEspi = async ({
           candidates.push(...pageCandidates);
           await extendSyncLock(token);
           if (++pagesSinceQueue >= ESPI_QUEUE_EVERY_PAGES) queueListed();
-          if (parsedPage.eligibleRows === 0) break;
+          // NewConnect lists EBI reports among ESPI ones, so the end of a list is told by all its
+          // rows: a full page often holds fewer than 50 ESPI reports, and could hold none.
+          if (parsedPage.listedRows === 0) break;
           const introducedNewCandidate = pageCandidates.some((candidate) => {
             if (seenPageIds.has(candidate.sourceId)) return false;
             seenPageIds.add(candidate.sourceId);
@@ -1377,7 +1379,7 @@ export const synchronizePapEspi = async ({
             .filter((value): value is string => Boolean(value))
             .sort()[0];
           if (
-            parsedPage.eligibleRows < 50 ||
+            parsedPage.listedRows < 50 ||
             (oldest && oldest < officialRepairFrom)
           ) break;
         }
@@ -1411,7 +1413,7 @@ export const synchronizePapEspi = async ({
             }
             candidates.push(...parsedPage.candidates);
             await extendSyncLock(token);
-            if (parsedPage.eligibleRows === 0) break;
+            if (parsedPage.listedRows === 0) break;
             const introducedNewCandidate = parsedPage.candidates.some((candidate) => {
               if (seenDateIds.has(candidate.sourceId)) return false;
               seenDateIds.add(candidate.sourceId);
@@ -1424,11 +1426,18 @@ export const synchronizePapEspi = async ({
               diagnose({ provider: source.sourcePrefix, phase: "date-pagination", status: "REPEATED_PAGE", date, offset });
               break;
             }
-            if (parsedPage.eligibleRows < 50) break;
+            if (parsedPage.listedRows < 50) break;
           }
         }
       }
-      if (overlapSucceeded) lastOverlapAt = new Date().toISOString();
+      if (overlapSucceeded) {
+        lastOverlapAt = new Date().toISOString();
+        await execute(
+          `INSERT INTO espi_sync_state (source, status, next_backfill_page, backfill_complete, last_success_at, created_at, updated_at)
+           VALUES ($1, 'SUCCESS', 1, TRUE, $2, $2, $2) ON CONFLICT (source) DO NOTHING`,
+          [ESPI_FULL_WALK_MARKER, lastOverlapAt]
+        );
+      }
     }
 
     // Preserve the bounded PAP archive bootstrap for installations which have

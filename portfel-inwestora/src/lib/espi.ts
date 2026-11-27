@@ -319,6 +319,7 @@ export const parseGpwEspiList = (
   const baseUrl = options.baseUrl ?? GPW_ESPI_BASE_URL;
   const sourcePrefix = options.sourcePrefix ?? "gpw";
   const sourceKind = options.sourceKind ?? "GPW";
+  let listedRows = 0;
   let eligibleRows = 0;
   let malformedRows = 0;
   let titleFallbacks = 0;
@@ -333,6 +334,7 @@ export const parseGpwEspiList = (
     const metadata = espHtmlToText(
       segment.match(/<span[^>]*class="[^"]*date[^"]*"[^>]*>([\s\S]*?)<\/span>/i)?.[1] ?? ""
     );
+    if (/(?:^|\|)\s*(?:ESPI|EBI)\s*(?:\||$)/i.test(metadata)) listedRows += 1;
     if (!/(?:^|\|)\s*ESPI\s*(?:\||$)/i.test(metadata)) continue;
     eligibleRows += 1;
 
@@ -386,6 +388,8 @@ export const parseGpwEspiList = (
 
   return {
     candidates: Array.from(new Map(candidates.map((item) => [item.sourceId, item])).values()),
+    /** Every report on the page, EBI too: a page with fewer than 50 of them is the last one. */
+    listedRows,
     /** Count source rows before normalization so a broken row cannot shrink a full page. */
     eligibleRows,
     malformedRows,

@@ -2,6 +2,8 @@
 
 import { useMemo, useState } from "react";
 import { Bar, CartesianGrid, ComposedChart, Line, ReferenceLine, ResponsiveContainer, Scatter, Tooltip, XAxis, YAxis, ZAxis } from "recharts";
+import { EventMarkShape, EventTooltipLines, LANE_ROOM, maxEventSlots, toEventMarks, type EventMark } from "@/components/chart-event-parts";
+import { findEventSlot, niceTicks, placeChartEvents, type ChartEvent, type EventSlot } from "@/lib/chart-events";
 import {
   aggregateCandles,
   averagePriceOn,
@@ -58,7 +60,9 @@ const barTitle = (row: CandleRow, interval: CandleInterval) => {
   return `Miesiąc: ${formatDate(row.from)} – ${formatDate(row.to)}`;
 };
 
-function CandleTooltip({ active, label, rows, markers, interval, currency }: { active?: boolean; label?: string | number; rows: Map<string, CandleRow>; markers: Marker[]; interval: CandleInterval; currency: string }) {
+type CandleEventMark = EventMark & { key: string };
+
+function CandleTooltip({ active, label, rows, markers, interval, currency, eventSlots, eventInterval }: { active?: boolean; label?: string | number; rows: Map<string, CandleRow>; markers: Marker[]; interval: CandleInterval; currency: string; eventSlots: Array<EventSlot<ChartEvent>>; eventInterval: CandleInterval }) {
   const row = active ? rows.get(String(label)) : undefined;
   if (!row) return null;
   const change = (row.close / row.open - 1) * 100;
@@ -75,14 +79,16 @@ function CandleTooltip({ active, label, rows, markers, interval, currency }: { a
           {trade.side === "buy" ? "Kupno" : "Sprzedaż"} {formatDate(trade.date)}: {quantity.format(trade.quantity)} szt. po {formatCurrency(trade.price, currency)}
         </span>
       ))}
+      <EventTooltipLines slot={findEventSlot(eventSlots, row.from, row.to)} interval={eventInterval} />
     </div>
   );
 }
 
-export default function InstrumentCandleChart({ candles, trades, averagePriceSteps, currency, height, isNarrow, ariaLabel }: {
+export default function InstrumentCandleChart({ candles, trades, averagePriceSteps, events, currency, height, isNarrow, ariaLabel }: {
   candles: Candle[];
   trades: InstrumentTrade[];
   averagePriceSteps: AveragePriceStep[];
+  events: ChartEvent[];
   currency: string;
   height?: number;
   isNarrow: boolean;
@@ -100,6 +106,16 @@ export default function InstrumentCandleChart({ candles, trades, averagePriceSte
     });
   }, [rows, trades]);
 
+  // Marks are never finer than the candles, so each candle has at most one slot of events.
+  const placement = useMemo(() => placeChartEvents(candles.map((candle) => candle.date), events, maxEventSlots(width, isNarrow), interval), [candles, events, interval, isNarrow, width]);
+  const eventMarks = useMemo(() => {
+    const toMarks = (kind: ChartEvent["kind"]): CandleEventMark[] => toEventMarks(placement.slots, kind).flatMap((mark) => {
+      const bar = findCandleBar(rows, mark.slot.session);
+      return bar ? [{ ...mark, key: bar.from }] : [];
+    });
+    return { dividend: toMarks("dividend"), espi: toMarks("espi") };
+  }, [placement, rows]);
+
   const max = rows.reduce((value, row) => Math.max(value, row.high), -Infinity);
   const min = rows.reduce((value, row) => Math.min(value, row.low), Infinity);
   // The scale also has to hold trade prices and the average, which can lie outside the sessions.
@@ -107,6 +123,9 @@ export default function InstrumentCandleChart({ candles, trades, averagePriceSte
   const top = Math.max(...drawn);
   const bottom = Math.min(...drawn);
   const padding = (top - bottom || top) * 0.06;
+  // With marks under the price, the scale leaves them room below the lowest value drawn.
+  const hasEventMarks = placement.slots.length > 0;
+  const lowerEnd = bottom - (hasEventMarks ? (top - bottom || top) * LANE_ROOM : padding);
 
   /** The first bar of each month, thinned so the axis shows a handful of dates. */
   const ticks = useMemo(() => {
@@ -122,15 +141,18 @@ export default function InstrumentCandleChart({ candles, trades, averagePriceSte
           <ComposedChart data={rows} margin={{ top: 16, right: 8, bottom: 0, left: 4 }} barCategoryGap="25%">
             <CartesianGrid stroke="rgba(20, 35, 48, 0.08)" strokeDasharray="3 10" vertical={false} />
             <XAxis dataKey="key" type="category" allowDuplicatedCategory={false} ticks={ticks} interval={0} axisLine={false} tickLine={false} tick={AXIS} tickFormatter={(key: string) => monthTick(toTime(key))} />
-            <YAxis type="number" domain={[bottom - padding, top + padding]} allowDataOverflow axisLine={false} tickLine={false} tick={AXIS} orientation="right" width={64} tickFormatter={(value: number) => percent.format(value)} />
+            <YAxis type="number" domain={[lowerEnd, top + padding]} {...(hasEventMarks ? { ticks: niceTicks(bottom, top + padding) } : {})} allowDataOverflow axisLine={false} tickLine={false} tick={AXIS} orientation="right" width={64} tickFormatter={(value: number) => percent.format(value)} />
+            <YAxis yAxisId="events" type="number" dataKey="lane" domain={[0, 1]} hide />
             <ZAxis dataKey="amount" type="number" range={[60, 380]} />
-            <Tooltip content={<CandleTooltip rows={rowsByKey} markers={markers} interval={interval} currency={currency} />} cursor={{ stroke: "rgba(20, 35, 48, 0.16)", strokeDasharray: "6 8", fill: "transparent" }} wrapperStyle={{ outline: "none", zIndex: 20 }} />
+            <Tooltip content={<CandleTooltip rows={rowsByKey} markers={markers} interval={interval} currency={currency} eventSlots={placement.slots} eventInterval={placement.interval} />} cursor={{ stroke: "rgba(20, 35, 48, 0.16)", strokeDasharray: "6 8", fill: "transparent" }} wrapperStyle={{ outline: "none", zIndex: 20 }} />
             <ReferenceLine y={max} stroke={MAX} strokeWidth={1} strokeDasharray="2 3" label={{ value: `max ${percent.format(max)}`, position: "insideTopLeft", fill: MAX, fontSize: 11, fontWeight: 700 }} />
             <ReferenceLine y={min} stroke={MIN} strokeWidth={1} strokeDasharray="2 3" label={{ value: `min ${percent.format(min)}`, position: "insideBottomLeft", fill: MIN, fontSize: 11, fontWeight: 700 }} />
             <Bar dataKey="range" shape={<CandleShape />} maxBarSize={14} isAnimationActive={false} name="Kurs" />
             <Line dataKey="average" type="stepAfter" stroke={BUY} strokeWidth={2} strokeDasharray="6 4" dot={false} activeDot={false} connectNulls={false} isAnimationActive={false} name="Średnia cena kupna" />
             {/* With an empty list Recharts would draw a mark for every candle. */}
             {markers.length > 0 ? <Scatter data={markers} dataKey="price" shape={<TradeShape />} isAnimationActive={false} name="Transakcje" /> : null}
+            {eventMarks.espi.length > 0 ? <Scatter yAxisId="events" data={eventMarks.espi} dataKey="lane" shape={<EventMarkShape />} isAnimationActive={false} name="Komunikaty ESPI" /> : null}
+            {eventMarks.dividend.length > 0 ? <Scatter yAxisId="events" data={eventMarks.dividend} dataKey="lane" shape={<EventMarkShape />} isAnimationActive={false} name="Dywidendy" /> : null}
           </ComposedChart>
         </ResponsiveContainer>
       </div>

@@ -119,8 +119,9 @@ export const buildDividendOperation = ({
       withholdingTax: round(withholdingTax, 6),
       domesticTax: round(domesticTax, 6),
       netAmount,
-      exDividendDate: toDateInputValue(exDividendDate),
-      recordDate: toDateInputValue(recordDate),
+      // An unknown date stays unknown: toDateInputValue alone would turn it into today.
+      exDividendDate: exDividendDate.trim() ? toDateInputValue(exDividendDate) : undefined,
+      recordDate: recordDate.trim() ? toDateInputValue(recordDate) : undefined,
       paymentDate: toDateInputValue(paymentDate),
       country: country.trim(),
     },

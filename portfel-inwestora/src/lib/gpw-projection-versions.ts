@@ -30,5 +30,8 @@ export const GENERAL_MEETING_PROJECTION_VERSION = 10;
 /**
  * 9: same cause for dividends (version 8 dates from 22.10.2026): 22 events on the 78-document corpus then,
  * 24 now (record/payment dates among them).
+ * 10: dates written in front of their label ("18 czerwca jako dzień dywidendy oraz 25 czerwca jako
+ * dzień wypłaty dywidendy", ORLEN 23/2026) gave the payment day as the record day and the meeting day
+ * as the payment day; a payment before the record day is no longer published.
  */
-export const DIVIDEND_PROJECTION_VERSION = 9;
+export const DIVIDEND_PROJECTION_VERSION = 10;

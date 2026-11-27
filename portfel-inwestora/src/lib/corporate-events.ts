@@ -2004,7 +2004,24 @@ const getExplicitRemainingPerShareDividend = (text: string) => {
   };
 };
 
+/**
+ * Dates written in front of their own label, as in the list "18 czerwca 2026 roku jako dzień
+ * dywidendy oraz 25 czerwca 2026 roku jako dzień wypłaty dywidendy" (ORLEN 23/2026). A search
+ * that only looks after a label takes the next row's date, so these are read first.
+ */
+const getDatesLabelledAfter = (text: string, label: RegExp) =>
+  Array.from(new Set(Array.from(text.matchAll(UNICODE_DATE_PATTERN)).flatMap((match) => {
+    const date = getIsoDateFromMatch(match);
+    const end = (match.index ?? 0) + match[0].length;
+    return date && label.test(text.slice(end, end + 80)) ? [date] : [];
+  })));
+
+const LABELLED_RECORD_DATE = /^\s*(?:[_,;–-]\s*)?jako\s+dzie[ńn]\s+dywidendy(?![\p{L}])/iu;
+const LABELLED_PAYMENT_DATE = /^\s*(?:[_,;–-]\s*)?jako\s+(?:termin|dzie[ńn])\s+wyp[łl]at/iu;
+
 const getDividendRecordDate = (text: string) => {
+  const labelled = getDatesLabelledAfter(text, LABELLED_RECORD_DATE);
+  if (labelled.length === 1) return labelled[0];
   // In resolutions the date often precedes its label. Looking only after
   // "dzień dywidendy" can incorrectly borrow the later payment date.
   for (const match of text.matchAll(UNICODE_DATE_PATTERN)) {
@@ -2304,8 +2321,11 @@ const getUpcomingDividendEvents = (text: string): ParsedCorporateEvent[] => {
         "last",
         true
       );
-      const resolvedPaymentDate =
+      const labelledPaymentDates = getDatesLabelledAfter(section, LABELLED_PAYMENT_DATE);
+      const statedPaymentDate =
         getPaymentDateBeforeAmount(section, entry.index) ??
+        // One date that names itself the payment day beats any date merely near a label.
+        (labelledPaymentDates.length === 1 ? labelledPaymentDates[0] : undefined) ??
         getDateAfterKeyword(
           localContextAfter,
           /(?:termin(?:u)?|dzie[ńn]|dniem)\s+wyp.{0,3}at\p{L}*|payment\s*date/iu,
@@ -2317,6 +2337,11 @@ const getUpcomingDividendEvents = (text: string): ParsedCorporateEvent[] => {
         localInstallmentDateAfter ??
         localPaymentDateAfter ??
         paymentDate;
+      // A dividend cannot be paid before the day that decides who gets it: such a date was
+      // borrowed from elsewhere in the notice (often the meeting day), so none is published.
+      const resolvedPaymentDate = recordDate && statedPaymentDate && statedPaymentDate < recordDate
+        ? undefined
+        : statedPaymentDate;
       const cancellationDate = cancellation ? extractPolishDates(section).at(-1) : undefined;
       const eventDate = recordDate ?? exDividendDate ?? resolvedPaymentDate ?? cancellationDate;
 

@@ -161,9 +161,59 @@ const operationMatchesDividendEvent = ({
   );
 };
 
+/** A payment before the record day cannot happen: such a date was misread from the notice. */
+const hasImpossibleDates = (recordDate: unknown, paymentDate: unknown) =>
+  typeof recordDate === "string" && typeof paymentDate === "string" &&
+  recordDate !== "" && paymentDate !== "" && paymentDate < recordDate;
+
+const MAX_RECORD_DATE_SHIFT_DAYS = 60;
+
+const daysApart = (left: string, right: string) =>
+  Math.abs(Date.parse(`${left}T00:00:00.000Z`) - Date.parse(`${right}T00:00:00.000Z`)) / 86_400_000;
+
+/**
+ * An automatic entry with impossible dates that the corrected event describes: the same company
+ * and amount per share, with a record day close to the corrected one. Editing an entry drops its
+ * automatic mark, so entries the user has touched are never matched.
+ */
+const isMisdatedPostingOfEvent = ({
+  operation,
+  instrumentId,
+  event,
+}: {
+  operation: PortfolioOperation;
+  instrumentId: string;
+  event: CorporateEvent;
+}) =>
+  operation.metadata.automaticDividend === true &&
+  operation.assetId === instrumentId &&
+  hasImpossibleDates(operation.metadata.recordDate, getOperationPaymentDate(operation)) &&
+  isSameAmount(operation.price, event.dividendPerShare!) &&
+  daysApart(String(operation.metadata.recordDate), event.recordDate!) <= MAX_RECORD_DATE_SHIFT_DAYS;
+
+/**
+ * Entries booked before the fix stored the booking day as the ex-dividend day when the notice
+ * gave none. A day after the payment is certainly that placeholder.
+ */
+const withoutPlaceholderExDate = (operation: PortfolioOperation) => {
+  const exDividendDate = operation.metadata.exDividendDate;
+  if (
+    operation.metadata.automaticDividend !== true ||
+    typeof exDividendDate !== "string" ||
+    exDividendDate <= getOperationPaymentDate(operation)
+  ) {
+    return operation;
+  }
+  const metadata = { ...operation.metadata };
+  delete metadata.exDividendDate;
+  return { ...operation, metadata };
+};
+
 export type AutomaticDividendApplication = {
   portfolioBook: PortfolioBook;
   addedCount: number;
+  /** Automatic entries with wrong dates that were removed or tidied. */
+  repairedCount: number;
   manualMatchesCount: number;
 };
 
@@ -183,11 +233,14 @@ export const applyAutomaticGpwDividends = ({
   createdAt?: string;
 }): AutomaticDividendApplication => {
   let addedCount = 0;
+  let repairedCount = 0;
   let manualMatchesCount = 0;
 
   const portfolios = portfolioBook.portfolios.map((portfolio) => {
-    let operations = portfolio.operations ?? [];
-    let portfolioChanged = false;
+    let operations = (portfolio.operations ?? []).map((operation) => withoutPlaceholderExDate(operation));
+    const tidied = operations.filter((operation, index) => operation !== portfolio.operations![index]).length;
+    let portfolioChanged = tidied > 0;
+    repairedCount += tidied;
 
     for (const event of events) {
       if (
@@ -195,7 +248,7 @@ export const applyAutomaticGpwDividends = ({
         event.status !== "CONFIRMED" ||
         !event.recordDate ||
         !event.paymentDate ||
-        event.paymentDate > today ||
+        hasImpossibleDates(event.recordDate, event.paymentDate) ||
         !isFinitePositive(event.dividendPerShare) ||
         (event.dividendCurrency ?? "PLN") !== "PLN"
       ) {
@@ -204,6 +257,16 @@ export const applyAutomaticGpwDividends = ({
 
       const instrument = getPortfolioInstrumentForEvent(portfolio, event);
       if (!instrument) continue;
+
+      // Now that the dates read correctly, the entry booked with impossible ones goes. It is
+      // booked again below, on the right day, once that day has come.
+      const kept = operations.filter((operation) => !isMisdatedPostingOfEvent({ operation, instrumentId: instrument.id, event }));
+      if (kept.length < operations.length) {
+        repairedCount += operations.length - kept.length;
+        operations = kept;
+        portfolioChanged = true;
+      }
+      if (event.paymentDate > today) continue;
 
       const matchingOperation = operations.find((operation) =>
         operationMatchesDividendEvent({ operation, portfolio, event })
@@ -270,8 +333,9 @@ export const applyAutomaticGpwDividends = ({
   });
 
   return {
-    portfolioBook: addedCount > 0 ? { ...portfolioBook, portfolios } : portfolioBook,
+    portfolioBook: addedCount + repairedCount > 0 ? { ...portfolioBook, portfolios } : portfolioBook,
     addedCount,
+    repairedCount,
     manualMatchesCount,
   };
 };

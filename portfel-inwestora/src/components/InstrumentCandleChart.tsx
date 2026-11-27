@@ -17,6 +17,7 @@ import {
   type InstrumentTrade,
 } from "@/lib/instrument-chart";
 import { AXIS, BUY, CANDLE_DOWN, CANDLE_UP, MAX, MIN, eventDots, monthTick, tradeDots } from "@/components/instrument-chart-parts";
+import { getQuantityUnit } from "@/lib/cfd";
 import { formatCurrency, formatDate } from "@/lib/utils";
 
 /**
@@ -64,7 +65,7 @@ const barTitle = (row: CandleRow, interval: CandleInterval) => {
 
 type CandleEventMark = EventMark & { key: string };
 
-function CandleTooltip({ active, label, rows, markers, interval, currency, eventSlots, eventInterval }: { active?: boolean; label?: string | number; rows: Map<string, CandleRow>; markers: Marker[]; interval: CandleInterval; currency: string; eventSlots: Array<EventSlot<ChartEvent>>; eventInterval: CandleInterval }) {
+function CandleTooltip({ active, label, rows, markers, interval, currency, isCfd, eventSlots, eventInterval }: { active?: boolean; label?: string | number; rows: Map<string, CandleRow>; markers: Marker[]; interval: CandleInterval; currency: string; isCfd?: boolean; eventSlots: Array<EventSlot<ChartEvent>>; eventInterval: CandleInterval }) {
   const row = active ? rows.get(String(label)) : undefined;
   if (!row) return null;
   const change = (row.close / row.open - 1) * 100;
@@ -78,7 +79,7 @@ function CandleTooltip({ active, label, rows, markers, interval, currency, event
       {row.average !== null ? <span>Średnia cena kupna: {formatCurrency(row.average, currency)}</span> : null}
       {markers.filter((marker) => marker.key === row.key).map((trade) => (
         <span key={trade.id} className={trade.side === "buy" ? "tone-positive" : "tone-negative"}>
-          {trade.side === "buy" ? "Kupno" : "Sprzedaż"} {formatDate(trade.date)}: {quantity.format(trade.quantity)} szt. po {formatCurrency(trade.price, currency)}
+          {trade.side === "buy" ? "Kupno" : "Sprzedaż"} {formatDate(trade.date)}: {quantity.format(trade.quantity)} {getQuantityUnit(trade.quantity, isCfd)} po{formatCurrency(trade.price, currency)}
         </span>
       ))}
       <EventTooltipLines slot={findEventSlot(eventSlots, row.from, row.to)} interval={eventInterval} />
@@ -86,12 +87,13 @@ function CandleTooltip({ active, label, rows, markers, interval, currency, event
   );
 }
 
-export default function InstrumentCandleChart({ candles, trades, averagePriceSteps, events, currency, height, isNarrow, ariaLabel }: {
+export default function InstrumentCandleChart({ candles, trades, averagePriceSteps, events, currency, isCfd, height, isNarrow, ariaLabel }: {
   candles: Candle[];
   trades: InstrumentTrade[];
   averagePriceSteps: AveragePriceStep[];
   events: ChartEvent[];
   currency: string;
+  isCfd?: boolean;
   height?: number;
   isNarrow: boolean;
   ariaLabel: string;
@@ -138,25 +140,22 @@ export default function InstrumentCandleChart({ candles, trades, averagePriceSte
   }, [isNarrow, rows]);
 
   return (
-    <>
-      <div className="instrument-chart mt-3" style={height ? { height } : undefined} role="img" aria-label={`${ariaLabel} Świece ${INTERVAL_LABELS[interval]}.`}>
-        <ResponsiveContainer width="100%" height="100%" onResize={(nextWidth) => setWidth(nextWidth)}>
-          <ComposedChart data={rows} margin={{ top: 16, right: 8, bottom: 0, left: 4 }} barCategoryGap="25%">
-            <CartesianGrid stroke="rgba(20, 35, 48, 0.08)" strokeDasharray="3 10" vertical={false} />
-            <XAxis dataKey="key" type="category" allowDuplicatedCategory={false} ticks={ticks} interval={0} axisLine={false} tickLine={false} tick={AXIS} tickFormatter={(key: string) => monthTick(toTime(key))} />
-            <YAxis type="number" domain={[lowerEnd, top + padding]} {...(hasEventMarks ? { ticks: niceTicks(bottom, top + padding) } : {})} allowDataOverflow axisLine={false} tickLine={false} tick={AXIS} orientation="right" width={64} tickFormatter={(value: number) => percent.format(value)} />
-            <Tooltip content={<CandleTooltip rows={rowsByKey} markers={markers} interval={interval} currency={currency} eventSlots={placement.slots} eventInterval={placement.interval} />} cursor={{ stroke: "rgba(20, 35, 48, 0.16)", strokeDasharray: "6 8", fill: "transparent" }} wrapperStyle={{ outline: "none", zIndex: 20 }} />
-            <ReferenceLine y={max} stroke={MAX} strokeWidth={1} strokeDasharray="2 3" label={{ value: `max ${percent.format(max)}`, position: "insideTopLeft", fill: MAX, fontSize: 11, fontWeight: 700 }} />
-            <ReferenceLine y={min} stroke={MIN} strokeWidth={1} strokeDasharray="2 3" label={{ value: `min ${percent.format(min)}`, position: "insideBottomLeft", fill: MIN, fontSize: 11, fontWeight: 700 }} />
-            <Bar dataKey="range" shape={<CandleShape />} maxBarSize={14} isAnimationActive={false} name="Kurs" />
-            <Line dataKey="average" type="stepAfter" stroke={BUY} strokeWidth={2} strokeDasharray="6 4" dot={false} activeDot={false} connectNulls={false} isAnimationActive={false} name="Średnia cena kupna" />
-            {tradeDots(markers, (marker) => marker.key, [60, 380], true)}
-            {eventDots(eventMarks.espi, (mark) => mark.key, [lowerEnd, top + padding])}
-            {eventDots(eventMarks.dividend, (mark) => mark.key, [lowerEnd, top + padding])}
-          </ComposedChart>
-        </ResponsiveContainer>
-      </div>
-      <p className="field-note instrument-candle-note">Świece {INTERVAL_LABELS[interval]} z Yahoo Finance, bez korekty o dywidendy.{interval === "D" ? "" : " Krótszy zakres pokaże dokładniejsze."}</p>
-    </>
+    <div className="instrument-chart mt-3" style={height ? { height } : undefined} role="img" aria-label={`${ariaLabel} Świece ${INTERVAL_LABELS[interval]}.`}>
+      <ResponsiveContainer width="100%" height="100%" onResize={(nextWidth) => setWidth(nextWidth)}>
+        <ComposedChart data={rows} margin={{ top: 16, right: 8, bottom: 0, left: 4 }} barCategoryGap="25%">
+          <CartesianGrid stroke="rgba(20, 35, 48, 0.08)" strokeDasharray="3 10" vertical={false} />
+          <XAxis dataKey="key" type="category" allowDuplicatedCategory={false} ticks={ticks} interval={0} axisLine={false} tickLine={false} tick={AXIS} tickFormatter={(key: string) => monthTick(toTime(key))} />
+          <YAxis type="number" domain={[lowerEnd, top + padding]} {...(hasEventMarks ? { ticks: niceTicks(bottom, top + padding) } : {})} allowDataOverflow axisLine={false} tickLine={false} tick={AXIS} orientation="right" width={64} tickFormatter={(value: number) => percent.format(value)} />
+          <Tooltip content={<CandleTooltip rows={rowsByKey} markers={markers} interval={interval} currency={currency} isCfd={isCfd} eventSlots={placement.slots} eventInterval={placement.interval} />} cursor={{ stroke: "rgba(20, 35, 48, 0.16)", strokeDasharray: "6 8", fill: "transparent" }} wrapperStyle={{ outline: "none", zIndex: 20 }} />
+          <ReferenceLine y={max} stroke={MAX} strokeWidth={1} strokeDasharray="2 3" label={{ value: `max ${percent.format(max)}`, position: "insideTopLeft", fill: MAX, fontSize: 11, fontWeight: 700 }} />
+          <ReferenceLine y={min} stroke={MIN} strokeWidth={1} strokeDasharray="2 3" label={{ value: `min ${percent.format(min)}`, position: "insideBottomLeft", fill: MIN, fontSize: 11, fontWeight: 700 }} />
+          <Bar dataKey="range" shape={<CandleShape />} maxBarSize={14} isAnimationActive={false} name="Kurs" />
+          <Line dataKey="average" type="stepAfter" stroke={BUY} strokeWidth={2} strokeDasharray="6 4" dot={false} activeDot={false} connectNulls={false} isAnimationActive={false} name="Średnia cena kupna" />
+          {tradeDots(markers, (marker) => marker.key, [60, 380], true)}
+          {eventDots(eventMarks.espi, (mark) => mark.key, [lowerEnd, top + padding])}
+          {eventDots(eventMarks.dividend, (mark) => mark.key, [lowerEnd, top + padding])}
+        </ComposedChart>
+      </ResponsiveContainer>
+    </div>
   );
 }

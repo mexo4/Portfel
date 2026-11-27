@@ -504,7 +504,6 @@ body { background: var(--canvas); color: var(--text); font-family: var(--font-sa
 
 /* A double click on the preview chart opens the instrument's own page. */
 .positions-chart-open { cursor: zoom-in; touch-action: manipulation; }
-.instrument-candle-note { margin: 4px 0 0; }
 
 /* Dividend and ESPI marks: legend entries that switch them, tooltip lines and the report list. */
 .workspace-shell .instrument-legend button { display: inline-flex; align-items: center; gap: 6px; min-height: 24px; padding: 0; border: 0; color: inherit; background: none; font: inherit; cursor: pointer; }

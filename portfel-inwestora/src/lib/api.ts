@@ -38,7 +38,7 @@ import type { CorporateEventsResponse, CorporateEventType } from "@/lib/corporat
 import type { DashboardScopeLayouts } from "@/lib/dashboard-layout";
 import type { WatchlistItem, WatchlistItemInput } from "@/lib/watchlist";
 import type { PerformanceMetricId } from "@/lib/performance-preferences";
-import type { EspiFeedResponse, EspiReport } from "@/lib/espi";
+import type { EspiFeedResponse, EspiIssuerSuggestion, EspiReport } from "@/lib/espi";
 import type { RiskFreeRatePoint } from "@/lib/portfolio-risk-analytics";
 
 type SearchParams = {
@@ -1242,6 +1242,12 @@ export const fetchEspiFeed = async ({
     if (value) params.set(key, value);
   }
   return requestJson<EspiFeedResponse>(`/api/espi?${params.toString()}`, { signal });
+};
+
+export const fetchEspiIssuers = async (query: string, market: "GPW" | "NEWCONNECT", signal?: AbortSignal) => {
+  const params = new URLSearchParams({ query, market });
+  const response = await requestJson<{ items: EspiIssuerSuggestion[] }>(`/api/espi/issuers?${params.toString()}`, { signal });
+  return response.items;
 };
 
 export const fetchEspiReport = async (reportId: string, signal?: AbortSignal) => {

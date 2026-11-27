@@ -89,6 +89,9 @@ export type EspiSyncMeta = {
   backfillComplete?: boolean;
 };
 
+/** A company offered while its name or ticker is being typed. */
+export type EspiIssuerSuggestion = { ticker: string; name: string };
+
 export type EspiFeedResponse = {
   items: EspiReportSummary[];
   nextCursor?: string;
@@ -392,6 +395,26 @@ export const parseGpwEspiList = (
   };
 };
 
+/*
+ * Only a number with a sequence ("5/2026") says which report this is. GPW gives periodic reports
+ * just the year ("/2026"), so every quarterly report of a company in a year carries the same one.
+ * The same pattern is used in JavaScript and in PostgreSQL.
+ */
+export const ESPI_OWN_NUMBER_PATTERN = "[0-9] ?/ ?20[0-9]{2}";
+export const hasOwnEspiReportNumber = (reportNumber: string | null | undefined) =>
+  new RegExp(ESPI_OWN_NUMBER_PATTERN).test(reportNumber ?? "");
+
+/** The channel a report came from: "gpw", "newconnect" or "pap". */
+export const getEspiSourceFamily = (sourceId: string) => sourceId.split(":", 1)[0]!;
+
+/** Every periodic form lists a sheet „KOREKTA RAPORTU”, which is empty unless the report corrects one. */
+const EMPTY_CORRECTION_SHEET = /^[ \t]*(?:\d+\.|(?:nazwa )?arkusza?:)[ \t]*korekta raportu[ \t]*$/gim;
+
+export const isEspiCorrection = (title: string, body: string) =>
+  /\bkorekt/.test(normalizeForRules(`${title}\n${body.slice(0, 1000).replace(EMPTY_CORRECTION_SHEET, "")}`)) ||
+  // The sheet filled in: it names the current report that carries the correction.
+  /skorygowany raportem biezacym nr\s*\d/.test(normalizeForRules(body));
+
 export const classifyEspiReportType = (value: string): EspiReportType => {
   const text = normalizeForRules(value);
   const isPeriodic = /raport okresowy|raport kwartalny|raport polroczny|raport roczny/i.test(text);
@@ -578,7 +601,7 @@ export const parsePapEspiReport = (
     lead.match(/(\d+(?:\/\d+)?\/20\d{2}(?:\s+[A-Z]+)?)/i)?.[1];
   const body = espHtmlToText(extractBodyHtml(article));
   const reportType = classifyEspiReportType(`${lead}\n${sourceTitle}`);
-  const isCorrection = /\bkorekt/i.test(normalizeForRules(`${sourceTitle}\n${body.slice(0, 1000)}`));
+  const isCorrection = isEspiCorrection(sourceTitle, body);
 
   return {
     sourceId: candidate.sourceId,
@@ -663,7 +686,7 @@ export const parseGpwEspiReport = (
   const reportNumber = candidate.reportNumber ??
     pageMeta.split("|").map((part) => part.trim())[3] ??
     undefined;
-  const isCorrection = /\bkorekt/i.test(normalizeForRules(`${candidate.sourceTitle}\n${body.slice(0, 1000)}`));
+  const isCorrection = isEspiCorrection(candidate.sourceTitle, body);
 
   return {
     sourceId: candidate.sourceId,

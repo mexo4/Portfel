@@ -9070,9 +9070,56 @@ textarea {
 
 .espi-filter-panel {
   display: grid;
-  grid-template-columns: minmax(220px, 1.6fr) minmax(150px, 1fr) 110px minmax(170px, 1fr) minmax(180px, 1fr) 138px 138px auto;
+  grid-template-columns: minmax(180px, 1.4fr) minmax(200px, 1.4fr) minmax(150px, 1fr) minmax(160px, 1fr) 138px 138px auto;
   align-items: end;
   gap: 10px;
+}
+
+/* The company suggestions hang under their field and may cover what is below the filters. */
+.panel.espi-filter-panel {
+  position: relative;
+  z-index: 5;
+  overflow: visible;
+}
+
+.espi-company-field {
+  position: relative;
+  min-width: 0;
+}
+
+.espi-company-options {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 1;
+  width: max(100%, 280px);
+  max-width: calc(100vw - 48px);
+  max-height: 320px;
+  margin: 0;
+  padding: 4px;
+  overflow-y: auto;
+  list-style: none;
+  background: var(--surface-strong);
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  box-shadow: 0 12px 28px rgba(20, 35, 48, .16);
+}
+
+.espi-company-options li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 36px;
+  padding: 8px 10px;
+  border-radius: 7px;
+  font-size: .78rem;
+  cursor: pointer;
+}
+
+.espi-company-options li:hover,
+.espi-company-options li[aria-selected="true"] {
+  background: var(--accent-soft, #e8eef8);
 }
 
 .espi-filter-panel label {
@@ -9519,7 +9566,8 @@ textarea {
   white-space: nowrap;
 }
 
-@media (max-width: 1240px) {
+/* One row needs about 1200 px beside the menu; narrower than that the filters take two rows. */
+@media (max-width: 1599px) {
   .espi-filter-panel {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }

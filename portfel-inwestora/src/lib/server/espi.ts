@@ -4,7 +4,12 @@ import {
   type EspiAttachment,
   type EspiCategory,
   type EspiFeedResponse,
+  type EspiIssuerSuggestion,
   type EspiMarket,
+  ESPI_OWN_NUMBER_PATTERN,
+  getEspiSourceFamily,
+  hasOwnEspiReportNumber,
+  isEspiCorrection,
   type EspiReport,
   type EspiReportSummary,
   type EspiReportType,
@@ -584,6 +589,29 @@ const resolveEspiIssuer = async (report: Pick<ParsedPapEspiReport, "issuerName" 
   );
 };
 
+/*
+ * Which stored report is the same filing. A report with its own number is identified by it. Without
+ * one, only a copy from another channel, published in the same minute, is the same filing: two
+ * records of one channel are two publications.
+ */
+const sameFilingSql = ({ hasOwn, minute, family }: { hasOwn: string; minute: string; family: string }) =>
+  `(${hasOwn}::boolean OR (LEFT(published_at, 16) = ${minute} AND split_part(source_id, ':', 1) <> ${family}))`;
+
+/*
+ * A GPW attachment belongs to one publication. Before periodic reports were told apart, a later
+ * report could leave its files on an earlier one, so storing a report takes its files back.
+ */
+const reclaimAttachmentsSql = `
+  DELETE FROM espi_report_attachments
+  WHERE source_url = ANY($1::text[]) AND espi_report_id <> $2
+    AND espi_report_id IN (
+      -- Every other publication; a copy from another channel in the same minute keeps its files.
+      SELECT id FROM espi_reports
+      WHERE NOT (LEFT(published_at, 16) = $3 AND split_part(source_id, ':', 1) <> $4)
+        AND COALESCE(report_number, '') !~ $5
+    )
+`;
+
 const upsertEspiReport = async (report: ParsedPapEspiReport) => {
   const issuer = await resolveEspiIssuer(report);
   const storedMarket: EspiMarket = report.market === "UNKNOWN"
@@ -601,6 +629,7 @@ const upsertEspiReport = async (report: ParsedPapEspiReport) => {
            AND report_number IS NOT DISTINCT FROM $5
            AND report_type = $6
            AND is_correction = $7
+           AND ${sameFilingSql({ hasOwn: "$9", minute: "$10", family: "$11" })}
          )
          OR (
            $8::text IS NOT NULL
@@ -608,6 +637,7 @@ const upsertEspiReport = async (report: ParsedPapEspiReport) => {
            AND report_number IS NOT DISTINCT FROM $5
            AND report_type = $6
            AND is_correction = $7
+           AND ${sameFilingSql({ hasOwn: "$9", minute: "$10", family: "$11" })}
          )
       ORDER BY
         CASE WHEN source = $1 AND source_id = $2 THEN 0 ELSE 1 END,
@@ -628,6 +658,9 @@ const upsertEspiReport = async (report: ParsedPapEspiReport) => {
       report.reportType,
       report.isCorrection,
       issuer?.id ?? null,
+      hasOwnEspiReportNumber(report.reportNumber),
+      report.publishedAt.slice(0, 16),
+      getEspiSourceFamily(report.sourceId),
     ]
   );
   const now = new Date().toISOString();
@@ -756,6 +789,12 @@ const upsertEspiReport = async (report: ParsedPapEspiReport) => {
         [randomUUID(), id, attachment.name, attachment.mediaType ?? null, attachment.sizeLabel ?? null, attachment.sourceUrl, now]
       );
     }
+    if (report.attachments.length > 0) {
+      await transaction.execute(reclaimAttachmentsSql, [
+        report.attachments.map((attachment) => attachment.sourceUrl), id,
+        report.publishedAt.slice(0, 16), getEspiSourceFamily(report.sourceId), ESPI_OWN_NUMBER_PATTERN,
+      ]);
+    }
   });
 
   return { id, issuerId: issuer?.id ?? null, created: !existing };
@@ -835,9 +874,10 @@ const getStoredSourceState = async (candidates: PapEspiListCandidate[]) => {
 
       // A formal report number is unique for an issuer and year. GPW and PAP
       // may publish the same report a minute apart, so the source timestamp is
-      // only needed as a fallback when no report number exists.
-      return Boolean(candidate.reportNumber) ||
-        normalizeIso(row.published_at).slice(0, 16) === candidate.sourcePublishedAt!.slice(0, 16);
+      // only needed when the report has no number of its own.
+      return hasOwnEspiReportNumber(candidate.reportNumber) ||
+        (getEspiSourceFamily(row.source_id) !== getEspiSourceFamily(candidate.sourceId) &&
+          normalizeIso(row.published_at).slice(0, 16) === candidate.sourcePublishedAt!.slice(0, 16));
     });
     if (naturalMatch) stored.add(candidate.sourceId);
   }
@@ -949,9 +989,14 @@ const reconcileStoredEspiMetadata = async () => {
   for (const row of rows) {
     try {
       const classifiedReportType = classifyEspiReportType(row.source_title);
-      const reportType = classifiedReportType === "OTHER" && row.report_number
-        ? "CURRENT"
-        : classifiedReportType;
+      // GPW's periodic reports often have no title: the type read from the list then stays.
+      const reportType = classifiedReportType !== "OTHER"
+        ? classifiedReportType
+        : row.report_type !== "OTHER"
+          ? row.report_type
+          : row.report_number
+            ? "CURRENT"
+            : "OTHER";
       const category = classifyEspiCategory({
         title: row.source_title,
         body: row.body_text,
@@ -1042,6 +1087,27 @@ const reconcileCorrectionLinks = async () => {
   );
 };
 
+/**
+ * Takes the correction mark off reports that got it only from the empty sheet of their form. It
+ * has to run before new rows are matched, because the mark is part of what makes two rows one.
+ */
+const repairFalseCorrections = async () => {
+  const rows = await query<{ id: string; source_title: string; body_text: string }>(
+    `SELECT id, source_title, body_text FROM espi_reports
+     WHERE source = $1 AND is_correction = TRUE AND body_text ILIKE '%korekta raportu%'`,
+    [PAP_SOURCE]
+  );
+  const falseIds = rows.filter((row) => !isEspiCorrection(row.source_title, row.body_text)).map((row) => row.id);
+  if (falseIds.length === 0) return 0;
+  await execute(
+    `UPDATE espi_reports
+     SET is_correction = FALSE, correction_target_report_number = NULL, correction_of_report_id = NULL, updated_at = $1
+     WHERE id = ANY($2::text[])`,
+    [new Date().toISOString(), falseIds]
+  );
+  return falseIds.length;
+};
+
 export const synchronizePapEspi = async ({
   force = false,
   backfillPages,
@@ -1074,6 +1140,14 @@ export const synchronizePapEspi = async ({
   let backfillComplete = state.backfillComplete;
   let lastOverlapAt: string | undefined;
   try {
+    try {
+      const repaired = await repairFalseCorrections();
+      if (repaired > 0) console.info(`[ESPI SYNC] false correction marks removed=${repaired}`);
+    } catch (error) {
+      errors += 1;
+      sourceFailure ??= "TEMPORARILY_UNAVAILABLE";
+      diagnose({ provider: PAP_SOURCE, phase: "correction-repair", error: error instanceof Error ? error.name : "unknown" });
+    }
     const candidates: PapEspiListCandidate[] = [];
     const officialSources = [
       { sourcePrefix: "gpw", fetchList: fetchGpwList, parseList: parseGpwEspiList },
@@ -2287,6 +2361,51 @@ const toWarsawDayBoundary = (date: string) => {
   return year && month && day ? toWarsawIso(`${day}.${month}.${year}, 00:00`) : undefined;
 };
 
+const POLISH_LETTERS = "ĄĆĘŁŃÓŚŹŻąćęłńóśźż";
+const PLAIN_LETTERS = "acelnoszzacelnoszz";
+const foldPolish = (value: string) =>
+  value.replace(/[ĄĆĘŁŃÓŚŹŻąćęłńóśźż]/g, (letter) => PLAIN_LETTERS[POLISH_LETTERS.indexOf(letter)]!).toLowerCase();
+// Translating both cases does not depend on how the database lowers letters outside ASCII.
+const foldedSql = (column: string) => `LOWER(TRANSLATE(${column}, '${POLISH_LETTERS}', '${PLAIN_LETTERS}'))`;
+const escapeLike = (value: string) => value.replace(/[\\%_]/g, (character) => `\\${character}`);
+
+const ESPI_SUGGESTION_LIMIT = 8;
+
+/** Companies with stored reports whose name or ticker matches what is being typed. */
+export const searchEspiIssuers = async ({ text, market }: {
+  text: string;
+  market: Exclude<EspiMarket, "UNKNOWN">;
+}): Promise<EspiIssuerSuggestion[]> => {
+  const folded = foldPolish(text.trim().slice(0, 60));
+  if (folded.length < 2) return [];
+  const rows = await query<{ ticker: string; name: string }>(
+    `
+      SELECT issuer.ticker,
+             (ARRAY_AGG(report.issuer_name ORDER BY report.published_at DESC))[1] AS name
+      FROM espi_reports report
+      JOIN corporate_event_instruments issuer ON issuer.id = report.issuer_id
+      WHERE report.source = $1 AND report.market = $2 AND issuer.ticker <> ''
+        AND (
+          ${foldedSql("report.issuer_name")} LIKE $3
+          OR ${foldedSql("issuer.company_name")} LIKE $3
+          OR LOWER(issuer.ticker) LIKE $4
+        )
+      GROUP BY issuer.ticker
+      ORDER BY
+        CASE
+          WHEN LOWER(issuer.ticker) = $5 THEN 0
+          WHEN BOOL_OR(${foldedSql("report.issuer_name")} LIKE $4) THEN 1
+          WHEN LOWER(issuer.ticker) LIKE $4 THEN 2
+          ELSE 3
+        END,
+        name
+      LIMIT $6
+    `,
+    [PAP_SOURCE, market, `%${escapeLike(folded)}%`, `${escapeLike(folded)}%`, folded, ESPI_SUGGESTION_LIMIT]
+  );
+  return rows.map((row) => ({ ticker: row.ticker, name: row.name }));
+};
+
 export const getEspiFeed = async ({
   userId,
   filters,
@@ -2326,12 +2445,13 @@ export const getEspiFeed = async ({
         AND preferred.is_correction = report.is_correction
         AND (
           (
-            report.report_number IS NOT NULL
+            report.report_number ~ '${ESPI_OWN_NUMBER_PATTERN}'
             AND preferred.report_number = report.report_number
           )
           OR (
-            report.report_number IS NULL
-            AND preferred.report_number IS NULL
+            COALESCE(report.report_number, '') !~ '${ESPI_OWN_NUMBER_PATTERN}'
+            AND preferred.report_number IS NOT DISTINCT FROM report.report_number
+            AND split_part(preferred.source_id, ':', 1) <> split_part(report.source_id, ':', 1)
             AND LEFT(preferred.published_at, 16) = LEFT(report.published_at, 16)
             AND LOWER(preferred.title) = LOWER(report.title)
           )
@@ -2400,12 +2520,29 @@ export const getEspiFeed = async ({
       ) @@ websearch_to_tsquery('simple'::regconfig, ${fts})
     )`);
   }
-  if (filters.company?.trim()) clauses.push(`report.issuer_name ILIKE ${add(`%${filters.company.trim().slice(0, 100)}%`)}`);
+  if (filters.company?.trim()) {
+    // The company field takes a name or a ticker, typed with or without Polish letters.
+    const folded = foldPolish(filters.company.trim().slice(0, 100));
+    const name = add(`%${escapeLike(folded)}%`);
+    const exactTicker = add(folded);
+    clauses.push(`(
+      ${foldedSql("report.issuer_name")} LIKE ${name}
+      OR LOWER(COALESCE(issuer.ticker, report.source_ticker, '')) = ${exactTicker}
+    )`);
+  }
   if (filters.ticker?.trim()) {
     const ticker = filters.market === "GPW"
       ? getGpwTickerCore(filters.ticker).slice(0, 8)
       : filters.ticker.trim().toUpperCase().slice(0, 16);
-    clauses.push(`UPPER(COALESCE(issuer.ticker, report.source_ticker, '')) = ${add(ticker)}`);
+    const tickerParam = add(ticker);
+    // A report whose issuer is not resolved yet is still the company's by its ISIN.
+    clauses.push(`(
+      UPPER(COALESCE(issuer.ticker, report.source_ticker, '')) = ${tickerParam}
+      OR UPPER(report.source_isin) IN (
+        SELECT UPPER(known.isin) FROM corporate_event_instruments known
+        WHERE known.market = report.market AND known.ticker = ${tickerParam} AND known.isin IS NOT NULL
+      )
+    )`);
   }
   if (filters.category) clauses.push(`report.category = ${add(filters.category)}`);
   if (filters.reportType) clauses.push(`report.report_type = ${add(filters.reportType)}`);

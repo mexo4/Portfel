@@ -5,7 +5,9 @@ import test from "node:test";
 import { strToU8, zipSync } from "fflate";
 
 const { getCfdFigures, getCfdLeverage, getCfdQuoteSource, getQuantityUnit, readClosedCfdTrade } = await import("../src/lib/cfd.ts");
-const { mergeQuoteIntoPortfolioAsset, refreshPortfolioQuotesWithProgress, applyRefreshedPortfolioAssetSnapshot } = await import("../src/lib/api.ts");
+const { getCfdDailyPercent, getCfdHeldValue } = await import("../src/lib/cfd-holding.ts");
+const { getGroupedPortfolioAssets } = await import("../src/lib/portfolio-engine.ts");
+const { mergeQuoteIntoPortfolioAsset,refreshPortfolioQuotesWithProgress, applyRefreshedPortfolioAssetSnapshot } = await import("../src/lib/api.ts");
 const { fetchCfdQuoteServer } = await import("../src/lib/server/cfd-quotes.ts");
 const { parseBrokerOperationsXlsx } = await import("../src/lib/import-operations.ts");
 const { attachClosedCfdDetails } = await import("../src/lib/xtb-open-cfd.ts");
@@ -23,6 +25,25 @@ test("a CFD is counted in lots, everything else in pieces", () => {
   assert.deepEqual([0.01, 2.5, 1, 2, 4, 5, 12, 13, 21, 22, 112].map((volume) => getQuantityUnit(volume, true)),
     ["lota", "lota", "lot", "loty", "loty", "lotów", "lotów", "lotów", "lotów", "loty", "lotów"]);
   assert.deepEqual([getQuantityUnit(1), getQuantityUnit(0.5, false)], ["szt.", "szt."]);
+});
+
+test("the list shows an open CFD as its deposit with the result, and its day as the price move", () => {
+  const fx = { PLN: 1, USD: 4, EUR: 5 };
+  const groupOf = (assets, base) => getGroupedPortfolioAssets(assets, fx, base)[0];
+  const long = lot({ previousClose: 20200 });
+  // 200 USD of margin and a 40 USD loss, at 4.
+  assert.equal(getCfdHeldValue(groupOf([long]), fx), 640);
+  assert.equal(getCfdHeldValue(groupOf([long], "EUR"), fx), 128);
+  assert.equal(getCfdHeldValue(groupOf([lot({ leverage: undefined })]), fx), null);
+  assert.equal(getCfdHeldValue(groupOf([lot({ latestPrice: undefined })]), fx), null);
+  assert.equal(groupOf([long]).marketValueBase, -160, "the portfolio still counts only the result");
+
+  const move = ((19800 - 20200) / 20200) * 100;
+  assert.ok(Math.abs(getCfdDailyPercent([groupOf([long])], fx) - move) < 1e-9);
+  assert.ok(Math.abs(getCfdDailyPercent([groupOf([lot({ previousClose: 20200, positionDirection: "SHORT" })])], fx) + move) < 1e-9);
+  const noDay = groupOf([lot({ id: "lot-2", symbol: "GOLD" })]);
+  assert.ok(Math.abs(getCfdDailyPercent([groupOf([long]), noDay], fx) - move) < 1e-9);
+  assert.equal(getCfdDailyPercent([noDay], fx), null);
 });
 
 test("leverage, margin and the return on the margin follow the broker", () => {

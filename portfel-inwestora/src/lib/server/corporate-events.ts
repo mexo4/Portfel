@@ -8,6 +8,7 @@ import {
   type CorporateEventType,
   type CorporateEventsResponse,
   getCorporateEventIdentityKey,
+  isDividendAdvanceIdentity,
   getReportScheduleNonPublicationDates,
   resolveCorporateEventStatus,
   getDividendAmendmentEvidence,
@@ -1428,7 +1429,9 @@ const upsertParsedEvents = async (
           parsed.eventTime ?? null,
           parsed.fiscalPeriod ?? null,
           parsed.fiscalYear ?? null,
-          parsed.fiscalPeriod && (parsed.fiscalYearLabel || parsed.fiscalYear)
+          // An advance stored under the year's single identity takes its own, so a later advance of the
+          // same year is not matched to it.
+          (parsed.fiscalPeriod && (parsed.fiscalYearLabel || parsed.fiscalYear)) || isDividendAdvanceIdentity(eventIdentity)
             ? eventIdentity
             : existing.event_identity || eventIdentity,
           parsed.generalMeetingType ?? null,
@@ -2568,6 +2571,21 @@ const getDividendReprojectionCandidates = async (
   [instrumentId, sourceUrl, recordDates, DIVIDEND_REPROJECTION_MAX_EVENTS]
 );
 
+/** Takes a source off rows it no longer describes. The rows stay: other sources support them. */
+const detachEventSource = async (transaction: DatabaseTransaction, ids: string[], sourceUrl: string) => {
+  const targets = ids.slice(0, DIVIDEND_REPROJECTION_MAX_EVENTS);
+  for (const id of targets) {
+    await transaction.execute(
+      `DELETE FROM corporate_event_sources
+       WHERE corporate_event_id = $1 AND source_url = $2
+         AND EXISTS (SELECT 1 FROM corporate_event_sources AS other
+                     WHERE other.corporate_event_id = $1 AND other.source_url <> $2)`,
+      [id, sourceUrl]
+    );
+  }
+  return targets.length;
+};
+
 const deactivateEventProjection = async (
   transaction: DatabaseTransaction,
   ids: string[],
@@ -2769,6 +2787,7 @@ export const synchronizeGlobalDividends = ({
           });
           const sourceDeactivated = await deactivateEventProjection(transaction, sourcePlan.deactivateIds,
             "SAME_SOURCE_REPARSE", report.source_url);
+          const detached = await detachEventSource(transaction, sourcePlan.detachIds ?? [], report.source_url);
           const finalDeactivated = await deactivateEventProjection(transaction, finalPlan.deactivateIds.filter((id) =>
             !sourcePlan.deactivateIds.includes(id)), "FINAL_DIVIDEND_RESOLUTION", report.source_url);
           if (sourcePlan.ambiguousIds.length) diagnose({ provider: "global-espi-dividends", sourceId: report.source_id,
@@ -2783,7 +2802,7 @@ export const synchronizeGlobalDividends = ({
             `,
             [new Date().toISOString(), DIVIDEND_PROJECTION_VERSION, report.id]
           );
-          return { upsert, changed: upsert.changed > 0 || sourceDeactivated + finalDeactivated > 0 };
+          return { upsert, changed: upsert.changed > 0 || sourceDeactivated + finalDeactivated + detached > 0 };
         });
         created += result.upsert.created;
         duplicates += result.upsert.duplicates;

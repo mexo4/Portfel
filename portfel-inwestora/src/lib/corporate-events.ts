@@ -1745,7 +1745,9 @@ const getDividendStatus = (text: string): Extract<
   CorporateEventStatus,
   "PROPOSED" | "CONFIRMED" | "UNKNOWN"
 > => {
-  const normalized = text.toLocaleLowerCase("pl-PL");
+  // ESPI bodies are wrapped at about 90 characters, and "." does not cross a line break: without
+  // this "podjął\nuchwałę" was not a resolution (Text, November 2026).
+  const normalized = text.toLocaleLowerCase("pl-PL").replace(/\s+/g, " ");
   const folded = normalized.normalize("NFD").replace(/\p{Diacritic}/gu, "").replace(/ł/g, "l");
   // An adopted profit-allocation resolution is final even if the issuer says
   // it was adopted "zgodnie z propozycją zarządu".
@@ -1768,10 +1770,12 @@ const getDividendStatus = (text: string): Extract<
   }
 
   const finalApproval =
-    /rada\s+nadzorcza[\s\S]{0,180}?(?:wyraziła|udzieliła|podjęła|postanowiła\s+wyrazić).{0,80}zgod|zgod[ae]\s+rady\s+nadzorczej|waln\w*\s+zgromadzeni\w*[\s\S]{0,120}?(?:podj.{0,24}uchwa|postanowi)|uchwał[ae]\s+(?:zwyczajnego|nadzwyczajnego)?\s*walnego\s+zgromadzenia/u.test(normalized);
+    /rada\s+nadzorcza[\s\S]{0,180}?(?:wyraziła|udzieliła|podjęła|postanowiła\s+wyrazić).{0,80}zgod|zgod[ae]\s+rady\s+nadzorczej|po\s+(?:otrzymaniu|uzyskaniu)\s+zgody\s+(?:od\s+)?rady\s+nadzorczej|waln\w*\s+zgromadzeni\w*[\s\S]{0,120}?(?:podj.{0,24}uchwa|postanowi)|uchwał[ae]\s+(?:zwyczajnego|nadzwyczajnego)?\s*walnego\s+zgromadzenia/u.test(normalized);
   const conditionalAdvance =
-    /warunkiem\s+wypłat[yi][\s\S]{0,180}?zgod[ayę]\s+rady\s+nadzorczej|uchwał\w*\s+o\s+(?:przedłożeniu|skierowaniu)[\s\S]{0,140}?(?:wniosku|rekomendacji)|zamiar\w*\s+wypłat[yi]\s+zaliczk/u.test(normalized) ||
-    /warunkiem\s+wyplaty[\s\S]{0,180}?udzielenie[\s\S]{0,80}?rad[ae]\s+nadzorcz[ae][\s\S]{0,30}?zgod[ay]/u.test(folded);
+    /warunkiem\s+wypłat[yi][\s\S]{0,180}?zgod[ayę]\s+rady\s+nadzorczej|uchwał\p{L}*\s+(?:o|w\s+(?:sprawie|przedmiocie))\s+(?:przedłożeni|skierowani|przedstawieni)\p{L}*[\s\S]{0,140}?(?:wniosku|rekomendacji)|zamiar\w*\s+wypłat[yi]\s+zaliczk/u.test(normalized) ||
+    /warunkiem\s+wyplaty[\s\S]{0,180}?udzielenie[\s\S]{0,80}?rad[ae]\s+nadzorcz[ae][\s\S]{0,30}?zgod[ay]/u.test(folded) ||
+    // "zostanie wypłacona pod warunkiem uzyskania zgody Rady Nadzorczej" (Echo Investment, November 2026)
+    /pod\s+warunkiem\s+uzyskania\s+zgody\s+rady\s+nadzorczej/u.test(folded);
 
   const approvedByMeeting = /waln\w*\s+zgromadzeni\w*[\s\S]{0,180}?podj\w*[\s\S]{0,80}?uchwa\w*[\s\S]{0,100}?dywidend/u.test(normalized);
   const adoptedProfitResolution = /waln\w*\s+zgromadzeni\w*[\s\S]{0,180}?podj\w*[\s\S]{0,180}?uchwa\w*[\s\S]{0,120}?(?:podzia\w*\s+zysku|dywidend)/u.test(normalized);
@@ -2064,6 +2068,14 @@ const getDividendRecordDate = (text: string) => {
       "first",
       true
     ) ??
+    // "Do zaliczki będą uprawnieni akcjonariusze posiadający akcje Spółki w dniu 9 grudnia 2026 r."
+    getDateAfterKeyword(
+      text,
+      /uprawnien\p{L}*\s+(?:będą\s+)?akcjonariusz\p{L}*\s+posiadając\p{L}*\s+akcje(?:\s+spółki)?\s+w\s+dniu/iu,
+      40,
+      "first",
+      true
+    ) ??
     getDateAfterKeyword(
       text,
       /dniem\s+nabycia\s+prawa\s+do\s+(?:dywidendy|zaliczki)\s+(?:jest|będzie)\s+dzie[ńn]/iu,
@@ -2187,6 +2199,32 @@ export const isSubsidiaryOnlyDividendNotice = (text: string) =>
   /wypłat\p{L}*\s+akcjonariuszom[\s\S]{0,100}?\bzaliczk/iu.test(text) &&
   !/\bemitent\p{L}*\s+(?:postanowi\p{L}*|podj\p{L}*\s+uchwał\p{L}*)[\s\S]{0,100}?\bwypłat/iu.test(text);
 
+/**
+ * Whether a notice is about paying an advance on the dividend ("zaliczka na poczet dywidendy").
+ * A final dividend resolution that splits profit is not, even when it mentions an advance.
+ */
+export const isDividendAdvanceNotice = (text: string) =>
+  /zaliczk\p{L}*\s+na\s+poczet\s+(?:\p{L}+\s+){0,2}dywidend/iu.test(text) &&
+  !/podzia\p{L}*\s+zysku|pokryci\p{L}*\s+straty|walne\s+zgromadzenie[\s\S]{0,160}?(?:postanawia|podjęło|uchwala)/iu.test(text);
+
+export const isDividendAdvanceIdentity = (identity: string | undefined) => /^dividend:[^:]+:advance:/.test(identity ?? "");
+
+/**
+ * The lasting name of one distribution. A dividend for a year is one, so a proposal and its later
+ * resolution update the same entry even when the dates change. Advances are not: a company may pay
+ * two for the same year, so an advance is named by its dividend day as well.
+ */
+export const getDividendEventIdentity = (
+  event: Pick<ParsedCorporateEvent, "fiscalYear" | "recordDate" | "exDividendDate" | "paymentDate" | "eventDate">,
+  installment: number | undefined,
+  isAdvance: boolean
+) => {
+  const day = event.recordDate ?? event.exDividendDate ?? event.paymentDate ?? event.eventDate;
+  const year = event.fiscalYear ?? day?.slice(0, 4) ?? "unknown";
+  if (isAdvance && day) return ["dividend", year, "advance", day, ...(installment ? [installment] : [])].join(":");
+  return ["dividend", year, installment ?? "single"].join(":");
+};
+
 const getUpcomingDividendEvents = (text: string): ParsedCorporateEvent[] => {
   if (!/dywidend|zaliczk/i.test(text)) return [];
   // Public company notices also report distributions made only by a private
@@ -2216,11 +2254,14 @@ const getUpcomingDividendEvents = (text: string): ParsedCorporateEvent[] => {
 
   const candidates = sections.flatMap<ParsedCorporateEvent>(({ section, statusContext }) => {
     const parsedAmounts = getDividendAmounts(section);
-    if (parsedAmounts.length === 0 && !cancellation) return [];
-    const advanceAdjustment = getExplicitRemainingPerShareDividend(section) ??
-      getAdvanceAdjustedDividend(section, parsedAmounts);
+    const advanceAdjustment = parsedAmounts.length > 0
+      ? getExplicitRemainingPerShareDividend(section) ?? getAdvanceAdjustedDividend(section, parsedAmounts)
+      : null;
     const amounts = advanceAdjustment ? [advanceAdjustment.amount] : parsedAmounts;
     const fiscalYear = getDividendFiscalYear(section);
+    // A notice about paying an advance on the dividend (not a final dividend that only deducts
+    // one already paid). A company can pay several in a year, so each is told apart by its dates.
+    const isAdvance = !advanceAdjustment && isDividendAdvanceNotice(section);
 
     const recordDate = getDividendRecordDate(section);
     const exDividendDate = getDateAfterKeyword(
@@ -2229,9 +2270,13 @@ const getUpcomingDividendEvents = (text: string): ParsedCorporateEvent[] => {
     );
     const paymentDate = getDividendPaymentDateBeforeLabel(section) ?? getDateAfterKeyword(
       section,
-      /(?:termin(?:u)?|dzie[ńn]|dniem)\s+wyp.{0,3}at\p{L}*|wyp.{0,3}at\p{L}*\s+(?:(?:dywidendy|środków)\s+)?(?:nastąpi|zostanie|ustalon|w\s+terminie)|payment\s*date/iu,
+      /(?:termin(?:u)?|dzie[ńn]|dniem)\s+wyp.{0,3}at\p{L}*|wyp.{0,3}at\p{L}*\s+(?:(?:dywidendy|środków)\s+)?(?:nastąpi|zostanie|ustalon|w\s+terminie)|zostanie\s+wyp.{0,3}acon\p{L}*\s+w\s+dniu|payment\s*date/iu,
       300
     );
+    // Without a per-share amount a notice is still a dividend when it names both the dividend day
+    // and a later payment day (a board's recommendation often gives only the total amount).
+    if (parsedAmounts.length === 0 && !cancellation &&
+      !(recordDate && paymentDate && paymentDate > recordDate)) return [];
     const sectionStatus = getDividendStatus(section);
     const contextStatus = sectionStatus === "UNKNOWN" ? getDividendStatus(statusContext) : sectionStatus;
     const dividendStatus = contextStatus === "UNKNOWN" ? documentStatus : contextStatus;
@@ -2360,11 +2405,10 @@ const getUpcomingDividendEvents = (text: string): ParsedCorporateEvent[] => {
         // resolution. The annual distribution + installment is the durable
         // identity, so a correction updates one pending event instead of
         // creating another calendar item.
-        eventIdentity: [
-          "dividend",
-          fiscalYear ?? (recordDate ?? exDividendDate ?? resolvedPaymentDate)?.slice(0, 4) ?? "unknown",
-          installment ?? "single",
-        ].join(":"),
+        eventIdentity: getDividendEventIdentity(
+          { fiscalYear, recordDate, exDividendDate, paymentDate: resolvedPaymentDate, eventDate },
+          installment, isAdvance
+        ),
         dividendPerShare: entry.amount,
         dividendTotalPerShare: advanceAdjustment?.total ?? installmentTotal,
         dividendAdvancePerShare: advanceAdjustment?.advance,
@@ -2418,11 +2462,7 @@ const getUpcomingDividendEvents = (text: string): ParsedCorporateEvent[] => {
       return {
         ...event,
         dividendInstallment: installment,
-        eventIdentity: [
-          "dividend",
-          event.fiscalYear ?? (event.recordDate ?? event.exDividendDate ?? event.paymentDate ?? event.eventDate).slice(0, 4),
-          installment ?? "single",
-        ].join(":"),
+        eventIdentity: getDividendEventIdentity(event, installment, isDividendAdvanceIdentity(event.eventIdentity)),
       };
     });
   });

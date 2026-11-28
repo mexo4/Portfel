@@ -12,9 +12,9 @@
     "sha256": "9ac8bfc9e6a95f47d144275a9647fd701028d1aed0acd1471919b13eb2f3ddda"
   },
   "dividends": {
-    "version": 10,
+    "version": 11,
     "documents": 98,
     "events": 24,
-    "sha256": "aee51d89fa9e18d13a1a031350db522f55ad129da482bc91a75380b874fa4e77"
+    "sha256": "5c544b6adb99eb00708bc9883da08aa9fdf5a31a8ed0f66e99f7e18f1997ca03"
   }
 }

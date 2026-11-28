@@ -33,5 +33,8 @@ export const GENERAL_MEETING_PROJECTION_VERSION = 10;
  * 10: dates written in front of their label ("18 czerwca jako dzień dywidendy oraz 25 czerwca jako
  * dzień wypłaty dywidendy", ORLEN 23/2026) gave the payment day as the record day and the meeting day
  * as the payment day; a payment before the record day is no longer published.
+ * 11: an advance on the dividend is named by its dividend day ("dividend:2026:advance:2026-12-16"), so a second
+ * advance of a year no longer lands on the first one (Votum, Text, November 2026); notices without a per-share
+ * amount count when they give both days (Atlanta Poland), and wrapped lines no longer hide a resolution.
  */
-export const DIVIDEND_PROJECTION_VERSION = 10;
+export const DIVIDEND_PROJECTION_VERSION = 11;

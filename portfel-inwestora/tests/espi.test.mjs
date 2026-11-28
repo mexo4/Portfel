@@ -197,6 +197,21 @@ test("NewConnect uses a separate stable source namespace while retaining ESPI-on
   assert.equal(parsed.candidates[0].sourceId, "newconnect:243663");
   assert.equal(parsed.candidates[0].market, "NEWCONNECT");
   assert.equal(parsed.candidates[0].sourceUrl, "https://newconnect.pl/komunikat?geru_id=243663");
+  // The EBI row is not stored, but it counts towards the page being full.
+  assert.deepEqual([parsed.listedRows, parsed.eligibleRows], [2, 1]);
+});
+
+test("the archive walk ends by all listed rows: ESPI alone does not fill a NewConnect page", async () => {
+  const page = Array.from({ length: 50 }, (_, index) => `<li><span class="date">06-09-2026 10:00:00 | Bieżący | EBI | ${index + 1}/2026</span></li>`).join("");
+  const parsed = parseGpwEspiList(page, { sourcePrefix: "newconnect", sourceKind: "NEWCONNECT" });
+  assert.deepEqual([parsed.listedRows, parsed.eligibleRows, parsed.malformedRows], [50, 0, 0], "a full page without any ESPI report is not the end");
+
+  const serverSource = await readFile(new URL("../src/lib/server/espi.ts", import.meta.url), "utf8");
+  const walk = serverSource.slice(serverSource.indexOf("export const synchronizePapEspi"), serverSource.indexOf("const isPotentialGpwGeneralMeetingCandidate"));
+  assert.equal(walk.match(/parsedPage\.listedRows === 0\) break/g).length, 2);
+  assert.equal(walk.match(/parsedPage\.listedRows < 50/g).length, 2);
+  assert.doesNotMatch(walk, /eligibleRows/);
+  assert.match(walk, /!\(await queryOne\("SELECT 1 AS done FROM espi_sync_state WHERE source = \$1", \[ESPI_FULL_WALK_MARKER\]\)\)/);
 });
 
 test("periodic report classification wins over incidental dividend words in its body", () => {
@@ -247,7 +262,7 @@ test("a formal correction remains a separate source report and points to its ori
   assert.equal(parsed.correctionTargetReportNumber, "16/2026");
 });
 
-test("only a number with a sequence identifies a report: a year alone repeats every quarter", () => {
+test("a number with a sequence helps to recognise a copy; a year alone repeats every quarter", () => {
   for (const number of ["5/2026", "12/2025/KOR", "RB 7 / 2026", "31/2026 K"]) assert.equal(hasOwnEspiReportNumber(number), true, number);
   for (const number of ["/2026", "/2025", "/", "", null, undefined]) assert.equal(hasOwnEspiReportNumber(number), false, String(number));
   assert.deepEqual(["gpw:1", "newconnect:2", "pap:node/3"].map(getEspiSourceFamily), ["gpw", "newconnect", "pap"]);
@@ -262,12 +277,15 @@ test("the empty correction sheet of a periodic form does not make a report a cor
   assert.equal(isEspiCorrection("TESTOWA SA (17/2026) Raport", "KOREKTA RAPORTU\nZmieniono załącznik."), true, "a heading of its own is not the form's sheet");
 });
 
-test("two reports without their own number stay apart unless they are copies from two channels", async () => {
+test("two entries of one channel are two reports, whatever their number says", async () => {
   const serverSource = await readFile(new URL("../src/lib/server/espi.ts", import.meta.url), "utf8");
-  // The stored row, the list check and the feed all use the same rule.
-  assert.equal(serverSource.match(/AND \$\{sameFilingSql\(\{ hasOwn: "\$9", minute: "\$10", family: "\$11" \}\)\}/g).length, 2);
-  assert.match(serverSource, /return hasOwnEspiReportNumber\(candidate\.reportNumber\) \|\|\s+\(getEspiSourceFamily\(row\.source_id\) !== getEspiSourceFamily\(candidate\.sourceId\)/);
-  assert.match(serverSource, /split_part\(preferred\.source_id, ':', 1\) <> split_part\(report\.source_id, ':', 1\)/);
+  // A stored row is taken for the same filing only on another channel, whichever way it is found.
+  assert.equal(serverSource.match(/AND \$\{sameFilingSql\(\{ family: "\$9", publishedAt: "\$10", hasOwn: "\$11" \}\)\}/g).length, 2);
+  assert.match(serverSource, /`\(split_part\(source_id, ':', 1\) <> \$\{family\} AND CASE WHEN/);
+  // The list check never skips a GPW publication for another row.
+  assert.match(serverSource, /return getEspiSourcePriority\(row\.source_id\) < getEspiSourcePriority\(candidate\.sourceId\) &&/);
+  // The feed hides on one channel only an exact repeat.
+  assert.match(serverSource, /preferred\.published_at = report\.published_at\s+AND preferred\.title = report\.title\s+AND preferred\.body_text = report\.body_text/);
 });
 
 test("list parsing deduplicates repeated source records by the stable PAP node id", () => {
@@ -291,7 +309,7 @@ test("cross-channel ESPI identity prefers the official market publication over i
     "utf8"
   );
   assert.match(serverSource, /preferred\.issuer_id = report\.issuer_id/);
-  assert.match(serverSource, /preferred\.report_number = report\.report_number/);
+  assert.match(serverSource, /preferred\.report_number IS NOT DISTINCT FROM report\.report_number/);
   assert.match(serverSource, /preferred\.is_correction = report\.is_correction/);
   assert.match(serverSource, /getEspiSourcePriority\(report\.sourceId\)/);
   assert.doesNotMatch(serverSource, /"issuer\.id IS NOT NULL"/);

@@ -660,6 +660,8 @@ const schemaStatements = [
     )
   `,
   "CREATE INDEX IF NOT EXISTS idx_espi_attachments_report ON espi_report_attachments(espi_report_id)",
+  // Storing a report looks its attachments up by address.
+  "CREATE INDEX IF NOT EXISTS idx_espi_attachments_url ON espi_report_attachments(source_url)",
   `
     CREATE TABLE IF NOT EXISTS espi_sync_state (
       source TEXT PRIMARY KEY,

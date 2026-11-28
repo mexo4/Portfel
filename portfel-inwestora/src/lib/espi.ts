@@ -319,6 +319,7 @@ export const parseGpwEspiList = (
   const baseUrl = options.baseUrl ?? GPW_ESPI_BASE_URL;
   const sourcePrefix = options.sourcePrefix ?? "gpw";
   const sourceKind = options.sourceKind ?? "GPW";
+  let listedRows = 0;
   let eligibleRows = 0;
   let malformedRows = 0;
   let titleFallbacks = 0;
@@ -333,6 +334,7 @@ export const parseGpwEspiList = (
     const metadata = espHtmlToText(
       segment.match(/<span[^>]*class="[^"]*date[^"]*"[^>]*>([\s\S]*?)<\/span>/i)?.[1] ?? ""
     );
+    if (/(?:^|\|)\s*(?:ESPI|EBI)\s*(?:\||$)/i.test(metadata)) listedRows += 1;
     if (!/(?:^|\|)\s*ESPI\s*(?:\||$)/i.test(metadata)) continue;
     eligibleRows += 1;
 
@@ -386,6 +388,8 @@ export const parseGpwEspiList = (
 
   return {
     candidates: Array.from(new Map(candidates.map((item) => [item.sourceId, item])).values()),
+    /** Every report on the page, EBI too: a page with fewer than 50 of them is the last one. */
+    listedRows,
     /** Count source rows before normalization so a broken row cannot shrink a full page. */
     eligibleRows,
     malformedRows,
@@ -396,8 +400,9 @@ export const parseGpwEspiList = (
 };
 
 /*
- * Only a number with a sequence ("5/2026") says which report this is. GPW gives periodic reports
- * just the year ("/2026"), so every quarterly report of a company in a year carries the same one.
+ * Only a number with a sequence ("5/2026") helps to recognise a copy of a report on another
+ * channel. GPW gives periodic reports just the year ("/2026"). No number names one publication on
+ * its own: companies use a full one again for a correction, a translation or another report.
  * The same pattern is used in JavaScript and in PostgreSQL.
  */
 export const ESPI_OWN_NUMBER_PATTERN = "[0-9] ?/ ?20[0-9]{2}";

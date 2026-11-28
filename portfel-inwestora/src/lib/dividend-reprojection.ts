@@ -1,4 +1,4 @@
-import type { ParsedCorporateEvent, getDividendAmendmentEvidence } from "@/lib/corporate-events";
+import { isDividendAdvanceIdentity, type ParsedCorporateEvent, type getDividendAmendmentEvidence } from "@/lib/corporate-events";
 
 export type StoredDividendProjection = {
   id: string;
@@ -17,7 +17,20 @@ export type DividendReprojectionPlan = {
   deactivateIds: string[];
   retainedIds: string[];
   ambiguousIds: string[];
+  /** Rows other sources still support, which this source no longer does: only its link goes. */
+  detachIds?: string[];
 };
+
+/**
+ * Whether a stored row is the distribution a parsed event describes. Advances used to be stored under
+ * the year's single identity ("dividend:2026:single"); such a row is still the same advance when its
+ * dividend day or payment day is the advance's.
+ */
+export const isSameDividendDistribution = (old: StoredDividendProjection, event: ParsedCorporateEvent) =>
+  old.event_identity === event.eventIdentity ||
+  (isDividendAdvanceIdentity(event.eventIdentity) && /^dividend:[^:]+:single$/.test(old.event_identity) &&
+    ((old.record_date !== null && old.record_date === event.recordDate) ||
+      (old.payment_date !== null && old.payment_date === event.paymentDate)));
 
 /**
  * A source may be reparsed after a parser fix. Only its exclusively-owned
@@ -33,12 +46,19 @@ export const planDividendSourceReprojection = (
   nonBindingDraft: boolean
 ): DividendReprojectionPlan => {
   const dividends = parsed.filter((event) => event.eventType === "UPCOMING_DIVIDEND");
-  const expected = new Set(dividends.map((event) => event.eventIdentity));
   const dates = new Set(dividends.map((event) => event.eventDate));
-  const result: DividendReprojectionPlan = { deactivateIds: [], retainedIds: [], ambiguousIds: [] };
+  const result: DividendReprojectionPlan = { deactivateIds: [], retainedIds: [], ambiguousIds: [], detachIds: [] };
   for (const old of existing) {
-    if (expected.has(old.event_identity)) {
+    const sharesADay = dividends.some((event) =>
+      (old.record_date !== null && old.record_date === event.recordDate) ||
+      (old.payment_date !== null && old.payment_date === event.paymentDate));
+    if (dividends.some((event) => isSameDividendDistribution(old, event))) {
       result.retainedIds.push(old.id);
+    } else if (parseComplete && dividends.length > 0 && old.source_urls.length > 1 &&
+      old.source_urls.includes(sourceUrl) && !sharesADay && !dates.has(old.event_date)) {
+      // Another distribution took this source by mistake (a second advance read as the first one).
+      // The row stands on its other sources; this document describes different days.
+      result.detachIds!.push(old.id);
     } else if (!parseComplete || old.source_urls.length !== 1 || old.source_urls[0] !== sourceUrl) {
       result.ambiguousIds.push(old.id);
     } else if (nonBindingDraft || (dividends.length > 0 && dates.has(old.event_date))) {

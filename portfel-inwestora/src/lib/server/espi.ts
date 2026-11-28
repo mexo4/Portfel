@@ -29,6 +29,14 @@ import {
   type PapEspiListCandidate,
   type ParsedPapEspiReport,
 } from "@/lib/espi";
+import {
+  ESPI_MISSING_SHOWN,
+  type EspiCompletenessCheck,
+  type EspiMarketCoverage,
+  type EspiMissingReason,
+  type EspiMissingReport,
+} from "@/lib/espi-completeness";
+import { planEspiWalk, type EspiWalkPlan } from "@/lib/espi-walk";
 import { parseCorporateEventDocument } from "@/lib/corporate-events";
 import { ensurePortfolioCoreModel, getPortfolioInstrumentId } from "@/lib/operation-engine";
 import { normalizePortfolioBook } from "@/lib/portfolio-state";
@@ -87,9 +95,13 @@ const ARTICLE_CONCURRENCY = 4;
 // Small enough that a batch of slow pages ends well within the lock's time.
 const ESPI_STORE_BATCH_SIZE = 20;
 const ESPI_QUEUE_EVERY_PAGES = 10;
-// Reports missed by a faulty rule come back only through the full walk. After such a fix one walk
-// is due whatever the daily clock says: raise the number, and the marker is not there yet.
-const ESPI_FULL_WALK_MARKER = "ESPI_FULL_WALK:2";
+// The row that remembers the last full walk. Reports missed by a faulty rule come back only
+// through such a walk: after a fix raise the number, and one is due at once.
+const ESPI_FULL_WALK_MARKER = "ESPI_FULL_WALK:3";
+const ESPI_WALK_FAILURE_ROW = "ESPI_WALK_FAILURE";
+const ESPI_CHECK_ROWS = { full: "ESPI_CHECK:full", recent: "ESPI_CHECK:recent" } as const;
+/** Stored reports published this recently are read again once a day, to pick up edits at the source. */
+const ESPI_REREAD_DAYS = 7;
 const ISSUER_METADATA_VERSION = 3;
 const ISSUER_RETRY_AFTER_DAYS = 7;
 const ISSUER_RECONCILIATION_BATCH_SIZE = 100;
@@ -1122,6 +1134,102 @@ const repairFalseCorrections = async () => {
   return falseIds.length;
 };
 
+/** Sets one timestamp of a bookkeeping row in the sync table, creating the row if needed. */
+const stampSyncRow = (source: string, column: "last_success_at" | "last_checked_at", at: string) =>
+  execute(
+    `INSERT INTO espi_sync_state (source, status, next_backfill_page, backfill_complete, ${column}, created_at, updated_at)
+     VALUES ($1, 'SUCCESS', 1, TRUE, $2, $2, $2)
+     ON CONFLICT (source) DO UPDATE SET ${column} = EXCLUDED.${column}, updated_at = EXCLUDED.updated_at`,
+    [source, at]
+  );
+
+/** Compares what a walk saw on the exchange lists with what is stored, and keeps the result. */
+const recordEspiCompleteness = async ({ plan, walkComplete, seen, failedReads }: {
+  plan: EspiWalkPlan;
+  walkComplete: boolean;
+  seen: PapEspiListCandidate[];
+  failedReads: Map<string, EspiMissingReason>;
+}) => {
+  const official = Array.from(new Map(
+    seen.filter((item) => item.sourceKind === "GPW" || item.sourceKind === "NEWCONNECT")
+      .map((item) => [item.sourceId, item])
+  ).values());
+  const day = (item: PapEspiListCandidate) => item.sourcePublishedAt?.slice(0, 10) ?? "";
+  const inRange = official.filter((item) => day(item) >= plan.from);
+  const markets = (["GPW", "NEWCONNECT"] as const).map((market): EspiMarketCoverage => {
+    const oldestDate = official.filter((item) => item.sourceKind === market).map(day).filter(Boolean).sort()[0];
+    return {
+      market,
+      listed: inRange.filter((item) => item.sourceKind === market).length,
+      oldestDate,
+      // The walk stops once a page goes past its date, so a walk that got there saw an older one.
+      reached: Boolean(oldestDate && oldestDate < plan.from),
+    };
+  });
+
+  const storedIds = new Set((await query<{ source_id: string }>(
+    "SELECT source_id FROM espi_reports WHERE source = $1 AND source_id = ANY($2::text[])",
+    [PAP_SOURCE, inRange.map((item) => item.sourceId)]
+  )).map((row) => row.source_id));
+  const absent = inRange.filter((item) => !storedIds.has(item.sourceId));
+  // One filing may be listed on both exchanges and kept once. Nothing else excuses an absence:
+  // these conditions are written out here on purpose, apart from the rules that store reports.
+  const otherListing = absent.length === 0 ? [] : await query<{
+    source_id: string; source_isin: string; report_number: string | null; published_at: string;
+  }>(
+    `SELECT source_id, source_isin, report_number, published_at FROM espi_reports
+     WHERE source = $1 AND source_isin = ANY($2::text[])`,
+    [PAP_SOURCE, Array.from(new Set(absent.flatMap((item) => item.sourceIsin ? [item.sourceIsin] : [])))]
+  );
+  const isKeptFromTheOtherExchange = (item: PapEspiListCandidate) => otherListing.some((row) =>
+    row.source_id.split(":")[0] !== item.sourceId.split(":")[0] &&
+    row.source_isin === item.sourceIsin &&
+    row.report_number === (item.reportNumber ?? null) &&
+    Math.abs(Date.parse(normalizeIso(row.published_at)) - Date.parse(item.sourcePublishedAt ?? "")) <= 600_000);
+  const missing = absent.filter((item) => !isKeptFromTheOtherExchange(item))
+    .map((item): EspiMissingReport => ({
+      sourceId: item.sourceId,
+      sourceUrl: item.sourceUrl,
+      issuerName: item.issuerName ?? item.sourceTitle,
+      publishedAt: item.sourcePublishedAt,
+      reportNumber: item.reportNumber,
+      reason: failedReads.get(item.sourceId) ?? "UNEXPLAINED",
+    }))
+    // The unexplained ones come first: they point at Mexo, not at the source.
+    .sort((left, right) => Number(right.reason === "UNEXPLAINED") - Number(left.reason === "UNEXPLAINED") ||
+      (right.publishedAt ?? "").localeCompare(left.publishedAt ?? ""));
+
+  const check: EspiCompletenessCheck = {
+    kind: plan.kind,
+    checkedAt: new Date().toISOString(),
+    from: plan.from,
+    walkComplete,
+    markets,
+    listed: inRange.length,
+    missingCount: missing.length,
+    missing: missing.slice(0, ESPI_MISSING_SHOWN),
+  };
+  await stampSyncRow(ESPI_CHECK_ROWS[plan.kind], "last_success_at", check.checkedAt);
+  await execute("UPDATE espi_sync_state SET details = $1 WHERE source = $2", [JSON.stringify(check), ESPI_CHECK_ROWS[plan.kind]]);
+  console.info(`[ESPI CHECK] kind=${check.kind} from=${check.from} listed=${check.listed} missing=${check.missingCount} unexplained=${missing.filter((item) => item.reason === "UNEXPLAINED").length} reached=${markets.map((market) => `${market.market}:${market.reached}`).join(",")} walkComplete=${walkComplete}`);
+  return check;
+};
+
+/** The latest completeness checks, for the administrator. */
+export const getEspiCompletenessChecks = async (): Promise<EspiCompletenessCheck[]> => {
+  const rows = await query<{ details: string | null }>(
+    "SELECT details FROM espi_sync_state WHERE source = ANY($1::text[])",
+    [Object.values(ESPI_CHECK_ROWS)]
+  );
+  return rows.flatMap((row) => {
+    try {
+      return row.details ? [JSON.parse(row.details) as EspiCompletenessCheck] : [];
+    } catch {
+      return [];
+    }
+  });
+};
+
 export const synchronizePapEspi = async ({
   force = false,
   backfillPages,
@@ -1159,6 +1267,9 @@ export const synchronizePapEspi = async ({
   let createdCount = 0;
   let firstDetailFailure: EspiSourceStatus | null = null;
   let storing: Promise<void> = Promise.resolve();
+  let walkPlan: EspiWalkPlan | null = null;
+  let walkEnded = false;
+  const failedReads = new Map<string, EspiMissingReason>();
   try {
     try {
       const repaired = await repairFalseCorrections();
@@ -1220,11 +1331,24 @@ export const synchronizePapEspi = async ({
       : requestedFrom
         ? boundedEarliest
         : addDays(today, -(ESPI_OVERLAP_DAYS - 1));
-    const overlapDue = force || Boolean(requestedFrom) || !isFresh(state.lastOverlapAt ?? null, ESPI_OVERLAP_TTL_MS) ||
-      !(await queryOne("SELECT 1 AS done FROM espi_sync_state WHERE source = $1", [ESPI_FULL_WALK_MARKER]));
-    let overlapSucceeded = errors === 0;
+    const walkRows = await query<{ source: string; last_success_at: string | null; last_checked_at: string | null }>(
+      "SELECT source, last_success_at, last_checked_at FROM espi_sync_state WHERE source = ANY($1::text[])",
+      [[ESPI_FULL_WALK_MARKER, ESPI_WALK_FAILURE_ROW]]
+    );
+    walkPlan = planEspiWalk({
+      now: Date.now(),
+      today,
+      force: force || Boolean(requestedFrom),
+      lastWalkAt: state.lastOverlapAt,
+      lastFullWalkAt: walkRows.find((row) => row.source === ESPI_FULL_WALK_MARKER)?.last_success_at,
+      lastFailedWalkAt: walkRows.find((row) => row.source === ESPI_WALK_FAILURE_ROW)?.last_checked_at,
+    });
+    const overlapDue = Boolean(walkPlan);
+    // A walk counts only when both lists can be walked and their first pages were whole. PAP, the
+    // supplementary channel, does not decide it.
+    let overlapSucceeded = availableOfficialSources.length === officialSources.length && parseErrors === 0;
 
-    const detailRefreshBoundary = addDays(today, -90);
+    const detailRefreshBoundary = addDays(today, -ESPI_REREAD_DAYS);
     const handled = new Set<string>();
     /*
      * Reads and stores the reports of the listed rows that were not read yet in this run. New ones
@@ -1257,17 +1381,18 @@ export const synchronizePapEspi = async ({
         const fetched = await mapWithConcurrency(pending.slice(start, start + ESPI_STORE_BATCH_SIZE), ARTICLE_CONCURRENCY, async (candidate) => {
           try {
             const response = await fetchOfficialHtml(candidate.sourceUrl);
-            if (response.status !== "SUCCESS") return { status: response.status, report: null };
+            if (response.status !== "SUCCESS") return { candidate, status: response.status, report: null };
             const report = candidate.sourceKind === "GPW" || candidate.sourceKind === "NEWCONNECT"
               ? parseGpwEspiReport(response.document, candidate)
               : parsePapEspiReport(response.document, candidate);
-            return { status: report ? "SUCCESS" as const : "PARSE_ERROR" as const, report };
+            return { candidate, status: report ? "SUCCESS" as const : "PARSE_ERROR" as const, report };
           } catch {
-            return { status: "PARSE_ERROR" as const, report: null };
+            return { candidate, status: "PARSE_ERROR" as const, report: null };
           }
         });
         for (const entry of fetched) {
           if (entry.status === "SUCCESS" && entry.report) continue;
+          failedReads.set(entry.candidate.sourceId, entry.status === "PARSE_ERROR" ? "UNREADABLE" : "UNAVAILABLE");
           errors += 1;
           firstDetailFailure ??= entry.status;
           if (entry.status === "PARSE_ERROR") parseErrors += 1;
@@ -1283,6 +1408,7 @@ export const synchronizePapEspi = async ({
             if (saved.created) createdCount += 1;
           } catch (error) {
             errors += 1;
+            failedReads.set(report.sourceId, "NOT_SAVED");
             diagnose({ provider: PAP_SOURCE, phase: "store", sourceId: report.sourceId, error: error instanceof Error ? error.name : "unknown" });
           }
         }
@@ -1300,7 +1426,7 @@ export const synchronizePapEspi = async ({
       }
     };
 
-    if (officialSourcesAvailable && overlapDue) {
+    if (officialSourcesAvailable && walkPlan) {
       // The walk takes long. Its reports are stored beside it: waiting would let new publications
       // move the list under it.
       let queuedUpTo = 0;
@@ -1319,9 +1445,9 @@ export const synchronizePapEspi = async ({
 
       // Date-specific GPW filtering is useful but has historically omitted an
       // occasional non-session day. Page overlap is therefore the completeness
-      // guard: it walks until reaching the full WZA repair horizon, instead of
-      // the old fixed first three pages.
-      const officialRepairFrom = addDays(today, -ESPI_OFFICIAL_REPAIR_DAYS);
+      // guard: it walks until reaching the date the plan sets, instead of the
+      // old fixed first three pages.
+      const walkFrom = walkPlan.from;
       for (const source of availableOfficialSources) {
         const seenPageIds = new Set(candidates
           .filter((candidate) => candidate.sourceId.startsWith(`${source.sourcePrefix}:`))
@@ -1377,7 +1503,7 @@ export const synchronizePapEspi = async ({
             .sort()[0];
           if (
             parsedPage.listedRows < 50 ||
-            (oldest && oldest < officialRepairFrom)
+            (oldest && oldest < walkFrom)
           ) break;
         }
         for (let date = overlapFrom; date <= today; date = addDays(date, 1)) {
@@ -1427,14 +1553,14 @@ export const synchronizePapEspi = async ({
           }
         }
       }
+      const endedAt = new Date().toISOString();
       if (overlapSucceeded) {
-        lastOverlapAt = new Date().toISOString();
-        await execute(
-          `INSERT INTO espi_sync_state (source, status, next_backfill_page, backfill_complete, last_success_at, created_at, updated_at)
-           VALUES ($1, 'SUCCESS', 1, TRUE, $2, $2, $2) ON CONFLICT (source) DO NOTHING`,
-          [ESPI_FULL_WALK_MARKER, lastOverlapAt]
-        );
+        lastOverlapAt = endedAt;
+        if (walkPlan.kind === "full") await stampSyncRow(ESPI_FULL_WALK_MARKER, "last_success_at", endedAt);
+      } else {
+        await stampSyncRow(ESPI_WALK_FAILURE_ROW, "last_checked_at", endedAt);
       }
+      walkEnded = true;
     }
 
     // Preserve the bounded PAP archive bootstrap for installations which have
@@ -1482,6 +1608,14 @@ export const synchronizePapEspi = async ({
     // Whatever the walk has not stored yet, and the daily re-reading of recent reports.
     await storing;
     await storeCandidates(candidates, true);
+    if (walkPlan && walkEnded) {
+      try {
+        await recordEspiCompleteness({ plan: walkPlan, walkComplete: overlapSucceeded, seen: candidates, failedReads });
+      } catch (error) {
+        // The check only reports. If it cannot, the administrator sees that no check arrived.
+        console.warn(`[ESPI CHECK] failed: ${error instanceof Error ? error.name : "unknown"}`);
+      }
+    }
     const uniqueCandidates = new Set(candidates.map((candidate) => candidate.sourceId)).size;
     skippedExisting = uniqueCandidates - attempted;
     let metadataChanges = 0;
@@ -1545,6 +1679,11 @@ export const synchronizePapEspi = async ({
   } catch (error) {
     // The lock stays held until the reports already queued are stored.
     await storing;
+    // A walk broken off by an error waits like a failed one before it is tried again. One cut off
+    // by a restart leaves nothing behind, so it starts again at once.
+    if (walkPlan && !walkEnded) {
+      await stampSyncRow(ESPI_WALK_FAILURE_ROW, "last_checked_at", new Date().toISOString()).catch(() => undefined);
+    }
     await releaseSyncLock({
       token,
       status,

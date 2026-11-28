@@ -52,7 +52,7 @@ export const getAnnouncedDividendDays = (text: string, fromDate: string) => {
     const date = match[1] ? toIso(match[3]!, MONTH_NUMBERS.get(match[2]!)!, match[1])
       : match[4] ? toIso(match[6]!, Number(match[5]), match[4]) : toIso(match[7]!, Number(match[8]), match[9]!);
     const between = flat.slice(Math.max(previousEnd, start - 160), start);
-    const isDividend = DIVIDEND_DAY_WORDS.test(between) ||
+    const isDividend: boolean = DIVIDEND_DAY_WORDS.test(between) ||
       (previousWasDividend && /^[\s,;]*(?:r\.|roku)?[\s,;]*(?:i|oraz|a|,)?\s*$/u.test(flat.slice(previousEnd, start)));
     previousEnd = start + match[0].length;
     previousWasDividend = isDividend;

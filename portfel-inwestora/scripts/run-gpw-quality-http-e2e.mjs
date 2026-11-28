@@ -99,7 +99,9 @@ const startServer = async (base) => {
   server = spawn(process.execPath,
     [nextBinary, "start", "--hostname", "127.0.0.1", "--port", String(listenerPort)],
     { cwd: appRoot, env: { ...process.env, DATABASE_URL: databaseUrl,
-      POSTGRES_CA_CERT_BASE64: "", POSTGRES_CA_CERT_PATH: "", NEXT_TELEMETRY_DISABLED: "1" },
+      POSTGRES_CA_CERT_BASE64: "", POSTGRES_CA_CERT_PATH: "", NEXT_TELEMETRY_DISABLED: "1",
+      // The test reads its own rows; the server must not fetch real reports beside it.
+      MEXO_ESPI_SCHEDULER: "off" },
       stdio: ["ignore", "pipe", "pipe"] });
   server.stdout.resume();
   server.stderr.resume();

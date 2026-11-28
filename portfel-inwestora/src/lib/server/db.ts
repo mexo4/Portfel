@@ -679,6 +679,8 @@ const schemaStatements = [
     )
   `,
   "ALTER TABLE espi_sync_state ADD COLUMN IF NOT EXISTS last_overlap_at TEXT",
+  // The result of a completeness check, on the row that is kept for it.
+  "ALTER TABLE espi_sync_state ADD COLUMN IF NOT EXISTS details TEXT",
   `
     CREATE TABLE IF NOT EXISTS portfolio_engine_cache (
       "key" TEXT PRIMARY KEY,

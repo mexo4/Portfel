@@ -211,7 +211,7 @@ test("the archive walk ends by all listed rows: ESPI alone does not fill a NewCo
   assert.equal(walk.match(/parsedPage\.listedRows === 0\) break/g).length, 2);
   assert.equal(walk.match(/parsedPage\.listedRows < 50/g).length, 2);
   assert.doesNotMatch(walk, /eligibleRows/);
-  assert.match(walk, /!\(await queryOne\("SELECT 1 AS done FROM espi_sync_state WHERE source = \$1", \[ESPI_FULL_WALK_MARKER\]\)\)/);
+  assert.match(walk, /\[\[ESPI_FULL_WALK_MARKER, ESPI_WALK_FAILURE_ROW\]\]/);
 });
 
 test("periodic report classification wins over incidental dividend words in its body", () => {

@@ -4529,6 +4529,45 @@ textarea {
   grid-template-columns: 100px 88px minmax(0, 1fr) minmax(140px, auto);
 }
 
+/* Reports missing from the ESPI lists: which one on the left, why on the right. */
+.espi-missing-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.espi-missing-list li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  border: 1px solid rgba(20, 35, 48, 0.08);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.82);
+  overflow-wrap: anywhere;
+}
+
+.espi-missing-list li > div {
+  display: grid;
+  gap: 4px;
+}
+
+.espi-missing-list a {
+  color: var(--text);
+  font-weight: 700;
+  text-decoration: underline;
+}
+
+@media (max-width: 640px) {
+  .espi-missing-list li {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+  }
+}
+
 .admin-subtitle {
   margin: 0 0 12px;
   color: var(--text);

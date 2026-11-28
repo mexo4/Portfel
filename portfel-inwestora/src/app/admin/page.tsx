@@ -2,10 +2,12 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import AdminEspiCompleteness from "@/components/AdminEspiCompleteness";
 import AdminGpwCalendarHealth from "@/components/AdminGpwCalendarHealth";
+import AdminGpwCalendarIntegrity from "@/components/AdminGpwCalendarIntegrity";
 import AdminUsersPanel from "@/components/AdminUsersPanel";
 import { getAdminDashboardData } from "@/lib/server/admin";
 import { getEspiCompletenessChecks } from "@/lib/server/espi";
 import { getGpwCalendarHealth } from "@/lib/server/gpw-calendar-health";
+import { getGpwCalendarIntegrity } from "@/lib/server/gpw-calendar-integrity";
 
 export const dynamic = "force-dynamic";
 
@@ -19,6 +21,7 @@ export default async function AdminPage() {
   // Read-only and optional: the admin panel must keep working when the calendar tables cannot be read.
   const calendarHealth = await getGpwCalendarHealth().catch(() => null);
   const espiChecks = await getEspiCompletenessChecks().catch(() => null);
+  const calendarIntegrity = await getGpwCalendarIntegrity().catch(() => null);
 
   return (
     <main className="page-shell">
@@ -77,6 +80,8 @@ export default async function AdminPage() {
         {espiChecks ? <AdminEspiCompleteness checks={espiChecks} /> : null}
 
         {calendarHealth ? <AdminGpwCalendarHealth health={calendarHealth} /> : null}
+
+        {calendarIntegrity ? <AdminGpwCalendarIntegrity integrity={calendarIntegrity} /> : null}
 
         <AdminUsersPanel users={dashboard.users} currentUserId={dashboard.currentUserId} />
       </div>

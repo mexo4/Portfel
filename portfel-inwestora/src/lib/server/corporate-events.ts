@@ -1884,6 +1884,9 @@ const REPORT_SCHEDULE_CANDIDATE_SQL = `(
   OR report.source_title ILIKE '%dat%publikacj%raport%' OR report.title ILIKE '%dat%publikacj%raport%'
   OR report.source_title ILIKE '%dat%przekazywan%raport%' OR report.title ILIKE '%dat%przekazywan%raport%'
   OR report.source_title ILIKE '%termin%przekazywan%raport%' OR report.title ILIKE '%termin%przekazywan%raport%'
+  /* "Zmiana daty przekazania raportu…", "Zmiana publikacji raportu okresowego": both left unread before 28.11.2026. */
+  OR report.source_title ILIKE '%dat%przekazan%raport%' OR report.title ILIKE '%dat%przekazan%raport%'
+  OR report.source_title ILIKE '%zmian%publikacj%raport%' OR report.title ILIKE '%zmian%publikacj%raport%'
   OR ${REPORT_SCHEDULE_BODY_SQL} ~* '(rapor(t|c)|sprawozdan|financial statement).{0,180}(zostanie|będzie|bedzie|will).{0,60}(opublikowan|przekazan|publish).{0,120}[0-9]{1,2}.{0,40}20[0-9]{2}'
   OR ${REPORT_SCHEDULE_BODY_SQL} ~* '(planowan|przewidywan|termin).{0,80}(publikacj|przekazan).{0,80}(rapor(t|c)|sprawozdan).{0,160}(przypada|wynosi|jest|zostanie|będzie|bedzie).{0,80}[0-9]{1,2}.{0,40}20[0-9]{2}'
 )`;

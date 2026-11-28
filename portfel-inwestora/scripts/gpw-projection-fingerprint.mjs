@@ -38,7 +38,7 @@ const canonical = (value) => {
   return value;
 };
 
-/** The fixed documents: the reference corpus, the three prospective holdouts and the wrapped-row filings. */
+/** The fixed documents: the reference corpus, the three prospective holdouts, the wrapped-row filings and the notices behind the faults of 28.11.2026. */
 export const loadProjectionCorpus = async () => {
   const fixtures = pathToFileURL(path.join(root, "tests", "fixtures") + path.sep).href;
   const sets = [
@@ -47,6 +47,8 @@ export const loadProjectionCorpus = async () => {
     ["holdout-E", "gpw-prospective-holdout-E-2026-10-24.mjs", "gpwProspectiveHoldoutE", "parserInput"],
     ["holdout-F", "gpw-prospective-holdout-F-2026-10-24.mjs", "gpwProspectiveHoldoutF", "parserInput"],
     ["wrapped", "gpw-wrapped-schedule-rows-2026-11-18.mjs", "gpwWrappedScheduleRows", "text"],
+    ["changes", "gpw-calendar-faults-2026-11-28.mjs", "gpwReportDateChanges", "text"],
+    ["dividends", "gpw-calendar-faults-2026-11-28.mjs", "gpwDividendNotices", "text"],
   ];
   const documents = [];
   for (const [group, file, exportName, field] of sets) {

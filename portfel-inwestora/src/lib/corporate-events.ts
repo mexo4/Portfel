@@ -2716,6 +2716,82 @@ const parseDirectReportScheduleCorrectionEvents = (text: string): ParsedCorporat
   return [...events.values()];
 };
 
+/*
+ * The words right before a date say whether a change notice gives it as the new appointment or the one
+ * it replaces. Each pattern ends where the date starts, so the nearest words decide. Measured on 121
+ * real change notices of 2026: the date-pair lanes above read nothing from 24 and the old date from 7.
+ */
+const NEW_DATE_CUES = [
+  // "zostanie opublikowany (do publicznej wiadomości) (w dniu)", "będzie przekazany na dzień"
+  /\b(?:zostan\p{L}*|będ\p{L}*)\s+(?:on\s+)?(?:opublikowan|przekazan|podan)\p{L}*(?:\s+do\s+(?:publicznej\s+)?(?:wiadomości|informacji)(?:\s+publicznej)?)?\s*(?:w\s+dniu|dnia|na\s+dzień)?\s*$/iu,
+  // "opublikowany zostanie w dniu"
+  /\b(?:opublikowan|przekazan)\p{L}*\s+zostan\p{L}*\s*(?:w\s+dniu|dnia)?\s*$/iu,
+  // "Nowy termin … wyznaczono na", "nową datą publikacji … będzie dzień", "Nowy termin publikacji raportów:"
+  /\bnow\p{L}*\s+(?:termin|dat)\p{L}*[^.]{0,200}?(?:\bna\s+(?:dzień\s+)?|\bto\s*:?\s*|\bjest\s+(?:dzień\s+)?|\bbędzie\s+(?:dzień\s+)?|:\s*)$/iu,
+  // "Aktualnie planowany termin publikacji to"
+  /\baktualn\p{L}*\s+(?:planowan\p{L}*\s+)?(?:termin|dat)\p{L}*[^.]{0,120}?(?:\bto\s*:?\s*|\bjest\s+(?:dzień\s+)?|:\s*)$/iu,
+  // "zostaje zmieniona na dzień", "o przesunięciu terminu publikacji … na dzień"
+  /\b(?:zmienion\p{L}*|przesuni\p{L}*|przesunięci\p{L}*[^.]{0,160}?)\s+na\s+(?:dzień\s+)?$/iu,
+  // "o zmianie terminu przekazania … na dzień", "o zmianie na dzień"
+  /\bzmian\p{L}*\s+(?:(?:terminu|daty)[^.]{0,220}?\s)?na\s+(?:dzień\s+)?$/iu,
+];
+const OLD_DATE_CUES = [
+  // "a nie 18 listopada", "a nie jak wcześniej planowano 29 września", "a nie w dniu"
+  /\ba\s+nie\s+(?:jak\s+(?:wcześniej\s+)?(?:planowano|wskazano)\s+)?(?:w\s+dniu\s+|dnia\s+)?$/iu,
+  /\bzamiast\s+(?:w\s+dniu\s+|dnia\s+)?$/iu,
+  // "miał zostać przekazany do publicznej wiadomości w dniu", "miał być opublikowany w dniu"
+  /\bmia\p{L}*\s+(?:zostać\s+|być\s+)?(?:opublikowan|przekazan|podan)\p{L}*[^.]{0,120}?(?:w\s+dniu|dnia|na\s+dzień)\s*$/iu,
+  /\bmia\p{L}*\s+(?:zostać|być)\s+(?:opublikowan|przekazan)\p{L}*\s*$/iu,
+  // "którego publikacja miała nastąpić w dniu"
+  /\bmia\p{L}*\s+nastąpić\s+(?:w\s+dniu|dnia)\s*$/iu,
+  // "pierwotna data … była ustalona na dzień", "Dotychczasowy termin … przypadał na", "była uprzednio ustalona na dzień"
+  /\b(?:pierwotn|dotychczasow|uprzedni|wcześniej|poprzedni|zadeklarowan)\p{L}*[^.]{0,200}?(?:\bna\s+(?:dzień\s+)?|\bbył\p{L}*\s+(?:dzień\s+)?|\bto\s*:?\s*|:\s*)$/iu,
+  // "planowana była na dzień", "określony był na dzień", "został określony na"
+  /\b(?:planowan\p{L}*\s+był\p{L}*|był\p{L}*\s+planowan\p{L}*|określon\p{L}*\s+był\p{L}*|był\p{L}*\s+(?:określon|ustalon|wyznaczon)\p{L}*|został\p{L}*\s+określon\p{L}*)\s+na\s+(?:dzień\s+)?$/iu,
+];
+/** A period boundary ("za okres zakończony 30 września"), not an appointment. */
+const PERIOD_BOUNDARY_BEFORE = /\b(?:zakończon\p{L}*|kończąc\p{L}*\s+się|od|do|okres\p{L}*\s+od)\s+(?:dnia\s+)?$/iu;
+
+export type ReportDateChangeCues = { newDate: string; oldDates: string[]; sentence: string; context: string };
+
+/** The one new appointment a change notice gives, and the dates it says were replaced. */
+export const getReportDateChangeCues = (noticeText: string): ReportDateChangeCues | null => {
+  const bodyStart = noticeText.search(/Treść\s+raportu\s*:?/iu);
+  const fromBody = bodyStart >= 0 ? noticeText.slice(bodyStart) : noticeText;
+  const bodyEnd = fromBody.slice(20).search(/\bPodstawa\s+prawna|Nazwa\s+arkusza|PODPISY\s+OSÓB/iu);
+  // A dot before a lowercase word ends an abbreviation ("ww. raportu", "2026 r. na dzień"), not a sentence.
+  const body = (bodyEnd >= 0 ? fromBody.slice(0, bodyEnd + 20) : fromBody).replace(/\s+/g, " ").replace(/\.(?=\s*\p{Ll})/gu, "");
+  const newDates = new Map<string, { sentence: string; context: string }>();
+  const oldDates = new Map<string, boolean>();
+  for (const match of body.matchAll(new RegExp(UNICODE_DATE_PATTERN.source, UNICODE_DATE_PATTERN.flags))) {
+    const date = getIsoDateFromMatch(match);
+    if (!date) continue;
+    const start = match.index ?? 0;
+    const boundary = Math.max(...Array.from(body.slice(0, start).matchAll(/\.\s+(?=\p{Lu})/gu)).map((item) => (item.index ?? 0) + 1), 0);
+    const before = body.slice(boundary, start);
+    if (PERIOD_BOUNDARY_BEFORE.test(before)) continue;
+    // When words of both kinds lead to the date, the nearer ones decide ("Stanowi to zmianę terminu …,
+    // który … został określony na 26 listopada": the replaced date, PCF).
+    const nearest = (cues: RegExp[]) => Math.max(-1, ...cues.map((cue) => cue.exec(before)?.index ?? -1));
+    const newAt = nearest(NEW_DATE_CUES);
+    const oldAt = nearest(OLD_DATE_CUES);
+    const isNew = newAt >= 0 && newAt > oldAt;
+    const isOld = oldAt >= 0 && oldAt > newAt;
+    // The report is named in the sentence of the date or in the one or two before it.
+    const after = match[0].endsWith(".") ? "" : body.slice(start + match[0].length).split(/\.\s+(?=\p{Lu})/u)[0];
+    if (isNew && !isOld) newDates.set(date, {
+      sentence: `${before}${match[0]}${after}`,
+      context: `${body.slice(Math.max(0, boundary - 300), start)}${match[0]}${after}`,
+    });
+    if (isOld && !isNew) oldDates.set(date, /\bpierwotn/iu.test(before));
+  }
+  const candidates = [...newDates.keys()].filter((date) => !oldDates.has(date));
+  if (candidates.length !== 1) return null;
+  // The date the calendar most likely still holds comes first: a later one rather than the original.
+  const ordered = [...oldDates].sort((left, right) => Number(left[1]) - Number(right[1])).map(([date]) => date);
+  return { newDate: candidates[0]!, oldDates: ordered, ...newDates.get(candidates[0]!)! };
+};
+
 /** "Zmiana terminu …", "Zmiana daty publikacji …", "nowy termin publikacji": the document moves an appointment. */
 const CHANGE_NOTICE_PATTERN = /\bzmian(?:a|y|ie|ę)\s+(?:harmonogramu\s+)?(?:terminu|dat\p{L}*\s+(?:publikacji|przekazania))\b|\bnowy termin(?: publikacji)?\b/iu;
 
@@ -2849,6 +2925,44 @@ export const parseCorporateEventDocument = (document: string): ParsedCorporateEv
         for (const event of rows) {
           const row = { ...event, isScheduleChange: titledAsChange };
           events.set(getCorporateEventIdentityKey(row), row);
+        }
+      }
+    }
+    // The words around each date: they read notices the lanes above miss, and they correct a lane
+    // that took the replaced date for the new one ("Nowy termin … wyznaczony na dzień 17 listopada.
+    // Data … była uprzednio ustalona na dzień 26 listopada", REINO).
+    const cues = getReportDateChangeCues(noticeText);
+    if (cues) {
+      const reportEvents = [...events.entries()].filter(([, event]) => isReportType(event.eventType));
+      const title = text.split("\n").slice(0, 3).join(" ");
+      if (reportEvents.length === 0) {
+        // A wider passage that names several reports ("raportów rocznych … oraz raportu kwartalnego") does
+        // not say which one the date belongs to.
+        const namesOneReport = (value: string) =>
+          // "(?<!\p{L})": \b would see a word start in "półrocznego" after the "ł".
+          [/półrocz/iu, /(?<!\p{L})roczn\p{L}*|(?<!\p{L})raport\p{L}*\s+za\s+rok/iu, /kwartał|kwartaln/iu].filter((pattern) => pattern.test(value)).length <= 1;
+        const source = [cues.sentence, cues.context, title]
+          .find((value, index) => isReportType(getEventType(value)) && (index === 0 || namesOneReport(value)));
+        const type = source ? getEventType(source) : null;
+        if (source && isReportType(type)) {
+          const other = source === title ? cues.sentence : title;
+          const fiscalYearLabel = getFiscalYearLabel(source) ?? getFiscalYearLabel(other);
+          const event: ParsedCorporateEvent = {
+            eventType: type,
+            eventDate: cues.newDate,
+            ...(cues.oldDates[0] ? { previousEventDate: cues.oldDates[0] } : {}),
+            fiscalPeriod: getFiscalPeriod(source, type) ?? getFiscalPeriod(other, type),
+            fiscalYear: fiscalYearLabel ? Number(fiscalYearLabel.slice(-4)) : undefined,
+            ...(fiscalYearLabel?.includes("/") ? { fiscalYearLabel } : {}),
+            isScheduleChange: true,
+            sourceEvidence: cues.context,
+          };
+          events.set(getCorporateEventIdentityKey(event), event);
+        }
+      } else if (reportEvents.length === 1) {
+        const [key, found] = reportEvents[0]!;
+        if (found.eventDate !== cues.newDate && cues.oldDates.includes(found.eventDate)) {
+          events.set(key, { ...found, eventDate: cues.newDate, previousEventDate: found.eventDate, isScheduleChange: true });
         }
       }
     }

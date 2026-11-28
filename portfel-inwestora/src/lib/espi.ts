@@ -400,8 +400,9 @@ export const parseGpwEspiList = (
 };
 
 /*
- * Only a number with a sequence ("5/2026") says which report this is. GPW gives periodic reports
- * just the year ("/2026"), so every quarterly report of a company in a year carries the same one.
+ * Only a number with a sequence ("5/2026") helps to recognise a copy of a report on another
+ * channel. GPW gives periodic reports just the year ("/2026"). No number names one publication on
+ * its own: companies use a full one again for a correction, a translation or another report.
  * The same pattern is used in JavaScript and in PostgreSQL.
  */
 export const ESPI_OWN_NUMBER_PATTERN = "[0-9] ?/ ?20[0-9]{2}";

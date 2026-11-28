@@ -607,26 +607,26 @@ const resolveEspiIssuer = async (report: Pick<ParsedPapEspiReport, "issuerName" 
 };
 
 /*
- * Which stored report is the same filing. A report with its own number is identified by it. Without
- * one, only a copy from another channel, published in the same minute, is the same filing: two
- * records of one channel are two publications.
+ * Which stored report is the same filing. Every entry of one channel's list is a publication of
+ * its own: companies use even a full number again, for a correction, a translation or a different
+ * report. Only a copy on another channel is the same filing: under the same full number, published
+ * within a few minutes, or without such a number, in the same minute.
  */
-const sameFilingSql = ({ hasOwn, minute, family }: { hasOwn: string; minute: string; family: string }) =>
-  `(${hasOwn}::boolean OR (LEFT(published_at, 16) = ${minute} AND split_part(source_id, ':', 1) <> ${family}))`;
+const ESPI_COPY_WINDOW_SECONDS = 600;
+const sameFilingSql = ({ family, publishedAt, hasOwn }: { family: string; publishedAt: string; hasOwn: string }) =>
+  `(split_part(source_id, ':', 1) <> ${family} AND CASE WHEN ${hasOwn}::boolean
+     THEN ABS(EXTRACT(EPOCH FROM (published_at::timestamptz - ${publishedAt}::timestamptz))) <= ${ESPI_COPY_WINDOW_SECONDS}
+     ELSE LEFT(published_at, 16) = LEFT(${publishedAt}::text, 16) END)`;
 
 /*
- * A GPW attachment belongs to one publication. Before periodic reports were told apart, a later
- * report could leave its files on an earlier one, so storing a report takes its files back.
+ * An attachment belongs to one publication. While different reports were taken for one, a later
+ * one could leave its files on an earlier one, so storing a report takes its files back. Only a
+ * repeat of the same text may list them too.
  */
 const reclaimAttachmentsSql = `
   DELETE FROM espi_report_attachments
   WHERE source_url = ANY($1::text[]) AND espi_report_id <> $2
-    AND espi_report_id IN (
-      -- Every other publication; a copy from another channel in the same minute keeps its files.
-      SELECT id FROM espi_reports
-      WHERE NOT (LEFT(published_at, 16) = $3 AND split_part(source_id, ':', 1) <> $4)
-        AND COALESCE(report_number, '') !~ $5
-    )
+    AND espi_report_id IN (SELECT id FROM espi_reports WHERE body_text <> $3)
 `;
 
 const upsertEspiReport = async (report: ParsedPapEspiReport) => {
@@ -646,7 +646,7 @@ const upsertEspiReport = async (report: ParsedPapEspiReport) => {
            AND report_number IS NOT DISTINCT FROM $5
            AND report_type = $6
            AND is_correction = $7
-           AND ${sameFilingSql({ hasOwn: "$9", minute: "$10", family: "$11" })}
+           AND ${sameFilingSql({ family: "$9", publishedAt: "$10", hasOwn: "$11" })}
          )
          OR (
            $8::text IS NOT NULL
@@ -654,7 +654,7 @@ const upsertEspiReport = async (report: ParsedPapEspiReport) => {
            AND report_number IS NOT DISTINCT FROM $5
            AND report_type = $6
            AND is_correction = $7
-           AND ${sameFilingSql({ hasOwn: "$9", minute: "$10", family: "$11" })}
+           AND ${sameFilingSql({ family: "$9", publishedAt: "$10", hasOwn: "$11" })}
          )
       ORDER BY
         CASE WHEN source = $1 AND source_id = $2 THEN 0 ELSE 1 END,
@@ -675,9 +675,9 @@ const upsertEspiReport = async (report: ParsedPapEspiReport) => {
       report.reportType,
       report.isCorrection,
       issuer?.id ?? null,
-      hasOwnEspiReportNumber(report.reportNumber),
-      report.publishedAt.slice(0, 16),
       getEspiSourceFamily(report.sourceId),
+      report.publishedAt,
+      hasOwnEspiReportNumber(report.reportNumber),
     ]
   );
   const now = new Date().toISOString();
@@ -808,8 +808,7 @@ const upsertEspiReport = async (report: ParsedPapEspiReport) => {
     }
     if (report.attachments.length > 0) {
       await transaction.execute(reclaimAttachmentsSql, [
-        report.attachments.map((attachment) => attachment.sourceUrl), id,
-        report.publishedAt.slice(0, 16), getEspiSourceFamily(report.sourceId), ESPI_OWN_NUMBER_PATTERN,
+        report.attachments.map((attachment) => attachment.sourceUrl), id, report.body,
       ]);
     }
   });
@@ -889,12 +888,10 @@ const getStoredSourceState = async (candidates: PapEspiListCandidate[]) => {
         return false;
       }
 
-      // A formal report number is unique for an issuer and year. GPW and PAP
-      // may publish the same report a minute apart, so the source timestamp is
-      // only needed when the report has no number of its own.
-      return hasOwnEspiReportNumber(candidate.reportNumber) ||
-        (getEspiSourceFamily(row.source_id) !== getEspiSourceFamily(candidate.sourceId) &&
-          normalizeIso(row.published_at).slice(0, 16) === candidate.sourcePublishedAt!.slice(0, 16));
+      // A copy on a lower channel need not be read when the better one is stored. A GPW
+      // publication is always read: only its own id says that it is stored.
+      return getEspiSourcePriority(row.source_id) < getEspiSourcePriority(candidate.sourceId) &&
+        normalizeIso(row.published_at).slice(0, 16) === candidate.sourcePublishedAt!.slice(0, 16);
     });
     if (naturalMatch) stored.add(candidate.sourceId);
   }
@@ -2524,43 +2521,38 @@ export const getEspiFeed = async ({
         )
         AND preferred.report_type = report.report_type
         AND preferred.is_correction = report.is_correction
+        AND preferred.report_number IS NOT DISTINCT FROM report.report_number
         AND (
+          -- A copy on a better channel stands for the report.
           (
-            report.report_number ~ '${ESPI_OWN_NUMBER_PATTERN}'
-            AND preferred.report_number = report.report_number
-          )
-          OR (
-            COALESCE(report.report_number, '') !~ '${ESPI_OWN_NUMBER_PATTERN}'
-            AND preferred.report_number IS NOT DISTINCT FROM report.report_number
-            AND split_part(preferred.source_id, ':', 1) <> split_part(report.source_id, ':', 1)
-            AND LEFT(preferred.published_at, 16) = LEFT(report.published_at, 16)
-            AND LOWER(preferred.title) = LOWER(report.title)
-          )
-        )
-        AND (
-          CASE
-            WHEN preferred.source_id LIKE 'gpw:%' THEN 0
-            WHEN preferred.source_id LIKE 'newconnect:%' THEN 1
-            ELSE 2
-          END
-          <
-          CASE
-            WHEN report.source_id LIKE 'gpw:%' THEN 0
-            WHEN report.source_id LIKE 'newconnect:%' THEN 1
-            ELSE 2
-          END
-          OR (
             CASE
               WHEN preferred.source_id LIKE 'gpw:%' THEN 0
               WHEN preferred.source_id LIKE 'newconnect:%' THEN 1
               ELSE 2
             END
-            =
+            <
             CASE
               WHEN report.source_id LIKE 'gpw:%' THEN 0
               WHEN report.source_id LIKE 'newconnect:%' THEN 1
               ELSE 2
             END
+            AND (
+              (
+                report.report_number ~ '${ESPI_OWN_NUMBER_PATTERN}'
+                AND ABS(EXTRACT(EPOCH FROM (preferred.published_at::timestamptz - report.published_at::timestamptz))) <= ${ESPI_COPY_WINDOW_SECONDS}
+              )
+              OR (
+                LEFT(preferred.published_at, 16) = LEFT(report.published_at, 16)
+                AND LOWER(preferred.title) = LOWER(report.title)
+              )
+            )
+          )
+          -- On one channel only an exact repeat is hidden: two entries are two publications.
+          OR (
+            split_part(preferred.source_id, ':', 1) = split_part(report.source_id, ':', 1)
+            AND preferred.published_at = report.published_at
+            AND preferred.title = report.title
+            AND preferred.body_text = report.body_text
             AND preferred.id < report.id
           )
         )

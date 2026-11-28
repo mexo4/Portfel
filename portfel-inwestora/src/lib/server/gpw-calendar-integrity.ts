@@ -1,6 +1,7 @@
 import { isSubsidiaryOnlyDividendNotice } from "@/lib/corporate-events";
 import {
   getAnnouncedDividendDays,
+  isAdvanceNoticeText,
   noticeStatesDate,
   type GpwCalendarIntegrity,
   type IntegrityReportMismatch,
@@ -50,10 +51,17 @@ export const getGpwCalendarIntegrity = async (): Promise<GpwCalendarIntegrity> =
   );
   const knownDays = new Set(dividendDays.map((row) => `${row.instrument_id}|${row.day}`));
   const checkedNotices = notices.filter((notice) => !isSubsidiaryOnlyDividendNotice(notice.text));
-  // Only the latest notice naming a day speaks for it; an older one may have been changed since.
+  // Newest first. A dividend notice speaks for the issuer's dividend until a later one: a general meeting
+  // may change the dates a recommendation gave. Advances do not replace each other (two advances taken
+  // for one is the fault this check exists for), so every advance notice is checked.
   const claimed = new Set<string>();
+  const laterDividendNotice = new Set<string>();
   const missing = checkedNotices.flatMap((notice) => {
-    const days = getAnnouncedDividendDays(notice.text, today).filter((day) => !claimed.has(`${notice.issuer_id}|${day}`));
+    const isAdvance = isAdvanceNoticeText(notice.text);
+    const allDays = getAnnouncedDividendDays(notice.text, today);
+    if (!isAdvance && laterDividendNotice.has(notice.issuer_id)) return [];
+    if (!isAdvance && allDays.length > 0) laterDividendNotice.add(notice.issuer_id);
+    const days = allDays.filter((day) => !claimed.has(`${notice.issuer_id}|${day}`));
     days.forEach((day) => claimed.add(`${notice.issuer_id}|${day}`));
     const absent = days.filter((day) => !knownDays.has(`${notice.issuer_id}|${day}`));
     return absent.length > 0

@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   assessGpwCalendarIntegrity,
   getAnnouncedDividendDays,
+  isAdvanceNoticeText,
   noticeStatesDate,
   polishCount,
 } from "../src/lib/gpw-calendar-integrity.ts";
@@ -20,6 +21,13 @@ test("the integrity check finds each dividend and payment day of the real divide
       }
     }
   }
+});
+
+test("advance notices are told apart by their words", () => {
+  const advances = gpwDividendNotices.filter((entry) => entry.expected.some(([identity]) => identity.includes(":advance:")));
+  assert.ok(advances.length > 0);
+  for (const entry of advances) assert.equal(isAdvanceNoticeText(entry.text), true, entry.id);
+  assert.equal(isAdvanceNoticeText("Zwyczajne Walne Zgromadzenie postanowiło przeznaczyć zysk na wypłatę dywidendy."), false);
 });
 
 test("each published dividend's own notice states its dates", () => {
@@ -63,8 +71,12 @@ test("the assessment names each kind of fault and stays quiet when there is none
   };
   const assessment = assessGpwCalendarIntegrity(faulty);
   assert.equal(assessment.level, "ATTENTION");
-  assert.equal(assessment.findings.length, 4);
+  assert.equal(assessment.findings.length, 3);
   assert.match(assessment.findings[0], /^Dywidendy: 1 komunikat podaje /);
+  assert.equal(assessment.findings[2], "Raporty: tylko 10 z 20 wyszło w dniu z kalendarza.");
+  // A late filer alone, or a quiet month with few filings, raises no alarm.
+  assert.equal(assessGpwCalendarIntegrity({ ...clean, reports: { ...clean.reports, onCalendarDay: 18, notInCalendar: [report] } }).level, "OK");
+  assert.equal(assessGpwCalendarIntegrity({ ...clean, reports: { ...clean.reports, published: 6, onCalendarDay: 2 } }).level, "OK");
 });
 
 test("counts take the right Polish form", () => {

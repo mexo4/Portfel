@@ -62,7 +62,10 @@ export const getAnnouncedDividendDays = (text: string, fromDate: string) => {
   return [...days].sort();
 };
 
-export type IntegrityDividendMissing = { issuer: string; sourceUrl: string; publishedAt: string; days: string[] };
+/** A notice about an advance on a dividend, by its words alone ("zaliczka", "interim dividend"). */
+export const isAdvanceNoticeText = (text: string) => /zaliczk|interim dividend/u.test(flatten(text));
+
+export type IntegrityDividendMissing ={ issuer: string; sourceUrl: string; publishedAt: string; days: string[] };
 export type IntegrityDividendUnsupported = {
   issuer: string; recordDate: string | null; paymentDate: string | null; sourceUrl: string;
 };
@@ -87,8 +90,13 @@ export type GpwCalendarIntegrity = {
   };
 };
 
-/** Below this share of reports out on the calendar's day the report dates need a look. */
-const REPORT_DAY_SHARE_EXPECTED = 0.9;
+/**
+ * Below this share of reports out on the calendar's day the report dates need a look. On 28.11.2026 the
+ * production calendar had 357 of 392 filings of the last 60 days (91%) on its day.
+ */
+const REPORT_DAY_SHARE_EXPECTED = 0.85;
+/** Too few filings (between reporting seasons) say nothing about the share. */
+const REPORT_SHARE_MIN_FILINGS = 20;
 
 /** Polish count forms: 1 komunikat, 2–4 komunikaty, 5 komunikatów (and 12–14 like 5). */
 export const polishCount = (count: number, one: string, few: string, many: string) => {
@@ -107,11 +115,10 @@ export const assessGpwCalendarIntegrity = (integrity: GpwCalendarIntegrity) => {
   if (dividends.unsupported.length > 0) {
     findings.push(`Dywidendy: ${polishCount(dividends.unsupported.length, "wpis w kalendarzu wskazuje", "wpisy w kalendarzu wskazują", "wpisów w kalendarzu wskazuje")} komunikat bez swoich dat (możliwe sklejenie dwóch wypłat).`);
   }
-  if (reports.published > 0 && reports.onCalendarDay / reports.published < REPORT_DAY_SHARE_EXPECTED) {
+  // Some companies always file late or after midnight, and some never announce a date: those stay in
+  // the lists below without raising the alarm. Only a drop of the whole share does.
+  if (reports.published >= REPORT_SHARE_MIN_FILINGS && reports.onCalendarDay / reports.published < REPORT_DAY_SHARE_EXPECTED) {
     findings.push(`Raporty: tylko ${reports.onCalendarDay} z ${reports.published} wyszło w dniu z kalendarza.`);
-  }
-  if (reports.notInCalendar.length > 0) {
-    findings.push(`Raporty: ${polishCount(reports.notInCalendar.length, "opublikowany raport nie miał", "opublikowane raporty nie miały", "opublikowanych raportów nie miało")} terminu w kalendarzu.`);
   }
   return { level: findings.length === 0 ? ("OK" as const) : ("ATTENTION" as const), findings };
 };

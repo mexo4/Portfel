@@ -49,24 +49,24 @@ export default function AdminEspiCompleteness({ checks }: { checks: EspiComplete
       ) : null}
 
       {ordered.filter((check) => check.missing.length > 0).map((check) => (
-        <div key={check.kind}>
-          <h3 className="admin-subtitle mt-6">
+        <div key={check.kind} className="mt-6">
+          <h3 className="admin-subtitle">
             Brakujące raporty: {check.kind === "full" ? "12 miesięcy" : "ostatnie dni"}
             {check.missingCount > check.missing.length ? ` (pierwsze ${check.missing.length} z ${check.missingCount})` : ""}
           </h3>
-          <div className="admin-transaction-list">
+          <ul className="espi-missing-list">
             {check.missing.map((report) => (
-              <div key={report.sourceId} className="admin-transaction-row">
+              <li key={report.sourceId}>
                 <div>
                   <a href={report.sourceUrl} target="_blank" rel="noreferrer noopener">
                     {report.issuerName}{report.reportNumber ? ` · ${report.reportNumber}` : ""}
                   </a>
-                  <p className="field-note">{formatTime(report.publishedAt)}</p>
+                  <span className="field-note">{formatTime(report.publishedAt)}</span>
                 </div>
-                <p className="field-note">{ESPI_MISSING_REASONS[report.reason]}</p>
-              </div>
+                <span className="field-note">{ESPI_MISSING_REASONS[report.reason]}</span>
+              </li>
             ))}
-          </div>
+          </ul>
         </div>
       ))}
     </section>

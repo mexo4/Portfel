@@ -53,47 +53,53 @@ export default function AdminGpwCalendarIntegrity({ integrity }: { integrity: Gp
       </div>
 
       {dividends.missing.length > 0 ? (
-        <>
-          <h3 className="admin-subtitle mt-6">Daty dywidend z komunikatów, których nie ma w kalendarzu</h3>
-          <div className="admin-transaction-list">
+        <div className="mt-6">
+          <h3 className="admin-subtitle">Daty dywidend z komunikatów, których nie ma w kalendarzu</h3>
+          <ul className="espi-missing-list">
             {dividends.missing.map((row) => (
-              <div key={row.sourceUrl} className="admin-transaction-row">
-                <a href={row.sourceUrl} target="_blank" rel="noreferrer noopener">{row.issuer}</a>
-                <p className="field-note">komunikat z {row.publishedAt.slice(0, 10)} · brak dni: {row.days.join(", ")}</p>
-              </div>
+              <li key={row.sourceUrl}>
+                <div>
+                  <a href={row.sourceUrl} target="_blank" rel="noreferrer noopener">{row.issuer}</a>
+                  <span className="field-note">komunikat z {row.publishedAt.slice(0, 10)}</span>
+                </div>
+                <span className="field-note">brak w kalendarzu: {row.days.join(", ")}</span>
+              </li>
             ))}
-          </div>
-        </>
+          </ul>
+        </div>
       ) : null}
 
       {dividends.unsupported.length > 0 ? (
-        <>
-          <h3 className="admin-subtitle mt-6">Dywidendy wskazujące komunikat bez ich dat</h3>
-          <div className="admin-transaction-list">
+        <div className="mt-6">
+          <h3 className="admin-subtitle">Dywidendy wskazujące komunikat bez ich dat</h3>
+          <ul className="espi-missing-list">
             {dividends.unsupported.map((row) => (
-              <div key={`${row.sourceUrl}-${row.recordDate}-${row.paymentDate}`} className="admin-transaction-row">
-                <a href={row.sourceUrl} target="_blank" rel="noreferrer noopener">{row.issuer}</a>
-                <p className="field-note">dzień dywidendy {row.recordDate ?? "—"} · wypłata {row.paymentDate ?? "—"}</p>
-              </div>
+              <li key={`${row.sourceUrl}-${row.recordDate}-${row.paymentDate}`}>
+                <div>
+                  <a href={row.sourceUrl} target="_blank" rel="noreferrer noopener">{row.issuer}</a>
+                </div>
+                <span className="field-note">dzień dywidendy {row.recordDate ?? "—"} · wypłata {row.paymentDate ?? "—"}</span>
+              </li>
             ))}
-          </div>
-        </>
+          </ul>
+        </div>
       ) : null}
 
       {reportRows.length > 0 ? (
-        <>
-          <h3 className="admin-subtitle mt-6">Raporty opublikowane poza dniem z kalendarza</h3>
-          <div className="admin-transaction-list">
+        <div className="mt-6">
+          <h3 className="admin-subtitle">Raporty opublikowane poza dniem z kalendarza</h3>
+          <ul className="espi-missing-list">
             {reportRows.map((row) => (
-              <div key={row.sourceUrl} className="admin-transaction-row">
-                <a href={row.sourceUrl} target="_blank" rel="noreferrer noopener">{row.issuer}</a>
-                <p className="field-note">
-                  raport {REPORT_TYPE_LABELS[row.reportType] ?? row.reportType} opublikowany {row.publishedOn} · {row.label}
-                </p>
-              </div>
+              <li key={row.sourceUrl}>
+                <div>
+                  <a href={row.sourceUrl} target="_blank" rel="noreferrer noopener">{row.issuer}</a>
+                  <span className="field-note">raport {REPORT_TYPE_LABELS[row.reportType] ?? row.reportType} opublikowany {row.publishedOn}</span>
+                </div>
+                <span className="field-note">{row.label}</span>
+              </li>
             ))}
-          </div>
-        </>
+          </ul>
+        </div>
       ) : null}
     </section>
   );

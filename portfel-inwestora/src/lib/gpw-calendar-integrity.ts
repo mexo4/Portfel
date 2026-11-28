@@ -87,23 +87,31 @@ export type GpwCalendarIntegrity = {
   };
 };
 
-/** Below this share of reports out on the calendar's day the report dates need a look (95% measured on 28.11.2026). */
+/** Below this share of reports out on the calendar's day the report dates need a look. */
 const REPORT_DAY_SHARE_EXPECTED = 0.9;
+
+/** Polish count forms: 1 komunikat, 2–4 komunikaty, 5 komunikatów (and 12–14 like 5). */
+export const polishCount = (count: number, one: string, few: string, many: string) => {
+  const lastTwo = count % 100;
+  const last = count % 10;
+  const form = count === 1 ? one : last >= 2 && last <= 4 && (lastTwo < 12 || lastTwo > 14) ? few : many;
+  return `${count} ${form}`;
+};
 
 export const assessGpwCalendarIntegrity = (integrity: GpwCalendarIntegrity) => {
   const findings: string[] = [];
   const { dividends, reports } = integrity;
   if (dividends.missing.length > 0) {
-    findings.push(`Dywidendy: ${dividends.missing.length} ${dividends.missing.length === 1 ? "komunikat podaje" : "komunikatów podaje"} przyszły dzień dywidendy lub wypłaty, którego nie ma w kalendarzu.`);
+    findings.push(`Dywidendy: ${polishCount(dividends.missing.length, "komunikat podaje", "komunikaty podają", "komunikatów podaje")} przyszły dzień dywidendy lub wypłaty, którego nie ma w kalendarzu.`);
   }
   if (dividends.unsupported.length > 0) {
-    findings.push(`Dywidendy: ${dividends.unsupported.length} wpisów w kalendarzu wskazuje komunikat, w którym nie ma ich dat (możliwe sklejenie dwóch wypłat).`);
+    findings.push(`Dywidendy: ${polishCount(dividends.unsupported.length, "wpis w kalendarzu wskazuje", "wpisy w kalendarzu wskazują", "wpisów w kalendarzu wskazuje")} komunikat bez swoich dat (możliwe sklejenie dwóch wypłat).`);
   }
   if (reports.published > 0 && reports.onCalendarDay / reports.published < REPORT_DAY_SHARE_EXPECTED) {
     findings.push(`Raporty: tylko ${reports.onCalendarDay} z ${reports.published} wyszło w dniu z kalendarza.`);
   }
   if (reports.notInCalendar.length > 0) {
-    findings.push(`Raporty: ${reports.notInCalendar.length} opublikowanych raportów nie miało terminu w kalendarzu.`);
+    findings.push(`Raporty: ${polishCount(reports.notInCalendar.length, "opublikowany raport nie miał", "opublikowane raporty nie miały", "opublikowanych raportów nie miało")} terminu w kalendarzu.`);
   }
   return { level: findings.length === 0 ? ("OK" as const) : ("ATTENTION" as const), findings };
 };

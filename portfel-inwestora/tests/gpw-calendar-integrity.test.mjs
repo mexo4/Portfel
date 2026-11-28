@@ -4,6 +4,7 @@ import {
   assessGpwCalendarIntegrity,
   getAnnouncedDividendDays,
   noticeStatesDate,
+  polishCount,
 } from "../src/lib/gpw-calendar-integrity.ts";
 import { gpwDividendNotices } from "./fixtures/gpw-calendar-faults-2026-11-28.mjs";
 
@@ -63,4 +64,13 @@ test("the assessment names each kind of fault and stays quiet when there is none
   const assessment = assessGpwCalendarIntegrity(faulty);
   assert.equal(assessment.level, "ATTENTION");
   assert.equal(assessment.findings.length, 4);
+  assert.match(assessment.findings[0], /^Dywidendy: 1 komunikat podaje /);
+});
+
+test("counts take the right Polish form", () => {
+  assert.equal(polishCount(1, "raport", "raporty", "raportów"), "1 raport");
+  assert.equal(polishCount(3, "raport", "raporty", "raportów"), "3 raporty");
+  assert.equal(polishCount(12, "raport", "raporty", "raportów"), "12 raportów");
+  assert.equal(polishCount(22, "raport", "raporty", "raportów"), "22 raporty");
+  assert.equal(polishCount(25, "raport", "raporty", "raportów"), "25 raportów");
 });

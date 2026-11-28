@@ -69,7 +69,8 @@ export const getGpwCalendarIntegrity = async (): Promise<GpwCalendarIntegrity> =
      JOIN corporate_event_instruments AS issuer ON issuer.id = event.instrument_id AND issuer.market = 'GPW'
      JOIN LATERAL (
        SELECT evidence.source_url FROM corporate_event_sources AS evidence
-       WHERE evidence.corporate_event_id = event.id AND evidence.source_url LIKE 'https://%'
+       WHERE evidence.corporate_event_id = event.id
+       -- The same choice as the public calendar's shown link (getStoredEvents in corporate-events.ts).
        ORDER BY (evidence.confirms_amount::int + evidence.confirms_record_date::int +
                  evidence.confirms_payment_date::int + evidence.confirms_status::int) DESC,
                 evidence.source_priority DESC, evidence.source_published_at DESC NULLS LAST, evidence.discovered_at DESC

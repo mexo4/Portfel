@@ -195,3 +195,18 @@ test("a missing period or an invalid date is never published, whatever the year 
     eventDate: "2026-02-30", requiresReview: true, reviewReasons: ["REPORT_PERIOD_MAY_BE_OVERDUE"] }], context);
   assert.equal(badDay[0].publish, false);
 });
+
+test("a change notice moves a row stored without its year when it stands on the notice's previous date", () => {
+  // Syn2bio (financial year October-September): "raport roczny za rok finansowy 2025" on 3 December 2026 was
+  // published without its year; the notice moving it to 17 December has the same contradiction.
+  const context = { sourcePublishedAt: "2026-11-24T08:58:18.000Z" };
+  const change = { eventType: "ANNUAL_REPORT", fiscalPeriod: "FY", fiscalYear: 2025, eventDate: "2026-12-17",
+    previousEventDate: "2026-12-03", isScheduleChange: true, requiresReview: true, reviewReasons: ["REPORT_PERIOD_MAY_BE_OVERDUE"] };
+  const [moved] = assessReportPublicationBatch([change], { ...context, knownRows: [{ identity: "ANNUAL_REPORT:FY:", date: "2026-12-03" }] });
+  assert.deepEqual([moved.publish, moved.yearWithdrawn, moved.event.fiscalYear, moved.event.eventDate], [true, true, undefined, "2026-12-17"]);
+  // the yearless row stands on another day: nothing confirms the change
+  assert.equal(assessReportPublicationBatch([change], { ...context, knownRows: [{ identity: "ANNUAL_REPORT:FY:", date: "2026-12-10" }] })[0].publish, false);
+  // a change that names no year at all is not confirmed this way either
+  const noYear = { ...change, fiscalYear: undefined, reviewReasons: ["FISCAL_YEAR_NOT_EXPLICIT"] };
+  assert.equal(assessReportPublicationBatch([noYear], { ...context, knownRows: [{ identity: "ANNUAL_REPORT:FY:", date: "2026-12-03" }] })[0].publish, false);
+});

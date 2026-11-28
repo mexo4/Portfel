@@ -6,7 +6,9 @@
 
 const POLISH_MONTHS = ["stycznia", "lutego", "marca", "kwietnia", "maja", "czerwca", "lipca", "sierpnia", "września", "października", "listopada", "grudnia"];
 const ENGLISH_MONTHS = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
-const MONTH_NUMBERS = new Map([...POLISH_MONTHS, ...ENGLISH_MONTHS].map((name, index) => [name, (index % 12) + 1]));
+/** "21 wrzesień 2026" (Bumech Defense Partners): some issuers write the month in the nominative. */
+const POLISH_MONTHS_NOMINATIVE = ["styczeń", "luty", "marzec", "kwiecień", "maj", "czerwiec", "lipiec", "sierpień", "wrzesień", "październik", "listopad", "grudzień"];
+const MONTH_NUMBERS = new Map([...POLISH_MONTHS, ...ENGLISH_MONTHS, ...POLISH_MONTHS_NOMINATIVE].map((name, index) => [name, (index % 12) + 1]));
 
 const flatten = (text: string) => text.toLocaleLowerCase("pl-PL").replace(/\s+/g, " ");
 
@@ -19,6 +21,7 @@ export const noticeStatesDate = (text: string, isoDate: string) => {
   return [
     isoDate, `${dd}.${mm}.${year}`, `${day}.${mm}.${year}`, `${dd}-${mm}-${year}`, `${dd}/${mm}/${year}`,
     `${day} ${POLISH_MONTHS[month - 1]} ${year}`, `${dd} ${POLISH_MONTHS[month - 1]} ${year}`,
+    `${day} ${POLISH_MONTHS_NOMINATIVE[month - 1]} ${year}`, `${dd} ${POLISH_MONTHS_NOMINATIVE[month - 1]} ${year}`,
     `${day} ${ENGLISH_MONTHS[month - 1]} ${year}`, `${ENGLISH_MONTHS[month - 1]} ${day}, ${year}`,
   ].some((form) => {
     // "5.01.2027" must not be found inside "15.01.2027".
@@ -29,7 +32,7 @@ export const noticeStatesDate = (text: string, isoDate: string) => {
   });
 };
 
-const DATE_IN_TEXT = /(\d{1,2})\s+(stycznia|lutego|marca|kwietnia|maja|czerwca|lipca|sierpnia|września|października|listopada|grudnia)\s+(20\d\d)|(\d{1,2})[.\-/](\d{1,2})[.\-/](20\d\d)|(20\d\d)-(\d\d)-(\d\d)/gu;
+const DATE_IN_TEXT = /(\d{1,2})\s+(stycznia|lutego|marca|kwietnia|maja|czerwca|lipca|sierpnia|września|października|listopada|grudnia|styczeń|luty|marzec|kwiecień|maj|czerwiec|lipiec|sierpień|wrzesień|październik|listopad|grudzień)\s+(20\d\d)|(\d{1,2})[.\-/](\d{1,2})[.\-/](20\d\d)|(20\d\d)-(\d\d)-(\d\d)/gu;
 /** Words that put a date to a dividend: its payment, its dividend day, who is entitled. */
 const DIVIDEND_DAY_WORDS = /(?:wypłat|wyplat|wypłacon|dzień dywidendy|dnia dywidendy|dniem dywidendy|uprawnion|uprawnien|ustalenia praw|nabycia praw|record date|payment date)/u;
 

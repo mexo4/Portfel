@@ -114,3 +114,12 @@ test("a change still ahead that the calendar did not take raises the alarm; a pa
   const open = assessGpwCalendarIntegrity(withChanges([change("NOT_APPLIED", true), change("DATE_NOT_IN_NOTICE", true)]));
   assert.deepEqual(open.findings, ["Raporty: 2 zmiany terminów przed publikacją nie są poprawnie w kalendarzu."]);
 });
+
+test("dates written with the month in the nominative count too", async () => {
+  const { getDatesInText } = await import("../src/lib/gpw-calendar-integrity.ts");
+  const text = "- Skonsolidowany raport półroczny za I półrocze 2026 roku - 21 wrzesień 2026 r. - raport kwartalny za III kwartał 2026 roku - 04 listopad 2026 r.";
+  assert.deepEqual(getDatesInText(text, "2026-09-09"), ["2026-09-21", "2026-11-04"]);
+  assert.equal(noticeStatesDate(text, "2026-11-04"), true);
+  // "maj" inside "majątek" is not a month.
+  assert.deepEqual(getDatesInText("dnia 5 maja 2026 r. i 5 maj 2026 r.", "2026-01-01"), ["2026-05-05"]);
+});

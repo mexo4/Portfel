@@ -22,7 +22,8 @@
  * 14: "I kw. 2026" names the first quarter (DGA, REINO); "Zmiana terminów …" is a change notice too, and its
  * full list of new dates replaces the old ones instead of colliding with them (Bumech Defense Partners); one
  * new date for several reports named with their periods moves each (Tower Investments); "raportów okresowych
- * w roku obrotowym 2026" is no longer taken for the moved report's year.
+ * w roku obrotowym 2026" is no longer taken for the moved report's year; a change notice moves a row stored
+ * without its year when it stands on the notice's previous date (Syn2bio, financial year October–September).
  */
 export const REPORT_SCHEDULE_PROJECTION_VERSION = 14;
 

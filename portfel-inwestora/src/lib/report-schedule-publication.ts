@@ -111,6 +111,24 @@ export function assessReportPublicationBatch(
         };
       }
     }
+    // A change notice that moves a row the calendar holds without its year (its schedule contradicted the year:
+    // Syn2bio's financial year runs October to September, so "raport roczny za rok finansowy 2025" comes in
+    // December 2026): the stored yearless row on the notice's previous date is that report. Move it, still
+    // without the year, instead of leaving the replaced date in the calendar.
+    if (unique.length > 0 && isReport(event) && event.isScheduleChange && !event.isCancellation &&
+      event.fiscalPeriod && (event.fiscalYear || event.fiscalYearLabel) && event.previousEventDate && isValidIsoDay(event.eventDate) &&
+      unique.every((reason) => YEAR_CONTRADICTION_REASONS.has(reason) && reason !== "FISCAL_YEAR_NOT_EXPLICIT") &&
+      reportsByTypePeriod.get(`${event.eventType}:${event.fiscalPeriod}`) === 1) {
+      const yearless = { ...event, fiscalYear: undefined, fiscalYearLabel: undefined };
+      if (knownKeys.has(`${getCorporateEventIdentityKey(yearless)}:${event.previousEventDate}`)) {
+        return {
+          event: { ...yearless, requiresReview: true, reviewReasons: unique },
+          publish: true,
+          reasons: unique,
+          yearWithdrawn: true,
+        };
+      }
+    }
     if (unique.length > 0 && isReport(event) && event.fiscalPeriod && !event.isScheduleChange && !event.isCancellation &&
       unique.every((reason) => YEAR_CONTRADICTION_REASONS.has(reason)) &&
       announcedOn && event.eventDate >= announcedOn &&

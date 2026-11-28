@@ -19,8 +19,12 @@
  * 13: change notices are also read by the words in front of each date ("zostanie opublikowany 26 listopada … a nie
  * 18 listopada", "Aktualnie planowany termin publikacji to …"); of 121 notices of 2026 the earlier lanes read nothing
  * from 24 and the replaced date from 7 (Gobarto, Krynica Vitamin, REINO, ZREMB).
+ * 14: "I kw. 2026" names the first quarter (DGA, REINO); "Zmiana terminów …" is a change notice too, and its
+ * full list of new dates replaces the old ones instead of colliding with them (Bumech Defense Partners); one
+ * new date for several reports named with their periods moves each (Tower Investments); "raportów okresowych
+ * w roku obrotowym 2026" is no longer taken for the moved report's year.
  */
-export const REPORT_SCHEDULE_PROJECTION_VERSION = 13;
+export const REPORT_SCHEDULE_PROJECTION_VERSION = 14;
 
 /**
  * 9: the parser changed after version 8 was set (24.10.2026 16:47) without a bump; on the 78-document corpus the

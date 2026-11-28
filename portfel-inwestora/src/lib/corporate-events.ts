@@ -337,9 +337,11 @@ const normalizeDocumentText = (value: string) =>
     .replace(/\r/g, "")
     .replace(/[ \t]+/g, " ")
     .replace(/ *\n */g, "\n")
+    // "raportu za I kw. 2026 r." (DGA): the abbreviation names the quarter like "I kwartał 2026".
+    .replace(/(?<![\p{L}\d])(I{1,3}|IV|[1-4])\s?(?:kw|Kw|KW)\.(?=\s?(?:20\d{2}|roku\b|r\.))/gu, "$1 kwartał")
     .trim();
 
-const toIsoDate = (day: string, month: string, year: string) => {
+const toIsoDate =(day: string, month: string, year: string) => {
   const monthNumber = POLISH_MONTHS[month.toLocaleLowerCase("pl-PL")];
   const parsedDay = Number(day);
 
@@ -457,7 +459,11 @@ const expandShortFiscalYears = (value: string) =>
     `${first}/${first.slice(0, 2)}${second}`);
 
 const getFiscalYearLabel = (value: string) => {
-  const withoutCalendarComparison = expandShortFiscalYears(value).replace(/\([^)]*roku\s+kalendarzowego[^)]*\)/giu, " ");
+  const withoutCalendarComparison = expandShortFiscalYears(value)
+    .replace(/\([^)]*roku\s+kalendarzowego[^)]*\)/giu, " ")
+    // "w sprawie terminów publikacji raportów okresowych w roku obrotowym 2026" names the schedule's year,
+    // not the year of the report a change notice moves ("raportu rocznego za rok 2025", Tower Investments).
+    .replace(/\braport\p{L}*\s+okresow\p{L}*\s+(?:w|za|na)\s+rok\p{L}*\s+(?:obrotow|finansow)\p{L}*\s+20\d{2}(?:\s*\/\s*20\d{2})?/giu, " ");
   const financialYear = withoutCalendarComparison.match(/\b(?:za\s+)?roku?\s+(?:finansow\p{L}*|obrotow\p{L}*)\s+(20\d{2})(?:\s*[/–—-]\s*(20\d{2}))?/iu);
   if (financialYear?.[1]) return financialYear[2] ? `${financialYear[1]}/${financialYear[2]}` : financialYear[1];
   const endingYear = withoutCalendarComparison.match(/\broku?\s+obrotow\w*\s+kończąc\w*\s+się\s+(?:w\s+dniu\s+)?\d{1,2}\s+\p{L}+\s+(20\d{2})/iu)?.[1];
@@ -2793,7 +2799,9 @@ export const getReportDateChangeCues = (noticeText: string): ReportDateChangeCue
 };
 
 /** "Zmiana terminu …", "Zmiana daty publikacji …", "nowy termin publikacji": the document moves an appointment. */
-const CHANGE_NOTICE_PATTERN = /\bzmian(?:a|y|ie|ę)\s+(?:harmonogramu\s+)?(?:terminu|dat\p{L}*\s+(?:publikacji|przekazania))\b|\bnowy termin(?: publikacji)?\b/iu;
+// "Zmiana terminów publikacji i zakresów raportów" (Bumech Defense Partners) moves reports too: read as an
+// ordinary schedule, its new dates only collided with the old ones and the calendar kept the old.
+const CHANGE_NOTICE_PATTERN = /\bzmian(?:a|y|ie|ę)\s+(?:harmonogramu\s+)?(?:termin(?:u|ów)|dat\p{L}*\s+(?:publikacji|przekazania))(?!\p{L})|\bnowy termin(?: publikacji)?\b/iu;
 
 /** "nr 8/2026 z dnia 30 stycznia 2026 roku" → "nr 8/2026": the date of a cited current report is not an appointment. */
 const stripReportCitationDates = (value: string) =>
@@ -2806,6 +2814,46 @@ const stripReportCitationDates = (value: string) =>
     /(\b(?:rozporządzeni\p{L}*|ustaw\p{L}*)[^.\n,;:]{0,40}?)\s+z\s+(?:dnia\s+)?(?:\d{1,2}\s+\p{L}+\s+20\d{2}|\d{1,2}[.\-/]\d{1,2}[.\-/]20\d{2})(?:\s*(?:roku|r)\.?)?/giu,
     "$1"
   );
+
+const NAMED_REPORT_PATTERN = new RegExp(
+  String.raw`(?<!\p{L})raport\p{L}*\s+(roczn|kwartaln|półroczn|śródroczn)\p{L}*((?:\s+\p{L}+){0,3}?)\s+za\s+` +
+  String.raw`(?:(I{1,3}|IV)\s+kwartał\p{L}*\s+|(I)\s+półrocz\p{L}*\s+|rok\p{L}*\s+(?:obrotow\p{L}*\s+)?)?(20\d{2})(?!\s*\/)`,
+  "giu"
+);
+const PERIOD_END: Record<string, string> = { Q1: "03-31", Q2: "06-30", Q3: "09-30", Q4: "12-31", H1: "06-30", FY: "12-31" };
+
+/**
+ * The reports a change notice names, each as "raport <rodzaj> za <okres> <rok>", when it gives one new date for
+ * all of them. Nothing when any naming is unclear (a second report kind in one phrase, a quarter without its
+ * number, a period that has not ended by the new date): a guess would put a wrong date in the calendar.
+ */
+const getNamedReportsOfOneDate = (noticeText: string, newDate: string, oldDates: string[]) => {
+  const bodyStart = noticeText.search(/treść\s+raportu/iu);
+  const fullBody = (bodyStart >= 0 ? noticeText.slice(bodyStart) : noticeText).replace(/\s+/g, " ");
+  // Only the reports named before the new date, with no date of their own on the way: an updated schedule
+  // that follows ("zaktualizowane terminy: raport roczny za 2025 rok - 30 marca 2026 r.", MCI) gives each
+  // report its own date and is no part of this change.
+  const dates = Array.from(fullBody.matchAll(UNICODE_DATE_PATTERN))
+    .map((match) => ({ date: getIsoDateFromMatch(match), at: match.index ?? 0 }));
+  const newDateAt = dates.find((entry) => entry.date === newDate)?.at;
+  if (newDateAt === undefined) return [];
+  if (dates.some((entry) => entry.at < newDateAt && entry.date && !oldDates.includes(entry.date))) return [];
+  const body = fullBody.slice(0, newDateAt);
+  const named = new Map<string, Pick<ParsedCorporateEvent, "eventType" | "fiscalPeriod" | "fiscalYear">>();
+  for (const match of body.matchAll(NAMED_REPORT_PATTERN)) {
+    const [, kind, between, quarter, half, year] = match;
+    if (/roczn|kwartaln|półroczn|śródroczn/iu.test(between ?? "")) return [];
+    const lower = kind!.toLocaleLowerCase("pl-PL");
+    const eventType: CorporateEventType = lower === "roczn" ? "ANNUAL_REPORT" : lower === "kwartaln" ? "QUARTERLY_REPORT" : "HALF_YEAR_REPORT";
+    const fiscalPeriod = eventType === "ANNUAL_REPORT" ? "FY"
+      : eventType === "HALF_YEAR_REPORT" ? (half || !quarter ? "H1" : undefined)
+        : quarter ? (["Q1", "Q2", "Q3", "Q4"] as const)[["I", "II", "III", "IV"].indexOf(quarter.toUpperCase())] : undefined;
+    if (!fiscalPeriod || (eventType === "ANNUAL_REPORT" && (quarter || half))) return [];
+    if (`${year}-${PERIOD_END[fiscalPeriod]}` >= newDate) return [];
+    named.set(`${eventType}:${fiscalPeriod}:${year}`, { eventType, fiscalPeriod, fiscalYear: Number(year) });
+  }
+  return named.size >= 2 ? [...named.values()] : [];
+};
 
 export const parseCorporateEventDocument = (document: string): ParsedCorporateEvent[] => {
   const text = normalizeDocumentText(document);
@@ -2920,7 +2968,12 @@ export const parseCorporateEventDocument = (document: string): ParsedCorporateEv
       const bodyDates = new Set(extractPolishDates(bodyStart >= 0 ? noticeText.slice(bodyStart) : noticeText));
       const rows = parseReportScheduleEvents(noticeText)
         .filter((event) => event.fiscalPeriod && event.fiscalYear && !event.requiresReview);
-      if (bodyDates.size === 1 || new Set(rows.map((row) => row.eventDate)).size >= 3) {
+      const rowDates = new Set(rows.map((row) => row.eventDate));
+      // Every date of the body is a row's own date: no replaced date is there to be taken for a new one
+      // ("terminy … przedstawiają się następująco: - raport półroczny … - 21 wrzesień 2026 r. - raport
+      // kwartalny za III kwartał 2026 roku - 04 listopad 2026 r.", Bumech Defense Partners).
+      const onlyRowDates = rows.length > 0 && [...bodyDates].every((date) => rowDates.has(date));
+      if (bodyDates.size === 1 || rowDates.size >= 3 || onlyRowDates) {
         const titledAsChange = CHANGE_NOTICE_PATTERN.test(text.split("\n").slice(0, 3).join(" "));
         for (const event of rows) {
           const row = { ...event, isScheduleChange: titledAsChange };
@@ -2958,11 +3011,35 @@ export const parseCorporateEventDocument = (document: string): ParsedCorporateEv
             sourceEvidence: cues.context,
           };
           events.set(getCorporateEventIdentityKey(event), event);
+        } else {
+          // "zmiany terminów publikacji raportów rocznych za rok 2025 … oraz raportu kwartalnego za I kwartał
+          // 2026 roku. Nowy termin publikacji raportów: 16 czerwca 2026" (Tower Investments): one new date for
+          // every report the notice names, when each is named with its own period and year.
+          for (const named of getNamedReportsOfOneDate(noticeText, cues.newDate, cues.oldDates)) {
+            const event: ParsedCorporateEvent = {
+              ...named,
+              eventDate: cues.newDate,
+              isScheduleChange: true,
+              sourceEvidence: cues.context,
+            };
+            events.set(getCorporateEventIdentityKey(event), event);
+          }
         }
       } else if (reportEvents.length === 1) {
         const [key, found] = reportEvents[0]!;
         if (found.eventDate !== cues.newDate && cues.oldDates.includes(found.eventDate)) {
           events.set(key, { ...found, eventDate: cues.newDate, previousEventDate: found.eventDate, isScheduleChange: true });
+        }
+        // The one report read is one of several the notice moves to the same new date: add the others.
+        const moved = events.get(key)!;
+        const named = moved.eventDate === cues.newDate ? getNamedReportsOfOneDate(noticeText, cues.newDate, cues.oldDates) : [];
+        if (named.some((report) => report.eventType === moved.eventType && report.fiscalPeriod === moved.fiscalPeriod &&
+          report.fiscalYear === moved.fiscalYear)) {
+          for (const report of named) {
+            const event: ParsedCorporateEvent = { ...report, eventDate: cues.newDate, isScheduleChange: true, sourceEvidence: cues.context };
+            const identity = getCorporateEventIdentityKey(event);
+            if (!events.has(identity)) events.set(identity, event);
+          }
         }
       }
     }

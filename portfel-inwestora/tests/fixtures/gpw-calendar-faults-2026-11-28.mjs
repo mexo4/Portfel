@@ -142,14 +142,14 @@ export const gpwReportDateChanges = [
   {
     "id": "gpw:500397",
     "issuer": "REINO CAPITAL SPÓŁKA AKCYJNA",
-    "note": "REINO: new date 17 November comes first, the old 26 November follows („uprzednio ustalona”)",
+    "note": "REINO: „za III kw. 2026 roku”, new date 17 November first, the old 26 November after („uprzednio ustalona”)",
     "expected": [
       [
         "QUARTERLY_REPORT",
         "2026-11-17",
-        null,
-        null,
-        true
+        "Q3",
+        "2026",
+        false
       ]
     ],
     "text": "REINO CAPITAL SPÓŁKA AKCYJNA (15/2026) Zmiana terminu publikacji raportu okresowego za III kw.2026 r.\nZmiana terminu publikacji raportu okresowego za III kw.2026 r.\nKOMISJA NADZORU FINANSOWEGO\n\nRaport bieżący nr\n15\n/\n2026\n\nData sporządzenia:\n2026-11-12\n\nSkrócona nazwa emitenta\n\nREINO CAPITAL SA\n\nTemat\n\nZmiana terminu publikacji raportu okresowego za III kw.2026 r.\n\nPodstawa prawna\n\nArt. 56 ust. 1 pkt 2 Ustawy o ofercie - informacje bieżące i okresowe\n\nTreść raportu:\n\nZarząd spółki REINO Capital S.A. _dalej jako \"Spółka\"_, w nawiązaniu do raportu bieżącego\nnr 1/2026 z dnia 16 stycznia br., informuje o zmianie terminu publikacji rozszerzonego\nskonsolidowanego raportu kwartalnego Grupy Kapitałowej REINO Capital S.A. za III kw.\n2026 roku.\n\nNowy termin publikacji rozszerzonego skonsolidowanego raportu kwartalnego za okres\n9 miesięcy zakończony 30 września 2026 roku został wyznaczony na dzień 17 listopada\n2026 roku.\n\nData publikacji wskazanego raportu była uprzednio ustalona na dzień 26 listopada 2026\nroku.\n\nPozostałe terminy i informacje wskazane w raporcie bieżącym nr 1/2026 na dzień publikacji\nniniejszego raportu nie ulegają zmianie.Podstawa prawna:\n§ 84 ust. 2 Rozporządzenia Ministra Finansów z dnia 29 marca 2018 r. w sprawie informacji\nbieżących i okresowych przekazywanych przez emitentów papierów wartościowych oraz\nwarunków uznawania za równoważne informacji wymaganych przepisami prawa państwa\nniebędącego państwem członkowskim"
@@ -1327,8 +1327,23 @@ export const gpwReportDateChanges = [
   {
     "id": "gpw:489946",
     "issuer": "TOWER INVESTMENTS SPÓŁKA AKCYJNA",
-    "note": "Tower Investments: one new date for several reports; no single report can be told, nothing is published",
-    "expected": [],
+    "note": "Tower Investments: one new date, 16 June, for the annual report 2025 and the Q1 2026 report, each named with its period",
+    "expected": [
+      [
+        "ANNUAL_REPORT",
+        "2026-06-16",
+        "FY",
+        "2025",
+        false
+      ],
+      [
+        "QUARTERLY_REPORT",
+        "2026-06-16",
+        "Q1",
+        "2026",
+        false
+      ]
+    ],
     "text": "TOWER INVESTMENTS SPÓŁKA AKCYJNA (16/2026) Zmiana terminów publikacji raportów okresowych\nZmiana terminów publikacji raportów okresowych\nKOMISJA NADZORU FINANSOWEGO\n\nRaport bieżący nr\n16\n/\n2026\n\nData sporządzenia:\n2026-05-27\n\nSkrócona nazwa emitenta\n\nTOWER INVESTMENTS S.A.\n\nTemat\n\nZmiana terminów publikacji raportów okresowych\n\nPodstawa prawna\n\nArt. 56 ust. 1 pkt 2 Ustawy o ofercie - informacje bieżące i okresowe\n\nTreść raportu:\n\nZarząd Tower Investments S.A. _\"Emitent\"_ w nawiązaniu do raportów bieżących 5/2026,\n12/2026 i 13/2026 dotyczących terminów publikacji raportów okresowych w 2026 roku\ninformuje, że z powodów technicznych zmuszony jest dokonać zmiany terminów publikacji\nraportów rocznych za rok 2025 wraz z korektą sprawozdań za rok 2024 i półrocze 2025\noraz publikacji raportu kwartalnego za I kwartał 2026 roku.\n\nNowy termin publikacji raportów: 16 czerwca 2026 roku."
   },
   {
@@ -1375,6 +1390,36 @@ export const gpwReportDateChanges = [
       ]
     ],
     "text": "TOWER INVESTMENTS SPÓŁKA AKCYJNA (15/2026) Zmiana terminu publikacji raportu kwartalnego\nZmiana terminu publikacji raportu kwartalnego\nKOMISJA NADZORU FINANSOWEGO\n\nRaport bieżący nr\n15\n/\n2026\n\nData sporządzenia:\n2026-05-21\n\nSkrócona nazwa emitenta\n\nTOWER INVESTMENTS S.A.\n\nTemat\n\nZmiana terminu publikacji raportu kwartalnego\n\nPodstawa prawna\n\nArt. 56 ust. 1 pkt 2 Ustawy o ofercie - informacje bieżące i okresowe\n\nTreść raportu:\n\nZarząd Tower Investments S.A. _Spółka_ w nawiązaniu do raportu bieżącego nr 5/2026\nz dnia 31 stycznia 2026 r. w sprawie terminów publikacji raportów okresowych w roku\nobrotowym 2026, informuje, że niniejszym dokonuje zmiany terminu publikacji raportu\nkwartalnego za I kwartał 2026 roku.\n\nZgodnie z treścią raportu bieżącego nr 5/2026 publikacja tego planowana była na dzień\n26 maja 2026 roku. Zarząd Spółki informuje, że nową datą publikacji raportu kwartalnego\nza I kwartał 2026 rok będzie dzień 31 maja 2026 r."
+  },
+  {
+    "id": "gpw:489665",
+    "issuer": "DGA SPÓŁKA AKCYJNA",
+    "note": "DGA: „raportu finansowego za I kw. 2026 r.”, 29 May changed to 1 June",
+    "expected": [
+      [
+        "QUARTERLY_REPORT",
+        "2026-06-01",
+        "Q1",
+        "2026",
+        false
+      ]
+    ],
+    "text": "DGA SPÓŁKA AKCYJNA (7/2026) Zmiana terminu publikacji raportu za I kw. 2026 r.\nZmiana terminu publikacji raportu za I kw. 2026 r.\nKOMISJA NADZORU FINANSOWEGO\n\nRaport bieżący nr\n7\n/\n2026\n\nData sporządzenia:\n2026-05-26\n\nSkrócona nazwa emitenta\n\nDGA\n\nTemat\n\nZmiana terminu publikacji raportu za I kw. 2026 r.\n\nPodstawa prawna\n\nArt. 56 ust. 1 pkt 2 Ustawy o ofercie - informacje bieżące i okresowe\n\nTreść raportu:\n\nW nawiązaniu do raportu bieżącego nr 1/2026 z dnia 30 stycznia 2026 roku, Zarząd DGA\nS.A. niniejszym informuje, iż zmianie ulega termin publikacji raportu finansowego\nza I kw. 2026 r. Data określona pierwotnie na dzień 29 maja 2026 r. zostaje zmieniona\nna dzień 1 czerwca 2026 roku."
+  },
+  {
+    "id": "gpw:487052",
+    "issuer": "TOWER INVESTMENTS SPÓŁKA AKCYJNA",
+    "note": "Tower Investments: annual report „za rok 2025”; „raportów okresowych w roku obrotowym 2026” is the schedule's year",
+    "expected": [
+      [
+        "ANNUAL_REPORT",
+        "2026-04-30",
+        "FY",
+        "2025",
+        false
+      ]
+    ],
+    "text": "TOWER INVESTMENTS SPÓŁKA AKCYJNA (12/2026) Zmiana terminu publikacji raportów rocznych za 2025 rok\nZmiana terminu publikacji raportów rocznych za 2025 rok\nKOMISJA NADZORU FINANSOWEGO\n\nRaport bieżący nr\n12\n/\n2026\n\nData sporządzenia:\n2026-04-23\n\nSkrócona nazwa emitenta\n\nTOWER INVESTMENTS S.A.\n\nTemat\n\nZmiana terminu publikacji raportów rocznych za 2025 rok\n\nPodstawa prawna\n\nArt. 56 ust. 1 pkt 2 Ustawy o ofercie - informacje bieżące i okresowe\n\nTreść raportu:\n\nZarząd Tower Investments S.A. _Spółka_ w nawiązaniu do raportu bieżącego nr 5/2026\nz dnia 31 stycznia 2026 r. w sprawie terminów publikacji raportów okresowych w roku\nobrotowym 2026, informuje, że niniejszym dokonuje zmiany terminu publikacji skonsolidowanego\ni jednostkowego raportu rocznego za rok 2025.\n\nZgodnie z treścią raportu bieżącego nr 5/2026 publikacja tych raportów planowana była\nna dzień 27 kwietnia 2026 roku. Zarząd Spółki informuje, że nową datą publikacji raportów\nrocznych za 2025 rok będzie dzień 30 kwietnia 2026 r."
   }
 ];
 

@@ -86,3 +86,31 @@ test("counts take the right Polish form", () => {
   assert.equal(polishCount(22, "raport", "raporty", "raportów"), "22 raporty");
   assert.equal(polishCount(25, "raport", "raporty", "raportów"), "25 raportów");
 });
+
+test("report date changes: titles, dates and what the calendar did with the notice", async () => {
+  const { classifyReportChange, getDatesInText, isReportDateChangeTitle } = await import("../src/lib/gpw-calendar-integrity.ts");
+  assert.equal(isReportDateChangeTitle("Zmiana terminu publikacji raportu za III kwartał 2026 roku"), true);
+  assert.equal(isReportDateChangeTitle("Zmiana terminów publikacji i zakresów raportów okresowych w roku 2026"), true);
+  assert.equal(isReportDateChangeTitle("Przesunięcie terminu przekazania raportu rocznego"), true);
+  assert.equal(isReportDateChangeTitle("Zmiana składu Zarządu"), false);
+  assert.equal(isReportDateChangeTitle("Terminy publikacji raportów okresowych w 2026 roku"), false);
+  const notice = "Pierwotnie wskazany termin publikacji na dzień 26 listopada 2026 roku został przesunięty na dzień 30 listopada 2026 roku.";
+  assert.deepEqual(getDatesInText(notice, "2026-10-26"), ["2026-11-26", "2026-11-30"]);
+  assert.equal(classifyReportChange(notice, ["2026-11-30"]), "APPLIED");
+  assert.equal(classifyReportChange(notice, ["2026-11-20"]), "DATE_NOT_IN_NOTICE");
+  assert.equal(classifyReportChange(notice, []), "NOT_APPLIED");
+});
+
+test("a change still ahead that the calendar did not take raises the alarm; a past one does not", () => {
+  const base = {
+    checkedAt: "2026-11-28T12:00:00.000Z",
+    dividends: { noticesChecked: 0, missing: [], eventsChecked: 0, unsupported: [] },
+    reports: { since: "2026-09-29", published: 0, onCalendarDay: 0, differentDay: [], notInCalendar: [] },
+  };
+  const change = (status, ahead) => ({ issuer: "Spółka Testowa", sourceUrl: `https://example.test/${status}${ahead}`, publishedAt: "2026-11-17T10:00:00Z",
+    title: "Zmiana terminu publikacji raportu", status, ahead, calendarRows: [], upcoming: [], noticeDates: [], projectionStatus: "REVIEW_REQUIRED" });
+  const withChanges = (list) => ({ ...base, reportChanges: { since: "2026-08-30", checked: list.length, applied: 0, list } });
+  assert.equal(assessGpwCalendarIntegrity(withChanges([change("NOT_APPLIED", false), change("APPLIED", true)])).level, "OK");
+  const open = assessGpwCalendarIntegrity(withChanges([change("NOT_APPLIED", true), change("DATE_NOT_IN_NOTICE", true)]));
+  assert.deepEqual(open.findings, ["Raporty: 2 zmiany terminów przed publikacją nie są poprawnie w kalendarzu."]);
+});

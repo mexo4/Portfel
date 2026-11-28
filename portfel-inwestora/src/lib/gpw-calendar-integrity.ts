@@ -62,6 +62,51 @@ export const getAnnouncedDividendDays = (text: string, fromDate: string) => {
   return [...days].sort();
 };
 
+/** Every date a text writes, from the given day on, sorted. */
+export const getDatesInText = (text: string, fromDate: string) => {
+  const days = new Set<string>();
+  for (const match of flatten(text).matchAll(DATE_IN_TEXT)) {
+    const date = match[1] ? toIso(match[3]!, MONTH_NUMBERS.get(match[2]!)!, match[1])
+      : match[4] ? toIso(match[6]!, Number(match[5]), match[4]) : toIso(match[7]!, Number(match[8]), match[9]!);
+    if (date >= fromDate) days.add(date);
+  }
+  return [...days].sort();
+};
+
+/** A title that announces a moved report date ("Zmiana terminu publikacji raportu…", "Przesunięcie terminu…"). */
+export const isReportDateChangeTitle = (title: string) => {
+  const flat = flatten(title);
+  return /(?:zmian|przesunię|przesunie|nowy|nowego|nowe)\p{L}*[\s\S]{0,60}(?:termin|dat|harmonogram)\p{L}*[\s\S]{0,100}(?:raport|sprawozda)/u.test(flat) ||
+    /(?:termin|dat)\p{L}*[\s\S]{0,60}(?:publikacj|przekazan)\p{L}*[\s\S]{0,80}raport\p{L}*[\s\S]{0,60}zmian/u.test(flat);
+};
+
+export type ReportChangeStatus = "APPLIED" | "DATE_NOT_IN_NOTICE" | "NOT_APPLIED";
+
+/**
+ * What the calendar did with a change notice: its rows that cite the notice, and whether their dates are
+ * written in it. A notice no row cites was not applied (unread, or held for review).
+ */
+export const classifyReportChange = (noticeText: string, linkedDates: string[]): ReportChangeStatus => {
+  if (linkedDates.length === 0) return "NOT_APPLIED";
+  return linkedDates.every((date) => noticeStatesDate(noticeText, date)) ? "APPLIED" : "DATE_NOT_IN_NOTICE";
+};
+
+export type IntegrityReportChange = {
+  issuer: string;
+  sourceUrl: string;
+  publishedAt: string;
+  title: string;
+  status: ReportChangeStatus;
+  /** A date the notice writes, or a date the calendar shows for the company, is still ahead. */
+  ahead: boolean;
+  /** The calendar's rows that cite the notice, as "Q3 2026: 2026-11-30". */
+  calendarRows: string[];
+  /** The company's next report dates in the calendar, whatever their source. */
+  upcoming: string[];
+  noticeDates: string[];
+  projectionStatus: string | null;
+};
+
 /** A notice about an advance on a dividend, by its words alone ("zaliczka", "interim dividend"). */
 export const isAdvanceNoticeText = (text: string) => /zaliczk|interim dividend/u.test(flatten(text));
 
@@ -87,6 +132,13 @@ export type GpwCalendarIntegrity = {
     onCalendarDay: number;
     differentDay: IntegrityReportMismatch[];
     notInCalendar: IntegrityReportMismatch[];
+  };
+  /** Report date change notices of the last 90 days, the latest per company, problems first. */
+  reportChanges?: {
+    since: string;
+    checked: number;
+    applied: number;
+    list: IntegrityReportChange[];
   };
 };
 
@@ -119,6 +171,11 @@ export const assessGpwCalendarIntegrity = (integrity: GpwCalendarIntegrity) => {
   // the lists below without raising the alarm. Only a drop of the whole share does.
   if (reports.published >= REPORT_SHARE_MIN_FILINGS && reports.onCalendarDay / reports.published < REPORT_DAY_SHARE_EXPECTED) {
     findings.push(`Raporty: tylko ${reports.onCalendarDay} z ${reports.published} wyszło w dniu z kalendarza.`);
+  }
+  // A change still ahead that the calendar did not take, or took with a date the notice does not write.
+  const openChanges = (integrity.reportChanges?.list ?? []).filter((change) => change.ahead && change.status !== "APPLIED");
+  if (openChanges.length > 0) {
+    findings.push(`Raporty: ${polishCount(openChanges.length, "zmiana terminu przed publikacją nie jest", "zmiany terminów przed publikacją nie są", "zmian terminów przed publikacją nie jest")} poprawnie w kalendarzu.`);
   }
   return { level: findings.length === 0 ? ("OK" as const) : ("ATTENTION" as const), findings };
 };

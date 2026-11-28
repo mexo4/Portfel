@@ -1,7 +1,10 @@
 import { isSubsidiaryOnlyDividendNotice } from "@/lib/corporate-events";
 import {
+  classifyReportChange,
   getAnnouncedDividendDays,
+  getDatesInText,
   isAdvanceNoticeText,
+  isReportDateChangeTitle,
   noticeStatesDate,
   type GpwCalendarIntegrity,
   type IntegrityReportMismatch,
@@ -144,5 +147,82 @@ export const getGpwCalendarIntegrity = async (): Promise<GpwCalendarIntegrity> =
       differentDay: differentDay.slice(0, LIST_LIMIT),
       notInCalendar: notInCalendar.slice(0, LIST_LIMIT),
     },
+    reportChanges: await getReportChanges(today),
+  };
+};
+
+const REPORT_CHANGE_DAYS = 90;
+const REPORT_CHANGE_LIST_LIMIT = 150;
+const PERIOD_LABELS: Record<string, string> = { QUARTERLY_REPORT: "kw.", HALF_YEAR_REPORT: "półr.", ANNUAL_REPORT: "rok" };
+const describeRow = (row: { event_type: string; fiscal_period: string | null; fiscal_year: number | null; event_date: string }) =>
+  `${row.fiscal_period ?? PERIOD_LABELS[row.event_type] ?? "?"} ${row.fiscal_year ?? "?"}: ${row.event_date}`;
+
+/** 4. Report date change notices: did the calendar take each one, with a date the notice writes? */
+const getReportChanges = async (today: string): Promise<NonNullable<GpwCalendarIntegrity["reportChanges"]>> => {
+  const since = daysAgo(REPORT_CHANGE_DAYS);
+  const candidates = await query<{ issuer_id: string; issuer_name: string; source_url: string; published_at: string;
+    title: string; text: string; projection_status: string | null }>(
+    `SELECT report.issuer_id, report.issuer_name, report.source_url, report.published_at, report.title,
+            report.source_title || E'\\n' || report.title || E'\\n' || report.body_text AS text,
+            report.report_schedule_projection_status AS projection_status
+     FROM espi_reports AS report
+     JOIN corporate_event_instruments AS issuer ON issuer.id = report.issuer_id AND issuer.market = 'GPW'
+     WHERE report.source = 'PAP_ESPI' AND report.published_at >= $1 AND report.is_correction = FALSE
+       AND report.report_type NOT IN ('PERIODIC_QUARTERLY', 'PERIODIC_HALF_YEAR', 'PERIODIC_ANNUAL')
+       AND (report.title ILIKE '%raport%' OR report.source_title ILIKE '%raport%'
+            OR report.title ILIKE '%sprawozda%' OR report.source_title ILIKE '%sprawozda%')
+       AND (report.title ~* '(zmian|przesuni|nowy|nowego|nowe)' OR report.source_title ~* '(zmian|przesuni|nowy|nowego|nowe)')
+     ORDER BY report.published_at DESC`,
+    [since]
+  );
+  // The latest change notice of each company speaks for its current dates.
+  const latest = new Map<string, (typeof candidates)[number]>();
+  for (const notice of candidates) {
+    if (!latest.has(notice.issuer_id) && (isReportDateChangeTitle(notice.title) || isReportDateChangeTitle(notice.text.split("\n")[0] ?? ""))) {
+      latest.set(notice.issuer_id, notice);
+    }
+  }
+  const notices = [...latest.values()];
+  if (notices.length === 0) return { since: warsawDay(since), checked: 0, applied: 0, list: [] };
+  const linked = await query<{ source_url: string; event_type: string; fiscal_period: string | null; fiscal_year: number | null; event_date: string }>(
+    `SELECT evidence.source_url, event.event_type, event.fiscal_period, event.fiscal_year, event.event_date
+     FROM corporate_event_sources AS evidence
+     JOIN corporate_events AS event ON event.id = evidence.corporate_event_id
+     WHERE evidence.source_url = ANY($1::text[]) AND event.active = TRUE AND event.status <> 'CANCELLED'
+       AND event.event_type IN ('QUARTERLY_REPORT', 'HALF_YEAR_REPORT', 'ANNUAL_REPORT')
+     ORDER BY event.event_date`,
+    [notices.map((notice) => notice.source_url)]
+  );
+  const upcoming = await query<{ instrument_id: string; event_type: string; fiscal_period: string | null; fiscal_year: number | null; event_date: string }>(
+    `SELECT instrument_id, event_type, fiscal_period, fiscal_year, event_date FROM corporate_events
+     WHERE active = TRUE AND status <> 'CANCELLED' AND instrument_id = ANY($1::text[]) AND event_date >= $2
+       AND event_type IN ('QUARTERLY_REPORT', 'HALF_YEAR_REPORT', 'ANNUAL_REPORT')
+     ORDER BY event_date`,
+    [notices.map((notice) => notice.issuer_id), today]
+  );
+  const list = notices.map((notice) => {
+    const rows = linked.filter((row) => row.source_url === notice.source_url);
+    const noticeDates = getDatesInText(notice.text, warsawDay(notice.published_at));
+    const next = upcoming.filter((row) => row.instrument_id === notice.issuer_id).slice(0, 2);
+    return {
+      issuer: notice.issuer_name,
+      sourceUrl: notice.source_url,
+      publishedAt: notice.published_at,
+      title: notice.title,
+      status: classifyReportChange(notice.text, rows.map((row) => row.event_date)),
+      ahead: noticeDates.some((date) => date >= today) || rows.some((row) => row.event_date >= today),
+      calendarRows: rows.map(describeRow),
+      upcoming: next.map(describeRow),
+      noticeDates,
+      projectionStatus: notice.projection_status,
+    };
+  });
+  const rank = (change: (typeof list)[number]) => (change.status === "APPLIED" ? 2 : 0) + (change.ahead ? 0 : 1);
+  list.sort((left, right) => rank(left) - rank(right) || right.publishedAt.localeCompare(left.publishedAt));
+  return {
+    since: warsawDay(since),
+    checked: list.length,
+    applied: list.filter((change) => change.status === "APPLIED").length,
+    list: list.slice(0, REPORT_CHANGE_LIST_LIMIT),
   };
 };

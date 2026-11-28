@@ -1,13 +1,50 @@
-import { assessGpwCalendarIntegrity, type GpwCalendarIntegrity } from "@/lib/gpw-calendar-integrity";
+import {
+  assessGpwCalendarIntegrity,
+  type GpwCalendarIntegrity,
+  type IntegrityReportChange,
+} from "@/lib/gpw-calendar-integrity";
 
 const REPORT_TYPE_LABELS: Record<string, string> = {
   QUARTERLY_REPORT: "kwartalny", HALF_YEAR_REPORT: "półroczny", ANNUAL_REPORT: "roczny",
 };
 
+const CHANGE_STATUS_LABELS: Record<IntegrityReportChange["status"], string> = {
+  APPLIED: "W kalendarzu",
+  DATE_NOT_IN_NOTICE: "Data spoza komunikatu",
+  NOT_APPLIED: "Nie zastosowano",
+};
+const PROJECTION_LABELS: Record<string, string> = {
+  REVIEW_REQUIRED: "wstrzymany do przeglądu", NO_EVENT: "nic nie odczytano", PARSE_ERROR: "błąd odczytu",
+  UNMATCHED: "spółka nieprzypisana", SUCCESS: "odczytany",
+};
+
+const ReportChangeRow = ({ change }: { change: IntegrityReportChange }) => (
+  <li>
+    <div>
+      <a href={change.sourceUrl} target="_blank" rel="noreferrer noopener">{change.issuer}</a>
+      <span className="field-note">{change.publishedAt.slice(0, 10)} · {change.title}</span>
+    </div>
+    <div>
+      <span className="field-note">
+        <strong>{CHANGE_STATUS_LABELS[change.status]}</strong>
+        {change.projectionStatus && change.status !== "APPLIED" ? ` (komunikat ${PROJECTION_LABELS[change.projectionStatus] ?? change.projectionStatus})` : ""}
+        {change.ahead ? "" : " · już po terminie"}
+      </span>
+      <span className="field-note">kalendarz z tego komunikatu: {change.calendarRows.join(", ") || "—"}</span>
+      {change.status !== "APPLIED" ? (
+        <span className="field-note">najbliższe w kalendarzu: {change.upcoming.join(", ") || "—"} · daty w komunikacie: {change.noticeDates.join(", ") || "—"}</span>
+      ) : null}
+    </div>
+  </li>
+);
+
 /** The GPW calendar checked against the notices and the reports that came out. Read-only. */
 export default function AdminGpwCalendarIntegrity({ integrity }: { integrity: GpwCalendarIntegrity }) {
   const assessment = assessGpwCalendarIntegrity(integrity);
   const { dividends, reports } = integrity;
+  const changes = integrity.reportChanges;
+  const changeProblems = changes?.list.filter((change) => change.status !== "APPLIED") ?? [];
+  const changesApplied = changes?.list.filter((change) => change.status === "APPLIED") ?? [];
   const reportRows = [
     ...reports.differentDay.map((row) => ({ ...row, label: `w kalendarzu ${row.calendarDate}` })),
     ...reports.notInCalendar.map((row) => ({ ...row, label: "bez terminu w kalendarzu" })),
@@ -21,7 +58,8 @@ export default function AdminGpwCalendarIntegrity({ integrity }: { integrity: Gp
           <h2 className="section-title" id="gpw-calendar-integrity-title">Kontrola z komunikatami</h2>
         </div>
         <p className="section-copy">
-          Porównanie bez reguł parsera: daty z treści komunikatów o dywidendach i dni faktycznej publikacji raportów.
+          Porównanie bez reguł parsera: daty z treści komunikatów o dywidendach i o zmianach terminów raportów oraz dni
+          faktycznej publikacji raportów.
         </p>
       </div>
 
@@ -50,7 +88,33 @@ export default function AdminGpwCalendarIntegrity({ integrity }: { integrity: Gp
           <strong>{reports.onCalendarDay} / {reports.published}</strong>
           <span>w dniu z kalendarza · inny dzień: {reports.differentDay.length} · bez terminu: {reports.notInCalendar.length}</span>
         </article>
+        {changes ? (
+          <article className="metric-card">
+            <span>Zmiany terminów raportów od {changes.since}</span>
+            <strong>{changes.applied} / {changes.checked}</strong>
+            <span>w kalendarzu z datą z komunikatu · do sprawdzenia: {changes.checked - changes.applied}</span>
+          </article>
+        ) : null}
       </div>
+
+      {changes && changes.checked > 0 ? (
+        <div className="mt-6">
+          <h3 className="admin-subtitle">Zmiany terminów raportów (ostatni komunikat każdej spółki)</h3>
+          {changeProblems.length > 0 ? (
+            <ul className="espi-missing-list">
+              {changeProblems.map((change) => <ReportChangeRow key={change.sourceUrl} change={change} />)}
+            </ul>
+          ) : <p className="field-note">Każda zmiana jest w kalendarzu z datą, którą podaje komunikat.</p>}
+          {changesApplied.length > 0 ? (
+            <details className="mt-4">
+              <summary className="field-note">Zastosowane zmiany ({changesApplied.length})</summary>
+              <ul className="espi-missing-list mt-2">
+                {changesApplied.map((change) => <ReportChangeRow key={change.sourceUrl} change={change} />)}
+              </ul>
+            </details>
+          ) : null}
+        </div>
+      ) : null}
 
       {dividends.missing.length > 0 ? (
         <div className="mt-6">

@@ -1,4 +1,6 @@
 /** Pure, server/client-neutral helpers for the public GPW events calendar. */
+import { resolveMeetingRegistrationDate } from "@/lib/meeting-registration";
+
 export const GPW_CALENDAR_CATEGORIES = ["all", "reports", "meetings", "dividends"] as const;
 export type GpwCalendarCategory = (typeof GPW_CALENDAR_CATEGORIES)[number];
 
@@ -22,6 +24,8 @@ export type PublicGpwCalendarEvent = {
   fiscalYear?: number;
   fiscalYearLabel?: string;
   registrationDate?: string;
+  /** "STATUTORY_CALCULATION": 16 days before the meeting (art. 406¹ KSH), the notice not read. */
+  registrationDateSource?: "OFFICIAL" | "STATUTORY_CALCULATION";
   dividendPerShare?: number;
   dividendCurrency?: string;
   recordDate?: string;
@@ -169,6 +173,8 @@ export type PublicGpwStoredEventRow = {
   fiscal_year_label?: string | null;
   general_meeting_type: "ZWZ" | "NWZ" | null;
   registration_date: string | null;
+  registration_date_source?: string | null;
+  issuer_isin?: string | null;
   dividend_per_share: number | string | null;
   dividend_currency: string | null;
   record_date: string | null;
@@ -210,9 +216,17 @@ export const expandGpwStoredCalendarEvent = (
     fiscalPeriod: row.fiscal_period ?? undefined,
     fiscalYear: row.fiscal_year ?? undefined,
     fiscalYearLabel: row.fiscal_year_label ?? undefined,
-    // Do not apply the Polish 16-day default to foreign issuers. A date is
-    // displayed only when an official source explicitly provides it.
-    registrationDate: row.event_type === "GENERAL_MEETING" ? row.registration_date ?? undefined : undefined,
+    // The Polish 16-day rule only for issuers registered in Poland (PL ISIN); a foreign issuer's day is shown
+    // only when its notice states it.
+    ...(() => {
+      if (row.event_type !== "GENERAL_MEETING") return {};
+      const registration = resolveMeetingRegistrationDate(row.event_date,
+        row.registration_date_source === "OFFICIAL" || row.registration_date_source === undefined ? row.registration_date : null,
+        row.issuer_isin);
+      return registration.date && registration.source !== "UNKNOWN"
+        ? { registrationDate: registration.date, registrationDateSource: registration.source }
+        : {};
+    })(),
     dividendPerShare,
     dividendCurrency: row.dividend_currency ?? undefined,
     recordDate: row.record_date ?? undefined,

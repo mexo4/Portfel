@@ -30,7 +30,13 @@ export const GENERAL_MEETING_ACTIONS = [
 
 export type GeneralMeetingAction = (typeof GENERAL_MEETING_ACTIONS)[number];
 
-export type GeneralMeetingRegistrationSource = "OFFICIAL" | "STATUTORY_CALCULATION" | "UNKNOWN";
+export {
+  getStatutoryMeetingRegistrationDate,
+  isPolishIssuerIsin,
+  resolveMeetingRegistrationDate,
+  type GeneralMeetingRegistrationSource,
+} from "@/lib/meeting-registration";
+import type { GeneralMeetingRegistrationSource } from "@/lib/meeting-registration";
 
 export type CorporateEventSourceType =
   | "ISSUER_CURRENT_REPORT"
@@ -193,15 +199,6 @@ export type CalendarWindowDays = (typeof CALENDAR_WINDOW_OPTIONS)[number];
 
 export const isCalendarWindowDays = (value: number): value is CalendarWindowDays =>
   CALENDAR_WINDOW_OPTIONS.some((days) => days === value);
-
-/** Art. 406¹ KSH: calendar days, including weekends. Only call for a verified public-company WZA. */
-export const getStatutoryMeetingRegistrationDate = (meetingDate: string): string | undefined => {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(meetingDate)) return undefined;
-  const date = new Date(`${meetingDate}T00:00:00.000Z`);
-  if (!Number.isFinite(date.getTime()) || date.toISOString().slice(0, 10) !== meetingDate) return undefined;
-  date.setUTCDate(date.getUTCDate() - 16);
-  return date.toISOString().slice(0, 10);
-};
 
 export type DividendCalendarResponse = {
   events: CorporateEvent[];

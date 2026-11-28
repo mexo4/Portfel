@@ -35,7 +35,12 @@ const readCalendarMonth = unstable_cache(
         SELECT event.id, issuer.ticker, issuer.company_name,
                event.event_type, event.event_date, event.event_time,
                event.fiscal_period, event.fiscal_year, event.fiscal_year_label, event.general_meeting_type,
-               event.registration_date, event.dividend_per_share, event.dividend_currency,
+               event.registration_date, event.registration_date_source,
+               CASE WHEN event.event_type = 'GENERAL_MEETING' THEN COALESCE(issuer.isin, (
+                 SELECT report.source_isin FROM espi_reports AS report
+                 WHERE report.issuer_id = issuer.id AND report.source_isin IS NOT NULL
+                 ORDER BY report.published_at DESC LIMIT 1)) END AS issuer_isin,
+               event.dividend_per_share, event.dividend_currency,
                event.record_date, event.payment_date, event.status, event.updated_at,
                source.source_url, source.source_published_at
         FROM corporate_events AS event

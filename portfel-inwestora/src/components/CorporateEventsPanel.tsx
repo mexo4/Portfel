@@ -419,7 +419,7 @@ export default function CorporateEventsPanel({ portfolioId, portfolioIds, varian
                         {registrationDate ? <time dateTime={event.registrationDate}>{registrationDate.long}</time> : <span>Nie podano</span>}
                         <small>{getRegistrationCountdown(event.registrationDate)}</small>
                         <small>{event.registrationDateSource === "OFFICIAL" ? "Data z oficjalnego ogłoszenia" :
-                          event.registrationDateSource === "STATUTORY_CALCULATION" ? "Wyliczono: 16 dni kalendarzowych przed WZA (art. 406¹ KSH)" : "Nie ustalono źródła daty"}</small>
+                          event.registrationDateSource === "STATUTORY_CALCULATION" ? "Wyliczono: 16 dni kalendarzowych przed WZA (art. 406¹ KSH)" : "Spółka zagraniczna lub brak ISIN: sprawdź dzień w ogłoszeniu spółki"}</small>
                         {event.registrationDateConflict ? <small>Uwaga: data ogłoszona różni się od terminu wyliczonego ustawowo. Sprawdź ogłoszenie.</small> : null}
                       </span>
                       <small className="corporate-event-registration-guidance">Żądanie imiennego zaświadczenia składa się najpóźniej w pierwszym dniu powszednim po dniu rejestracji (art. 406³ KSH). Broker może mieć wcześniejszą godzinę graniczną.</small>

@@ -53,7 +53,12 @@ function EventCard({ event, agendaDate }: { event: PublicGpwCalendarEvent; agend
           {event.status === "PROPOSED" || event.status === "CHANGED" || event.status === "UNKNOWN"
             ? <span className={styles.status}>{getGpwEventStatusLabel(event.status, event.kind)}</span> : null}
           {amount ? <span>{amount}</span> : null}
-          {event.kind === "GENERAL_MEETING" && event.registrationDate ? <span>Rejestracja: {formatDate(event.registrationDate, { day: "numeric", month: "short" })}</span> : null}
+          {event.kind === "GENERAL_MEETING" && event.registrationDate ? (
+            <span title={event.registrationDateSource === "STATUTORY_CALCULATION" ? "Wyliczona: 16 dni kalendarzowych przed walnym zgromadzeniem (art. 406¹ KSH)" : "Data z ogłoszenia spółki"}>
+              Rejestracja: {formatDate(event.registrationDate, { day: "numeric", month: "short" })}
+              {event.registrationDateSource === "STATUTORY_CALCULATION" ? " (16 dni przed WZA)" : ""}
+            </span>
+          ) : null}
         </div>
         <div className={styles.sourceRow}>
           <a className={styles.sourceLink} href={event.sourceUrl} target="_blank" rel="noopener noreferrer nofollow"

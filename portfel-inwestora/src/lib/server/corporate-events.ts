@@ -9,6 +9,7 @@ import {
   type CorporateEventsResponse,
   getCorporateEventIdentityKey,
   isDividendAdvanceIdentity,
+  resolveMeetingRegistrationDate,
   getReportScheduleNonPublicationDates,
   resolveCorporateEventStatus,
   getDividendAmendmentEvidence,
@@ -96,6 +97,7 @@ type EventRow = {
   id: string;
   instrument_id: string;
   ticker: string;
+  issuer_isin: string | null;
   company_name: string;
   event_type: CorporateEventType;
   event_date: string;
@@ -1678,13 +1680,11 @@ const toCorporateEvent = (row: EventRow): CorporateEvent => ({
   periodStart: row.period_start ?? undefined,
   periodEnd: row.period_end ?? undefined,
   generalMeetingType: row.general_meeting_type ?? undefined,
-  registrationDate: row.event_type === "GENERAL_MEETING" &&
-    row.registration_date_source === "OFFICIAL" ? row.registration_date ?? undefined : undefined,
-  registrationDateSource: row.event_type === "GENERAL_MEETING"
-    ? row.registration_date_source === "OFFICIAL" && row.registration_date
-      ? "OFFICIAL"
-      : "UNKNOWN"
-    : undefined,
+  ...(row.event_type === "GENERAL_MEETING" ? (() => {
+    const registration = resolveMeetingRegistrationDate(row.event_date,
+      row.registration_date_source === "OFFICIAL" ? row.registration_date : null, row.issuer_isin);
+    return { registrationDate: registration.date, registrationDateSource: registration.source };
+  })() : { registrationDate: undefined, registrationDateSource: undefined }),
   // Without verified issuer jurisdiction, a Polish statutory comparison can
   // falsely flag official foreign record dates. Keep the announced date and
   // source; do not infer a jurisdiction-specific conflict here.
@@ -1724,6 +1724,10 @@ const getStoredEvents = async (
   const rows = await query<EventRow>(
     `
       SELECT event.id, event.instrument_id, instrument.ticker, instrument.company_name,
+             CASE WHEN event.event_type = 'GENERAL_MEETING' THEN COALESCE(instrument.isin, (
+               SELECT report.source_isin FROM espi_reports AS report
+               WHERE report.issuer_id = instrument.id AND report.source_isin IS NOT NULL
+               ORDER BY report.published_at DESC LIMIT 1)) END AS issuer_isin,
              event.event_type, event.event_date, event.event_time, event.fiscal_period,
              event.fiscal_year, event.fiscal_year_label, event.period_start, event.period_end,
              event.general_meeting_type, event.registration_date,
